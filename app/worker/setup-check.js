@@ -89,6 +89,22 @@ const GROUPS = [
       + "which is the honest answer, not a silent pass.",
   },
   {
+    // Its own group rather than a third key beside the verifiers: it names WHICH
+    // one, and is meaningless without that one's key, so pairing them would
+    // read a verifier set up for the app as a half-configured public checker.
+    id: "lookup-partner", label: "Public licence checker partner",
+    vars: ["LICENSE_LOOKUP_PARTNER"],
+    matters: "Which licence verifier (statelicense or tradesapi) the public checker at "
+      + "subsub.work/check may use. Unset, the checker answers from the state's own records "
+      + "where SubSub reads them (Washington) and links every other state's board.",
+  },
+  {
+    id: "leads", label: "Leads from the free tools",
+    vars: ["LEADS_EMAIL"],
+    matters: "Where a lead from subsub.work/check or /handyman-limits is emailed. Unset, leads "
+      + "are still kept in the leads table (migration 076) and nobody is told about them.",
+  },
+  {
     id: "demo", label: "Book a demo (Cal)",
     vars: ["CAL_API_KEY", "CAL_EVENT_TYPE_ID"],
     matters: "Real availability and real bookings on the marketing site's demo form. "

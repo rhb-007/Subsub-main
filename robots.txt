@@ -15,3 +15,5 @@ Allow: /
 Sitemap: https://subsub.work/sitemap.xml
 Sitemap: https://subsub.work/licensing/sitemap.xml
 Sitemap: https://subsub.work/compare/sitemap.xml
+Sitemap: https://subsub.work/check/sitemap.xml
+Sitemap: https://subsub.work/handyman-limits/sitemap.xml

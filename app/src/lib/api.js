@@ -553,6 +553,11 @@ export const api = {
   // wrong, including an account with no city on it, so callers never branch.
   weather: () => request("/weather"),
   myCompany: () => request("/my-company"),
+  // 075. This seat's referral code, link, who it brought in and what that
+  // earned; and sending the pre-written invite. Texts are only COUNTED here --
+  // the browser opens the sender's own messages app, SubSub never texts.
+  referralsMine: () => request("/referrals/mine"),
+  sendReferralInvites: (body) => request("/referrals/invites", { method: "POST", body: JSON.stringify(body) }),
   saveMyCompany: (patch) => request("/my-company", { method: "PATCH", body: JSON.stringify(patch) }),
 
   // Getting paid. `payoutConnect` returns a one-time Stripe URL to follow --
@@ -874,6 +879,12 @@ export const api = {
     feeTerms: (id) => request(`/platform/accounts/${encodeURIComponent(id)}/fee-terms`),
     // 074. Work orders sent, links opened and subs this account brought onto SubSub.
     attribution: (id) => request(`/platform/accounts/${encodeURIComponent(id)}/attribution`),
+    // 075. The referral ledger, the referrers, and new hiring accounts per
+    // existing one by week and metro. Moving a reward is finance access only.
+    referrals: () => request("/platform/referrals"),
+    referralAcquisition: (weeks = 12) => request(`/platform/referrals/acquisition?weeks=${weeks}`),
+    rewardAction: (id, body) =>
+      request(`/platform/referrals/rewards/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify(body) }),
     setFeeTerms: (id, body) =>
       request(`/platform/accounts/${encodeURIComponent(id)}/fee-terms`, { method: "PUT", body: JSON.stringify(body) }),
     deleteAccount: (id, confirmName) =>

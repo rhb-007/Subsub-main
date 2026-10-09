@@ -19,6 +19,112 @@ The standing rules, from `CLAUDE.md`:
 
 ---
 
+## 075 — Referrals: a code for every sub and GC, and what referring earns
+
+Every subcontractor company and every hiring account (general contractor,
+property manager, building owner, portfolio manager) now has a **referral code
+and link** (`subsub.work/gc?ref=CODE`). Signups are credited to whoever brought
+them in, **last touch wins**, by link, typed code, work-order claim or (once it
+exists) a Passport view.
+
+- **A sub refers a GC who starts paying:** the sub earns **$100**, recorded in a
+  rewards ledger as *pending*, and the **Preferred Sub** badge on every roster
+  they are on. A person approves and pays the $100 by hand in the console.
+- **A GC refers a GC:** when the referred account starts paying, **both** get a
+  month of Scale free, applied automatically as a Stripe customer-balance
+  credit on their next invoice.
+
+"Starts paying" means the referred account's **first paid invoice with money
+in it**. Signing up earns nothing, so twenty free accounts from one kitchen
+table earn nothing either.
+
+### 1. Paste migration 075
+
+`worker/migrations/075_referrals.sql`, one paste. Five tables, no `ALTER TABLE`,
+safe to paste twice:
+
+| Table | One row per | What it holds |
+|---|---|---|
+| `referral_codes` | sub company, or hiring account | The 8-character code. Minted the first time somebody opens their referral screen. |
+| `referral_touches` | arrival | A link opened, a code typed, a claim, a Passport view. A count, nothing about the visitor. |
+| `referral_attributions` | signed-up account (or claimed company) | Which code brought them in, by which channel. Written once, at signup. |
+| `referral_rewards` | reward | The ledger: `sub_cash` ($100) pending → approved → paid, or `gc_credit` (a month) pending → applied. Either can be voided with a reason. Unique per referred account, kind and side, so a webhook delivered twice cannot pay twice. |
+| `referral_invites` | invitation sent | For the daily limit (25) and to stop the same address being emailed twice in 30 days. Emails keep the address; texts keep nothing, because they go from the sub's own phone. |
+
+Then run `CHECK.sql`. New rows: five did-I-run-it checks (`m075_…`) and three
+invariants that must read 0:
+
+- `m075_inv_reward_unattributed`: a reward whose account was not brought in on that code.
+- `m075_inv_paid_unreferenced`: a $100 marked paid with no reference saying how.
+- `m075_inv_credit_unrecorded`: a month-free marked applied with no Stripe transaction behind it.
+
+Until 075 is pasted nothing breaks. Signups go through with no referrer
+recorded, the paid-invoice webhook earns nothing (the nightly sweep catches up
+once it is pasted), and the referral screens say which migration is missing.
+
+### 2. Stripe: nothing new to configure
+
+The month-free credit uses the existing `STRIPE_SECRET_KEY` and is triggered by
+the existing webhook's `invoice.paid` event, which the endpoint already
+receives. It is a **negative customer-balance transaction**
+(`POST /v1/customers/:id/balance_transactions`), which Stripe takes off the
+next invoice on either billing cycle. It is not a coupon and it does not
+expire.
+
+- A month is the account's own cycle: $99 monthly, $82.50 on annual.
+- An account with no Stripe customer yet (still on Basic) keeps its credit
+  **pending**. The nightly sweep applies it the night after they subscribe, and
+  their referral screen says it is waiting.
+- `GET /api/cron/referrals` (with the cron secret) runs that sweep by hand.
+
+### 3. Paying a sub's $100 (manual)
+
+Console → **Referrals** (any staff member can see it; moving money needs
+**finance** access):
+
+1. A pending $100 shows the sub's company, their email and the account they
+   brought in. Check it is not a self-referral: the same person, the same
+   address or an account that paid one invoice and cancelled.
+2. **Approve**, or **Void** with a reason.
+3. Pay them however you like (check, transfer), then **Mark paid** and type the
+   reference. It refuses without one.
+
+Paid money is never voided from here. Undoing a payment is a refund, not a
+status.
+
+The same screen shows **new GCs acquired per existing GC**, by week and by
+metro, split into referred-by-a-GC and referred-by-a-sub. A metro is the town
+and state on the account's company record (or its commonest building), not a
+census metro area. Accounts with neither read *Unknown*.
+
+### Where people find it
+
+- **Subs** (a contractor seat, or a subcontractor account's own team): **Get your
+  GCs on SubSub** in the nav. It shows the code, the link and a QR code, plus a
+  pre-written invite. Emails are sent by SubSub under the sub's name, with
+  their address to reply to. Texts open the sub's own messages app, so SubSub
+  never texts anybody. **Pick from contacts** appears only where the browser
+  supports it (Chrome on Android); Safari on an iPad does not, and the box
+  takes typed or pasted numbers and addresses instead.
+- **Hiring accounts:** Account → **Refer a GC**, admins only.
+- **The badge:** *Preferred Sub* on the roster card, from the ledger, so voiding
+  the reward takes it away.
+- **Signup:** `get-started.html` sends the referral cookie and has an optional
+  **Referral code** box (see the site README).
+
+### Not verified here
+
+- A live Stripe customer-balance credit. The request is Stripe's documented
+  shape and the suite asserts it at `fetch`; the first real referral is the
+  real test. Check the referred account's next invoice shows the credit.
+
+### Tests
+
+`npm run test:referral` (server, 85), `npm run test:referralui` (the sub's and
+the GC's screens, 22) and `npm run test:referralconsole` (the ledger, 16).
+
+---
+
 ## 074 — "Sent via SubSub" on every work order, and subs claiming a free login
 
 Every work order a hiring account sends now carries a footer reading

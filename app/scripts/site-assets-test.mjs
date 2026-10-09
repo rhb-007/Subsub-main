@@ -48,7 +48,7 @@ for (const p of ["CLAUDE.md", "EASY-PAY.md", "LAUNCH.md", "README.md", "wrangler
 // BY SHAPE, which is the assertion a new private file cannot slip past: every
 // published path is a root-level site file or lives under one of the three
 // generated sections.
-const SITE = /^(?:[^/]+\.(?:html|png|webp|ico|svg|webmanifest)|robots\.txt|sitemap\.xml|(?:licensing|compare|blog)\/.+)$/;
+const SITE = /^(?:[^/]+\.(?:html|png|webp|ico|svg|webmanifest)|robots\.txt|sitemap\.xml|(?:licensing|compare|blog|check|handyman-limits)\/.+)$/;
 const stray = published.filter((p) => !SITE.test(p));
 ck("everything published is a site file", stray.length === 0, stray.slice(0, 8).join(", "));
 const markdown = published.filter((p) => /\.(md|js|mjs|ts|tsx|sql|json|jsonc|yml|toml)$/.test(p));
@@ -57,7 +57,9 @@ ck("no source, notes or config of any kind", markdown.length === 0, markdown.sli
 console.log("\n-- nothing the site needs is held back --");
 for (const p of ["index.html", "404.html", "pricing.html", "developers.html", "hero-crew.webp",
   "hero-crew@2x.png", "favicon.ico", "favicon.svg", "og-image.png", "site.webmanifest",
-  "robots.txt", "sitemap.xml", "licensing/index.html", "compare/index.html", "compare/sitemap.xml"]) {
+  "robots.txt", "sitemap.xml", "licensing/index.html", "compare/index.html", "compare/sitemap.xml",
+  "check/index.html", "check/wa/index.html", "check/sitemap.xml",
+  "handyman-limits/index.html", "handyman-limits/wa/index.html", "handyman-limits/sitemap.xml"]) {
   ck(`${p} is published`, set.has(p));
 }
 ck("every generated licensing page is published",

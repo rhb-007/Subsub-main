@@ -11476,6 +11476,113 @@ refactor.
   run here. `test:inviteeditui` was already failing before this change, on
   the handyman picker's note, and still is.
 
+- **REFERRALS ARE LAST TOUCH, AND A REWARD IS EARNED BY MONEY, NOT BY A
+  SIGNUP.** Asked for as a two-sided referral system: a link and a code for
+  every sub and GC; a sub who brings in a GC that starts paying gets *Preferred
+  Sub* and $100; a GC who brings in a GC gets a month free for both. Migration
+  075, `app/shared/referral.js`.
+
+  **Last touch, and it deliberately disagrees with 074.** `sub_attributions`
+  is first-claim-wins because it credits the account whose work order brought a
+  sub in, and nothing should overwrite that. A referral is the opposite
+  question: which link actually got somebody to sign up. So the cookie
+  (`ss_ref`, on `.subsub.work`, sixty days) is replaced by every newer touch, a
+  code typed into the form beats any cookie because it is a touch made now, and
+  a code that does not exist falls back to the next touch rather than to nothing.
+  It is decided once, at signup or claim, and then never moves
+  (`INSERT OR IGNORE` on the subject). Referring yourself records nothing.
+  `recordReferral` never throws: a referral that cannot be recorded must not
+  cost anybody their account.
+
+  **Nothing is earned at signup.** A reward row is written by the first
+  `invoice.paid` with money on it, which is the only event that says the GC is
+  paying. One row per referred account, kind and side, held by a unique index,
+  so a second invoice earns nothing. *Preferred Sub* is read from that ledger
+  rather than stored, so voiding the reward takes the badge with it.
+
+  **The $100 is paid by hand, and the ledger says so.** `pending`, then
+  `approved`, then `paid` with a reference somebody typed (a cheque number, a
+  transfer id), the same seam `wo_releases.reference` is. Approving and paying
+  are finance-only on the console and audited; voiding needs a reason. Money
+  that has moved cannot be voided from there, because the ledger would then
+  disagree with the bank.
+
+  **A month free is a Stripe customer-balance credit**, which Stripe takes off
+  the next invoice by itself. No coupon to configure, nothing that expires, and
+  it works on monthly and yearly alike. It is keyed by the reward id, so a retry
+  cannot credit twice. An account with no Stripe customer yet keeps its credit
+  pending and the nightly sweep applies it the day they subscribe. *Applied* and
+  *paid* are different words because one is SubSub's own discount and the other
+  is money that left.
+
+  **The invite screen sends from the sub's own phone.** *Get your GCs on
+  SubSub* takes typed or pasted numbers and addresses (the Contact Picker API
+  where the browser has it, which iPad Safari does not). Emails go from SubSub,
+  rate-limited and deduped per address for thirty days. Texts open the sub's own
+  messages app with the words filled in, because SubSub texting a stranger on
+  somebody's behalf is a marketing text to a list, and a text from a sub to a GC
+  they work with is not. An address that already has an account is skipped
+  silently and reported as sent, so the screen cannot be used to ask who is on
+  SubSub.
+
+  **The acquisition metric counts new GCs per existing GC, by week and by
+  town**, where "GC" is every hiring kind and a town is the company row's city
+  and state or the account's commonest building. It is not a census metro, and
+  the console says so.
+
+  **The claim route had to learn the account's kind**, which is the
+  column-not-named trap one more time: `claimLookup` selected six columns of
+  `accounts` and `kind` was not one of them, so "was this sent by a GC" read
+  `undefined` and every claim recorded no referral, silently.
+
+- **TWO FREE TOOLS ON THE MARKETING SITE, AND THE LICENCE CHECK ANSWERS ONLY
+  WHERE IT HAS BEEN VERIFIED.** `/check` and `/handyman-limits`, plus one page
+  per state for each, built by `npm run tools` from the app's own data
+  (`shared/licenselookup.js`, `shared/handytool.js`). Migration 076 holds the
+  emails they collect.
+
+  **`LIVE_STATES` is Washington alone**, for the reason the comparison pages
+  record: `SOCRATA_STATES` wires seven and only WA carries
+  `fieldMappingVerified`. A Texas page that "checks" a licence against a mapping
+  nobody has run would read as true and not be. The other fifty pages say the
+  lookup is not live there yet and name the state's own board. The lookup sits
+  behind a provider interface (`LOOKUP_PROVIDERS`), so a fifty-state partner is
+  a row and an env var (`LICENSE_LOOKUP_PARTNER`) rather than a rewrite. Name
+  search matches against **the state's** register, never the `companies`
+  table, so it is not a directory of who is on SubSub.
+
+  **The preview carries no status.** Without an email the page names the
+  business and the number; the status, expiry, bond and insurance come with the
+  email, which is the gate that was asked for. Without an email there is
+  nothing to tell a real check from a broken one, so the gate costs nothing
+  honest.
+
+  **The handyman answer says no for an excluded trade.** The app's picker
+  quietly notes that plumbing and electrical sit outside every exemption; on a
+  public page answering "can a handyman do this", a figure under the cap over a
+  trade nobody may do unlicensed would be a yes that is wrong. An annual cap is
+  "maybe", never "yes", because SubSub cannot see the handyman's other clients.
+  Every page carries the not-legal-advice line and the data's date.
+
+  **There was no lead destination, so there is one.** Each email is a `leads`
+  row tagged by tool and state, and `LEADS_EMAIL` on the API Worker gets a copy.
+  `setup-check` caught both new settings on its first run, which is that check
+  doing its job.
+
+- **THE LAUNCH ASSETS LIVE IN `/marketing`, AND THE DECAL CARRIES A QR CODE
+  BECAUSE A PRINTED BADGE CANNOT EXPIRE.** "SubSub Verified" on a screen is
+  drawn only while the licence and insurance are current; on a truck door it
+  says so for the life of the vinyl. So the 6 in decal's centre is a code
+  pointing at a live check, and the 3 in sticker, too small for a code that
+  scans across a driveway, is to be handed only to subs whose badge is live.
+  Everything is generated by `npm run assets` with the lettering outlined, and
+  `.assetsignore` keeps the folder off subsub.work.
+
+  **The Facebook posts carry a disclosure line, deliberately.** They were asked
+  for as reading like a contractor, not an ad. A post that hides who wrote it
+  breaks the FTC's endorsement rules and most groups' own rules, so each one
+  says the writer works on SubSub. That is what keeps them postable.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

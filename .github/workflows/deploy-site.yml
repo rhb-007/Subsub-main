@@ -45,6 +45,8 @@ on:
       - "licensing/**"
       - "compare/**"
       - "blog/**"
+      - "check/**"
+      - "handyman-limits/**"
       - "wrangler.jsonc"
       - ".assetsignore"
       - "app/scripts/site-assets-test.mjs"

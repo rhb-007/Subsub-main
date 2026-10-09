@@ -2199,6 +2199,93 @@ CREATE TABLE IF NOT EXISTS sub_attributions (
 );
 CREATE INDEX IF NOT EXISTS ix_sub_attributions_account ON sub_attributions(account_id);
 
+-- 075. Referrals: a code per sub company and per hiring account, the arrivals,
+-- who brought whom in (last touch at signup), the reward ledger and the
+-- invitations a sub sent. Rules in shared/referral.js.
+CREATE TABLE IF NOT EXISTS referral_codes (
+  code        TEXT PRIMARY KEY,
+  kind        TEXT NOT NULL CHECK (kind IN ('sub', 'gc')),
+  account_id  TEXT REFERENCES accounts(id) ON DELETE CASCADE,
+  company_id  TEXT REFERENCES companies(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CHECK ((kind = 'sub' AND company_id IS NOT NULL) OR (kind = 'gc' AND account_id IS NOT NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_gc ON referral_codes(account_id) WHERE kind = 'gc';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_sub ON referral_codes(company_id) WHERE kind = 'sub';
+
+CREATE TABLE IF NOT EXISTS referral_touches (
+  id       TEXT PRIMARY KEY,
+  code     TEXT NOT NULL REFERENCES referral_codes(code) ON DELETE CASCADE,
+  channel  TEXT NOT NULL CHECK (channel IN ('link', 'code', 'claim', 'passport')),
+  at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_referral_touches_code ON referral_touches(code, at);
+
+CREATE TABLE IF NOT EXISTS referral_attributions (
+  subject_kind  TEXT NOT NULL CHECK (subject_kind IN ('account', 'company')),
+  subject_id    TEXT NOT NULL,
+  code          TEXT NOT NULL REFERENCES referral_codes(code) ON DELETE CASCADE,
+  channel       TEXT NOT NULL CHECK (channel IN ('link', 'code', 'claim', 'passport')),
+  touched_at    TEXT,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (subject_kind, subject_id)
+);
+CREATE INDEX IF NOT EXISTS ix_referral_attributions_code ON referral_attributions(code);
+
+CREATE TABLE IF NOT EXISTS referral_rewards (
+  id                      TEXT PRIMARY KEY,
+  code                    TEXT NOT NULL REFERENCES referral_codes(code) ON DELETE CASCADE,
+  referred_account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  kind                    TEXT NOT NULL CHECK (kind IN ('sub_cash', 'gc_credit')),
+  beneficiary             TEXT NOT NULL CHECK (beneficiary IN ('referrer', 'referred')),
+  beneficiary_account_id  TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+  beneficiary_company_id  TEXT REFERENCES companies(id) ON DELETE SET NULL,
+  amount_cents            INTEGER NOT NULL CHECK (amount_cents > 0),
+  status                  TEXT NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending', 'approved', 'paid', 'applied', 'void')),
+  trigger_invoice_id      TEXT,
+  processor_ref           TEXT,
+  reference               TEXT,
+  note                    TEXT,
+  error                   TEXT,
+  created_at              TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_at             TEXT,
+  approved_by             TEXT REFERENCES users(id) ON DELETE SET NULL,
+  paid_at                 TEXT,
+  paid_by                 TEXT REFERENCES users(id) ON DELETE SET NULL,
+  applied_at              TEXT,
+  voided_at               TEXT,
+  voided_by               TEXT REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_reward ON referral_rewards(referred_account_id, kind, beneficiary);
+CREATE INDEX IF NOT EXISTS ix_referral_rewards_code ON referral_rewards(code);
+CREATE INDEX IF NOT EXISTS ix_referral_rewards_status ON referral_rewards(status);
+
+CREATE TABLE IF NOT EXISTS referral_invites (
+  id          TEXT PRIMARY KEY,
+  code        TEXT NOT NULL REFERENCES referral_codes(code) ON DELETE CASCADE,
+  sent_by     TEXT REFERENCES users(id) ON DELETE SET NULL,
+  channel     TEXT NOT NULL CHECK (channel IN ('email', 'sms')),
+  to_email    TEXT,
+  emailed     INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_referral_invites_code ON referral_invites(code, created_at);
+
+-- 076. Leads from the marketing site's free tools (/check, /handyman-limits).
+CREATE TABLE IF NOT EXISTS leads (
+  id          TEXT PRIMARY KEY,
+  email       TEXT NOT NULL,
+  tool        TEXT NOT NULL CHECK (tool IN ('check', 'handyman_limits')),
+  state       TEXT,
+  detail      TEXT NOT NULL DEFAULT '{}',
+  ref_code    TEXT,
+  notified    INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_leads_created ON leads(created_at);
+CREATE INDEX IF NOT EXISTS ix_leads_email ON leads(email);
+
 -- 073. How the crew gets in, in words. See migrations/073_job_access.sql.
 CREATE TABLE IF NOT EXISTS job_access (
   job_id      TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,

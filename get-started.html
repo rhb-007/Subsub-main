@@ -472,6 +472,9 @@ body.nav-open{overflow:hidden}
           <div class="field"><label for="phone">Mobile</label>
             <input id="phone" type="tel" autocomplete="tel" inputmode="numeric"
               maxlength="13" placeholder="(206)555-0100"></div>
+          <div class="field"><label for="refCode">Referral code <span style="font-weight:400;color:#5D6F67">(optional)</span></label>
+            <input id="refCode" autocomplete="off" autocapitalize="characters" maxlength="12"
+              spellcheck="false"></div>
           <!-- NO PASSWORD HERE. It used to be asked for, and then the
                confirmation email's link asked for a new one twice -- so
                somebody chose a password, never used it, and had to choose
@@ -652,6 +655,8 @@ body.nav-open{overflow:hidden}
       <a href="compare/">Compare SubSub</a>
       <a href="blog/best-subcontractor-management-software/">Best subcontractor software</a>
       <a href="licensing/">Licensing by state</a>
+      <a href="check/">Check a contractor's license</a>
+      <a href="handyman-limits/">Handyman limits by state</a>
       <a href="index.html#faq">FAQ</a>
       <a href="developers.html">Connect your CRM</a>
       <a href="developers.html#inspections">Send inspections in</a>
@@ -1177,6 +1182,10 @@ body.nav-open{overflow:hidden}
     || (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)
         ? 'http://127.0.0.1:8787/api'
         : 'https://api.subsub.work/api');
+  function ssReadRef(){try{
+  var m=document.cookie.match(/(?:^|;\s*)ss_ref=([A-Z0-9]{8})\.(link|code|claim|passport)\.(\d{9,11})/);
+  return m?{code:m[1],channel:m[2],at:new Date(Number(m[3])*1000).toISOString()}:null;
+  }catch(e){return null;}}
   var KINDS = {
     'General contractor': 'general_contractor',
     'Subcontractor': 'subcontractor',
@@ -1260,7 +1269,12 @@ body.nav-open{overflow:hidden}
       state: (document.getElementById('state') || {}).value || '',
       zip: (document.getElementById('zip') || {}).value || '',
       plan: plan,
-      billing: billing
+      billing: billing,
+      // 075. Who brought them in. A code typed here is a touch made now and
+      // beats the cookie; the cookie is the last link, claim or Passport
+      // they arrived through. The server decides which wins and checks both.
+      refCode: ((document.getElementById('refCode') || {}).value || '').trim(),
+      referral: ssReadRef()
     };
 
     fetch(API + '/signup', {
@@ -1466,6 +1480,23 @@ body.nav-open{overflow:hidden}
   document.addEventListener('keydown', function(e){ if(e.key==='Escape') set(false); });
   window.addEventListener('resize', function(){ if(window.innerWidth>900) set(false); });
 })();
+</script>
+<script>/* subsub-ref v1 */
+(function(){try{
+var API=window.SUBSUB_API||'https://api.subsub.work/api';
+var q=new URLSearchParams(location.search).get('ref');
+if(!q)return;
+var c=String(q).toUpperCase().replace(/[\s-]/g,'');
+if(!/^[23456789ABCDEFGHJKMNPQRSTVWXYZ]{8}$/.test(c))return;
+var dom=/(^|\.)subsub\.work$/.test(location.hostname)?';domain=.subsub.work':'';
+document.cookie='ss_ref='+c+'.link.'+Math.floor(Date.now()/1000)+';path=/;max-age=5184000;samesite=lax'+(location.protocol==='https:'?';secure':'')+dom;
+fetch(API+'/referrals/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:c,channel:'link'})})
+.then(function(r){return r.json();}).then(function(j){
+if(!j||!j.ok||!j.from)return;
+var els=document.querySelectorAll('[data-ref-from]');
+for(var i=0;i<els.length;i++){els[i].textContent=j.from+' invited you to SubSub.';els[i].hidden=false;}
+}).catch(function(){});
+}catch(e){}})();
 </script>
 </body>
 </html>

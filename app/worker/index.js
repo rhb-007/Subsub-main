@@ -133,6 +133,12 @@ import { PREF_IDS, NEEDS_PHONE, validNotice, noticeLive, sortNotices } from "../
 import { systemHealth } from "./syshealth.js";
 import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
+import { handyVerdict } from "../shared/handytool.js";
+import { LIVE_STATES, isLiveState, readLookup, previewOf, fullOf, verdictText, validLeadEmail,
+  isLeadTool, MAX_MATCHES } from "../shared/licenselookup.js";
+import { normalizeCode, mintCode, CODE_LENGTH, isChannel, isGcKind, referrerKindForAccount, referralLink,
+  REF_COOKIE_DAYS, rewardsFor, rewardMove, isPreferredSub, PREFERRED_SUB, INVITE_DAILY_LIMIT,
+  INVITE_REPEAT_DAYS, validInviteEmail, inviteEmail, acquisitionByWeek } from "../shared/referral.js";
 import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck } from "../shared/licensecheck.js";
 import { validCrews, offDays, isOffOn } from "../shared/crews.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
@@ -373,6 +379,13 @@ app.use("/api/*", async (c, next) => {
     // is not the same as being unauthenticated, and the comment above is the
     // rule this must not break.
     || c.req.path.startsWith("/api/v1/")
+    // A referral link opened on the marketing site. Counts the arrival and
+    // names whose code it is; nothing about the visitor is kept.
+    || c.req.path === "/api/referrals/touch"
+    // The marketing site's free tools: a licence lookup against the state's
+    // own public data and the handyman-limit calculator. Nobody using them
+    // has an account; both are rate-limited per IP inline.
+    || c.req.path.startsWith("/api/public/")
     || c.req.path === "/api/password-help"
     || c.req.path === "/api/stripe/webhook"
     // Connect events, same reasoning: Stripe holds no session and the
@@ -1200,8 +1213,19 @@ app.post("/api/signup", async (c) => {
     syncHostnameAfter(c, { id: accountId, subdomain, plan }, { reason: "signup" });
   }
 
+  // WHO BROUGHT THEM IN, from the last touch before now: a code typed on the
+  // form, or the one the cookie carried from a link, a claim or a Passport.
+  // Recorded once and never fails the signup.
+  const referredBy = await recordReferral(c.env, {
+    subjectKind: "account", subjectId: accountId,
+    cookie: b.referral && typeof b.referral === "object" ? b.referral : null,
+    typed: b.refCode || null,
+    notCode: (row) => (row.kind === "gc" && row.account_id === accountId)
+      || (row.kind === "sub" && row.company_id === ownCompanyId(accountId)),
+  });
+
   await logEvent(c.env, accountId, userId, "account.created", accountId,
-    { kind, plan, subdomain, viaAuth: realAuth });
+    { kind, plan, subdomain, viaAuth: realAuth, referredBy: referredBy?.code || null });
   await logActivity(c.env, accountId, userId, "account_created",
     `${personName} created this account on the ${plan === "scale" ? "Scale" : "Basic"} plan`);
 
@@ -1867,6 +1891,11 @@ app.post("/api/stripe/webhook", async (c) => {
           stripeTime(obj.period_end) || new Date().toISOString(),
           obj.status === "paid" ? stripeTime(obj.status_transitions?.paid_at) : null,
           obj.attempt_count ?? 0).run();
+        // A referred account's first PAID invoice is what earns the referral.
+        // An invoice the account's own credit covered in full is not paying.
+        if (event.type === "invoice.paid" && Number(obj.amount_paid) > 0) {
+          await referralOnPaid(c.env, account, obj.id);
+        }
         break;
       }
 
@@ -3254,7 +3283,7 @@ async function claimLookup(env, token) {
        FROM work_orders w JOIN jobs j ON j.id = w.job_id WHERE w.id = ?`
   ).bind(link.work_order_id).first();
   const account = await env.DB.prepare(
-    `SELECT id, name, subdomain, theme, logo_key, use_default_mark FROM accounts WHERE id = ?`
+    `SELECT id, name, subdomain, kind, theme, logo_key, use_default_mark FROM accounts WHERE id = ?`
   ).bind(link.account_id).first();
   const company = await env.DB.prepare(
     `SELECT id, company, contact, email, phone FROM companies WHERE id = ?`).bind(link.company_id).first();
@@ -3548,6 +3577,20 @@ app.post("/api/claim/:token/verify", async (c) => {
        VALUES (?, ?, ?, ?, ?)`).bind(company.id, account.id, wo.id, link.token, user.id).run();
     attributed = (r?.meta?.changes || 0) > 0;
   }
+  // A claim is a sub signing up, and the work order they claimed is the touch
+  // that brought them -- so the sending account's referral code is credited
+  // with the company, beside 074's first-account record. Only for a company
+  // that had no login anywhere before, for the same reason that row is.
+  if (attributed && isGcKind(account.kind)) {
+    try {
+      const code = await ensureReferralCode(c.env, { kind: "gc", accountId: account.id });
+      await logReferralTouch(c.env, code, "claim");
+      await recordReferral(c.env, { subjectKind: "company", subjectId: company.id,
+        cookie: { code, channel: "claim", at: new Date().toISOString() } });
+    } catch (err) {
+      if (!missingSchema(err)) console.error("[referral] claim:", err?.message || err);
+    }
+  }
   await logEvent(c.env, account.id, user.id, "sub.claimed", company.id,
     { workOrderId: wo.id, woNumber: wo.wo_number, attributed });
   if (attributed) {
@@ -3635,6 +3678,521 @@ app.get("/api/platform/accounts/:id/attribution", async (c) => {
     if (!migration) throw err;
     return c.json({ ...claimFunnel(), opens: 0, subs: [], migration });
   }
+});
+
+// ===========================================================================
+// 075. REFERRALS. Rules in shared/referral.js; this is the plumbing.
+//
+// A code is minted lazily, the first time anybody asks for theirs. A touch is
+// counted whenever a link, a typed code, a claim or a Passport brings somebody
+// in. Attribution is written ONCE, at signup (or at the claim that creates a
+// sub's seat), from the last touch before it. A reward is written only when a
+// referred account's first paid invoice arrives, and a month-free credit is
+// handed to Stripe as a customer-balance credit the moment there is a
+// customer to give it to.
+// ===========================================================================
+
+async function referralCodeRow(env, code) {
+  const c = normalizeCode(code);
+  if (!c) return null;
+  const row = await env.DB.prepare(
+    `SELECT r.*, a.name AS account_name, co.company AS company_name
+       FROM referral_codes r
+       LEFT JOIN accounts a ON a.id = r.account_id
+       LEFT JOIN companies co ON co.id = r.company_id
+      WHERE r.code = ?`).bind(c).first();
+  return row || null;
+}
+const referrerName = (row) => (row?.kind === "sub" ? row.company_name : row?.account_name) || null;
+
+async function ensureReferralCode(env, { kind, accountId = null, companyId = null }) {
+  const lookup = () => (kind === "gc"
+    ? env.DB.prepare(`SELECT code FROM referral_codes WHERE kind = 'gc' AND account_id = ?`).bind(accountId)
+    : env.DB.prepare(`SELECT code FROM referral_codes WHERE kind = 'sub' AND company_id = ?`).bind(companyId)).first();
+  const have = await lookup();
+  if (have) return have.code;
+  for (let i = 0; i < 6; i++) {
+    const code = mintCode(crypto.getRandomValues(new Uint8Array(CODE_LENGTH)));
+    try {
+      await env.DB.prepare(
+        `INSERT INTO referral_codes (code, kind, account_id, company_id) VALUES (?, ?, ?, ?)`
+      ).bind(code, kind, kind === "gc" ? accountId : null, kind === "sub" ? companyId : null).run();
+      return code;
+    } catch (err) {
+      if (missingSchema(err)) throw err;
+      // Either the code collided (try another) or a second request minted
+      // this owner's code first (use theirs). Re-reading tells which.
+      const again = await lookup();
+      if (again) return again.code;
+    }
+  }
+  throw new Error("referral_code_mint_failed");
+}
+
+// Who this seat refers AS. A contractor seat speaks for its company; an admin
+// or a project manager speaks for the account -- as a sub if the account is a
+// subcontractor, as the hiring side otherwise. An owner or a tenant is a
+// guest on somebody else's account and refers nobody.
+async function referrerForSeat(c) {
+  const { role, companyId, accountId } = c.get("auth");
+  if (role === "contractor" && companyId) return { kind: "sub", companyId };
+  if (role !== "admin" && role !== "pm") return null;
+  const a = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  const kind = referrerKindForAccount(a?.kind);
+  if (kind === "gc") return { kind: "gc", accountId };
+  if (kind === "sub") {
+    const own = await ensureAccountCompany(c.env, accountId);
+    return own ? { kind: "sub", companyId: own } : null;
+  }
+  return null;
+}
+
+async function logReferralTouch(env, code, channel) {
+  await env.DB.prepare(`INSERT INTO referral_touches (id, code, channel) VALUES (?, ?, ?)`)
+    .bind(uid(), code, channel).run();
+}
+
+// Signup and claim both end here. `cookie` is what the browser carried (the
+// last touch on subsub.work or app.subsub.work); `typed` is a code typed into
+// the form, which is a touch made now and so beats any cookie. Never throws:
+// a referral that cannot be recorded must not cost anybody their account.
+async function recordReferral(env, { subjectKind, subjectId, cookie = null, typed = null, notCode = null }) {
+  try {
+    const now = new Date().toISOString();
+    const touches = [];
+    const typedCode = normalizeCode(typed);
+    if (typedCode) touches.push({ code: typedCode, channel: "code", at: now, typed: true });
+    if (cookie && typeof cookie === "object") {
+      const at = String(cookie.at || "");
+      const age = (Date.now() - Date.parse(at)) / 86400000;
+      if (normalizeCode(cookie.code) && isChannel(cookie.channel) && age >= -1 && age <= REF_COOKIE_DAYS) {
+        touches.push({ code: normalizeCode(cookie.code), channel: cookie.channel, at });
+      }
+    }
+    // Last touch first; if it names a code that does not exist (a typo, a
+    // stale cookie), fall back to the next one rather than to nothing.
+    const ordered = touches.slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    for (const t of ordered) {
+      const row = await referralCodeRow(env, t.code);
+      if (!row) continue;
+      // Referring yourself earns nothing and records nothing.
+      if (notCode && notCode(row)) continue;
+      if (t.typed) await logReferralTouch(env, row.code, "code");
+      const r = await env.DB.prepare(
+        `INSERT OR IGNORE INTO referral_attributions (subject_kind, subject_id, code, channel, touched_at)
+         VALUES (?, ?, ?, ?, ?)`).bind(subjectKind, subjectId, row.code, t.channel, t.at).run();
+      return (r?.meta?.changes || 0) > 0 ? { code: row.code, channel: t.channel, kind: row.kind } : null;
+    }
+  } catch (err) {
+    console.error("[referral] could not record:", err?.message || err);
+  }
+  return null;
+}
+
+// A month free, handed to Stripe. Applied as a CUSTOMER BALANCE credit, which
+// Stripe takes off the next invoice automatically -- no coupon to configure,
+// nothing that expires, and it works on either billing cycle. Keyed by the
+// reward's id so a retry cannot credit twice. An account with no Stripe
+// customer yet (on Basic) keeps the credit pending, and the nightly sweep
+// applies it the day they subscribe.
+async function applyReferralCredit(env, reward) {
+  if (reward.kind !== "gc_credit" || reward.status !== "pending" || !reward.beneficiary_account_id) return false;
+  const acct = await env.DB.prepare(`SELECT id, stripe_customer_id FROM accounts WHERE id = ?`)
+    .bind(reward.beneficiary_account_id).first();
+  if (!acct?.stripe_customer_id) {
+    await env.DB.prepare(`UPDATE referral_rewards SET error = 'no_billing_yet' WHERE id = ?`).bind(reward.id).run();
+    return false;
+  }
+  try {
+    const txn = await stripeCall(env, `/customers/${acct.stripe_customer_id}/balance_transactions`, {
+      params: { amount: -Math.abs(reward.amount_cents), currency: "usd",
+        description: "SubSub referral: one month of Scale free",
+        metadata: { referral_reward_id: reward.id } },
+      idempotencyKey: `ref-credit:${reward.id}`,
+    });
+    const r = await env.DB.prepare(
+      `UPDATE referral_rewards SET status = 'applied', processor_ref = ?, applied_at = CURRENT_TIMESTAMP, error = NULL
+        WHERE id = ? AND status = 'pending'`).bind(txn?.id || null, reward.id).run();
+    if ((r?.meta?.changes || 0) > 0) {
+      await logActivity(env, acct.id, null, "referral_credit",
+        `A referral credited a month of Scale (${formatCentsPlain(reward.amount_cents)}) to the next bill`).catch(() => {});
+    }
+    return true;
+  } catch (err) {
+    await env.DB.prepare(`UPDATE referral_rewards SET error = ? WHERE id = ?`)
+      .bind(String(err?.message || err).slice(0, 300), reward.id).run();
+    return false;
+  }
+}
+const formatCentsPlain = (c) => "$" + (Math.round(c) / 100).toFixed(2).replace(/\.00$/, "");
+
+async function applyPendingCreditsFor(env, accountIds) {
+  for (const id of [...new Set(accountIds.filter(Boolean))]) {
+    const { results } = await env.DB.prepare(
+      `SELECT * FROM referral_rewards WHERE kind = 'gc_credit' AND status = 'pending' AND beneficiary_account_id = ?`
+    ).bind(id).all();
+    for (const r of results || []) await applyReferralCredit(env, r);
+  }
+}
+
+// THE MOMENT A REFERRAL EARNS SOMETHING: a referred account's first PAID
+// invoice. Idempotent by the unique index on (referred account, kind,
+// beneficiary), so Stripe delivering invoice.paid twice -- or every month --
+// writes the rewards once. Never throws; the nightly sweep is the safety net.
+async function referralOnPaid(env, account, invoiceId = null) {
+  try {
+    const attr = await env.DB.prepare(
+      `SELECT * FROM referral_attributions WHERE subject_kind = 'account' AND subject_id = ?`
+    ).bind(account.id).first();
+    const touched = [account.id];
+    if (attr) {
+      const code = await referralCodeRow(env, attr.code);
+      const self = code && ((code.kind === "gc" && code.account_id === account.id)
+        || (code.kind === "sub" && account.company_id && code.company_id === account.company_id));
+      if (code && !self) {
+        const referrer = code.kind === "gc"
+          ? await env.DB.prepare(`SELECT billing FROM accounts WHERE id = ?`).bind(code.account_id).first()
+          : null;
+        const specs = rewardsFor({ codeKind: code.kind, referredKind: account.kind,
+          referredBilling: account.billing, referrerBilling: referrer?.billing });
+        for (const s of specs) {
+          const benAccount = s.beneficiary === "referred" ? account.id : (code.kind === "gc" ? code.account_id : null);
+          const benCompany = code.kind === "sub" && s.beneficiary === "referrer" ? code.company_id : null;
+          const id = uid();
+          const r = await env.DB.prepare(
+            `INSERT OR IGNORE INTO referral_rewards
+               (id, code, referred_account_id, kind, beneficiary, beneficiary_account_id, beneficiary_company_id,
+                amount_cents, trigger_invoice_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).bind(id, code.code, account.id, s.kind, s.beneficiary, benAccount, benCompany,
+            s.amountCents, invoiceId).run();
+          if ((r?.meta?.changes || 0) === 0) continue;
+          await logEvent(env, null, null, "referral.reward_earned", id,
+            { kind: s.kind, beneficiary: s.beneficiary, amountCents: s.amountCents,
+              code: code.code, referredAccountId: account.id });
+          if (s.kind === "sub_cash") {
+            const co = await env.DB.prepare(`SELECT company, contact, email FROM companies WHERE id = ?`)
+              .bind(code.company_id).first();
+            if (co?.email) {
+              const text = [
+                `Hi${co.contact ? " " + String(co.contact).split(" ")[0] : ""},`, "",
+                `${account.name} joined SubSub on your referral and has started paying for it.`,
+                `That earns you $100 and the ${PREFERRED_SUB} badge on your profile.`, "",
+                "The $100 is checked by a person at SubSub before it is paid, which usually takes a few days. We'll be in touch at this address about how you'd like it.", "",
+                "Thanks for spreading the word.", "The SubSub team",
+              ].join("\n");
+              const res = await sendEmail(env, { to: co.email, subject: "You earned $100 for a SubSub referral", text });
+              await logMail(env, { accountId: null, companyId: code.company_id, to: co.email,
+                kind: "referral_reward", subject: "You earned $100 for a SubSub referral", result: res }).catch(() => {});
+            }
+          }
+          if (s.kind === "gc_credit" && benAccount) touched.push(benAccount);
+        }
+      }
+    }
+    await applyPendingCreditsFor(env, touched);
+  } catch (err) {
+    if (!missingSchema(err)) console.error("[referral] on paid:", err?.message || err);
+  }
+}
+
+// The safety net. Any attributed account with a paid invoice and no rewards
+// (a webhook that died, or 075 pasted after somebody had already paid), and
+// any month-free credit still waiting for its account to have billing.
+async function referralSweep(env) {
+  try {
+    const { results: missed } = await env.DB.prepare(
+      `SELECT a.* FROM referral_attributions ra JOIN accounts a ON a.id = ra.subject_id
+        WHERE ra.subject_kind = 'account'
+          AND EXISTS (SELECT 1 FROM invoices i WHERE i.account_id = a.id AND i.status = 'paid' AND i.amount_cents > 0)
+          AND NOT EXISTS (SELECT 1 FROM referral_rewards r WHERE r.referred_account_id = a.id)
+        LIMIT 200`).all();
+    for (const a of missed || []) await referralOnPaid(env, a);
+    const { results: waiting } = await env.DB.prepare(
+      `SELECT r.* FROM referral_rewards r JOIN accounts a ON a.id = r.beneficiary_account_id
+        WHERE r.kind = 'gc_credit' AND r.status = 'pending' AND a.stripe_customer_id IS NOT NULL LIMIT 200`).all();
+    let applied = 0;
+    for (const r of waiting || []) if (await applyReferralCredit(env, r)) applied++;
+    return { missed: (missed || []).length, applied };
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { skipped: migration };
+  }
+}
+
+// ---- the arrival ------------------------------------------------------------
+
+// PUBLIC. A link opened, a Passport viewed. Counts the arrival and says whose
+// code it is, so the landing page can say who invited them -- the referrer
+// chose to put their name on that link. An unknown code is a plain 200 with
+// ok:false rather than a 404, and the route is rate-limited per IP, because a
+// code is eight characters from thirty and walking that space is not
+// something this should help with.
+app.post("/api/referrals/touch", async (c) => {
+  const limit = await rateLimit(c.env, "referral-touch", clientIp(c), { limit: 60, windowMinutes: 10 });
+  if (!limit.ok) return c.json({ ok: false, error: "slow_down" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  const channel = isChannel(b.channel) && b.channel !== "code" ? b.channel : "link";
+  try {
+    const row = await referralCodeRow(c.env, b.code);
+    if (!row) return c.json({ ok: false });
+    await logReferralTouch(c.env, row.code, channel);
+    return c.json({ ok: true, code: row.code, kind: row.kind, from: referrerName(row) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ ok: false });
+    throw err;
+  }
+});
+
+// ---- the referrer's own screen ----------------------------------------------
+
+app.get("/api/referrals/mine", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { accountId } = c.get("auth");
+  const who = await referrerForSeat(c);
+  if (!who) return c.json({ available: false });
+  try {
+    const code = await ensureReferralCode(c.env, who);
+    const row = await referralCodeRow(c.env, code);
+    const { results: referred } = await c.env.DB.prepare(
+      `SELECT ra.subject_id, ra.channel, ra.created_at, a.name, a.kind, a.plan, a.subscription_status
+         FROM referral_attributions ra JOIN accounts a ON a.id = ra.subject_id
+        WHERE ra.code = ? AND ra.subject_kind = 'account' ORDER BY ra.created_at DESC LIMIT 100`
+    ).bind(code).all();
+    const { results: rewards } = await c.env.DB.prepare(
+      `SELECT r.*, a.name AS referred_name FROM referral_rewards r
+         LEFT JOIN accounts a ON a.id = r.referred_account_id
+        WHERE (r.code = ? AND r.beneficiary = 'referrer')
+           OR (r.beneficiary = 'referred' AND r.beneficiary_account_id = ?)
+        ORDER BY r.created_at DESC`
+    ).bind(code, who.kind === "gc" ? accountId : "-").all();
+    const today = new Date().toISOString().slice(0, 10);
+    const inv = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM referral_invites WHERE code = ? AND created_at >= ?`).bind(code, today).first();
+    const opens = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM referral_touches WHERE code = ?`).bind(code).first();
+    const rewardFor = (accId) => (rewards || []).find((r) => r.referred_account_id === accId && r.beneficiary === "referrer");
+    return c.json({
+      available: true, kind: who.kind, code, link: referralLink(code), from: referrerName(row),
+      preferredSub: who.kind === "sub" && isPreferredSub(rewards || []),
+      opens: opens?.n || 0,
+      invitesToday: inv?.n || 0, inviteLimit: INVITE_DAILY_LIMIT,
+      referred: (referred || []).map((r) => {
+        const rw = rewardFor(r.subject_id);
+        return { name: r.name, kind: r.kind, joinedAt: r.created_at, via: r.channel,
+          paying: !!rw || (r.plan === "scale" && ENTITLED.has(r.subscription_status)),
+          reward: rw ? { kind: rw.kind, status: rw.status, amountCents: rw.amount_cents } : null };
+      }),
+      rewards: (rewards || []).map((r) => ({ id: r.id, kind: r.kind, beneficiary: r.beneficiary,
+        status: r.status, amountCents: r.amount_cents, referredName: r.referred_name,
+        createdAt: r.created_at, paidAt: r.paid_at, appliedAt: r.applied_at,
+        waiting: r.status === "pending" && r.error === "no_billing_yet" })),
+    });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+// "Get your GCs on SubSub". Email goes from SubSub with the sender's name on
+// it and their address as reply-to; a text goes from the sender's OWN phone
+// (the browser opens it), so SubSub never texts a stranger on anybody's
+// behalf and never sees the number -- those are only counted. Rate-limited per
+// code per day, and an address emailed in the last month is not emailed again.
+//
+// An address that already belongs to somebody on SubSub is not emailed, and
+// the reply does not say so: it reads exactly like a sent invite, because an
+// invite screen that answered "already on SubSub" would be a way to ask which
+// of a list of addresses is here.
+app.post("/api/referrals/invites", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { userId } = c.get("auth");
+  const who = await referrerForSeat(c);
+  if (!who) return c.json({ error: "forbidden" }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  const emails = [...new Set((Array.isArray(b.emails) ? b.emails : [])
+    .map((e) => String(e || "").trim().toLowerCase()).filter(Boolean))].slice(0, INVITE_DAILY_LIMIT);
+  const sms = Math.max(0, Math.min(INVITE_DAILY_LIMIT, Math.floor(Number(b.sms) || 0)));
+  if (!emails.length && !sms) return c.json({ error: "nothing_to_send" }, 400);
+  try {
+    const code = await ensureReferralCode(c.env, who);
+    const row = await referralCodeRow(c.env, code);
+    const today = new Date().toISOString().slice(0, 10);
+    const used = (await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM referral_invites WHERE code = ? AND created_at >= ?`).bind(code, today).first())?.n || 0;
+    let room = INVITE_DAILY_LIMIT - used;
+    const me = await c.env.DB.prepare(`SELECT name, email FROM users WHERE id = ?`).bind(userId).first();
+    const link = referralLink(code);
+    const mail = inviteEmail({ fromName: me?.name, company: referrerName(row), link });
+    let sent = 0, texted = 0;
+    const skipped = [];
+    const since = new Date(Date.now() - INVITE_REPEAT_DAYS * 86400000).toISOString().slice(0, 10);
+    for (const to of emails) {
+      if (!validInviteEmail(to)) { skipped.push({ email: to, reason: "invalid" }); continue; }
+      if (room <= 0) { skipped.push({ email: to, reason: "limit" }); continue; }
+      const recent = await c.env.DB.prepare(
+        `SELECT 1 AS yes FROM referral_invites WHERE code = ? AND to_email = ? AND created_at >= ?`
+      ).bind(code, to, since).first();
+      if (recent) { skipped.push({ email: to, reason: "recent" }); continue; }
+      const id = uid();
+      await c.env.DB.prepare(
+        `INSERT INTO referral_invites (id, code, sent_by, channel, to_email) VALUES (?, ?, ?, 'email', ?)`
+      ).bind(id, code, userId || null, to).run();
+      room--; sent++;
+      const known = await c.env.DB.prepare(`SELECT 1 AS yes FROM users WHERE lower(email) = ?`).bind(to).first();
+      if (known) continue;
+      const res = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, replyTo: me?.email || undefined });
+      await logMail(c.env, { accountId: c.get("auth").accountId, companyId: who.companyId || null, to,
+        kind: "referral_invite", subject: mail.subject, result: res, sentBy: userId }).catch(() => {});
+      if (res?.ok) await c.env.DB.prepare(`UPDATE referral_invites SET emailed = 1 WHERE id = ?`).bind(id).run();
+    }
+    for (let i = 0; i < sms && room > 0; i++) {
+      await c.env.DB.prepare(
+        `INSERT INTO referral_invites (id, code, sent_by, channel) VALUES (?, ?, ?, 'sms')`
+      ).bind(uid(), code, userId || null).run();
+      room--; texted++;
+    }
+    return c.json({ ok: true, sent, texted, skipped, left: Math.max(0, room) });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+// ---- the console ------------------------------------------------------------
+
+// THE LEDGER, every reward with who earned it and from whom, plus the
+// referrers bringing the most accounts in. Staff route.
+app.get("/api/platform/referrals", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  try {
+    const { results: rewards } = await c.env.DB.prepare(
+      `SELECT r.*, ra.name AS referred_name, ra.kind AS referred_kind,
+              ba.name AS beneficiary_account_name, bc.company AS beneficiary_company_name,
+              bc.email AS beneficiary_company_email,
+              au.name AS approved_by_name, pu.name AS paid_by_name
+         FROM referral_rewards r
+         LEFT JOIN accounts ra ON ra.id = r.referred_account_id
+         LEFT JOIN accounts ba ON ba.id = r.beneficiary_account_id
+         LEFT JOIN companies bc ON bc.id = r.beneficiary_company_id
+         LEFT JOIN users au ON au.id = r.approved_by
+         LEFT JOIN users pu ON pu.id = r.paid_by
+        ORDER BY r.created_at DESC LIMIT 500`).all();
+    const { results: top } = await c.env.DB.prepare(
+      `SELECT rc.code, rc.kind, a.name AS account_name, co.company AS company_name,
+              (SELECT COUNT(*) FROM referral_attributions x WHERE x.code = rc.code AND x.subject_kind = 'account') AS referred,
+              (SELECT COUNT(*) FROM referral_rewards y WHERE y.code = rc.code AND y.beneficiary = 'referrer' AND y.status <> 'void') AS paying,
+              (SELECT COUNT(*) FROM referral_touches t WHERE t.code = rc.code) AS opens,
+              (SELECT COUNT(*) FROM referral_invites v WHERE v.code = rc.code) AS invites
+         FROM referral_codes rc
+         LEFT JOIN accounts a ON a.id = rc.account_id
+         LEFT JOIN companies co ON co.id = rc.company_id
+        ORDER BY referred DESC, paying DESC, opens DESC LIMIT 50`).all();
+    return c.json({
+      rewards: (rewards || []).map((r) => ({
+        id: r.id, kind: r.kind, beneficiary: r.beneficiary, status: r.status, amountCents: r.amount_cents,
+        code: r.code, referredAccountId: r.referred_account_id, referredName: r.referred_name, referredKind: r.referred_kind,
+        to: r.beneficiary_company_name || r.beneficiary_account_name || null,
+        toEmail: r.beneficiary_company_email || null,
+        reference: r.reference, note: r.note, error: r.error, processorRef: r.processor_ref,
+        createdAt: r.created_at, approvedAt: r.approved_at, approvedBy: r.approved_by_name,
+        paidAt: r.paid_at, paidBy: r.paid_by_name, appliedAt: r.applied_at, voidedAt: r.voided_at,
+      })),
+      referrers: (top || []).filter((t) => t.referred > 0 || t.opens > 0 || t.invites > 0).map((t) => ({
+        code: t.code, kind: t.kind, name: t.kind === "sub" ? t.company_name : t.account_name,
+        referred: t.referred, paying: t.paying, opens: t.opens, invites: t.invites })),
+    });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ rewards: [], referrers: [], migration });
+  }
+});
+
+// Approve, mark paid, void, or retry a credit. Money, so finance access only,
+// and every move is on the platform log with who made it. Marking paid needs a
+// reference -- a check number, a transfer id -- because "how was it paid" is
+// the question that gets asked; voiding needs a reason.
+app.post("/api/platform/referrals/rewards/:id", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  if (!staff.finance) return c.json({ error: "finance_only" }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  const action = String(b.action || "");
+  const reference = String(b.reference || "").trim().slice(0, 200);
+  const note = String(b.note || "").trim().slice(0, 500);
+  try {
+    const r = await c.env.DB.prepare(`SELECT * FROM referral_rewards WHERE id = ?`).bind(c.req.param("id")).first();
+    if (!r) return c.json({ error: "not_found" }, 404);
+    if (action === "retry") {
+      if (r.kind !== "gc_credit" || r.status !== "pending") return c.json({ error: "wrong_status" }, 409);
+      const ok = await applyReferralCredit(c.env, r);
+      const now = await c.env.DB.prepare(`SELECT status, error FROM referral_rewards WHERE id = ?`).bind(r.id).first();
+      return c.json({ ok, status: now?.status, error: now?.error || null });
+    }
+    const move = rewardMove(r, action);
+    if (!move.ok) return c.json({ error: move.error }, 409);
+    if (action === "pay" && !reference) return c.json({ error: "reference_required" }, 400);
+    if (action === "void" && !note) return c.json({ error: "reason_required" }, 400);
+    const sets = {
+      approve: [`approved_at = CURRENT_TIMESTAMP, approved_by = ?`, [staff.userId]],
+      pay: [`paid_at = CURRENT_TIMESTAMP, paid_by = ?, reference = ?`, [staff.userId, reference]],
+      void: [`voided_at = CURRENT_TIMESTAMP, voided_by = ?, note = ?`, [staff.userId, note]],
+    }[action];
+    const res = await c.env.DB.prepare(
+      `UPDATE referral_rewards SET status = ?, ${sets[0]} WHERE id = ? AND status = ?`
+    ).bind(move.to, ...sets[1], r.id, r.status).run();
+    if ((res?.meta?.changes || 0) === 0) return c.json({ error: "wrong_status" }, 409);
+    await auditPlatform(c.env, staff, null, `referral.reward_${action}`,
+      `Referral reward ${action}: ${formatCentsPlain(r.amount_cents)} (${r.kind})`,
+      { rewardId: r.id, from: r.status, to: move.to, reference: reference || null, note: note || null });
+    return c.json({ ok: true, status: move.to });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+// NEW HIRING ACCOUNTS PER EXISTING ONE, BY WEEK AND BY METRO. The arithmetic
+// is acquisitionByWeek in shared/referral.js; this is the read. Where an
+// account is comes off its company row, and for the kinds that have none off
+// its commonest building city -- the same order accountPlace uses -- and
+// otherwise it says Unknown rather than guess.
+app.get("/api/platform/referrals/acquisition", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const weeks = Math.max(4, Math.min(52, Math.floor(Number(c.req.query("weeks")) || 12)));
+  const { results: accounts } = await c.env.DB.prepare(
+    `SELECT a.id, a.kind, a.created_at,
+            COALESCE(NULLIF(TRIM(co.city), ''),
+              (SELECT p.city FROM properties p WHERE p.account_id = a.id AND TRIM(COALESCE(p.city, '')) <> ''
+                GROUP BY lower(TRIM(p.city)) ORDER BY COUNT(*) DESC, lower(TRIM(p.city)) LIMIT 1)) AS city,
+            COALESCE(NULLIF(TRIM(co.state), ''),
+              (SELECT p.state FROM properties p WHERE p.account_id = a.id AND TRIM(COALESCE(p.state, '')) <> ''
+                GROUP BY upper(TRIM(p.state)) ORDER BY COUNT(*) DESC, upper(TRIM(p.state)) LIMIT 1)) AS state
+       FROM accounts a LEFT JOIN companies co ON co.id = a.company_id`).all().catch(async (err) => {
+    if (!missingSchema(err)) throw err;
+    return c.env.DB.prepare(`SELECT id, kind, created_at, NULL AS city, NULL AS state FROM accounts`).all();
+  });
+  let attributions = {};
+  let migration = null;
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT ra.subject_id, rc.kind FROM referral_attributions ra JOIN referral_codes rc ON rc.code = ra.code
+        WHERE ra.subject_kind = 'account'`).all();
+    attributions = Object.fromEntries((results || []).map((r) => [r.subject_id, r.kind]));
+  } catch (err) {
+    migration = missingSchema(err);
+    if (!migration) throw err;
+  }
+  const out = acquisitionByWeek({
+    accounts: (accounts || []).map((a) => ({ id: a.id, kind: a.kind, createdAt: a.created_at, city: a.city, state: a.state })),
+    attributions, weeks,
+  });
+  return c.json({ ...out, migration });
 });
 
 
@@ -6480,6 +7038,25 @@ app.get("/api/subs", async (c) => {
     if (!missingSchema(err)) throw err;
     console.warn("[company_docs] roster detail unavailable:", err?.message || err);
   }
+  // PREFERRED SUB, read off the referral ledger rather than stored beside it:
+  // a sub holding a cash reward nobody voided brought a paying account onto
+  // SubSub. One query for the roster, and a database without 075 simply has
+  // no badges. Attached here and carried by name in hydrateAccount, which
+  // drops anything its whitelists do not name.
+  try {
+    const ids = subs.map((x) => x.id);
+    if (ids.length) {
+      const { results: pref } = await c.env.DB.prepare(
+        `SELECT DISTINCT r.beneficiary_company_id AS company_id FROM referral_rewards r
+          WHERE r.kind = 'sub_cash' AND r.status <> 'void'
+            AND r.beneficiary_company_id IN (${ids.map(() => "?").join(",")})`
+      ).bind(...ids).all();
+      const set = new Set((pref || []).map((r) => r.company_id));
+      subs.forEach((sub) => { sub.preferredSub = set.has(sub.id); });
+    }
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
   return c.json(subs);
 });
 
@@ -6929,6 +7506,153 @@ async function askStateRegistry(state, licenseNumber) {
   if (!cfg) return { found: false, status: "UNSUPPORTED_STATE", supportedStates: [...Object.keys(SOCRATA_STATES), "DC"] };
   return verifySocrataState(cfg, licenseNumber);
 }
+
+// ===========================================================================
+// THE MARKETING SITE'S FREE TOOLS. Public, rate-limited per IP, and never a
+// door into SubSub's own data: the licence checker reads the STATE's public
+// registry, never the companies table, and the handyman calculator is
+// arithmetic the browser already did. The rules are shared/licenselookup.js.
+// ===========================================================================
+
+// A provider answers two questions about one state. Washington is the state's
+// own open data; a 50-state verification partner slots in here as one more
+// provider when LICENSE_LOOKUP_PARTNER names one of worker/licenses.js's
+// PROVIDERS and its key is set. byName may be null -- most partners verify by
+// number only -- and the route says so rather than pretending to search.
+const LOOKUP_PROVIDERS = {
+  WA: {
+    id: "wa-lni", label: "Washington State L&I",
+    byLicense: (env, license) => askStateRegistry("WA", license),
+    byName: (env, name) => socrataNameSearch(SOCRATA_STATES.WA, name),
+  },
+};
+function lookupProviderFor(env, state) {
+  if (!isLiveState(state)) return null;
+  if (LOOKUP_PROVIDERS[state]) return LOOKUP_PROVIDERS[state];
+  const want = String(env.LICENSE_LOOKUP_PARTNER || "").trim();
+  const partner = want && configuredProviders(env).find((p) => p.id === want);
+  if (!partner) return null;
+  return { id: partner.id, label: partner.label, byName: null,
+    byLicense: (env2, license) => askProvider(partner, { state, license }) };
+}
+
+// The registry's own search, by business name. A CONTAINS match on the state's
+// public data -- which is what the state's own lookup page offers -- and never
+// anything of SubSub's: this reads data.wa.gov, not the companies table, so it
+// is not the directory this product refuses. Ten rows, no status in them.
+async function socrataNameSearch(cfg, name) {
+  const q = String(name).toUpperCase().replace(/'/g, "''").replace(/[%_]/g, "");
+  const where = `upper(businessname) like '%${q}%'`;
+  const url = `${cfg.base}/${cfg.datasets.general}.json?$where=${encodeURIComponent(where)}`
+    + `&$order=${encodeURIComponent("businessname")}&$limit=${MAX_MATCHES}`;
+  const res = await fetchJsonSafe(url);
+  if (!res.ok) return { ok: false, error: res.error };
+  return { ok: true, rows: (res.data || []).map((r) => ({
+    businessName: r.businessname || null,
+    licenseNumber: r[cfg.licenseField] || null,
+    city: r.city || r.businessaddresscity || null,
+  })) };
+}
+
+async function storeLead(env, { email, tool, state, detail, refCode }) {
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO leads (id, email, tool, state, detail, ref_code) VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, email, tool, state || null, JSON.stringify(detail || {}), refCode || null).run();
+  // Told to a person, because a lead nobody hears about is a row in a table.
+  const to = String(env.LEADS_EMAIL || "").trim();
+  if (to) {
+    const subject = `[Lead] ${tool === "check" ? "Licence check" : "Handyman limits"} · ${state || "no state"} · ${email}`;
+    const text = [`${email} used ${tool === "check" ? "subsub.work/check" : "subsub.work/handyman-limits"}.`,
+      `State: ${state || "—"}`, `Asked: ${JSON.stringify(detail || {})}`,
+      refCode ? `Arrived on referral code ${refCode}.` : ""].filter(Boolean).join("\n");
+    const res = await sendEmail(env, { to, subject, text, replyTo: email });
+    if (res?.ok) await env.DB.prepare(`UPDATE leads SET notified = 1 WHERE id = ?`).bind(id).run();
+  }
+  return id;
+}
+
+// THE CHECKER. Without an email: whether there is a record, and whose. With
+// one: the status, the expiry, the bond and the insurance, and the address is
+// kept as a lead tagged with the tool and the state.
+app.post("/api/public/license-lookup", async (c) => {
+  const limit = await rateLimit(c.env, "public-lookup", clientIp(c), { limit: 30, windowMinutes: 10 });
+  if (!limit.ok) return c.json({ error: "slow_down" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  const q = readLookup(b);
+  if (q.error) return c.json({ error: q.error }, 400);
+  const provider = lookupProviderFor(c.env, q.state);
+  if (!provider) {
+    return c.json({ error: "state_not_live", state: q.state, live: LIVE_STATES }, 404);
+  }
+  const email = String(b.email || "").trim().toLowerCase();
+  const wantFull = !!email;
+  if (wantFull && !validLeadEmail(email)) return c.json({ error: "bad_email" }, 400);
+
+  // By name: a list of matches to choose from. Never the full answer, even
+  // with an email -- that is asked for by number, once a match is chosen.
+  if (q.name) {
+    if (!provider.byName) return c.json({ error: "name_search_unavailable", source: provider.label }, 400);
+    const r = await provider.byName(c.env, q.name);
+    if (!r.ok) return c.json({ error: "registry_unavailable", source: provider.label }, 502);
+    return c.json({ state: q.state, source: provider.label, matches: r.rows.map(previewOf) });
+  }
+
+  const rec = await provider.byLicense(c.env, q.license);
+  if (rec?.status === "CHECK_FAILED") return c.json({ error: "registry_unavailable", source: provider.label }, 502);
+  const full = fullOf({ ...rec, licenseNumber: rec?.licenseNumber || q.license });
+  if (!wantFull) {
+    return c.json({ state: q.state, source: provider.label, found: full.found,
+      preview: full.found ? previewOf({ businessName: full.name, licenseNumber: full.license }) : null });
+  }
+  let leadSaved = true;
+  try {
+    await storeLead(c.env, { email, tool: "check", state: q.state,
+      detail: { license: q.license }, refCode: normalizeCode(b.ref) || null });
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    leadSaved = false;   // a database without 076 still answers
+  }
+  return c.json({ state: q.state, source: provider.label, full, verdict: verdictText(full, q.state), leadSaved });
+});
+
+// THE CALCULATOR'S EMAIL, and "tell me when my state is live" on a check page.
+// The arithmetic happens in the browser off the same handycap.js the app uses;
+// this keeps the address and emails the visitor what they asked for.
+app.post("/api/public/leads", async (c) => {
+  const limit = await rateLimit(c.env, "public-lead", clientIp(c), { limit: 10, windowMinutes: 10 });
+  if (!limit.ok) return c.json({ error: "slow_down" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  const email = String(b.email || "").trim().toLowerCase();
+  if (!validLeadEmail(email)) return c.json({ error: "bad_email" }, 400);
+  if (!isLeadTool(b.tool)) return c.json({ error: "bad_tool" }, 400);
+  const state = normalizeState(b.state) || null;
+  const raw = b.detail && typeof b.detail === "object" ? b.detail : {};
+  const detail = {};
+  for (const k of ["jobValue", "jobType", "notifyWhenLive", "license"]) {
+    if (raw[k] !== undefined) detail[k] = typeof raw[k] === "string" ? raw[k].slice(0, 80) : raw[k];
+  }
+  try {
+    await storeLead(c.env, { email, tool: b.tool, state, detail, refCode: normalizeCode(b.ref) || null });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+  // The visitor gets the copy they asked for. The words are the shared
+  // module's, so the email cannot say something the page did not.
+  if (b.tool === "handyman_limits" && state) {
+    const t = handyVerdict({ state, jobValue: detail.jobValue, jobType: detail.jobType });
+    if (t) {
+      const text = [`Your handyman limit check for ${stateName(state) || state}:`, "",
+        t.answer, t.head, t.why, t.note || "", "",
+        "Not legal advice. Verify with your state licensing board before relying on it.", "",
+        "SubSub keeps your subs, their licenses and their insurance in one place: https://subsub.work/"].filter((x) => x !== null).join("\n");
+      await sendEmail(c.env, { to: email, subject: `Handyman limits in ${stateName(state) || state}`, text });
+    }
+  }
+  return c.json({ ok: true });
+});
 
 async function verifyLicenseForState(env, state, licenseNumber) {
   return verifyWithFallback(env, {
@@ -7455,6 +8179,8 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bleads\b/i.test(m)) return "076_leads";
+  if (/\breferral_(codes|touches|attributions|rewards|invites)\b|ux_referral_/i.test(m)) return "075_referrals";
   if (/\bwo_claim_links\b|\bsub_attributions\b/i.test(m)) return "074_wo_claims";
   if (/\bjob_access\b/i.test(m)) return "073_job_access";
   if (/\btenant_contacts\b|\bbuilding_notices\b/i.test(m)) return "072_tenant_home";
@@ -16758,6 +17484,11 @@ app.get("/api/cron/embed-nudge", async (c) => {
   return c.json(await embedNudgeSweep(c.env));
 });
 
+app.get("/api/cron/referrals", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await referralSweep(c.env));
+});
+
 app.get("/api/cron/doc-expiry", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await docExpirySweep(c.env));
@@ -21323,7 +22054,8 @@ export default {
     const jobs = nightly
       ? [["hostnames", hostnameSweep], ["licenses", licenseSweep],
          ["doc-expiry", docExpirySweep], ["retouch", retouchSweep],
-         ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep]]
+         ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
+         ["referrals", referralSweep]]
       : [["hostnames", hostnameSweep]];
 
     ctx.waitUntil((async () => {

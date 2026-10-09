@@ -247,6 +247,18 @@ WITH spec(j) AS (SELECT
   -- answers migration_needed naming it.
   ',["m074_wo_claim_links","col","wo_claim_links",["token","work_order_id","account_id","company_id","open_count","claimed_at"]]' ||
   ',["m074_sub_attributions","col","sub_attributions",["company_id","account_id","work_order_id","user_id","claimed_at"]]' ||
+  -- 075. Referrals. Until it is run the referral screens answer
+  -- migration_needed naming it, signups record no referrer, and the
+  -- paid-invoice webhook earns nothing (the nightly sweep catches up after).
+  ',["m075_referral_codes","col","referral_codes",["code","kind","account_id","company_id"]]' ||
+  ',["m075_referral_touches","col","referral_touches",["id","code","channel","at"]]' ||
+  ',["m075_referral_attributions","col","referral_attributions",["subject_kind","subject_id","code","channel","touched_at"]]' ||
+  ',["m075_referral_rewards","col","referral_rewards",["id","code","referred_account_id","kind","beneficiary","amount_cents","status","processor_ref","reference"]]' ||
+  ',["m075_referral_invites","col","referral_invites",["id","code","channel","to_email","emailed"]]' ||
+  -- 076. Leads from the marketing site's free tools. Until it is run the
+  -- licence checker and the handyman calculator still answer, and the email
+  -- they asked for is not kept.
+  ',["m076_leads","col","leads",["id","email","tool","state","detail","ref_code","notified"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -687,6 +699,22 @@ WITH inv(j) AS (SELECT '['
   || ',' || json_array('m074_inv_claim_unattributed', (SELECT COUNT(*) FROM wo_claim_links l
     WHERE l.claimed_at IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM sub_attributions a WHERE a.company_id = l.company_id)))
+  -- Must read ZERO. A reward whose referred account was not brought in on that
+  -- code is money earned by somebody who did not refer anybody -- the webhook
+  -- only ever writes rewards from the account's own attribution row.
+  || ',' || json_array('m075_inv_reward_unattributed', (SELECT COUNT(*) FROM referral_rewards r
+    WHERE NOT EXISTS (SELECT 1 FROM referral_attributions a
+      WHERE a.subject_kind = 'account' AND a.subject_id = r.referred_account_id AND a.code = r.code)))
+  -- Must read ZERO. A sub's $100 marked paid with nothing saying how is the
+  -- question "how did we pay them?" with no answer -- the console refuses
+  -- the move without a reference.
+  || ',' || json_array('m075_inv_paid_unreferenced', (SELECT COUNT(*) FROM referral_rewards
+    WHERE status = 'paid' AND (reference IS NULL OR TRIM(reference) = '')))
+  -- Must read ZERO. A month-free credit marked applied with no Stripe balance
+  -- transaction behind it is an account told their bill was credited when
+  -- nothing carries the credit.
+  || ',' || json_array('m075_inv_credit_unrecorded', (SELECT COUNT(*) FROM referral_rewards
+    WHERE status = 'applied' AND (processor_ref IS NULL OR processor_ref = '')))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

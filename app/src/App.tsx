@@ -35,6 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
+  Gift, Award, Contact, BadgeCheck,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -105,6 +106,7 @@ import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
 import { TRADES } from "../shared/trades.js";
 import { claimPathToken, SENT_VIA, FREE_LINE, footerText } from "../shared/claim.js";
+import { inviteText, smsHref, PREFERRED_SUB, isGcKind } from "../shared/referral.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
 import { qrPath } from "./lib/qr.js";
@@ -4663,6 +4665,10 @@ export default function SubSub() {
         // here, a seat somewhere else. Third instance of
         // drop-a-field-you-did-not-list.
         if ("answersForItself" in flat) en.answersForItself = !!flat.answersForItself;
+        // 075. Preferred Sub is read off the referral ledger and is neither a
+        // companies column nor an engagements one, so both whitelists would
+        // drop it -- named here by hand, the fourth field that has had to be.
+        if ("preferredSub" in flat) en.preferredSub = !!flat.preferredSub;
         // Same for what the documents say. These are read off company_docs,
         // which is neither a companies column nor an engagements one, so the
         // whitelists drop them -- and a roster whose `docs` is undefined reads
@@ -5983,8 +5989,12 @@ export default function SubSub() {
               (JOB_PANES), and the crews are a tab of the roster page beside
               the companies this account hires, because both are the labour. */}
           {!can("portal") && ownWork && [["jobs", "My Jobs"]]
+            /* 075. A subcontractor account's own team refers GCs too. A
+               hiring account refers from Account -> Refer a GC instead,
+               because for them it is an account matter, not their work. */
+            .concat(kindOf(account) === "subcontractor" ? [["refer", "Get your GCs on SubSub"]] : [])
             .map(([id, label]) => (
-              <button key={id} className={tab === "portal" && JOB_PANES.includes(pane) ? "on" : ""}
+              <button key={id} className={tab === "portal" && (id === "jobs" ? JOB_PANES.includes(pane) : pane === id) ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
                 {label}
                 {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
@@ -6007,6 +6017,8 @@ export default function SubSub() {
                entry reading "My QR code". */
             ["crews", "My Crews"], ["docs", "Compliance pack"], ["uniforms", "Uniforms"],
             ["connect", "Connect"],
+            /* 075. Where a sub brings the GCs they work for onto SubSub. */
+            ["refer", "Get your GCs on SubSub"],
           ].map(([id, label]) => (
             <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
@@ -6375,6 +6387,7 @@ export default function SubSub() {
                         <div className="name-row">
                           <h3>{s.company}</h3>
                           <span className="nr-right">
+                            {s.preferredSub && <span className="pref-sub" title="Brought a paying GC onto SubSub"><Award size={11} /> {PREFERRED_SUB}</span>}
                             {s.rating > 0 && <Stars value={s.rating} />}
                             <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
                           </span>
@@ -6409,6 +6422,7 @@ export default function SubSub() {
                       <div className="name-row">
                         <h3>{s.company}</h3>
                         <span className="nr-right">
+                          {s.preferredSub && <span className="pref-sub" title="Brought a paying GC onto SubSub"><Award size={11} /> {PREFERRED_SUB}</span>}
                           {s.rating > 0 && <Stars value={s.rating} />}
                           <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
                         </span>
@@ -9502,6 +9516,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     ["accounts", "Accounts", Building2],
     ["companies", "Companies", Users],
     ...(admin.finance ? [["revenue", "Revenue", TrendingUp]] : []),
+    // 075. Referrals: the acquisition metric any staff member reads, and the
+    // ledger only finance can move.
+    ["referrals", "Referrals", Gift],
     ...(isSuper ? [["health", "Health", Activity]] : []),
   ];
   const [navOpen, setNavOpen] = useState(false);
@@ -10748,6 +10765,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
         )}
 
         {/* ===== HEALTH ===== */}
+        {screen === "referrals" && !openId && <PlatformReferrals admin={admin} />}
+
         {screen === "health" && !openId && isSuper && (
           <>
             <div className="pf-head"><h2>Health</h2></div>
@@ -21482,7 +21501,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage ? [["users", "Users"]] : [])
     // Only where there are buildings for tenants to be in.
     .concat(canManage && kindHasProperties(accountKind) ? [["tenants", "Tenants"]] : [])
-    .concat(canManage ? [["billing", "Subscription"]] : []);
+    .concat(canManage ? [["billing", "Subscription"]] : [])
+    // 075. The hiring side's referral code. Beside the subscription, because
+    // what it earns is a month of that subscription.
+    .concat(canManage && isGcKind(accountKind) ? [["refer", "Refer a GC"]] : []);
   // Who is about to be removed, so the row does not vanish before anybody
   // has agreed to it.
   const [removing, setRemoving] = useState(null);
@@ -22296,6 +22318,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "tenants" && canManage && (
         <TenantsPane properties={properties} accountKind={accountKind} />
       )}
+
+      {pane === "refer" && canManage && isGcKind(accountKind) && <ReferScreen fromName={me?.name} />}
 
       {pane === "billing" && canManage && (
         <>
@@ -25890,6 +25914,422 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
 // A QR code, as an SVG. Vector rather than a canvas or an image request:
 // this gets photographed off a phone screen in a car park and printed on a
 // van door, and both want crisp edges at whatever size they end up.
+// 075. GET YOUR GCs ON SUBSUB, AND REFER A GC.
+//
+// One screen for both kinds of referrer, because both are bringing in a
+// HIRING account and the mechanics are identical: a code, a link, a
+// pre-written message, and a list of who came in on it. What differs is the
+// reward and the words, and those come off `kind`.
+//
+// TEXTS GO FROM THE SENDER'S OWN PHONE. Each number opens their messages app
+// with the invite already written; SubSub never texts a stranger on anybody's
+// behalf, and a message from somebody you work with is the one that gets
+// read. The press is only COUNTED, for the daily ceiling. Emails are sent by
+// SubSub under the sender's name, with their address to reply to.
+//
+// CONTACTS ARE PICKED ON THE DEVICE AND NEVER UPLOADED AS A LIST. Where the
+// browser offers its contact picker (Chrome on Android), the chosen entries
+// land in this form and nowhere else until somebody presses Send; elsewhere
+// (Safari on an iPad has no picker) the box takes typed or pasted addresses.
+// A server-side address book would be a list of every GC a sub knows, which is
+// the accumulation this product refuses everywhere.
+function splitContacts(text) {
+  return String(text || "").split(/[\n,;]+/).map((t) => t.trim()).filter(Boolean).map((t) => {
+    if (t.includes("@")) return { kind: "email", value: t.toLowerCase() };
+    const digits = t.replace(/\D/g, "");
+    if (digits.length >= 10) return { kind: "phone", value: t };
+    return { kind: "bad", value: t };
+  });
+}
+
+const REWARD_WORDS = {
+  sub_cash: {
+    pending: "$100 earned · being checked",
+    approved: "$100 approved · on its way",
+    paid: "$100 paid",
+    void: "Not eligible",
+  },
+  gc_credit: {
+    pending: "Month free · applies once you're on a paid plan",
+    applied: "Month free · credited to your bill",
+    void: "Not eligible",
+  },
+};
+
+function ReferScreen({ fromName }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [text, setText] = useState("");
+  const [picked, setPicked] = useState([]);
+  const [opened, setOpened] = useState({});
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState(null);
+  const [copied, setCopied] = useState("");
+  const load = useCallback(() => api.referralsMine()
+    .then((d) => { setData(d); setErr(""); })
+    .catch((e) => setErr(e?.body?.migration
+      ? `Referrals are not switched on yet. Migration ${e.body.migration} needs pasting.`
+      : "Couldn't load your referral link. Try again in a moment.")), []);
+  useEffect(() => { load(); }, [load]);
+
+  if (err) return <div className="refer"><p className="form-err">{err}</p></div>;
+  if (!data) return <div className="refer"><p className="panel-note">Loading your link…</p></div>;
+  if (!data.available) return null;
+
+  const isSub = data.kind === "sub";
+  const message = inviteText({ fromName, company: data.from, link: data.link });
+  const entries = [...picked, ...splitContacts(text)];
+  const emails = [...new Set(entries.filter((e) => e.kind === "email").map((e) => e.value))];
+  const phones = entries.filter((e) => e.kind === "phone");
+  const bad = entries.filter((e) => e.kind === "bad");
+  const canPick = typeof navigator !== "undefined" && navigator.contacts && typeof navigator.contacts.select === "function";
+
+  const copy = async (what, value) => {
+    try { await navigator.clipboard.writeText(value); setCopied(what); setTimeout(() => setCopied(""), 2000); }
+    catch { setCopied(""); }
+  };
+  const share = async () => {
+    try { await navigator.share({ text: message }); } catch { /* cancelled */ }
+  };
+  const pick = async () => {
+    try {
+      const got = await navigator.contacts.select(["name", "email", "tel"], { multiple: true });
+      const add = [];
+      for (const c of got || []) {
+        const email = (c.email || [])[0];
+        const tel = (c.tel || [])[0];
+        if (email) add.push({ kind: "email", value: String(email).toLowerCase(), name: (c.name || [])[0] });
+        else if (tel) add.push({ kind: "phone", value: tel, name: (c.name || [])[0] });
+      }
+      setPicked((was) => [...was, ...add]);
+    } catch { /* cancelled */ }
+  };
+  const sendEmails = async () => {
+    setSending(true); setResult(null);
+    try {
+      const r = await api.sendReferralInvites({ emails });
+      setResult(r);
+      setText((t) => splitContacts(t).filter((e) => e.kind !== "email").map((e) => e.value).join("\n"));
+      setPicked((p) => p.filter((e) => e.kind !== "email"));
+      load();
+    } catch (e) {
+      setResult({ error: e?.body?.error === "migration_needed"
+        ? `Migration ${e.body.migration} needs pasting first.` : "That didn't send. Try again in a moment." });
+    } finally { setSending(false); }
+  };
+  const texted = (value) => {
+    setOpened((o) => ({ ...o, [value]: true }));
+    api.sendReferralInvites({ sms: 1 }).catch(() => {});
+  };
+  const skippedWords = { invalid: "doesn't look like an address", recent: "already invited this month", limit: "over today's limit" };
+
+  return (
+    <div className="refer">
+      <div className="page-head">
+        <h2>{isSub ? "Get your GCs on SubSub" : "Refer a GC"}</h2>
+      </div>
+      <section className="refer-hero">
+        <div className="refer-earn">
+          <Gift size={22} />
+          <div>
+            <h3>{isSub ? "Earn $100 for every GC who signs up and starts paying" : "You both get a month of Scale free"}</h3>
+            <p>{isSub
+              ? <>Send the GCs you work for your link. When one of them joins and starts paying for SubSub, you earn $100 and the <b>Preferred Sub</b> badge on your profile.</>
+              : <>When a general contractor or property manager you send here starts paying, a month of Scale is credited to their bill and to yours.</>}</p>
+          </div>
+          {data.preferredSub && (
+            <span className="refer-badge" title="You brought a paying GC onto SubSub">
+              <Award size={15} /> Preferred Sub
+            </span>
+          )}
+        </div>
+        <div className="refer-code">
+          <QrCode value={data.link} size={132} label="Your referral link" />
+          <div className="refer-code-main">
+            <span className="refer-k">Your code</span>
+            <span className="refer-v refer-codev">{data.code}</span>
+            <span className="refer-k">Your link</span>
+            <span className="refer-v refer-link">{data.link}</span>
+            <div className="refer-btns">
+              <button className="btn-ghost" onClick={() => copy("link", data.link)}>
+                <Copy size={14} /> {copied === "link" ? "Copied" : "Copy link"}
+              </button>
+              <button className="btn-ghost" onClick={() => copy("msg", message)}>
+                <Copy size={14} /> {copied === "msg" ? "Copied" : "Copy message"}
+              </button>
+              {typeof navigator !== "undefined" && navigator.share && (
+                <button className="btn-ghost" onClick={share}><Share2 size={14} /> Share</button>
+              )}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="refer-send">
+        <h3>Send the invite</h3>
+        <p className="panel-note">The message, written for you. Emails go from SubSub with your name on them and your address to reply to. Texts open your own messages app, so they come from your number.</p>
+        <blockquote className="refer-msg">{message}</blockquote>
+        <label className="fld">
+          <span>Phone numbers or email addresses</span>
+          <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
+            placeholder={"One per line, or separated by commas"} />
+        </label>
+        {canPick && (
+          <button className="btn-ghost" onClick={pick}><Contact size={14} /> Pick from contacts</button>
+        )}
+        {picked.length > 0 && (
+          <p className="panel-note">{picked.length} picked from your contacts.</p>
+        )}
+        {bad.length > 0 && (
+          <p className="form-err">Not a phone number or an email: {bad.map((b) => b.value).join(", ")}</p>
+        )}
+        {phones.length > 0 && (
+          <ul className="refer-phones">
+            {phones.map((p) => (
+              <li key={p.value}>
+                <span>{p.name ? `${p.name} · ` : ""}{p.value}</span>
+                <a className={`btn-solid ${opened[p.value] ? "is-done" : ""}`} href={smsHref(p.value, message)}
+                  onClick={() => texted(p.value)}>
+                  <MessageSquareText size={14} /> {opened[p.value] ? "Opened in Messages" : "Text"}
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+        {emails.length > 0 && (
+          <button className="btn-solid" disabled={sending} onClick={sendEmails}>
+            <Send size={14} /> {sending ? "Sending…" : `Email ${emails.length} invite${emails.length === 1 ? "" : "s"}`}
+          </button>
+        )}
+        {result && !result.error && (
+          <p className="refer-ok">
+            {result.sent ? `Sent ${result.sent} invite${result.sent === 1 ? "" : "s"}.` : "Nothing new to send."}
+            {(result.skipped || []).length > 0 && ` Not sent: ${result.skipped.map((s) => `${s.email} (${skippedWords[s.reason] || s.reason})`).join(", ")}.`}
+          </p>
+        )}
+        {result?.error && <p className="form-err">{result.error}</p>}
+        <p className="panel-note refer-limit">{Math.max(0, data.inviteLimit - data.invitesToday)} of {data.inviteLimit} invites left today. Nobody is invited twice in a month.</p>
+      </section>
+
+      <section className="refer-list">
+        <h3>Who came in on your link <span className="sec-count">{data.referred.length}</span></h3>
+        {data.opens > 0 && <p className="panel-note">Your link has been opened {data.opens} time{data.opens === 1 ? "" : "s"}.</p>}
+        {data.referred.length === 0 ? (
+          <p className="panel-note">Nobody yet. The first one who signs up appears here.</p>
+        ) : (
+          <ul className="refer-rows">
+            {data.referred.map((r, i) => (
+              <li key={i}>
+                <span className="refer-name">{r.name}</span>
+                <span className="refer-when">Joined {formatDay(String(r.joinedAt).slice(0, 10))}</span>
+                <span className={`refer-status ${r.reward ? `rs-${r.reward.status}` : ""}`}>
+                  {r.reward ? (REWARD_WORDS[r.reward.kind]?.[r.reward.status] || r.reward.status)
+                    : r.paying ? "Paying" : "Not paying yet"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!isSub && data.rewards.some((r) => r.beneficiary === "referred") && (
+          <p className="panel-note">
+            {data.rewards.filter((r) => r.beneficiary === "referred").map((r) =>
+              `You joined on a referral: ${REWARD_WORDS.gc_credit[r.status] || r.status}.`).join(" ")}
+          </p>
+        )}
+      </section>
+    </div>
+  );
+}
+
+// THE CONSOLE'S REFERRALS SCREEN: the acquisition metric, the ledger, and the
+// referrers. Money moves only with finance access -- approve, then mark paid
+// with a reference; void with a reason -- and the buttons are not drawn for
+// anybody the route would refuse.
+function PlatformReferrals({ admin }) {
+  const [data, setData] = useState(null);
+  const [acq, setAcq] = useState(null);
+  const [weeks, setWeeks] = useState(12);
+  const [status, setStatus] = useState("");
+  const [kind, setKind] = useState("");
+  const [acting, setActing] = useState(null);   // {id, action}
+  const [form, setForm] = useState("");
+  const [err, setErr] = useState("");
+  const load = useCallback(() => {
+    api.platform.referrals().then(setData).catch(() => setData({ rewards: [], referrers: [], failed: true }));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { api.platform.referralAcquisition(weeks).then(setAcq).catch(() => setAcq({ failed: true })); }, [weeks]);
+  const fmt = (c) => "$" + (c / 100).toFixed(2).replace(/\.00$/, "");
+  const rows = (data?.rewards || []).filter((r) => (!status || r.status === status) && (!kind || r.kind === kind));
+  const owed = (data?.rewards || []).filter((r) => r.kind === "sub_cash" && (r.status === "pending" || r.status === "approved"));
+  const act = async (r, action) => {
+    if ((action === "pay" || action === "void") && !(acting?.id === r.id && acting.action === action)) {
+      setActing({ id: r.id, action }); setForm(""); setErr(""); return;
+    }
+    setErr("");
+    try {
+      await api.platform.rewardAction(r.id, { action,
+        reference: action === "pay" ? form : undefined, note: action === "void" ? form : undefined });
+      setActing(null); setForm(""); load();
+    } catch (e) {
+      setErr({ reference_required: "Say how it was paid -- a check number or a transfer id.",
+        reason_required: "Say why it is not eligible.", money_has_moved: "Money has already moved on that one.",
+        wrong_status: "That reward has moved on since this page loaded.", finance_only: "Moving money needs finance access.",
+      }[e?.body?.error] || "That didn't save. Try again.");
+    }
+  };
+  const words = { sub_cash: "Sub · $100", gc_credit: "Month free" };
+  const last = acq?.overall?.[acq.overall.length - 1];
+  return (
+    <div className="pf-referrals">
+      <div className="pf-head">
+        <div>
+          <h2>Referrals</h2>
+          <span className="pf-sub">New hiring accounts per existing one, what referrals have earned, and who is bringing people in.</span>
+        </div>
+      </div>
+      {(data?.migration || acq?.migration) && (
+        <p className="pf-note pf-warn">Migration {data?.migration || acq?.migration} has not been pasted, so there is nothing to count yet.</p>
+      )}
+
+      <section className="pf-section">
+        <div className="pf-section-hd"><h3>New GCs acquired per existing GC</h3>
+          <select value={weeks} onChange={(e) => setWeeks(Number(e.target.value))} aria-label="Weeks">
+            {[8, 12, 26, 52].map((w) => <option key={w} value={w}>Last {w} weeks</option>)}
+          </select>
+        </div>
+        {last && (
+          <div className="pf-kpis">
+            <Kpi label="New this week" value={last.newGc} accent />
+            <Kpi label="Per existing GC" value={last.perExisting === null ? "—" : last.perExisting.toFixed(2)} sub={`${last.existing} at the start of the week`} />
+            <Kpi label="Referred by a GC" value={last.referredByGc} />
+            <Kpi label="Referred by a sub" value={last.referredBySub} />
+            <Kpi label="Sub payouts owed" value={owed.length} sub={owed.length ? fmt(owed.reduce((s, r) => s + r.amountCents, 0)) : ""} warn={owed.length > 0} />
+          </div>
+        )}
+        {acq?.overall && (
+          <div className="pf-table-wrap">
+            <table className="pf-table pf-num pf-table-responsive pf-acq">
+              <thead><tr><th>Week of</th><th>Existing</th><th>New</th><th>Per existing</th><th>By a GC</th><th>By a sub</th></tr></thead>
+              <tbody>
+                {[...acq.overall].reverse().map((r) => (
+                  <tr key={r.week}>
+                    <td data-label="Week of"><b>{r.week}</b></td>
+                    <td data-label="Existing">{r.existing}</td>
+                    <td data-label="New">{r.newGc}</td>
+                    <td data-label="Per existing">{r.perExisting === null ? "—" : r.perExisting.toFixed(2)}</td>
+                    <td data-label="By a GC">{r.referredByGc}</td>
+                    <td data-label="By a sub">{r.referredBySub}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {acq?.byMetro?.length > 0 && (
+          <>
+            <h4 className="pf-subhd">By metro</h4>
+            <p className="pf-note">A metro is the town and state on the account's company record, or its commonest building's. Not a census metro area.</p>
+            <div className="pf-table-wrap">
+              <table className="pf-table pf-num pf-table-responsive pf-metro">
+                <thead><tr><th>Metro</th><th>GCs now</th><th>New in range</th><th>Per existing (this week)</th><th>Referred (range)</th></tr></thead>
+                <tbody>
+                  {acq.byMetro.map((m) => {
+                    const lw = m.rows[m.rows.length - 1];
+                    return (
+                      <tr key={m.metro}>
+                        <td data-label="Metro"><b>{m.metro}</b></td>
+                        <td data-label="GCs now">{m.total}</td>
+                        <td data-label="New in range">{m.newInRange}</td>
+                        <td data-label="Per existing">{lw.perExisting === null ? "—" : lw.perExisting.toFixed(2)}</td>
+                        <td data-label="Referred">{m.rows.reduce((s, r) => s + r.referredByGc + r.referredBySub, 0)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="pf-section">
+        <div className="pf-section-hd"><h3>Rewards ledger</h3>
+          <span className="pf-ledger-filters">
+            <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Kind">
+              <option value="">All kinds</option><option value="sub_cash">Sub $100</option><option value="gc_credit">Month free</option>
+            </select>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Status">
+              <option value="">All statuses</option>
+              {["pending", "approved", "paid", "applied", "void"].map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </span>
+        </div>
+        {!admin.finance && <p className="pf-note">Approving and paying need finance access.</p>}
+        {err && <p className="form-err">{err}</p>}
+        {rows.length === 0 ? <p className="pf-note">Nothing here yet.</p> : (
+          <ul className="pf-ledger">
+            {rows.map((r) => (
+              <li key={r.id} className={`pf-ledger-row st-${r.status}`} data-reward={r.id}>
+                <div className="pf-ledger-main">
+                  <b>{words[r.kind]} · {fmt(r.amountCents)}</b>
+                  <span>to {r.to || "—"}{r.beneficiary === "referred" ? " (the referred account)" : ""}{r.toEmail ? ` · ${r.toEmail}` : ""}</span>
+                  <span className="pf-note">for bringing in {r.referredName || "an account"} · {String(r.createdAt).slice(0, 10)}</span>
+                  {r.reference && <span className="pf-note">Paid: {r.reference}{r.paidBy ? ` by ${r.paidBy}` : ""}</span>}
+                  {r.note && <span className="pf-note">Void: {r.note}</span>}
+                  {r.error && r.status === "pending" && <span className="pf-note pf-warn">{r.error === "no_billing_yet" ? "Waiting for their first subscription." : r.error}</span>}
+                </div>
+                <span className={`pf-pill st-${r.status}`}>{r.status}</span>
+                {admin.finance && (
+                  <div className="pf-ledger-acts">
+                    {r.kind === "sub_cash" && r.status === "pending" && <button className="pf-mini" onClick={() => act(r, "approve")}>Approve</button>}
+                    {r.kind === "sub_cash" && r.status === "approved" && <button className="pf-mini" onClick={() => act(r, "pay")}>Mark paid</button>}
+                    {r.kind === "gc_credit" && r.status === "pending" && <button className="pf-mini" onClick={() => act(r, "retry")}>Apply now</button>}
+                    {(r.status === "pending" || r.status === "approved") && <button className="pf-mini pf-danger" onClick={() => act(r, "void")}>Void</button>}
+                  </div>
+                )}
+                {acting?.id === r.id && (
+                  <div className="pf-ledger-form">
+                    <input value={form} onChange={(e) => setForm(e.target.value)} autoFocus
+                      placeholder={acting.action === "pay" ? "How it was paid: check number, transfer id" : "Why it is not eligible"} />
+                    <button className="pf-mini" disabled={!form.trim()} onClick={() => act(r, acting.action)}>
+                      {acting.action === "pay" ? "Record payment" : "Void it"}
+                    </button>
+                    <button className="pf-mini" onClick={() => setActing(null)}>Cancel</button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {data?.referrers?.length > 0 && (
+        <section className="pf-section">
+          <div className="pf-section-hd"><h3>Who is bringing people in</h3></div>
+          <div className="pf-table-wrap">
+            <table className="pf-table pf-num pf-table-responsive">
+              <thead><tr><th>Referrer</th><th>Code</th><th>Opens</th><th>Invites</th><th>Signed up</th><th>Paying</th></tr></thead>
+              <tbody>
+                {data.referrers.map((t) => (
+                  <tr key={t.code}>
+                    <td data-label="Referrer"><b>{t.name || "—"}</b> <span className="pf-note">{t.kind === "sub" ? "sub" : "GC"}</span></td>
+                    <td data-label="Code">{t.code}</td>
+                    <td data-label="Opens">{t.opens}</td>
+                    <td data-label="Invites">{t.invites}</td>
+                    <td data-label="Signed up">{t.referred}</td>
+                    <td data-label="Paying">{t.paying}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function QrCode({ value, size = 190, label }) {
   const { size: modules, path } = useMemo(() => qrPath(value), [value]);
   return (
@@ -27971,6 +28411,8 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
       {pane === "connect" && (
         <ConnectPane requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}
+
+      {pane === "refer" && <ReferScreen fromName={me?.name} />}
 
       {pane === "uniforms" && (
         <UniformOrder sub={sub} orders={orders} onOrder={onOrderUniform} brand={brand} />
@@ -41999,4 +42441,62 @@ button.job-insp:hover{border-color:#2f5577}
 .pf-split-compact .pf-rank-track{height:7px}
 .pf-rank-more{margin-top:8px;background:none;border:0;padding:4px 0;color:var(--brand);font:inherit;
   font-size:12.5px;font-weight:600;cursor:pointer}
+/* 075. Get your GCs on SubSub, and Refer a GC. */
+.refer{max-width:860px}
+.refer h3{margin:0 0 6px;font-size:16px}
+.refer-hero{display:grid;grid-template-columns:1fr;gap:16px;background:var(--card);border:1px solid var(--line);
+  border-radius:14px;padding:18px;margin-bottom:16px}
+.refer-earn{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}
+.refer-earn > svg{color:var(--brand);flex:none;margin-top:2px}
+.refer-earn > div{flex:1 1 260px}
+.refer-earn p{margin:0;font-size:13.5px;line-height:1.45;color:var(--ink-soft)}
+.refer-badge,.pref-sub{display:inline-flex;align-items:center;gap:5px;border-radius:999px;font-weight:700;
+  background:#fdf3dc;color:var(--amber-ink);border:1px solid #f1d9a0}
+.refer-badge{font-size:12.5px;padding:5px 11px}
+.pref-sub{font-size:10.5px;padding:2px 7px;margin-right:6px;white-space:nowrap}
+.refer-code{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.refer-code .qr{flex:none;border:1px solid var(--line);border-radius:10px;padding:6px;background:#fff}
+.refer-code-main{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 240px}
+.refer-k{font-size:11.5px;font-weight:600;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;margin-top:6px}
+.refer-v{font-size:14px;font-weight:600;overflow-wrap:anywhere}
+.refer-codev{font-size:22px;letter-spacing:.12em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.refer-btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.refer-btns .btn-ghost{min-height:40px}
+.refer-send,.refer-list{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+.refer-msg{margin:0 0 14px;padding:12px 14px;border-left:3px solid var(--brand);background:var(--paper);
+  border-radius:0 9px 9px 0;font-size:13.5px;line-height:1.5}
+.refer-send textarea{width:100%;font:inherit;font-size:14px;padding:10px;border:1px solid var(--line);border-radius:9px;margin-top:6px;box-sizing:border-box}
+.refer-send > .btn-solid,.refer-send > .btn-ghost{min-height:44px;margin:4px 0 10px}
+.refer-phones{list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:8px}
+.refer-phones li{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  border:1px solid var(--line);border-radius:10px;padding:8px 10px}
+.refer-phones a.btn-solid{text-decoration:none;min-height:40px}
+.refer-phones a.is-done{background:var(--brand-dk)}
+.refer-ok{color:var(--brand);font-weight:600;font-size:13px}
+.refer-rows{list-style:none;margin:8px 0 0;padding:0}
+.refer-rows li{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;padding:10px 0;border-top:1px solid var(--line)}
+.refer-name{font-weight:600;flex:1 1 180px}
+.refer-when{font-size:12.5px;color:var(--ink-soft)}
+.refer-status{font-size:12.5px;font-weight:600;color:var(--ink-soft)}
+.refer-status.rs-paid,.refer-status.rs-applied,.refer-status.rs-approved{color:var(--brand)}
+.refer-status.rs-pending{color:var(--amber-ink)}
+@media (min-width:760px){.refer-hero{grid-template-columns:1.2fr 1fr}}
+/* The console's Referrals screen. */
+.pf-referrals select{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.pf-ledger-filters{display:flex;gap:8px;flex-wrap:wrap}
+.pf-subhd{margin:18px 0 4px;font-size:14px}
+.pf-ledger{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.pf-ledger-row{display:grid;grid-template-columns:1fr auto;gap:8px 12px;align-items:center;background:var(--card);
+  border:1px solid var(--line);border-radius:11px;padding:10px 12px}
+.pf-ledger-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pf-ledger-main .pf-note{margin:0}
+.pf-ledger-acts{grid-column:1 / -1;display:flex;gap:8px;flex-wrap:wrap}
+.pf-ledger-form{grid-column:1 / -1;display:flex;gap:8px;flex-wrap:wrap}
+.pf-ledger-form input{flex:1 1 220px;font:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--line);border-radius:8px}
+.pf-pill{font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;background:var(--paper);color:var(--ink-soft);text-transform:capitalize}
+.pf-pill.st-pending{background:#fdf3dc;color:var(--amber-ink)}
+.pf-pill.st-approved{background:#e8f3ee;color:var(--brand)}
+.pf-pill.st-paid,.pf-pill.st-applied{background:var(--brand);color:#fff}
+.pf-mini.pf-danger{color:var(--red)}
+.pf-warn{color:var(--amber-ink)}
 `;
