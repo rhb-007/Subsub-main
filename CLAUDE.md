@@ -11435,6 +11435,40 @@ refactor.
   own assertion. `test:ownportal`, `test:mycal` and `test:owncrews` pinned the
   old entries and were rewritten to the new rule rather than loosened.
 
+- **EVERY DASHBOARD LIST IS ONE ROW, AND "SEE ALL" OPENS THE REST AS A PAGE
+  OF ITS OWN.** Reported with the dashboard on screen and every row after the
+  first in each section struck through: *"way too much overwhelming information
+  on the dashboard ... reduce all these categories to one line and then a
+  little arrow below that would open up the rest of those listings on another
+  page"*. Capping at three still ran a busy morning to two screenfuls.
+
+  `DashRows` shows **one** row, and the heading and its count stay, because
+  the count is the signal. Below it a full-width **See all N** opens that
+  section as a page: the dashboard draws that one section, every row, under a
+  **Dashboard** back control, and everything else steps aside. A page rather
+  than an accordion, because unfolding in place pushes every section under it
+  down a screen, which is the overwhelm this removes. One list at a time, held
+  by `DashPage` on the dashboard, and **not remembered**: every visit starts as
+  the dashboard, so the old per-section localStorage memory is gone. The
+  emergencies section is not a `DashRows` and keeps its own cap, because an
+  urgent report must not hide behind a press.
+
+  **The hiding is CSS, from whether the open list is on the page**
+  (`:has(.dash-rows-all)`), so no section needed rewriting. A modal is
+  excepted, because a row on the page still opens one inline. A list that
+  empties under the page (every request approved) says *Nothing left in that
+  list* rather than a back button over nothing.
+
+  `test:waitingon` drives it: one row, the page, everything else hidden, and
+  Dashboard bringing it all back. Three mutations fire (back to three rows,
+  nothing hiding, the page drawing one row). Its "the other sections hid"
+  assertion was vacuous on a one-section fixture, so it counts the tiles and
+  the schedule as well. `test:dashreq`, `test:approveref` and
+  `test:dashpeekui` pinned or assumed several rows and were rewritten to the
+  new rule; `test:dashlayout` too, which needs the full stack and has not been
+  run here. `test:inviteeditui` was already failing before this change, on
+  the handyman picker's note, and still is.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

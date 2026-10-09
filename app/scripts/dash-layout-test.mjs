@@ -118,7 +118,7 @@ try {
         title: s.querySelector("h3")?.textContent.trim().replace(/\s+/g, " ") || "",
         count: Number(s.querySelector(".sec-count")?.textContent.trim() || 0),
         rows, more: more?.innerText.trim() || null,
-        showAll: /^Show all (\d+)/.exec(more?.innerText || "")?.[1] || null,
+        showAll: /^See all (\d+)/.exec(more?.innerText || "")?.[1] || null,
       };
     }));
     ck("there are sections to look at", secs.length >= 4, `${secs.length}`);
@@ -130,48 +130,47 @@ try {
       secs.map((x) => `${x.title}:${x.rows}`).join(" | "));
     if (!capped.length) throw new Error("no section was capped -- nothing below would be testing anything");
     // The cap itself.
-    ck("and none of those shows more than three rows",
-      capped.every((x) => x.rows <= 3), capped.map((x) => `${x.title} ${x.rows}`).join(" | "));
+    ck("and each of those shows one row",
+      capped.every((x) => x.rows === 1), capped.map((x) => `${x.title} ${x.rows}`).join(" | "));
     // The heading and its number stay put. That is the whole argument for
     // capping rather than folding: the count is the signal.
     ck("every section still says how many it has",
       secs.every((x) => x.count > 0 || x.rows > 0),
       secs.map((x) => `${x.title}=${x.count}`).join(" | "));
     ck("and the button says how many are hidden behind it",
-      capped.every((x) => Number(x.showAll) > 3), capped.map((x) => x.more).join(" | "));
+      capped.every((x) => Number(x.showAll) > 1), capped.map((x) => x.more).join(" | "));
 
-    // Opening one shows exactly what it promised.
+    // Opening one is a page: that section alone, every row it said it had,
+    // under a way back.
     const target = capped[0];
     const opened = await page.evaluate((title) => {
       const s = [...document.querySelectorAll(".dash-sec")]
         .find((x) => x.querySelector("h3")?.textContent.trim().replace(/\s+/g, " ") === title);
       s.querySelector(".dash-more").click();
-      return new Promise((res) => setTimeout(() => res({
-        rows: s.querySelectorAll(".dash-row, .dash-doc-row").length,
-        more: s.querySelector(".dash-more")?.innerText.trim(),
-      }), 400));
+      return new Promise((res) => setTimeout(() => {
+        const shown = (el) => !!el && el.getClientRects().length > 0;
+        res({
+          rows: s.querySelectorAll(".dash-row, .dash-doc-row").length,
+          back: shown(document.querySelector(".dash-back")),
+          others: [...document.querySelectorAll(".dash-sec")].filter((x) => x !== s && shown(x)).length,
+        });
+      }, 400));
     }, target.title);
     ck("opening one shows every row it said it had",
       opened.rows === Number(target.showAll), `${opened.rows} of ${target.showAll}`);
-    ck("and the button offers the way back", /show the first 3/i.test(opened.more || ""), opened.more);
+    ck("on a page of its own, with a way back", opened.back && opened.others === 0, JSON.stringify(opened));
 
-    // Left open, it stays open: somebody who works out of one queue every
-    // morning should not reopen it every morning.
+    // Not remembered: every visit to the dashboard starts as the dashboard.
     await page.reload({ waitUntil: "domcontentloaded" });
     await wait(7000);
-    const after = await page.evaluate((title) => {
-      const s = [...document.querySelectorAll(".dash-sec")]
-        .find((x) => x.querySelector("h3")?.textContent.trim().replace(/\s+/g, " ") === title);
-      return { rows: s?.querySelectorAll(".dash-row, .dash-doc-row").length,
-        more: s?.querySelector(".dash-more")?.innerText.trim() };
-    }, target.title);
-    ck("and it is still open on the way back",
-      after.rows === Number(target.showAll), `${after.rows} of ${target.showAll}`);
-    const others = await page.evaluate(() => [...document.querySelectorAll(".dash-sec")]
-      .filter((s) => /^Show all/.test(s.querySelector(".dash-more")?.innerText || ""))
-      .map((s) => s.querySelectorAll(".dash-row, .dash-doc-row").length));
-    ck("while the ones nobody opened are still capped",
-      others.every((n) => n <= 3), others.join(", "));
+    const after = await page.evaluate(() => ({
+      back: !!document.querySelector(".dash-back"),
+      rows: [...document.querySelectorAll(".dash-sec")]
+        .filter((s) => /^See all/.test(s.querySelector(".dash-more")?.innerText || ""))
+        .map((s) => s.querySelectorAll(".dash-row, .dash-doc-row").length),
+    }));
+    ck("and a reload starts on the dashboard, every list one row again",
+      !after.back && after.rows.length > 0 && after.rows.every((n) => n === 1), JSON.stringify(after));
     await ctx.close();
   }
 } catch (err) {

@@ -241,9 +241,11 @@ try {
     t.ck("it wraps to two lines rather than ellipsing at a third of it",
       g.title.lines === 2, JSON.stringify(g.title));
 
-    // Capped, like every other section in that row. Three shown, the rest
-    // offered -- a panel that grows with the book has stopped summarising.
-    t.ck("three rows are shown", g.rows === 3, String(g.rows));
+    // Capped, like every other section on the page: ONE row shown, and the
+    // rest a page of their own behind "See all" -- a panel that grows with
+    // the book has stopped summarising.
+    t.ck("one row is shown", g.rows === 1, String(g.rows));
+    t.ck("and the rest are offered by count", /^See all \d+/.test(g.more || ""), String(g.more));
 
     t.ck("a long title in a full-width section stays in it too",
       g.wide.length > 0 && g.wide.every((w) => w.right <= w.limit + 1), JSON.stringify(g.wide));

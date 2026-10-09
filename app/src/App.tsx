@@ -23262,50 +23262,53 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
   );
 }
 
-// A dashboard section's rows, capped.
+// A dashboard section's rows: one line, and the rest on a page of its own.
 //
 // Ten sections, most of them drawing every row they had, on a page whose
-// job is to be scanned. A morning with four approvals, six unassigned
-// trades and five documents outstanding ran to three screenfuls, and the
-// section at the bottom might as well not have been there.
+// job is to be scanned. Capping each at three still left a morning with
+// four approvals, six unassigned trades and five documents outstanding
+// running to two screenfuls -- reported with every row after the first
+// struck through: "reduce all these categories to one line, and an arrow
+// below that opens the rest of those listings on another page".
 //
-// Capped rather than folded away. Hiding a section behind a closed header
-// would hide the count with it, and the count is the whole signal -- "5
-// documents to verify" is the thing somebody needs to see whether or not
-// they open it. So the heading and the number stay, the first few rows
-// stay, and the rest waits behind one button that says how many there are.
+// So a section is its heading, its count and its FIRST row. The count stays
+// because it is the whole signal -- "5 documents to verify" is the thing
+// somebody needs to see whether or not they open it -- and the first row
+// stays because it says what kind of thing the list is and lets the
+// commonest case, one of them, be done in place.
 //
-// Three is the default because it is enough to show the shape of the list
-// -- what these rows are, and roughly how urgent -- without any one
-// section owning the screen.
+// The rest is a PAGE, not an accordion. Opening a list in place pushes
+// every section under it down a screen, which is the overwhelm this
+// exists to remove; the dashboard instead draws that one section alone,
+// every row, under a way back. It is held by the dashboard (DashPage) so
+// one list is open at a time and everything else on the page steps aside.
+// In memory only: every visit to the dashboard starts as the dashboard.
 //
-// Whether it is open is remembered per section, because somebody who works
-// out of the documents queue every morning should not reopen it every
-// morning. localStorage throws in a private window on read as well as
-// write, so both are guarded.
-function DashRows({ id, peek = 3, children }) {
+// Without a dashboard around it, it falls back to the in-place toggle, so
+// a caller elsewhere still gets every row behind one press.
+const DashPage = React.createContext(null);
+
+function DashRows({ id, peek = 1, children }) {
   const rows = React.Children.toArray(children).filter(Boolean);
-  const key = `subsub.dash.rows.${id}`;
-  const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem(key) === "1"; } catch { return false; }
-  });
-  const toggle = () => setOpen((was) => {
-    const next = !was;
-    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* nothing to remember it with */ }
-    return next;
-  });
+  const pager = React.useContext(DashPage);
+  const [open, setOpen] = useState(false);
   const over = rows.length > peek;
+  if (pager && pager.page === id) {
+    return <div className="dash-rows dash-rows-all" data-rows={id}>{rows}</div>;
+  }
   const shown = over && !open ? rows.slice(0, peek) : rows;
   return (
-    <>
+    <div className="dash-rows" data-rows={id}>
       {shown}
       {over && (
-        <button className="dash-more" onClick={toggle} aria-expanded={open}>
-          {open ? `Show the first ${peek}` : `Show all ${rows.length}`}
-          <ChevronDown size={13} className={open ? "flip" : ""} />
+        <button className="dash-more dash-more-page"
+          onClick={() => (pager ? pager.open(id) : setOpen((was) => !was))}
+          aria-expanded={pager ? undefined : open}>
+          {pager || !open ? `See all ${rows.length}` : "Show fewer"}
+          <ArrowRight size={14} />
         </button>
       )}
-    </>
+    </div>
   );
 }
 
@@ -23669,6 +23672,13 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // job object, for the reason `openReq` is: an assign or a reload replaces
   // the row, and a captured copy would draw the old one under the modal.
   const [peek, setPeek] = useState(null);
+  // Which section's whole list is open as a page of its own (DashRows), or
+  // null for the dashboard itself. One at a time, and never remembered.
+  const [listPage, setListPage] = useState(null);
+  const pager = useMemo(() => ({
+    page: listPage,
+    open: (id) => { setListPage(id); try { window.scrollTo(0, 0); } catch { /* no window to scroll */ } },
+  }), [listPage]);
   // Which request is being turned down, and why. One at a time: the reason
   // is the point, and a row of open boxes invites none of them being filled.
   const [declining, setDeclining] = useState(null);
@@ -23866,7 +23876,18 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   );
 
   return (
-    <main className="ss-main">
+    <DashPage.Provider value={pager}>
+    <main className={`ss-main ${listPage ? "dash-paged" : ""}`}>
+      {listPage && (
+        <button className="dash-back" onClick={() => setListPage(null)}>
+          <ChevronLeft size={16} /> Dashboard
+        </button>
+      )}
+      {/* Drawn only when the page's list has emptied under it -- every
+          request approved, every document reviewed -- so the page says so
+          rather than standing blank under a back button. CSS decides, from
+          whether the list is still on the page. */}
+      {listPage && <p className="dash-paged-empty">Nothing left in that list.</p>}
       <div className="dash-hello">
         <div>
           <Hello name={first} weather={weather} />
@@ -24155,7 +24176,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             );
           })}
           </DashRows>
-          {open.length > 6 && <button className="dash-more" onClick={onGoJobs}>View all {open.length} open slots →</button>}
         </section>
       )}
 
@@ -24320,6 +24340,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         );
       })()}
     </main>
+    </DashPage.Provider>
   );
 }
 
@@ -39115,6 +39136,25 @@ strong.insp-name{background:none;border:0;padding:0}
 .dash-more:hover{text-decoration:underline;text-underline-offset:2px}
 .dash-more svg{transition:transform .15s}
 .dash-more svg.flip{transform:rotate(180deg)}
+/* One row per section, and "See all" opens that section as a page of its
+   own: everything else on the dashboard steps aside rather than being
+   pushed a screen down. The two containers a section can sit in are the
+   main column and the top row; whatever there does not hold the open list
+   is hidden, a modal excepted so a row on the page can still open one. */
+.dash-more-page{display:flex;width:100%;justify-content:center;gap:6px;
+  min-height:40px;margin-top:2px;border:1px dashed var(--line);border-radius:10px;
+  font-size:13px}
+.dash-more-page:hover{text-decoration:none;background:var(--paper)}
+.dash-rows > .dash-row:last-of-type{margin-bottom:0}
+.dash-rows > .dash-row + .dash-more-page{margin-top:8px}
+.dash-back{display:inline-flex;align-items:center;gap:4px;border:0;background:none;
+  color:var(--brand);font:inherit;font-size:14px;font-weight:700;padding:6px 0;
+  margin:0 0 12px;cursor:pointer;min-height:40px}
+.dash-paged-empty{display:none;color:var(--ink-soft);font-size:14px}
+.dash-paged:not(:has(.dash-rows-all)) .dash-paged-empty{display:block}
+.dash-paged > :not(.dash-back):not(.dash-paged-empty):not(.modal-backdrop):not(:has(.dash-rows-all)),
+.dash-paged .dash-top > :not(.modal-backdrop):not(:has(.dash-rows-all)){display:none}
+.dash-paged .dash-top{display:block}
 .sec-count.red{background:var(--red);color:#fff}
 
 /* coverage: custom cities + multiple radii */

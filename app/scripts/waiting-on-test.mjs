@@ -80,10 +80,10 @@ try {
   console.log("\n-- the dashboard says who has not answered --");
   {
     const { ctx, page, crashes } = await open();
-    // The section caps itself at three rows and offers the rest behind
-    // "Show all", which is the house style for these roll-ups. Open it, or
-    // half the assertions below are about rows that are deliberately not
-    // drawn yet.
+    // The section shows ONE row and offers the rest behind "See all", which
+    // opens the list as a page of its own -- the house style for these
+    // roll-ups. Open it, or half the assertions below are about rows that are
+    // deliberately not drawn yet.
     const capped = await page.evaluate(() => {
       const h = [...document.querySelectorAll(".dash-sec h3")]
         .find((x) => /waiting on contractors/i.test(x.innerText));
@@ -92,10 +92,36 @@ try {
       if (more) more.click();
       return { n, hadMore: !!more, label: more?.innerText.trim() };
     });
-    t.ck("it caps itself rather than running down the page",
-      capped.n === 3 && capped.hadMore, JSON.stringify(capped));
-    t.ck("and offers the rest", /show all 5/i.test(capped.label || ""), String(capped.label));
+    t.ck("it shows one row rather than running down the page",
+      capped.n === 1 && capped.hadMore, JSON.stringify(capped));
+    t.ck("and offers the rest", /see all 5/i.test(capped.label || ""), String(capped.label));
     await wait(250);
+
+    // "See all" is a PAGE: that section alone, every row, under a way back --
+    // not the list unfolding in place and pushing the rest of the dashboard a
+    // screen down. Asked for in those words.
+    const paged = await page.evaluate(() => {
+      const shown = (el) => !!el && el.getClientRects().length > 0;
+      const secs = [...document.querySelectorAll(".dash-sec")];
+      const h = secs.map((s) => s.querySelector("h3"))
+        .find((x) => x && /waiting on contractors/i.test(x.innerText));
+      return {
+        back: shown(document.querySelector(".dash-back")),
+        hello: shown(document.querySelector(".dash-hello")),
+        mine: shown(h?.closest(".dash-sec")),
+        // Everything else the dashboard draws, counted only where it exists
+        // -- this fixture has one section, so "the other sections hid" would
+        // pass over nothing. The tiles and the schedule are always here.
+        others: [...secs.filter((s) => s !== h?.closest(".dash-sec")),
+          ...document.querySelectorAll(".dash-grid, .sched-hero")].filter(shown).length,
+        present: secs.length - 1 + document.querySelectorAll(".dash-grid, .sched-hero").length,
+      };
+    });
+    t.ck("the page has a way back", paged.back, JSON.stringify(paged));
+    t.ck("and the section it opened is on it", paged.mine, JSON.stringify(paged));
+    t.ck("while every other section steps aside",
+      paged.present > 0 && paged.others === 0, JSON.stringify(paged));
+    t.ck("and so does the greeting", paged.hello === false, JSON.stringify(paged));
 
     const sec = await page.evaluate(() => {
       const h = [...document.querySelectorAll(".dash-sec h3")]
@@ -144,6 +170,21 @@ try {
     t.ck("it says who is NOT in the list, so the absence reads as an answer",
       /drop off here on their own/i.test(sec.note || ""), String(sec.note));
     t.ck("nothing threw", crashes.length === 0, crashes.join(" ; "));
+
+    // And the way back returns the dashboard, with the list one row again.
+    const back = await page.evaluate(() => {
+      document.querySelector(".dash-back")?.click();
+      return new Promise((res) => setTimeout(() => {
+        const shown = (el) => !!el && el.getClientRects().length > 0;
+        const h = [...document.querySelectorAll(".dash-sec h3")]
+          .find((x) => /waiting on contractors/i.test(x.innerText));
+        res({ back: !!document.querySelector(".dash-back"),
+          hello: shown(document.querySelector(".dash-hello")),
+          rows: h?.closest(".dash-sec")?.querySelectorAll(".dash-row").length });
+      }, 250));
+    });
+    t.ck("Dashboard puts the whole page back, one row a section",
+      !back.back && back.hello && back.rows === 1, JSON.stringify(back));
 
     // The tile that caused the confusion.
     const tiles = await page.$$eval(".dash-card .dc-lab", (n) => n.map((x) => x.innerText.trim()));
