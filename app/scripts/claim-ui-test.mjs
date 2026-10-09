@@ -35,7 +35,7 @@ const PAGE = (state = "claimable") => ({
     rateCents: null, capHours: null, respondBy: "2026-11-10T17:00:00.000Z", status: "pending",
     autoScheduled: false, withdrawn: false },
 });
-const S = { state: "claimable", codes: [], verifies: [] };
+const S = { state: "claimable", codes: [], verifies: [], noSms: false };
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -43,6 +43,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === `/api/claim/${TOK}`) return [200, PAGE(S.state)];
   if (path === `/api/claim/${TOK}/code` && method === "POST") {
     S.codes.push(body);
+    if (S.noSms) return [501, { error: "phone_login_unavailable" }];
     if (String(body?.phone || "").replace(/\D/g, "").endsWith("0102"))
       return [409, { error: "phone_mismatch", hint: "(•••) •••-0101" }];
     return [200, { ok: true, sentTo: "(•••) •••-0101" }];
@@ -158,6 +159,22 @@ try {
     t.ck("it says they are on SubSub already", /already on SubSub/.test(r.box), r.box);
     t.ck("and offers sign-in, to the account that sent it", r.btn?.href === "https://outerhome.subsub.work/", r.btn?.href);
     t.ck("with no phone box", r.inputs.length === 0);
+    await ctx.close();
+  }
+
+  console.log("\n-- text sign-in not switched on yet (no SMS provider) --");
+  {
+    S.state = "claimable"; S.noSms = true;
+    const { ctx, page } = await visitApp(browser, { host: "app", webPort: WEB, viewport: PHONE, path: `/claim/${TOK}` });
+    await wait(2000);
+    await type(page, ".claim-box input", "(206) 555-0101");
+    await wait(150); await press(page); await wait(800);
+    const r = await read(page);
+    t.ck("the phone box goes rather than staying a dead end", r.inputs.length === 0, JSON.stringify(r.inputs));
+    t.ck("the page says text sign-in is not open yet", /Claiming by text opens soon/.test(r.box), r.box);
+    t.ck("and offers the account's sign-in", r.btn?.href === "https://outerhome.subsub.work/", r.btn?.href);
+    t.ck("the work order is still there", /Reroof the Lee house/.test(r.h1));
+    S.noSms = false;
     await ctx.close();
   }
 

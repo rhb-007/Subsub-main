@@ -26396,7 +26396,7 @@ const CLAIM_ERRORS = {
   phone_mismatch: "Use the mobile this work order was sent to.",
   bad_code: "That code didn't work. Check the text, or send a new one.",
   rate_limited: "Too many tries. Wait a few minutes and try again.",
-  phone_login_unavailable: "Sign-in by text isn't available right now. Use the sign-in link below instead.",
+  phone_login_unavailable: "Sign-in by text isn't available yet.",
   claimed: "This link has already been used to make a login. Sign in instead.",
   on_subsub: "You're already on SubSub. Sign in to answer this work order.",
   auth_unreachable: "We couldn't reach the sign-in service. Try again in a moment.",
@@ -26457,6 +26457,10 @@ function ClaimPage({ token }) {
     } catch (e) {
       setErr(claimErrText(e));
       if (["claimed", "on_subsub"].includes(e?.body?.error)) setPage({ ...page, state: e.body.error });
+      // Text sign-in switched off (no SMS provider behind Supabase yet) is
+      // ours to fix and not theirs, so the form goes and the page says so,
+      // rather than leaving a phone box that can never send a code.
+      if (e?.body?.error === "phone_login_unavailable") { setErr(""); setPage({ ...page, phoneLogin: false }); }
     } finally { setBusy(false); }
   };
   const verify = async () => {
@@ -26474,6 +26478,10 @@ function ClaimPage({ token }) {
     } catch (e) {
       setErr(claimErrText(e));
       if (["claimed", "on_subsub"].includes(e?.body?.error)) setPage({ ...page, state: e.body.error });
+      // Text sign-in switched off (no SMS provider behind Supabase yet) is
+      // ours to fix and not theirs, so the form goes and the page says so,
+      // rather than leaving a phone box that can never send a code.
+      if (e?.body?.error === "phone_login_unavailable") { setErr(""); setPage({ ...page, phoneLogin: false }); }
     } finally { setBusy(false); }
   };
 
@@ -26516,8 +26524,9 @@ function ClaimPage({ token }) {
             </>
           ) : !page.phoneLogin ? (
             <>
-              <h3>Answer this work order in SubSub</h3>
-              <p>{FREE_LINE} Sign in from the link in the email you were sent.</p>
+              <h3>Claiming by text opens soon</h3>
+              <p>{FREE_LINE} Until then, answer this work order from the email you were
+                sent, or sign in if you already have a login.</p>
               <a className="btn-solid claim-btn" href={signIn}>Sign in</a>
             </>
           ) : step === "phone" ? (
