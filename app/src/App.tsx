@@ -106,6 +106,7 @@ import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
 import { TRADES } from "../shared/trades.js";
 import { claimPathToken, SENT_VIA, FREE_LINE, footerText } from "../shared/claim.js";
+import { passportPathSlug, PASSPORT_CTA, isSlug } from "../shared/passport.js";
 import { inviteText, smsHref, PREFERRED_SUB, isGcKind } from "../shared/referral.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
@@ -2145,6 +2146,10 @@ export default function SubSub() {
   // the app for any path it has no file for, so this reaches the bundle.
   const [claimToken] = useState(() =>
     typeof window === "undefined" ? null : claimPathToken(window.location.pathname));
+  // 077. A Sub Passport, /p/<slug>: the same kind of path, printed on a decal
+  // and read off a QR code.
+  const [passportSlug] = useState(() =>
+    typeof window === "undefined" ? null : passportPathSlug(window.location.pathname));
   // And `?signup=1`, which meant "I want an account" and was handled by
   // nothing at all -- so it fell through to the sign-in form, which is a
   // password box in front of somebody who has just said they have no account.
@@ -5125,6 +5130,32 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoAsk, loggedIn, role]);
 
+  // 077. Back to the Passport somebody was reading when they pressed "Sign in
+  // to ask". Only ever a /p/<slug> path, read back and checked, so a value
+  // planted in sessionStorage cannot send anybody anywhere else.
+  useEffect(() => {
+    if (!loggedIn) return;
+    let back = null;
+    try { back = sessionStorage.getItem("ss_after_login"); sessionStorage.removeItem("ss_after_login"); } catch { /* none */ }
+    const slug = back && /^\/p\/([a-z0-9-]+)$/.exec(back)?.[1];
+    if (slug && isSlug(slug)) window.location.assign(`/p/${slug}`);
+  }, [loggedIn]);
+  // And the request email's link (?open=passport): the screen where the sub
+  // answers it. Held until signed in, like the auto-schedule one.
+  const [passportAsk] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("open") === "passport"; }
+    catch { return false; }
+  });
+  const passportAimed = useRef(false);
+  useEffect(() => {
+    if (!passportAsk || passportAimed.current || !loggedIn) return;
+    passportAimed.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    if (can("portal")) { setTab("portal"); setPane("passport"); }
+    else { setTab("account"); setOpenPane({ pane: "passport", n: Date.now() }); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [passportAsk, loggedIn, role]);
+
   // A code belongs to a company, and switching seats switches company. Held
   // over, the menu would show the last one -- which is somebody else's
   // standing offer to be asked, handed to the wrong person to show around.
@@ -5309,6 +5340,19 @@ export default function SubSub() {
       <div className="ss-root">
         <style>{CSS}</style>
         <ClaimPage token={claimToken} />
+      </div>
+    );
+  }
+
+  // Above the logged-in gate for the pack's reason. The seat is passed in,
+  // because the one thing on the page that needs an account -- asking for the
+  // certificate and the W-9 -- has to know whether there is one.
+  if (passportSlug) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <PassportPage slug={passportSlug}
+          seat={loggedIn ? { role, accountName: account?.name } : null} />
       </div>
     );
   }
@@ -6015,7 +6059,7 @@ export default function SubSub() {
                they ask for it, which is the whole reason the words matter
                here. Same trap as a panel headed "Your code" under a menu
                entry reading "My QR code". */
-            ["crews", "My Crews"], ["docs", "Compliance pack"], ["uniforms", "Uniforms"],
+            ["crews", "My Crews"], ["docs", "Compliance pack"], ["passport", "Passport"], ["uniforms", "Uniforms"],
             ["connect", "Connect"],
             /* 075. Where a sub brings the GCs they work for onto SubSub. */
             ["refer", "Get your GCs on SubSub"],
@@ -21498,6 +21542,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage ? [["branding", "Branding"]] : [])
     // Only an account that can be hired has paperwork of its own to keep.
     .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "Compliance pack"]] : [])
+    // 077. The page they hand out, beside the paperwork it is made from.
+    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["passport", "Passport"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
     // Only where there are buildings for tenants to be in.
     .concat(canManage && kindHasProperties(accountKind) ? [["tenants", "Tenants"]] : [])
@@ -21951,6 +21997,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           focus={openPane?.focus} focusN={openPane?.n}
           onRespond={onRespondConnect} onReload={onReloadConnects} />
       )}
+
+      {pane === "passport" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && <PassportPanel />}
 
       {/* The terms SubSub's agreement carries. An account that cannot hire
           issues none, so this is not their question. */}
@@ -26980,6 +27028,425 @@ function claimPay(w) {
   return w.valueCents != null ? formatCents(w.valueCents) : null;
 }
 
+// ---- 077. The Sub Passport ------------------------------------------------------
+//
+// The public page at /p/<slug>. Mobile-first because it is opened from a QR
+// code on a job site, and deliberately not the app: no nav, no brand
+// furniture, one card. Everything on it is something the sub chose to publish
+// -- `publicPassport` in shared/passport.js is the redaction -- and the files
+// open only for a signed-in hiring account the sub has approved.
+
+// Where the CTA goes: the GC landing page, carrying the sub's own code and
+// the channel, so the cookie it writes credits this sub and says it came from
+// a Passport rather than from a plain link.
+const passportCtaHref = (refCode) => (refCode
+  ? `https://subsub.work/gc?ref=${encodeURIComponent(refCode)}&via=passport`
+  : "https://subsub.work/gc");
+
+const PASSPORT_AFTER_LOGIN = "ss_after_login";
+
+function PassportShare({ url, name, compact = false }) {
+  const [copied, setCopied] = useState(false);
+  const text = `${name} on SubSub: licence, insurance and work in one place. ${url}`;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { setCopied(false); }
+  };
+  const share = async () => { try { await navigator.share({ title: name, text, url }); } catch { /* cancelled */ } };
+  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  return (
+    <div className={`pp-share${compact ? " compact" : ""}`}>
+      {canShare && <button className="btn-solid pp-sbtn" onClick={share}><Share2 size={16} /> Share</button>}
+      <a className="btn-ghost pp-sbtn" href={`sms:?&body=${encodeURIComponent(text)}`}>
+        <MessageSquareText size={16} /> Text</a>
+      <a className="btn-ghost pp-sbtn" href={`mailto:?subject=${encodeURIComponent(`${name} on SubSub`)}&body=${encodeURIComponent(text)}`}>
+        <Mail size={16} /> Email</a>
+      <button className="btn-ghost pp-sbtn" onClick={copy}><Copy size={16} /> {copied ? "Copied" : "Copy link"}</button>
+    </div>
+  );
+}
+
+function PassportBadge({ badge }) {
+  if (!badge) return null;
+  return (
+    <div className={`pp-badge${badge.verified ? " on" : ""}`}>
+      {badge.verified
+        ? <span className="pp-badge-name"><ShieldCheck size={18} /> {badge.name}</span>
+        : <span className="pp-badge-name off"><Shield size={18} /> Not verified yet</span>}
+      <span className="pp-badge-line">{badge.line}</span>
+    </div>
+  );
+}
+
+// Asking for, and then opening, the certificate and the W-9. Only a signed-in
+// admin or project manager of an account that hires can ask; everybody else
+// is told how, and a sub looking at their own page is told it is theirs.
+function PassportAccessBox({ slug, seat }) {
+  const [st, setSt] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [opening, setOpening] = useState("");
+  const team = seat && (seat.role === "admin" || seat.role === "pm");
+  const load = useCallback(() => {
+    if (!team) return;
+    api.passportAccess(slug).then(setSt).catch(() => setSt({ status: "unknown" }));
+  }, [slug, team]);
+  useEffect(() => { load(); }, [load]);
+
+  const signIn = () => {
+    try { sessionStorage.setItem(PASSPORT_AFTER_LOGIN, `/p/${slug}`); } catch { /* private window */ }
+    window.location.assign("/");
+  };
+  const ask = async () => {
+    setBusy(true); setErr("");
+    try { await api.askPassportAccess(slug, msg.trim()); setMsg(""); load(); }
+    catch (e) {
+      const k = e?.body?.error;
+      setErr(k === "already_asked" ? "You've already asked. It is waiting on their answer."
+        : k === "not_a_hiring_account" ? "Only an account that hires subcontractors can ask for these."
+        : k === "slow_down" ? "Too many requests just now. Try again in an hour."
+        : "That didn't send. Try again in a moment.");
+      load();
+    } finally { setBusy(false); }
+  };
+  const open = async (kind) => {
+    setOpening(kind); setErr("");
+    try {
+      const f = await api.passportFileBlob(slug, kind);
+      window.open(f.url, "_blank", "noopener");
+    } catch (e) {
+      setErr(String(e?.message) === "not_approved" ? "They've taken that back. Ask again if you still need it."
+        : String(e?.message) === "no_file" ? "That file isn't on SubSub any more." : "That didn't open. Try again.");
+      load();
+    } finally { setOpening(""); }
+  };
+
+  let body;
+  if (!seat) {
+    body = (<>
+      <p>Hiring this sub? Sign in to SubSub and ask them to share their certificate of insurance and W-9. Nothing opens until they say yes.</p>
+      <button className="btn-solid claim-btn" onClick={signIn}>Sign in to ask</button>
+    </>);
+  } else if (!team) {
+    body = <p>Only an admin or a project manager of a company that hires subcontractors can ask for these files.</p>;
+  } else if (!st) {
+    body = <p>Checking…</p>;
+  } else if (st.status === "own") {
+    body = <p>This is your own Passport. Requests to see your files arrive in Account → Passport.</p>;
+  } else if (st.reason === "not_a_hiring_account") {
+    body = <p>Only an account that hires subcontractors can ask for these files.</p>;
+  } else if (st.status === "pending") {
+    body = <p className="pp-wait"><Clock size={15} /> You asked. It is waiting on their answer, and we'll email you when they reply.</p>;
+  } else if (st.status === "approved") {
+    body = (<>
+      <p className="pp-ok"><CheckCircle2 size={15} /> They shared these with you. They can take it back at any time.</p>
+      {(st.files || []).length === 0 && <p>Nothing is on file to open right now.</p>}
+      <div className="pp-files">
+        {(st.files || []).map((f) => (
+          <button key={f.kind} className="btn-ghost pp-sbtn" disabled={!!opening} onClick={() => open(f.kind)}>
+            <FileText size={16} /> {opening === f.kind ? "Opening…" : f.kind === "w9" ? "Open the W-9" : "Open the certificate"}
+          </button>
+        ))}
+      </div>
+    </>);
+  } else {
+    body = (<>
+      {st.status === "declined" && <p>They declined your last request. You can ask again.</p>}
+      {st.status === "revoked" && <p>They stopped sharing these with you. You can ask again.</p>}
+      <p>Ask them to share their certificate of insurance and W-9. Nothing opens until they say yes.</p>
+      <label className="claim-fld">
+        <span>A note for them (optional)</span>
+        <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
+      </label>
+      <button className="btn-solid claim-btn" disabled={busy} onClick={ask}>
+        {busy ? "Sending…" : "Ask to see the files"}
+      </button>
+    </>);
+  }
+  return (
+    <div className="claim-box pp-access">
+      <h3><FileText size={18} /> Certificate and W-9</h3>
+      {body}
+      {err && <p className="claim-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+function PassportPage({ slug, seat = null }) {
+  const [p, setP] = useState(null);
+  const [gone, setGone] = useState("");
+  const [big, setBig] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.publicPassport(slug).then((r) => { if (live) setP(r); })
+      .catch((e) => { if (live) setGone(e?.status === 404 ? "not_found" : "error"); });
+    return () => { live = false; };
+  }, [slug]);
+  // Not for search engines: SubSub is not a directory of subs.
+  useEffect(() => {
+    const m = document.createElement("meta");
+    m.name = "robots"; m.content = "noindex";
+    document.head.appendChild(m);
+    return () => { m.remove(); };
+  }, []);
+  useEffect(() => { if (p?.name) document.title = `${p.name} · SubSub Passport`; }, [p]);
+
+  if (gone) return (
+    <div className="pack-page pp-page">
+      <div className="pack-card pack-gone">
+        <AlertTriangle size={26} />
+        <h2>{gone === "not_found" ? "We couldn't find that Passport" : "That didn't load"}</h2>
+        <p>{gone === "not_found"
+          ? "It may have been taken down, or the link was copied only in part."
+          : "Check your signal and open the link again."}</p>
+      </div>
+    </div>
+  );
+  if (!p) return <div className="pack-page pp-page"><div className="pack-card">Loading…</div></div>;
+
+  const url = `${window.location.origin}/p/${p.slug}`;
+  const where = [p.city, p.state].filter(Boolean).join(", ");
+  return (
+    <div className="pack-page pp-page">
+      <div className="pack-card pp-card">
+        <span className="pack-kicker">SubSub Passport</span>
+        <h1>{p.name}</h1>
+        {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
+        <PassportBadge badge={p.badge} />
+        {p.trades.length > 0 && (
+          <ul className="pp-trades">{p.trades.map((t) => <li key={t.id}>{t.label}</li>)}</ul>
+        )}
+        {p.about && <p className="pp-about">{p.about}</p>}
+
+        <dl className="claim-facts pp-facts">
+          {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
+          <div><dt><Award size={14} /> License</dt>
+            <dd>{p.license ? <>{p.license.number}<span className={`pp-sub${p.license.ok ? " ok" : ""}`}>{p.license.text}</span></>
+              : <span className="pp-sub">{p.badge?.line?.split(" · ")[0]}</span>}</dd></div>
+          <div><dt><Shield size={14} /> Insurance</dt>
+            <dd>{p.insurance ? <>{p.insurance.carrier || "Certificate on file"}<span className="pp-sub">{p.insurance.text}</span></>
+              : <span className="pp-sub">No certificate on file</span>}</dd></div>
+          <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
+        </dl>
+
+        {p.photos.length > 0 && (
+          <div className="pp-photos">
+            {p.photos.map((ph) => (
+              <button key={ph.id} className="pp-photo" onClick={() => setBig(ph)}>
+                <img src={api.passportPhotoUrl(p.slug, ph.id)} alt={ph.caption || `Work by ${p.name}`} loading="lazy" />
+                {ph.caption && <span>{ph.caption}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <PassportAccessBox slug={p.slug} seat={seat} />
+
+        <div className="pp-qrrow">
+          <QrCode value={url} size={132} label={`QR code for ${p.name}'s Passport`} />
+          <div>
+            <b>Share this Passport</b>
+            <span className="pp-sub">Scan it, or send it on.</span>
+            <PassportShare url={url} name={p.name} compact />
+          </div>
+        </div>
+
+        <div className="pp-cta">
+          <strong>Hire subcontractors?</strong>
+          <span>Every sub's license, insurance, W-9 and availability, current and in one roster you control.</span>
+          <a className="btn-solid claim-btn" href={passportCtaHref(p.refCode)}>{PASSPORT_CTA}</a>
+        </div>
+      </div>
+      <p className="pack-foot">A SubSub Passport. Free for subcontractors, forever. Not legal advice; confirm a license with the state.</p>
+      {big && (
+        <div className="pp-big" role="dialog" aria-label={big.caption || "Photo"} onClick={() => setBig(null)}>
+          <img src={api.passportPhotoUrl(p.slug, big.id)} alt={big.caption || ""} />
+          {big.caption && <span>{big.caption}</span>}
+          <button className="pp-big-x" aria-label="Close"><X size={22} /></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// The sub's own editor: Account → Passport for an account's admin, and the
+// same panel in the contractor portal for a contractor seat.
+function PassportPhotoThumb({ id }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => {
+    let live = true, made = null;
+    api.myPassportPhotoBlob(id).then((u) => { made = u; if (live) setSrc(u); else URL.revokeObjectURL(u); }).catch(() => {});
+    return () => { live = false; if (made) URL.revokeObjectURL(made); };
+  }, [id]);
+  return src ? <img src={src} alt="" /> : <span className="pp-thumb-wait" />;
+}
+
+function PassportPanel() {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState("");
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState("");
+  const load = useCallback(() => api.myPassport().then((r) => {
+    setD(r); setErr("");
+    setF({ trades: r.passport.trades || [], foundedYear: r.passport.foundedYear ?? "", about: r.passport.about || "" });
+  }).catch((e) => setErr(e?.body?.migration || e?.body?.error === "migration_needed"
+    ? `The Passport is not switched on yet. Migration ${e?.body?.migration || "077_passport"} needs pasting.`
+    : e?.body?.error === "not_hireable" ? "Only a company that can be hired has a Passport."
+    : "Couldn't load your Passport. Try again in a moment.")), []);
+  useEffect(() => { load(); }, [load]);
+
+  if (err) return <div className="portal-panel"><p className="form-err">{err}</p></div>;
+  if (!d || !f) return <div className="portal-panel"><p className="panel-note">Loading your Passport…</p></div>;
+  const pp = d.passport;
+  const dirty = JSON.stringify(f.trades) !== JSON.stringify(pp.trades || [])
+    || String(f.foundedYear ?? "") !== String(pp.foundedYear ?? "") || (f.about || "") !== (pp.about || "");
+
+  const save = async (extra = {}) => {
+    setBusy("save"); setNote("");
+    try {
+      await api.saveMyPassport({ trades: f.trades, foundedYear: f.foundedYear === "" ? null : Number(f.foundedYear),
+        about: f.about, ...extra });
+      await load();
+      setNote(extra.published === true ? "Published. Anybody with the link can see it now."
+        : extra.published === false ? "Taken down. The link shows nothing until you publish again." : "Saved.");
+    } catch (e) {
+      const k = e?.body?.error;
+      setNote(k === "invalid_year" ? "That year doesn't look right." : k === "about_too_long" ? "That note is too long."
+        : "That didn't save. Try again.");
+    } finally { setBusy(""); }
+  };
+  const addPhoto = async (file) => {
+    if (!file) return;
+    setBusy("photo"); setNote("");
+    try {
+      const up = await api.uploadPassportPhoto(file);
+      await api.addPassportPhoto(up.key, "");
+      await load();
+    } catch (e) {
+      setNote(String(e?.message).includes("415") ? "That isn't a photo." : String(e?.message).includes("413") ? "That photo is too big."
+        : e?.body?.error === "too_many_photos" ? "Twelve photos is the most a Passport holds." : "That photo didn't upload. Try again.");
+    } finally { setBusy(""); }
+  };
+  const removePhoto = async (id) => { setBusy(id); try { await api.removePassportPhoto(id); await load(); } finally { setBusy(""); } };
+  const answer = async (id, action) => {
+    setBusy(id); setNote("");
+    try { await api.answerPassportAccess(id, action); await load(); }
+    catch { setNote("That didn't go through. Try again."); }
+    finally { setBusy(""); }
+  };
+  const toggleTrade = (id) => setF({ ...f, trades: f.trades.includes(id) ? f.trades.filter((t) => t !== id) : [...f.trades, id] });
+  const pending = (d.access || []).filter((a) => a.status === "pending");
+  const decided = (d.access || []).filter((a) => a.status !== "pending");
+
+  return (
+    <div className="pp-edit">
+      <div className="portal-panel settings-panel">
+        <h4>Your SubSub Passport</h4>
+        <p className="panel-note">One page with your license, insurance, trades and photos of your work. Hand it to a GC
+          on site instead of emailing PDFs. Your certificate and W-9 never show publicly: a GC asks, and you decide.</p>
+        <PassportBadge badge={d.preview?.badge} />
+        <div className="pp-qrrow">
+          <QrCode value={pp.url} size={132} label="QR code for your Passport" />
+          <div>
+            <b className="pp-url">{pp.url}</b>
+            <span className="pp-sub">{pp.published
+              ? `Public · ${pp.viewCount} view${pp.viewCount === 1 ? "" : "s"}`
+              : "Private. Nobody can open it until you publish."}</span>
+            {pp.published && <PassportShare url={pp.url} name={d.preview?.name || "My company"} compact />}
+          </div>
+        </div>
+        <div className="pp-pub">
+          {pp.published ? (<>
+            <a className="btn-ghost" href={pp.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} /> View it</a>
+            <button className="btn-ghost" disabled={!!busy} onClick={() => save({ published: false })}>Take it down</button>
+          </>) : (
+            <button className="btn-solid" disabled={!!busy} onClick={() => save({ published: true })}>
+              <Globe size={14} /> Publish my Passport</button>
+          )}
+        </div>
+        {note && <p className="pp-note" role="status">{note}</p>}
+      </div>
+
+      {pending.length > 0 && (
+        <div className="portal-panel settings-panel pp-requests">
+          <h4>Asking to see your certificate and W-9</h4>
+          {pending.map((a) => (
+            <div key={a.id} className="pp-req">
+              <div><b>{a.accountName || "A company"}</b>
+                <span className="pp-sub">{a.requesterName ? `${a.requesterName} · ` : ""}asked {niceDay(String(a.requestedAt).slice(0, 10))}</span>
+                {a.message && <span className="pp-msg">“{a.message}”</span>}
+              </div>
+              <div className="pp-req-btns">
+                <button className="btn-solid" disabled={busy === a.id} onClick={() => answer(a.id, "approve")}>Share them</button>
+                <button className="btn-ghost" disabled={busy === a.id} onClick={() => answer(a.id, "decline")}>Decline</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="portal-panel settings-panel">
+        <h4>What it says</h4>
+        <p className="panel-note">Your license, insurance and W-9 come from your compliance pack and update themselves.
+          These are the parts you write.</p>
+        <span className="pp-k">Trades you do</span>
+        <div className="chips">
+          {TRADES.map((t) => (
+            <button key={t.id} className={`chip${f.trades.includes(t.id) ? " on" : ""}`} onClick={() => toggleTrade(t.id)}>{t.label}</button>
+          ))}
+        </div>
+        <label className="fld"><span>Year you started</span>
+          <input inputMode="numeric" maxLength={4} value={f.foundedYear}
+            onChange={(e) => setF({ ...f, foundedYear: e.target.value.replace(/\D/g, "") })} placeholder="2014" />
+        </label>
+        <label className="fld"><span>About your company (optional)</span>
+          <textarea rows={3} maxLength={600} value={f.about} onChange={(e) => setF({ ...f, about: e.target.value })}
+            placeholder="Residential re-roofs and gutters, two crews, Pierce and King counties." />
+        </label>
+        <button className="btn-solid" disabled={!dirty || !!busy} onClick={() => save()}>{busy === "save" ? "Saving…" : "Save"}</button>
+      </div>
+
+      <div className="portal-panel settings-panel">
+        <h4>Photos of your work</h4>
+        <p className="panel-note">Up to twelve. They show on your public page.</p>
+        <div className="pp-thumbs">
+          {(d.photos || []).map((ph) => (
+            <div key={ph.id} className="pp-thumb">
+              <PassportPhotoThumb id={ph.id} />
+              <button className="pp-thumb-x" aria-label="Remove photo" disabled={busy === ph.id} onClick={() => removePhoto(ph.id)}><X size={14} /></button>
+            </div>
+          ))}
+          {(d.photos || []).length < 12 && (
+            <label className="pp-thumb pp-thumb-add">
+              <ImagePlus size={20} /><span>{busy === "photo" ? "Adding…" : "Add a photo"}</span>
+              <input type="file" accept="image/*" hidden disabled={busy === "photo"}
+                onChange={(e) => { addPhoto(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+          )}
+        </div>
+      </div>
+
+      {decided.length > 0 && (
+        <div className="portal-panel settings-panel">
+          <h4>Who you've answered</h4>
+          {decided.map((a) => (
+            <div key={a.id} className="pp-req">
+              <div><b>{a.accountName || "A company"}</b>
+                <span className="pp-sub">{a.status === "approved" ? "Can open your certificate and W-9"
+                  : a.status === "declined" ? "Declined" : "Stopped sharing"}</span></div>
+              {a.status === "approved" && (
+                <button className="btn-ghost" disabled={busy === a.id} onClick={() => answer(a.id, "revoke")}>Stop sharing</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ClaimPage({ token }) {
   const [page, setPage] = useState(null);
   const [gone, setGone] = useState("");
@@ -28509,6 +28976,13 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         </>
       )}
 
+
+      {pane === "passport" && (
+        <>
+          <PageHead title="Passport" sub="The page you hand to a GC" />
+          <PassportPanel />
+        </>
+      )}
 
       {pane === "docs" && (
         <>
@@ -37000,6 +37474,76 @@ body{background:var(--paper)}
 .claim-err{color:#a3342a!important;font-weight:700}
 .claim-back{background:none;border:0;padding:6px 0;font:600 13px Inter,sans-serif;
   color:var(--ink-soft);text-decoration:underline;cursor:pointer;align-self:flex-start}
+
+/* ---- 077. The Sub Passport ---------------------------------------------------
+   Opened from a QR code on a job site, so it is laid out for a phone first:
+   one column, 48px controls, and the badge's own line under it in words. */
+.pp-page{justify-content:flex-start;padding-top:24px}
+.pp-card h1{font-size:26px;line-height:1.15;overflow-wrap:anywhere}
+.pp-badge{margin-top:14px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);
+  background:var(--paper);display:flex;flex-direction:column;gap:4px}
+.pp-badge.on{border-color:var(--brand);background:#eef7f1}
+.pp-badge-name{display:flex;align-items:center;gap:7px;font-weight:800;font-size:15.5px;color:var(--brand-dk)}
+.pp-badge-name.off{color:var(--ink-soft)}
+.pp-badge-line{font-size:12.5px;line-height:1.5;color:var(--ink)}
+.pp-trades{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
+.pp-trades li{padding:5px 10px;border-radius:999px;background:var(--paper);border:1px solid var(--line);
+  font-size:12.5px;font-weight:700}
+.pp-about{margin:12px 0 0;font-size:14px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.pp-facts dd{display:flex;flex-direction:column;gap:2px}
+.pp-sub{display:block;font-size:12px;font-weight:500;color:var(--ink-soft);line-height:1.45}
+.pp-sub.ok{color:var(--brand-dk);font-weight:700}
+.pp-photos{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.pp-photo{padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--paper);
+  cursor:pointer;display:flex;flex-direction:column;text-align:left}
+.pp-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
+.pp-photo span{padding:6px 8px;font-size:12px;line-height:1.35;color:var(--ink)}
+.pp-big{position:fixed;inset:0;background:rgba(10,18,14,.88);z-index:200;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:10px;padding:16px}
+.pp-big img{max-width:100%;max-height:80vh;border-radius:8px}
+.pp-big span{color:#fff;font-size:14px}
+.pp-big-x{position:absolute;top:12px;right:12px;width:44px;height:44px;border-radius:50%;border:0;
+  background:rgba(255,255,255,.15);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.pp-access{margin-top:18px}
+.pp-files{display:flex;flex-wrap:wrap;gap:8px}
+.pp-wait,.pp-ok{display:flex;align-items:center;gap:6px;font-weight:700}
+.pp-ok{color:var(--brand-dk)!important}
+.pp-qrrow{margin-top:18px;display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.pp-qrrow > div{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 220px}
+.pp-qrrow .qr{flex:none;border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff}
+.pp-url{font-size:13px;overflow-wrap:anywhere}
+.pp-share{display:flex;flex-wrap:wrap;gap:8px}
+.pp-sbtn{min-height:44px;display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.pp-cta{margin-top:20px;padding:16px;border-radius:14px;background:var(--ink);color:#fff;
+  display:flex;flex-direction:column;gap:6px}
+.pp-cta strong{font-size:15px}
+.pp-cta span{font-size:13px;line-height:1.5;color:#cfdad4}
+.pp-cta .claim-btn{margin-top:6px}
+.pp-edit{display:flex;flex-direction:column;gap:14px}
+.pp-pub{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px}
+.pp-note{margin:10px 0 0;font-size:13px;font-weight:700}
+.pp-k{display:block;margin:6px 0;font-size:12.5px;font-weight:700;color:var(--ink-soft)}
+.pp-req{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  padding:12px 0;border-top:1px solid var(--line)}
+.pp-req > div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pp-msg{font-size:13px;font-style:italic}
+.pp-req-btns{display:flex;gap:8px}
+.pp-requests{border-color:var(--amber, #E39B32)}
+.pp-thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px}
+.pp-thumb{position:relative;aspect-ratio:1;border-radius:10px;overflow:hidden;border:1px solid var(--line);
+  background:var(--paper);display:flex;align-items:center;justify-content:center}
+.pp-thumb img{width:100%;height:100%;object-fit:cover}
+.pp-thumb-x{position:absolute;top:4px;right:4px;width:30px;height:30px;border-radius:50%;border:0;
+  background:rgba(0,0,0,.6);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.pp-thumb-add{flex-direction:column;gap:6px;cursor:pointer;font-size:12.5px;font-weight:700;color:var(--ink-soft);
+  border-style:dashed}
+@media (max-width:560px){
+  .pp-card{padding:18px}
+  .pp-card h1{font-size:22px}
+  .pp-share .pp-sbtn{flex:1 1 calc(50% - 8px);justify-content:center}
+  .pp-req-btns{width:100%}
+  .pp-req-btns > *{flex:1}
+}
 
 /* ---- The inbox -------------------------------------------------------- */
 .pack-wrap.wide .pack-card{max-width:760px}

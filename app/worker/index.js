@@ -15,7 +15,8 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   connectRequestEmail, connectRequestSms, workOrderIssuedSms,
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
-  waiverRequestEmail, portalUrl } from "./mail.js";
+  waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
+  licenseExpiryEmail } from "./mail.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
 import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, smsOverageCents,
   SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS, SMS_OVERAGE_MAX_BLOCKS,
@@ -139,8 +140,12 @@ import { LIVE_STATES, isLiveState, readLookup, previewOf, fullOf, verdictText, v
 import { normalizeCode, mintCode, CODE_LENGTH, isChannel, isGcKind, referrerKindForAccount, referralLink,
   REF_COOKIE_DAYS, rewardsFor, rewardMove, isPreferredSub, PREFERRED_SUB, INVITE_DAILY_LIMIT,
   INVITE_REPEAT_DAYS, validInviteEmail, inviteEmail, acquisitionByWeek } from "../shared/referral.js";
-import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck } from "../shared/licensecheck.js";
+import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck, licenseReminderDue,
+  LICENSE_CHASE_AT } from "../shared/licensecheck.js";
 import { validCrews, offDays, isOffOn } from "../shared/crews.js";
+import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passportBadge,
+  ACCESS_KINDS as PASSPORT_ACCESS_KINDS, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
+  CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
@@ -8179,6 +8184,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bpassport(s|_photos|_access)\b|\blicense_reminders\b|ux_passport_|ux_license_reminder/i.test(m)) return "077_passport";
   if (/\bleads\b/i.test(m)) return "076_leads";
   if (/\breferral_(codes|touches|attributions|rewards|invites)\b|ux_referral_/i.test(m)) return "075_referrals";
   if (/\bwo_claim_links\b|\bsub_attributions\b/i.test(m)) return "074_wo_claims";
@@ -17105,6 +17111,449 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
     auto }, 201);
 });
 
+// ---------------------------------------------------------------------------
+// The Sub Passport (077). One public page a subcontractor owns and hands out,
+// at /p/<slug>. `shared/passport.js` holds every rule -- the address, the
+// badge, what the page carries and the access moves -- and this is the I/O.
+//
+// Three doors, three audiences, and they must not blur:
+//   /api/my-passport/...        the sub editing their own page
+//   /api/public/passport/:slug  anybody holding the link, no session
+//   /api/passport/:slug/...     a signed-in hiring account asking for, and
+//                               then opening, the certificate and the W-9
+// ---------------------------------------------------------------------------
+
+// Which company this seat's Passport is. The same answer `seatCompany` gives
+// every other "my company" route, so a contractor seat and the admin of the
+// sub's own account land on the same page.
+async function passportCompany(c) {
+  const companyId = await seatCompany(c);
+  if (companyId) return { companyId };
+  const why = await noCompanyReason(c);
+  return { error: why === "not_hireable" ? "not_hireable" : why === "migration_needed" ? "migration_needed" : "forbidden" };
+}
+
+const passportRowToJs = (r) => ({
+  slug: r.slug,
+  url: passportUrl(r.slug),
+  published: !!r.published_at,
+  publishedAt: r.published_at || null,
+  trades: parseJson(r.trades, []),
+  foundedYear: r.founded_year ?? null,
+  about: r.about || null,
+  viewCount: r.view_count || 0,
+  lastViewedAt: r.last_viewed_at || null,
+});
+
+// The trades a new Passport starts with: what the sub's clients already
+// engage them for. Their own statement from then on -- this is only a seed,
+// and an empty list is fine.
+async function seedPassportTrades(env, companyId) {
+  const { results } = await env.DB.prepare(
+    `SELECT categories FROM engagements WHERE company_id = ? AND status <> 'ended'`).bind(companyId).all();
+  const out = [];
+  for (const r of results || []) {
+    for (const t of parseJson(r.categories, [])) if (TRADE_IDS.has(t) && !out.includes(t)) out.push(t);
+  }
+  return out.slice(0, 12);
+}
+
+// The row, made on first open. The slug is stamped once and never changed,
+// because it ends up on decals and flyers. A collision on the random suffix is
+// a UNIQUE failure, so it is retried rather than checked first -- a check
+// beforehand cannot cover two requests arriving at once.
+async function ensurePassport(env, companyId) {
+  const read = () => env.DB.prepare(`SELECT * FROM passports WHERE company_id = ?`).bind(companyId).first();
+  const have = await read();
+  if (have) return have;
+  const co = await env.DB.prepare(`SELECT company FROM companies WHERE id = ?`).bind(companyId).first();
+  const trades = JSON.stringify(await seedPassportTrades(env, companyId));
+  for (let i = 0; i < 6; i++) {
+    const slug = mintSlug(co?.company, crypto.getRandomValues(new Uint8Array(8)));
+    try {
+      await env.DB.prepare(`INSERT INTO passports (company_id, slug, trades) VALUES (?, ?, ?)`)
+        .bind(companyId, slug, trades).run();
+      return await read();
+    } catch (err) {
+      if (missingSchema(err)) throw err;
+      // Either the slug collided (try another) or a second request made this
+      // company's row first (use it). Re-reading tells which.
+      const again = await read();
+      if (again) return again;
+    }
+  }
+  throw new Error("passport_slug_mint_failed");
+}
+
+async function passportPhotos(env, companyId) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, caption, file_type, position FROM passport_photos
+      WHERE company_id = ? AND removed_at IS NULL ORDER BY position, created_at`).bind(companyId).all();
+  return results || [];
+}
+
+// Everything the public page draws, from the company row as it is now. Read
+// live rather than stamped: the whole point of a Passport over an emailed PDF
+// is that a renewed certificate shows the day it is uploaded.
+async function passportPublicShape(env, passport, { today = new Date().toISOString().slice(0, 10) } = {}) {
+  const co = await env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(passport.company_id).first();
+  if (!co) return null;
+  let docs = {};
+  try { docs = docShapeWithLegacy(await currentDocRows(env.DB, co.id), co); }
+  catch (err) { if (!missingSchema(err)) throw err; docs = docShapeWithLegacy({}, co); }
+  // The sub's own referral code, so a GC pressing "Manage your whole sub
+  // network like this" is credited to them. A database without 075 has no
+  // codes, and that costs the credit, never the page.
+  let refCode = null;
+  try { refCode = await ensureReferralCode(env, { kind: "sub", companyId: co.id }); }
+  catch (err) { if (!missingSchema(err)) console.warn("[passport] no referral code:", err?.message || err); }
+  return publicPassport({
+    passport: { slug: passport.slug, trades: parseJson(passport.trades, []),
+      foundedYear: passport.founded_year, about: passport.about },
+    company: { company: co.company, city: co.city, state: co.state, license: co.license,
+      licenseCheck: checkView(parseJson(co.license_check, null), co.license),
+      coverage: validCoverage(parseJson(co.coverage, null)) || {},
+      insurance: co.insurance, w9: co.w9 },
+    photos: await passportPhotos(env, co.id), docs, refCode, today,
+  });
+}
+
+const accessRowToJs = (r) => ({
+  id: r.id, accountId: r.account_id, accountName: r.account_name || null,
+  requesterName: r.requester_name || null, message: r.message || null,
+  status: r.status, requestedAt: r.requested_at, decidedAt: r.decided_at || null,
+});
+
+app.get("/api/my-passport", requireRole("admin", "pm", "contractor"), async (c) => {
+  const who = await passportCompany(c);
+  if (who.error === "not_hireable") return c.json({ error: "not_hireable" }, 409);
+  if (who.error === "migration_needed") return c.json({ error: "migration_needed", migration: "031_account_company" }, 503);
+  if (who.error) return c.json({ error: "forbidden" }, 403);
+  const row = await ensurePassport(c.env, who.companyId);
+  const preview = await passportPublicShape(c.env, row);
+  const { results: access } = await c.env.DB.prepare(
+    `SELECT pa.*, a.name AS account_name, u.name AS requester_name
+       FROM passport_access pa
+       LEFT JOIN accounts a ON a.id = pa.account_id
+       LEFT JOIN users u ON u.id = pa.requested_by
+      WHERE pa.company_id = ?
+      ORDER BY CASE pa.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, pa.requested_at DESC
+      LIMIT 100`).bind(who.companyId).all();
+  return c.json({ passport: passportRowToJs(row), preview,
+    photos: (await passportPhotos(c.env, who.companyId)).map((p) => ({ id: p.id, caption: p.caption || null })),
+    access: (access || []).map(accessRowToJs) });
+});
+
+app.put("/api/my-passport", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  const b = await c.req.json().catch(() => ({}));
+  const v = validPassportEdit(b);
+  if (!v.ok) return c.json(v, 400);
+  const row = await ensurePassport(c.env, who.companyId);
+  const sets = [], binds = [];
+  if ("trades" in v.value) { sets.push("trades = ?"); binds.push(JSON.stringify(v.value.trades)); }
+  if ("foundedYear" in v.value) { sets.push("founded_year = ?"); binds.push(v.value.foundedYear); }
+  if ("about" in v.value) { sets.push("about = ?"); binds.push(v.value.about); }
+  // Publishing is a word the sub says, never a side effect of saving. Only a
+  // real boolean moves it, so a body that merely omits it changes nothing.
+  if (b.published === true && !row.published_at) sets.push("published_at = CURRENT_TIMESTAMP");
+  if (b.published === false && row.published_at) sets.push("published_at = NULL");
+  if (!sets.length) return c.json({ passport: passportRowToJs(row) });
+  sets.push("updated_at = CURRENT_TIMESTAMP");
+  await c.env.DB.prepare(`UPDATE passports SET ${sets.join(", ")} WHERE company_id = ?`)
+    .bind(...binds, who.companyId).run();
+  if (typeof b.published === "boolean" && b.published !== !!row.published_at) {
+    await logActivity(c.env, accountId, userId, "passport",
+      b.published ? "Published the SubSub Passport" : "Took the SubSub Passport down");
+  }
+  const fresh = await ensurePassport(c.env, who.companyId);
+  return c.json({ passport: passportRowToJs(fresh), preview: await passportPublicShape(c.env, fresh) });
+});
+
+// A photograph of their work. Uploaded first through the checked
+// passport-photo kind, then attached here. The key is a claim the browser
+// makes, so it must sit under this account's own passport-photo prefix --
+// without that, any object in the bucket could be published by naming it.
+app.post("/api/my-passport/photos", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { accountId } = c.get("auth");
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  const b = await c.req.json().catch(() => ({}));
+  const key = String(b.key || "");
+  if (!key.startsWith(`${accountId}/passport-photo/`) || key.includes("..")) return c.json({ error: "invalid_key" }, 400);
+  const caption = String(b.caption ?? "").trim();
+  if (caption.length > PASSPORT_CAPTION_MAX) return c.json({ error: "caption_too_long", max: PASSPORT_CAPTION_MAX }, 400);
+  const head = await c.env.FILES.head(key);
+  if (!head) return c.json({ error: "not_uploaded" }, 400);
+  await ensurePassport(c.env, who.companyId);
+  const have = await passportPhotos(c.env, who.companyId);
+  if (have.length >= PASSPORT_MAX_PHOTOS) return c.json({ error: "too_many_photos", max: PASSPORT_MAX_PHOTOS }, 409);
+  const id = uid();
+  const position = have.reduce((m, p) => Math.max(m, p.position || 0), 0) + 1;
+  await c.env.DB.prepare(
+    `INSERT INTO passport_photos (id, company_id, file_key, file_type, caption, position) VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, who.companyId, key, head.httpMetadata?.contentType || String(b.type || "") || null,
+    caption || null, position).run();
+  return c.json({ id, caption: caption || null }, 201);
+});
+
+app.patch("/api/my-passport/photos/:id", requireRole("admin", "pm", "contractor"), async (c) => {
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  const b = await c.req.json().catch(() => ({}));
+  const caption = String(b.caption ?? "").trim();
+  if (caption.length > PASSPORT_CAPTION_MAX) return c.json({ error: "caption_too_long", max: PASSPORT_CAPTION_MAX }, 400);
+  const r = await c.env.DB.prepare(
+    `UPDATE passport_photos SET caption = ? WHERE id = ? AND company_id = ? AND removed_at IS NULL`
+  ).bind(caption || null, c.req.param("id"), who.companyId).run();
+  if (!(r?.meta?.changes > 0)) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true, caption: caption || null });
+});
+
+// Taken off, never deleted, like every other upload here.
+app.delete("/api/my-passport/photos/:id", requireRole("admin", "pm", "contractor"), async (c) => {
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  const r = await c.env.DB.prepare(
+    `UPDATE passport_photos SET removed_at = CURRENT_TIMESTAMP WHERE id = ? AND company_id = ? AND removed_at IS NULL`
+  ).bind(c.req.param("id"), who.companyId).run();
+  if (!(r?.meta?.changes > 0)) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+async function servePassportPhoto(c, companyId, photoId, cache) {
+  const p = await c.env.DB.prepare(
+    `SELECT file_key, file_type FROM passport_photos WHERE id = ? AND company_id = ? AND removed_at IS NULL`
+  ).bind(photoId, companyId).first();
+  if (!p) return c.json({ error: "not_found" }, 404);
+  const obj = await c.env.FILES.get(p.file_key);
+  if (!obj) return c.json({ error: "not_found" }, 404);
+  return new Response(obj.body, { headers: {
+    "Content-Type": obj.httpMetadata?.contentType || p.file_type || "image/jpeg",
+    "Cache-Control": cache, "X-Robots-Tag": "noindex",
+  } });
+}
+
+// The owner's own view of a photo, published or not.
+app.get("/api/my-passport/photos/:id", requireRole("admin", "pm", "contractor"), async (c) => {
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: "not_found" }, 404);
+  return servePassportPhoto(c, who.companyId, c.req.param("id"), "private, no-store");
+});
+
+// The sub answering a request. A yes can be revoked; a no is final for that
+// request and a fresh one can be sent. Guarded on the status it is moving
+// FROM in the UPDATE itself, so two presses move it once.
+app.post("/api/my-passport/access/:id", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  const b = await c.req.json().catch(() => ({}));
+  const req = await c.env.DB.prepare(
+    `SELECT pa.*, a.name AS account_name, u.name AS requester_name, u.email AS requester_email
+       FROM passport_access pa
+       LEFT JOIN accounts a ON a.id = pa.account_id
+       LEFT JOIN users u ON u.id = pa.requested_by
+      WHERE pa.id = ? AND pa.company_id = ?`).bind(c.req.param("id"), who.companyId).first();
+  if (!req) return c.json({ error: "not_found" }, 404);
+  const mv = accessMove(req.status, b.action);
+  if (!mv.ok) return c.json(mv, mv.error === "unknown_action" ? 400 : 409);
+  const r = await c.env.DB.prepare(
+    `UPDATE passport_access SET status = ?, decided_at = CURRENT_TIMESTAMP, decided_by = ?
+      WHERE id = ? AND status = ?`).bind(mv.to, userId, req.id, req.status).run();
+  if (!(r?.meta?.changes > 0)) return c.json({ error: "not_allowed", from: req.status }, 409);
+
+  const co = await c.env.DB.prepare(`SELECT company FROM companies WHERE id = ?`).bind(who.companyId).first();
+  const pp = await c.env.DB.prepare(`SELECT slug FROM passports WHERE company_id = ?`).bind(who.companyId).first();
+  // The person who asked is told a yes or a no. A revoke is not mailed: the
+  // files simply stop opening, and an email announcing it reads as a dispute.
+  if ((mv.to === "approved" || mv.to === "declined") && req.requester_email) {
+    const mail = passportAccessDecisionEmail({ firstName: String(req.requester_name || "").split(/\s+/)[0],
+      companyName: co?.company, approved: mv.to === "approved", link: passportUrl(pp?.slug) || "https://app.subsub.work" });
+    const result = await sendEmail(c.env, { to: req.requester_email, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(c.env, { accountId: req.account_id, companyId: who.companyId, to: req.requester_email,
+      kind: "passport_access_decision", subject: mail.subject, result, sentBy: userId });
+  }
+  await logActivity(c.env, req.account_id, null, "passport_access",
+    `${co?.company || "A subcontractor"} ${mv.to === "approved" ? "approved" : mv.to === "declined" ? "declined" : "withdrew"} access to their insurance and W-9`);
+  await logEvent(c.env, accountId, userId, `passport.access_${mv.to}`, req.id,
+    { companyId: who.companyId, forAccount: req.account_id });
+  return c.json({ ok: true, status: mv.to });
+});
+
+// ---- the public page ----------------------------------------------------------
+
+// Published only. An unpublished slug, an unknown one and a malformed one all
+// answer the same 404, so the route cannot be used to ask which exist. noindex
+// on the reply as well as on the page: SubSub is not a directory, and a crawler
+// following a shared link must not turn the Passports into one.
+async function publishedPassport(env, slug) {
+  if (!isSlug(slug)) return null;
+  return await env.DB.prepare(
+    `SELECT * FROM passports WHERE slug = ? AND published_at IS NOT NULL`).bind(slug).first();
+}
+
+app.get("/api/public/passport/:slug", async (c) => {
+  const rl = await rateLimit(c.env, "passport-view", clientIp(c), { limit: 120, windowMinutes: 10 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  c.header("X-Robots-Tag", "noindex");
+  c.header("Cache-Control", "private, no-store");
+  let row;
+  try { row = await publishedPassport(c.env, c.req.param("slug")); }
+  catch (err) { if (missingSchema(err)) return c.json({ error: "not_found" }, 404); throw err; }
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const shape = await passportPublicShape(c.env, row);
+  if (!shape) return c.json({ error: "not_found" }, 404);
+  // A count for the sub, not a log of who looked. Nothing about the viewer is
+  // kept: no address, no account, no time beyond the last one.
+  await c.env.DB.prepare(
+    `UPDATE passports SET view_count = view_count + 1, last_viewed_at = CURRENT_TIMESTAMP WHERE company_id = ?`
+  ).bind(row.company_id).run();
+  return c.json(shape);
+});
+
+app.get("/api/public/passport/:slug/photo/:id", async (c) => {
+  const rl = await rateLimit(c.env, "passport-photo", clientIp(c), { limit: 600, windowMinutes: 10 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  let row;
+  try { row = await publishedPassport(c.env, c.req.param("slug")); }
+  catch (err) { if (missingSchema(err)) return c.json({ error: "not_found" }, 404); throw err; }
+  if (!row) return c.json({ error: "not_found" }, 404);
+  return servePassportPhoto(c, row.company_id, c.req.param("id"), "public, max-age=300");
+});
+
+// ---- a hiring account asking, and opening ------------------------------------
+
+// Who may ask: the team of an account that hires. A tenant, an owner and a
+// contractor seat are guests or crew on somebody else's account, and the
+// subcontractor kind does not hire, so neither has a reason to hold another
+// sub's tax form.
+async function passportAsker(c, slug) {
+  const { accountId } = c.get("auth");
+  const acct = await c.env.DB.prepare(`SELECT id, name, kind, company_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  let row;
+  try { row = await publishedPassport(c.env, slug); }
+  catch (err) { if (missingSchema(err)) return { error: "migration_needed" }; throw err; }
+  if (!row) return { error: "not_found" };
+  if (acct?.company_id && acct.company_id === row.company_id) return { error: "own_passport", row, acct };
+  if (!acct || !HIRING_KINDS.includes(acct.kind)) return { error: "not_a_hiring_account", row, acct };
+  return { row, acct };
+}
+
+const liveAccess = (env, companyId, accountId) => env.DB.prepare(
+  `SELECT * FROM passport_access WHERE company_id = ? AND account_id = ?
+    ORDER BY requested_at DESC, rowid DESC LIMIT 1`).bind(companyId, accountId).first();
+
+app.get("/api/passport/:slug/access", requireRole("admin", "pm"), async (c) => {
+  const who = await passportAsker(c, c.req.param("slug"));
+  if (who.error === "not_found" || who.error === "migration_needed") return c.json({ error: who.error }, 404);
+  if (who.error === "own_passport") return c.json({ status: "own", mayRequest: false });
+  if (who.error) return c.json({ status: "none", mayRequest: false, reason: who.error });
+  const last = await liveAccess(c.env, who.row.company_id, who.acct.id);
+  const status = last?.status || "none";
+  let files = [];
+  if (status === "approved") {
+    const docs = await currentDocRows(c.env.DB, who.row.company_id).catch(() => ({}));
+    files = PASSPORT_ACCESS_KINDS.filter((k) => docs[k]?.file_key)
+      .map((k) => ({ kind: k, fileName: docs[k].file_name, expiresOn: docs[k].expires_on || null }));
+  }
+  return c.json({ status, requestedAt: last?.requested_at || null, decidedAt: last?.decided_at || null,
+    mayRequest: status === "none" || status === "declined" || status === "revoked", files });
+});
+
+app.post("/api/passport/:slug/access", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const rl = await rateLimit(c.env, "passport-access", accountId, { limit: 30, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  const who = await passportAsker(c, c.req.param("slug"));
+  if (who.error === "not_found" || who.error === "migration_needed") return c.json({ error: "not_found" }, 404);
+  if (who.error) return c.json({ error: who.error }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const message = String(b.message ?? "").trim();
+  if (message.length > ACCESS_MESSAGE_MAX) return c.json({ error: "message_too_long", max: ACCESS_MESSAGE_MAX }, 400);
+  const id = uid();
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO passport_access (id, company_id, account_id, requested_by, message) VALUES (?, ?, ?, ?, ?)`
+    ).bind(id, who.row.company_id, accountId, userId, message || null).run();
+  } catch (err) {
+    // ux_passport_access_live: one pending-or-approved request per pair, held
+    // by the index even when two presses arrive at once. The live one is the
+    // answer rather than an error.
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      const last = await liveAccess(c.env, who.row.company_id, accountId);
+      return c.json({ error: "already_asked", status: last?.status || "pending" }, 409);
+    }
+    throw err;
+  }
+  const co = await c.env.DB.prepare(`SELECT company, contact, email FROM companies WHERE id = ?`)
+    .bind(who.row.company_id).first();
+  const me = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first();
+  if (co?.email) {
+    const link = "https://app.subsub.work/?open=passport";
+    const mail = passportAccessRequestEmail({ company: co, contact: co.contact, accountName: who.acct.name,
+      requesterName: me?.name, message, link });
+    const result = await sendEmail(c.env, { to: co.email, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(c.env, { accountId, companyId: who.row.company_id, to: co.email,
+      kind: "passport_access_request", subject: mail.subject, result, sentBy: userId });
+  }
+  await logEvent(c.env, accountId, userId, "passport.access_requested", id, { companyId: who.row.company_id });
+  return c.json({ ok: true, id, status: "pending" }, 201);
+});
+
+// The two files, once the sub has said yes. Pinned three ways: the access row
+// is approved for THIS account and THIS company, the kind is one the request
+// covers, and the file is the company's CURRENT row of that kind -- a
+// superseded certificate drawn here would be last year's cover under this
+// year's Passport. Read from company_docs only: the fallback the roster's own
+// file route uses is scoped to the caller's own account prefix, which on
+// somebody else's company finds nothing anyway.
+app.get("/api/passport/:slug/documents/:kind/file", requireRole("admin", "pm"), async (c) => {
+  const { kind } = c.req.param();
+  if (!PASSPORT_ACCESS_KINDS.includes(kind)) return c.json({ error: "not_found" }, 404);
+  const who = await passportAsker(c, c.req.param("slug"));
+  if (who.error) return c.json({ error: "not_found" }, 404);
+  const last = await liveAccess(c.env, who.row.company_id, who.acct.id);
+  if (last?.status !== "approved") return c.json({ error: "not_approved" }, 403);
+  let doc = null;
+  try {
+    doc = await c.env.DB.prepare(
+      `SELECT file_key, file_name FROM company_docs
+        WHERE company_id = ? AND kind = ? AND superseded_at IS NULL
+        ORDER BY uploaded_at DESC LIMIT 1`).bind(who.row.company_id, kind).first();
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  if (!doc?.file_key) return c.json({ error: "no_file" }, 404);
+  const obj = await c.env.FILES.get(doc.file_key);
+  if (!obj) return c.json({ error: "no_file" }, 404);
+  return new Response(obj.body, { headers: {
+    "Content-Type": obj.httpMetadata?.contentType || "application/octet-stream",
+    "Content-Disposition": `inline; filename="${(doc.file_name || "document").replace(/[^\w.\-]/g, "_")}"`,
+    // Never a shared cache: revoking has to stop it opening.
+    "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex",
+  } });
+});
+
+// The hiring side's own list: every Passport this account has asked about and
+// where each one got to.
+app.get("/api/passport-access", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT pa.id, pa.status, pa.requested_at, pa.decided_at, p.slug, co.company
+         FROM passport_access pa
+         JOIN passports p ON p.company_id = pa.company_id
+         JOIN companies co ON co.id = pa.company_id
+        WHERE pa.account_id = ? ORDER BY pa.requested_at DESC LIMIT 100`).bind(accountId).all();
+    return c.json((results || []).map((r) => ({ id: r.id, status: r.status, company: r.company,
+      slug: r.slug, url: passportUrl(r.slug), requestedAt: r.requested_at, decidedAt: r.decided_at })));
+  } catch (err) {
+    if (missingSchema(err)) return c.json([]);
+    throw err;
+  }
+});
+
 app.put("/api/uploads/:kind/:fileName", async (c) => {
   const { accountId } = c.get("auth");
   const { kind, fileName } = c.req.param();
@@ -17116,8 +17565,9 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
   // all; the real length is checked after, because Content-Length can lie
   // and a chunked upload does not send one.
   // An avatar is the same shape of thing from the same kind of person -- a
-  // guest seat may upload one -- so it gets the same checks.
-  if (kind === "report-photo" || kind === "avatar") {
+  // guest seat may upload one -- so it gets the same checks. A Passport photo
+  // is published to anybody holding the link, so it is checked the same way.
+  if (kind === "report-photo" || kind === "avatar" || kind === "passport-photo") {
     if (!PHOTO_TYPES.has(type)) return c.json({ error: "not_an_image", type }, 415);
     const declared = Number(c.req.header("Content-Length") || 0);
     if (declared > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
@@ -17198,7 +17648,7 @@ async function hostnameSweep(env) {
 //
 // Every current certificate with a date on it, asked one question: is a
 // reminder due today that has not been sent? shared/docs.js decides that
-// (CHASE_AT = 30, 14, 3, 0) and the doc_reminders table remembers the answer,
+// (CHASE_AT = 30, 14, 7, 3, 0) and the doc_reminders table remembers the answer,
 // so this can run every night without sending the same warning thirty times.
 //
 // The -1 case is the one worth reading twice. A certificate that lapses under
@@ -17302,6 +17752,85 @@ async function docExpirySweep(env) {
     }
   }
   return { considered: (rows || []).length, sent, urgent, skipped };
+}
+
+// The licence running out, at 30, 7 and 0 days (077).
+//
+// The date is the state register's own -- `expirationDate` on the check the
+// nightly licenseSweep stored -- never one the sub typed, because a reminder
+// about a date nobody checked is a reminder that can be wrong in either
+// direction. So today this reaches Washington alone, which is the one register
+// SubSub reads; the other states' boards publish no date SubSub can see.
+//
+// Same ledger rule as the certificate chase: the row is written BEFORE the
+// send, and ux_license_reminder (company, expiry, days out) is the control, so
+// a night that dies halfway never sends the same reminder twice -- and keyed
+// on the expiry, so a renewed licence earns a fresh set.
+async function licenseReminderSweep(env) {
+  const today = new Date().toISOString().slice(0, 10);
+  const horizon = addDaysIso(today, Math.max(...LICENSE_CHASE_AT));
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT id, company, contact, email, license, state, license_check FROM companies
+        WHERE license IS NOT NULL AND license <> '' AND license_check IS NOT NULL
+          AND json_extract(license_check, '$.expirationDate') IS NOT NULL
+          AND substr(json_extract(license_check, '$.expirationDate'), 1, 10) <= ?`
+    ).bind(horizon).all());
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return { skipped: "not migrated" };
+  }
+  let sent = 0, skipped = 0;
+  for (const co of rows || []) {
+    const check = parseJson(co.license_check, null);
+    // A registry that answered "not found" has no expiry worth chasing.
+    if (!check?.found) { skipped++; continue; }
+    const expiresOn = String(check.expirationDate).slice(0, 10);
+    let alreadySent;
+    try {
+      const { results: prior } = await env.DB.prepare(
+        `SELECT days_out FROM license_reminders WHERE company_id = ? AND expires_on = ?`).bind(co.id, expiresOn).all();
+      alreadySent = (prior || []).map((r) => r.days_out);
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      return { skipped: "license_reminders not migrated" };
+    }
+    // One reminder at most after it has lapsed, and none for a licence that
+    // lapsed before anybody here was chasing it: the 0 is "today", not
+    // "every night since".
+    const due = licenseReminderDue({ expiresOn, today, alreadySent });
+    if (due === null || (due === 0 && expiresOn < addDaysIso(today, -7))) { skipped++; continue; }
+    try {
+      await env.DB.prepare(
+        `INSERT INTO license_reminders (id, company_id, expires_on, days_out, emailed) VALUES (?, ?, ?, ?, 0)`
+      ).bind(uid(), co.id, expiresOn, due).run();
+    } catch (err) {
+      if (/UNIQUE constraint failed/i.test(String(err?.message || err))) { skipped++; continue; }
+      throw err;
+    }
+    if (co.email) {
+      const st = normalizeState(co.state);
+      const pp = await env.DB.prepare(`SELECT slug FROM passports WHERE company_id = ?`).bind(co.id).first()
+        .catch(() => null);
+      const own = await env.DB.prepare(`SELECT id FROM accounts WHERE company_id = ?`).bind(co.id).first()
+        .catch(() => null);
+      const mail = licenseExpiryEmail({ company: co, contact: co.contact, number: co.license, expiresOn,
+        daysOut: Math.max(0, daysBetween(today, expiresOn)),
+        registry: st === "WA" ? "Washington L&I" : st ? `${stateName(st)}'s licensing board` : null,
+        link: passportUrl(pp?.slug) || "https://app.subsub.work/?open=passport" });
+      const result = await sendEmail(env, { to: co.email, subject: mail.subject, text: mail.text, html: mail.html });
+      await logMail(env, { accountId: own?.id || null, companyId: co.id, to: co.email,
+        kind: "license_expiry", subject: mail.subject, result });
+      if (result.ok) {
+        await env.DB.prepare(
+          `UPDATE license_reminders SET emailed = 1 WHERE company_id = ? AND expires_on = ? AND days_out = ?`
+        ).bind(co.id, expiresOn, due).run();
+      }
+    }
+    sent++;
+  }
+  return { considered: (rows || []).length, sent, skipped };
 }
 
 // ---------------------------------------------------------------------------
@@ -17492,6 +18021,11 @@ app.get("/api/cron/referrals", async (c) => {
 app.get("/api/cron/doc-expiry", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await docExpirySweep(c.env));
+});
+
+app.get("/api/cron/license-reminders", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await licenseReminderSweep(c.env));
 });
 
 app.get("/api/cron/license-sweep", async (c) => {
@@ -22053,7 +22587,8 @@ export default {
     const nightly = event.cron === "0 3 * * *";
     const jobs = nightly
       ? [["hostnames", hostnameSweep], ["licenses", licenseSweep],
-         ["doc-expiry", docExpirySweep], ["retouch", retouchSweep],
+         ["doc-expiry", docExpirySweep], ["license-reminders", licenseReminderSweep],
+         ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep]]
       : [["hostnames", hostnameSweep]];

@@ -2286,6 +2286,58 @@ CREATE TABLE IF NOT EXISTS leads (
 CREATE INDEX IF NOT EXISTS ix_leads_created ON leads(created_at);
 CREATE INDEX IF NOT EXISTS ix_leads_email ON leads(email);
 
+-- 077: the Sub Passport. See migrations/077_passport.sql.
+CREATE TABLE IF NOT EXISTS passports (
+  company_id     TEXT PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  slug           TEXT NOT NULL UNIQUE,
+  published_at   TEXT,
+  trades         TEXT NOT NULL DEFAULT '[]',
+  founded_year   INTEGER,
+  about          TEXT,
+  view_count     INTEGER NOT NULL DEFAULT 0,
+  last_viewed_at TEXT,
+  created_at     TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS passport_photos (
+  id          TEXT PRIMARY KEY,
+  company_id  TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  file_key    TEXT NOT NULL,
+  file_type   TEXT,
+  caption     TEXT,
+  position    INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+  removed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_passport_photos_company ON passport_photos (company_id, position);
+
+CREATE TABLE IF NOT EXISTS passport_access (
+  id            TEXT PRIMARY KEY,
+  company_id    TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  requested_by  TEXT REFERENCES users(id),
+  message       TEXT,
+  status        TEXT NOT NULL DEFAULT 'pending'
+                  CHECK (status IN ('pending', 'approved', 'declined', 'revoked')),
+  requested_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+  decided_at    TEXT,
+  decided_by    TEXT REFERENCES users(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_passport_access_live
+  ON passport_access (company_id, account_id) WHERE status IN ('pending', 'approved');
+
+CREATE TABLE IF NOT EXISTS license_reminders (
+  id          TEXT PRIMARY KEY,
+  company_id  TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  expires_on  TEXT NOT NULL,
+  days_out    INTEGER NOT NULL,
+  emailed     INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_license_reminder
+  ON license_reminders (company_id, expires_on, days_out);
+
 -- 073. How the crew gets in, in words. See migrations/073_job_access.sql.
 CREATE TABLE IF NOT EXISTS job_access (
   job_id      TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,

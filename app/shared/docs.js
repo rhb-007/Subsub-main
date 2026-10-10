@@ -79,9 +79,10 @@ export const OPTIONAL_KINDS = ["contract"];
 export const isOptionalDoc = (kind) => OPTIONAL_KINDS.includes(kind);
 export const REQUIRED_KINDS = DOC_KINDS.filter((k) => !isOptionalDoc(k));
 // How close counts as close. Thirty days is a renewal cycle; three is a
-// phone call.
+// phone call. Seven was added with the Passport (077): a week out is when a
+// renewal can still be bought before the old certificate runs out.
 export const WARN_DAYS = 30;
-export const CHASE_AT = [30, 14, 3, 0];
+export const CHASE_AT = [30, 14, 7, 3, 0];
 
 const day = (d) => String(d || "").slice(0, 10);
 export const addDaysIso = (iso, n) => {

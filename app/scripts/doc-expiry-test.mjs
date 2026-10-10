@@ -111,18 +111,21 @@ console.log("\n-- chasing, without sending the same warning for thirty nights --
   ck("already sent, nothing due", dueReminder({ doc, asOf: TODAY, alreadySent: [30] }) === null);
   ck("fourteen out, the fourteen", dueReminder({ doc, asOf: "2026-10-11", alreadySent: [30] }) === 14,
     String(dueReminder({ doc, asOf: "2026-10-11", alreadySent: [30] })));
-  ck("three out, the three", dueReminder({ doc, asOf: "2026-10-22", alreadySent: [30, 14] }) === 3);
-  ck("on the day, the last one", dueReminder({ doc, asOf: "2026-10-25", alreadySent: [30, 14, 3] }) === 0);
-  ck("all sent, nothing more", dueReminder({ doc, asOf: "2026-10-25", alreadySent: [30, 14, 3, 0] }) === null);
+  ck("a week out, the seven", dueReminder({ doc, asOf: "2026-10-18", alreadySent: [30, 14] }) === 7,
+    String(dueReminder({ doc, asOf: "2026-10-18", alreadySent: [30, 14] })));
+  ck("three out, the three", dueReminder({ doc, asOf: "2026-10-22", alreadySent: [30, 14, 7] }) === 3);
+  ck("on the day, the last one", dueReminder({ doc, asOf: "2026-10-25", alreadySent: [30, 14, 7, 3] }) === 0);
+  ck("all sent, nothing more", dueReminder({ doc, asOf: "2026-10-25", alreadySent: [30, 14, 7, 3, 0] }) === null);
   ck("forty days out, nothing yet", dueReminder({ doc, asOf: "2026-09-15" }) === null);
   ck("a document that never expires is never chased",
     dueReminder({ doc: { fileName: "w9.pdf" }, asOf: TODAY }) === null);
-  ck("the milestones are the documented ones", CHASE_AT.join(",") === "30,14,3,0", CHASE_AT.join(","));
+  ck("the milestones are the documented ones", CHASE_AT.join(",") === "30,14,7,3,0", CHASE_AT.join(","));
 
   // Missing a window entirely -- a sweep that did not run for a week -- must
-  // still send the closest one rather than nothing.
+  // still send the closest one rather than nothing. Five days out with only
+  // the 30 sent: the closest is the 7 now that it exists, not the 14.
   ck("a missed window still chases",
-    dueReminder({ doc, asOf: "2026-10-20", alreadySent: [30] }) === 14,
+    dueReminder({ doc, asOf: "2026-10-20", alreadySent: [30] }) === 7,
     String(dueReminder({ doc, asOf: "2026-10-20", alreadySent: [30] })));
 }
 

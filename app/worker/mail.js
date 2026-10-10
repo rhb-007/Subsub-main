@@ -1089,3 +1089,89 @@ This is an automated message from an unmonitored address. Replies aren't receive
     html: textToHtml(text, link),
   };
 }
+
+// ---- The Sub Passport (077) -------------------------------------------------
+
+// A hiring account asking to open a sub's certificate and W-9. The sub decides;
+// nothing opens until they say yes, and the email says so in those words,
+// because "somebody wants your tax form" is the sentence a careful person
+// stops at.
+export function passportAccessRequestEmail({ company, contact, accountName, requesterName, message, link }) {
+  const who = accountName || "A company";
+  const text = `Hi ${contact || company?.company || "there"},
+
+${who}${requesterName ? ` (${requesterName})` : ""} opened your SubSub Passport and asked to see
+your certificate of insurance and your W-9.
+${message ? `\nThey added: "${message}"\n` : ""}
+Nothing opens until you say yes. Approve or decline here:
+  ${link}
+
+If you approve, they can open those two files while you leave it on. You can
+take it back at any time from the same screen.
+
+-- SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return { subject: `${who} asked to see your insurance and W-9`, text, html: textToHtml(text, link) };
+}
+
+// The answer, to the person who asked.
+export function passportAccessDecisionEmail({ firstName, companyName, approved, link }) {
+  const sub = companyName || "The subcontractor";
+  const text = approved
+    ? `Hi ${firstName || "there"},
+
+${sub} approved your request. Their certificate of insurance and W-9 now
+open from their Passport while you are signed in to SubSub:
+  ${link}
+
+They can take this back at any time.
+
+-- SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`
+    : `Hi ${firstName || "there"},
+
+${sub} declined your request to see their certificate of insurance and W-9.
+Their Passport still shows what is on file and when it runs out:
+  ${link}
+
+-- SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: approved ? `${sub} shared their insurance and W-9 with you` : `${sub} declined your document request`,
+    text, html: textToHtml(text, link),
+  };
+}
+
+// The licence running out, at 30, 7 and 0 days. The date is the state
+// register's own, never one the sub typed, and the email says which register.
+export function licenseExpiryEmail({ company, contact, number, expiresOn, daysOut, registry, link }) {
+  const reg = registry || "the state";
+  const lapsed = daysOut <= 0;
+  const lead = lapsed
+    ? `Your contractor license ${number ? `(${number}) ` : ""}runs out today (${expiresOn}) according to ${reg}.`
+    : `Your contractor license ${number ? `(${number}) ` : ""}runs out on ${expiresOn} -- ${daysOut} day${daysOut === 1 ? "" : "s"} from now, according to ${reg}.`;
+  const text = `Hi ${contact || company?.company || "there"},
+
+${lead}
+
+WHAT HAPPENS IF IT LAPSES
+  The "SubSub Verified" badge comes off your Passport, and the GCs you work
+  with see the license as not active.
+
+WHAT TO DO
+  Renew it with ${reg}. SubSub checks the register every night, so once it
+  is renewed there, it shows here by itself -- nothing to upload.
+
+  Your Passport: ${link}
+
+-- SubSub
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return {
+    subject: lapsed ? "Your contractor license runs out today" : `Your contractor license runs out in ${daysOut} days`,
+    text, html: textToHtml(text, link),
+  };
+}

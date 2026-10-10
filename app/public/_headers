@@ -1,0 +1,6 @@
+# 077. A Sub Passport is shared by link and QR code, and SubSub is not a
+# directory of subs: no search engine should list one. The page also sets a
+# robots meta tag and the API answers noindex; this covers a crawler that
+# reads the response headers before running any script.
+/p/*
+  X-Robots-Tag: noindex

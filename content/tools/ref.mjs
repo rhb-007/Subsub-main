@@ -15,6 +15,11 @@
 //
 // `window.SUBSUB_API` is set by each page, the same convention
 // book-a-demo.html already uses.
+//
+// `&via=passport` names the channel. A Passport's "Manage your whole sub
+// network like this" lands here with the sub's code, and crediting that as a
+// plain link would lose the one fact the referrer's screen is about: which of
+// their doors brought the GC in. Anything else reads as a link.
 
 import { CODE_ALPHABET, REF_COOKIE, REF_COOKIE_DAYS } from "../../app/shared/referral.js";
 
@@ -23,11 +28,12 @@ export const REF_SNIPPET = `<script>/* subsub-ref v1 */
 var API=window.SUBSUB_API||'https://api.subsub.work/api';
 var q=new URLSearchParams(location.search).get('ref');
 if(!q)return;
+var ch=new URLSearchParams(location.search).get('via')==='passport'?'passport':'link';
 var c=String(q).toUpperCase().replace(/[\\s-]/g,'');
 if(!/^[${CODE_ALPHABET}]{8}$/.test(c))return;
 var dom=/(^|\\.)subsub\\.work$/.test(location.hostname)?';domain=.subsub.work':'';
-document.cookie='${REF_COOKIE}='+c+'.link.'+Math.floor(Date.now()/1000)+';path=/;max-age=${REF_COOKIE_DAYS * 86400};samesite=lax'+(location.protocol==='https:'?';secure':'')+dom;
-fetch(API+'/referrals/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:c,channel:'link'})})
+document.cookie='${REF_COOKIE}='+c+'.'+ch+'.'+Math.floor(Date.now()/1000)+';path=/;max-age=${REF_COOKIE_DAYS * 86400};samesite=lax'+(location.protocol==='https:'?';secure':'')+dom;
+fetch(API+'/referrals/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:c,channel:ch})})
 .then(function(r){return r.json();}).then(function(j){
 if(!j||!j.ok||!j.from)return;
 var els=document.querySelectorAll('[data-ref-from]');

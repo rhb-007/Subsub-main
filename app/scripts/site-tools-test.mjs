@@ -244,6 +244,17 @@ try {
     const plain = await open("/gc");
     t.ck("and with no referral says nothing", await plain.page.evaluate(() => document.querySelector("[data-ref-from]")?.hidden === true));
     await plain.ctx.close();
+    // A Passport's CTA lands here with &via=passport, and that is the channel
+    // the cookie and the count carry -- crediting it as a plain link would
+    // lose which of the sub's doors brought the GC in.
+    const pass = await open("/gc?ref=K7Q2MXRB&via=passport");
+    await wait(300);
+    const pc = await pass.page.evaluate(() => document.cookie);
+    t.ck("a Passport's CTA writes the passport channel", /ss_ref=K7Q2MXRB\.passport\.\d{10}/.test(pc), pc);
+    t.ck("and counts it as one", posts.some((p) => p.path === "/api/referrals/touch" && p.body.channel === "passport"));
+    const odd = await open("/gc?ref=K7Q2MXRB&via=claim");
+    t.ck("any other via is a plain link", /ss_ref=K7Q2MXRB\.link\./.test(await odd.page.evaluate(() => document.cookie)));
+    await pass.ctx.close(); await odd.ctx.close();
     await ctx.close();
   }
 

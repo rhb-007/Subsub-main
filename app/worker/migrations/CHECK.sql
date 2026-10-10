@@ -259,6 +259,14 @@ WITH spec(j) AS (SELECT
   -- licence checker and the handyman calculator still answer, and the email
   -- they asked for is not kept.
   ',["m076_leads","col","leads",["id","email","tool","state","detail","ref_code","notified"]]' ||
+  -- 077: the Sub Passport -- the page, its photos, access requests and
+  -- licence reminders. Columns, not table names: a table missing the columns
+  -- the routes write reads as run and answers nothing.
+  ',["m077_passports","col","passports",["company_id","slug","published_at","trades","founded_year","about","view_count"]]' ||
+  ',["m077_passport_photos","col","passport_photos",["id","company_id","file_key","caption","position","removed_at"]]' ||
+  ',["m077_passport_access","col","passport_access",["id","company_id","account_id","status","decided_at"]]' ||
+  ',["m077_license_reminders","col","license_reminders",["company_id","expires_on","days_out","emailed"]]' ||
+  ',["m077_access_live_unique","index","ux_passport_access_live",[]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -715,6 +723,14 @@ WITH inv(j) AS (SELECT '['
   -- nothing carries the credit.
   || ',' || json_array('m075_inv_credit_unrecorded', (SELECT COUNT(*) FROM referral_rewards
     WHERE status = 'applied' AND (processor_ref IS NULL OR processor_ref = '')))
+  -- 077. A Passport address with no random suffix is one somebody can guess
+  -- by typing a company's name, which is the directory SubSub refuses to be.
+  || ',' || json_array('m077_inv_guessable_slug', (SELECT COUNT(*) FROM passports
+    WHERE slug NOT GLOB '*-[2-9a-z][2-9a-z][2-9a-z][2-9a-z][2-9a-z]'))
+  -- And an access request marked decided with no record of when: the sub's
+  -- yes or no is the thing somebody asks about later.
+  || ',' || json_array('m077_inv_decided_undated', (SELECT COUNT(*) FROM passport_access
+    WHERE status IN ('approved', 'declined', 'revoked') AND decided_at IS NULL))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

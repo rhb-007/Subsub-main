@@ -82,3 +82,21 @@ export function nextStoredCheck(prev, result, today = new Date().toISOString().s
   }
   return { stored: fresh, kept: false };
 }
+
+// When to remind a sub that their licence is running out: 30, 7 and 0 days.
+// The expiry is the registry's own date off the stored check, never one the
+// sub typed. Same shape as the certificate chase in shared/docs.js -- the
+// closest milestone passed and not yet sent -- and one reminder at most after
+// it has lapsed, because a licence expired last month is not news every night.
+export const LICENSE_CHASE_AT = [30, 7, 0];
+
+export function licenseReminderDue({ expiresOn, today, alreadySent = [] }) {
+  const e = String(expiresOn || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(e)) return null;
+  const t = String(today).slice(0, 10);
+  const days = Math.round((Date.UTC(+e.slice(0, 4), +e.slice(5, 7) - 1, +e.slice(8, 10))
+    - Date.UTC(+t.slice(0, 4), +t.slice(5, 7) - 1, +t.slice(8, 10))) / 86400000);
+  const due = days < 0 ? 0 : LICENSE_CHASE_AT.filter((d) => days <= d).sort((a, b) => a - b)[0];
+  if (due === undefined) return null;
+  return alreadySent.includes(due) ? null : due;
+}

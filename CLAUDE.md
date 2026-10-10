@@ -11583,6 +11583,67 @@ refactor.
   breaks the FTC's endorsement rules and most groups' own rules, so each one
   says the writer works on SubSub. That is what keeps them postable.
 
+- **THE SUB PASSPORT IS A PAGE A SUB HANDS OUT, AND EVERY RULE ON IT IS ABOUT
+  NOT BECOMING A DIRECTORY.** Migration 077, `app/shared/passport.js`, `/p/<slug>`.
+  A free public profile: name, trades, area, years, photos, the license and its
+  check, the insurer and its date, and W-9 *on file* yes or no. Four decisions
+  were taken out loud before it was built, and each is the line a later pass
+  would move.
+
+  **The address can be read and cannot be guessed.** `bay-roofing-k7q2m`: the
+  name so a person can say it, five random characters so nobody can walk names
+  to find who is on SubSub, and `noindex` three times over (the page's meta tag,
+  the API reply, Pages' `_headers`) so a crawler following a shared link does not
+  build the directory this product refuses. Stamped once and never changed,
+  because it gets printed on decals. `m077_inv_guessable_slug` counts one that
+  lost its suffix.
+
+  **"SubSub Verified" claims only what was checked, and the line under it says
+  what.** A license counts when the one register SubSub reads (Washington L&I)
+  says ACTIVE, or when the state issues no contractor license for that work --
+  read off the handyman dataset's `no_state_license`, minus plumbing, electrical
+  and HVAC, which are licensed even there. A typed number SubSub cannot check,
+  and a failed check, never earn it; so does no certificate, one with no date or
+  one past its date. The badge's name was kept on request with that line under
+  it, rather than renamed per state.
+
+  **The files are behind an account and the sub's yes.** The public page says a
+  W-9 is on file and never carries one, because a W-9 can carry a sole
+  proprietor's SSN. A hiring account's admin or pm asks; the sub approves,
+  declines, or later revokes (`accessMove`), guarded on the status it moves FROM
+  in the UPDATE so two presses move it once; and the file route is pinned to the
+  approving account, the two kinds asked for, and the CURRENT row. The test
+  fixture makes the superseded certificate the newer upload, because that is the
+  only order in which reading by date instead of by `superseded_at` can be told
+  apart.
+
+  **One referral record, not two.** The proposed `passport_referrals` table was
+  dropped before shipping: 075's codes already credit a signup, and the CTA goes
+  to `/gc?ref=<code>&via=passport`, which the shared ref snippet now reads as the
+  `passport` channel. All 108 copies of that snippet were rewritten from
+  `content/tools/ref.mjs` mechanically, because `test:sitetools` fails any copy
+  that differs.
+
+  **License reminders read the register's date, never the sub's.** 30, 7 and 0
+  days, written to `license_reminders` before the send and keyed on the expiry,
+  so a renewal earns a fresh set; a licence that lapsed weeks ago is not chased
+  nightly. Today that reaches Washington only. The certificate schedule gained a
+  7 (`CHASE_AT` is 30, 14, 7, 3, 0), and two suites that pinned the old list were
+  updated rather than loosened.
+
+  **A slash-star inside a `//` comment is a block comment to a naive stripper.**
+  The route map's comment named `/api/my-passport/*`, and `test:seatgate` strips
+  `/* ... */` before reading the Worker, so it ate everything up to the next
+  star-slash -- including the three crm-rules routes it counts -- and reported
+  them missing. Same class as the backtick trap: a comment is not inert to every
+  reader of the file.
+
+  **Still open:** My QR code still encodes the connect code, not the Passport,
+  because changing what an existing printed code opens would break every one
+  already handed out; the Passport has its own code on its own tab. And a GC's
+  pending request is surfaced by email and on the Passport tab, not yet as a
+  dashboard row.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

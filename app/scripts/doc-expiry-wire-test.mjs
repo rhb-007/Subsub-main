@@ -287,7 +287,7 @@ console.log("\n-- a lapse under booked work is urgent, and cancels nothing --");
 
 console.log("\n-- and it walks down the milestones as the date approaches --");
 {
-  // 30, 14, 3, 0 -- each once. A document does not get chased at 14 and then
+  // 30, 14, 7, 3, 0 -- each once. A document does not get chased at 14 and then
   // go quiet for the last fortnight, and it does not get chased at 14 twice
   // because it is still inside fourteen days tomorrow.
   const { db, env } = seed();
@@ -311,16 +311,20 @@ console.log("\n-- and it walks down the milestones as the date approaches --");
   await sweep();
   ck("and not a second time at 14", JSON.stringify(sent()) === "[30,14]", JSON.stringify(sent()));
 
+  db.prepare(`UPDATE company_docs SET expires_on = ? WHERE id = ?`).run(iso(6), cur());
+  await sweep();
+  ck("six days out is chased at 7", JSON.stringify(sent()) === "[30,14,7]", JSON.stringify(sent()));
+
   db.prepare(`UPDATE company_docs SET expires_on = ? WHERE id = ?`).run(iso(2), cur());
   await sweep();
-  ck("two days out is chased at 3", JSON.stringify(sent()) === "[30,14,3]", JSON.stringify(sent()));
+  ck("two days out is chased at 3", JSON.stringify(sent()) === "[30,14,7,3]", JSON.stringify(sent()));
 
   db.prepare(`UPDATE company_docs SET expires_on = ? WHERE id = ?`).run(iso(0), cur());
   await sweep();
-  ck("the day it expires is chased at 0", JSON.stringify(sent()) === "[30,14,3,0]", JSON.stringify(sent()));
+  ck("the day it expires is chased at 0", JSON.stringify(sent()) === "[30,14,7,3,0]", JSON.stringify(sent()));
   await sweep();
-  ck("and then it stops -- four chases, not one a night",
-    JSON.stringify(sent()) === "[30,14,3,0]", JSON.stringify(sent()));
+  ck("and then it stops -- five chases, not one a night",
+    JSON.stringify(sent()) === "[30,14,7,3,0]", JSON.stringify(sent()));
 }
 
 console.log("\n-- a corrected expiry on the same certificate is chased afresh --");

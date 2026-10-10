@@ -19,6 +19,78 @@ The standing rules, from `CLAUDE.md`:
 
 ---
 
+## 077 — The Sub Passport: a free public page a sub hands out
+
+Every company that can be hired (a subcontractor account, a general contractor,
+and every contractor seat's company) now has a **Passport** at
+`app.subsub.work/p/<name>-<5 random characters>`: the business name, trades,
+where they work, years in business, photos of their work, the license and its
+check, the insurer and when the certificate runs out, and whether a W-9 is on
+file (**yes or no only**). The sub edits it under **Account → Passport** (a
+contractor seat: **Passport** in its own menu) and nothing is public until they
+press **Publish**.
+
+- **The address can be read but not guessed.** The random suffix means nobody
+  can find a sub by typing names, and every page, every API reply and every
+  photo says `noindex`, so search engines do not turn Passports into a
+  directory.
+- **"SubSub Verified" claims only what was checked**, and the line under it
+  says what. The license counts when Washington L&I says ACTIVE (the one
+  register SubSub reads), **or** when the state issues no contractor license
+  for that work (Texas roofing yes; plumbing, electrical and HVAC are
+  state-licensed even there, so not). The insurance counts when a certificate
+  is on file with an expiry date that has not passed. A number typed in that
+  SubSub cannot check never earns it, and neither does a failed check.
+- **The certificate and the W-9 open only with the sub's yes.** A signed-in
+  admin or project manager of a hiring account presses *Ask to see the files*;
+  the sub is emailed and answers in one press; approved, those two files open
+  for that account only, the current version only, until the sub stops sharing.
+  The bond and the agreement are not part of it.
+- **"Manage your whole sub network like this"** on the page goes to
+  `subsub.work/gc?ref=<the sub's code>&via=passport`, so a GC who signs up is
+  credited to the sub through 075's referrals, on the `passport` channel.
+- **Reminders:** the certificate's emails now go at **30, 14, 7, 3 and 0** days
+  (7 is new). The license gets its own at **30, 7 and 0** days, off the state
+  register's own date -- so today, Washington licenses only.
+
+### 1. Paste migration 077
+
+`npm run paste 077` prints it. It is four `CREATE TABLE IF NOT EXISTS` and
+three indexes, no `ALTER TABLE`, so it is one paste and safe to run twice.
+
+It differs from the schema shown before building in one place: there is **no
+`passport_referrals` table**. 075's referral codes already record who referred
+whom, with `passport` as one of their channels, and a second table holding the
+same fact would be the one that went stale.
+
+### 2. Run CHECK.sql
+
+`npm run paste check`. Statement 1 gains five rows (`m077_passports`,
+`m077_passport_photos`, `m077_passport_access`, `m077_license_reminders`,
+`m077_access_live_unique`), statement 2 two invariants that must read 0:
+`m077_inv_guessable_slug` (a Passport address with no random suffix) and
+`m077_inv_decided_undated` (an answered request with no date).
+
+### 3. Nothing to configure
+
+No new settings. The license reminders run in the existing nightly cron
+(`license-reminders`), and by hand at `GET /api/cron/license-reminders` with the
+cron secret.
+
+### Not verified here
+
+- A live Passport photo upload into R2 and back out (the suite stubs the
+  bucket).
+- How a real iPhone's share sheet draws the Share button.
+
+### Tests
+
+`npm run test:passport` (the rules and every route, 104) and
+`npm run test:passportui` (the public page at phone width, asking for the
+files, and the sub's own screen, 33).
+
+---
+
 ## 075 — Referrals: a code for every sub and GC, and what referring earns
 
 Every subcontractor company and every hiring account (general contractor,

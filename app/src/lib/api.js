@@ -732,6 +732,38 @@ export const api = {
   claimVerify: (token, who, code) => request(`/claim/${encodeURIComponent(token)}/verify`,
     { method: "POST", body: JSON.stringify({ ...who, code }) }),
   woClaimLink: (woId) => request(`/work-orders/${encodeURIComponent(woId)}/claim-link`),
+  // 077. The Sub Passport. The public page needs no session; asking for and
+  // opening the files does, and the files come back as blobs because the
+  // route needs an Authorization header an <a href> cannot carry.
+  publicPassport: (slug) => request(`/public/passport/${encodeURIComponent(slug)}`),
+  passportPhotoUrl: (slug, id) => `${API_BASE}/public/passport/${encodeURIComponent(slug)}/photo/${encodeURIComponent(id)}`,
+  passportAccess: (slug) => request(`/passport/${encodeURIComponent(slug)}/access`),
+  askPassportAccess: (slug, message) => request(`/passport/${encodeURIComponent(slug)}/access`,
+    { method: "POST", body: JSON.stringify({ message }) }),
+  passportFileBlob: async (slug, kind) => {
+    const res = await fetch(`${API_BASE}/passport/${encodeURIComponent(slug)}/documents/${kind}/file`,
+      { headers: await authHeaders() });
+    if (!res.ok) {
+      let code = `doc_${res.status}`;
+      try { code = (await res.json())?.error || code; } catch { /* not json */ }
+      throw new Error(code);
+    }
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || "" };
+  },
+  myPassport: () => request("/my-passport"),
+  saveMyPassport: (patch) => request("/my-passport", { method: "PUT", body: JSON.stringify(patch) }),
+  uploadPassportPhoto: async (file) => uploadFile("passport-photo", await shrinkPhoto(file)),
+  addPassportPhoto: (key, caption) => request("/my-passport/photos",
+    { method: "POST", body: JSON.stringify({ key, caption }) }),
+  removePassportPhoto: (id) => request(`/my-passport/photos/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  myPassportPhotoBlob: async (id) => {
+    const res = await fetch(`${API_BASE}/my-passport/photos/${encodeURIComponent(id)}`, { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`photo_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
+  answerPassportAccess: (id, action) => request(`/my-passport/access/${encodeURIComponent(id)}`,
+    { method: "POST", body: JSON.stringify({ action }) }),
   claimInbox: (token) => request(`/inbox/${encodeURIComponent(token)}/claim`,
     { method: "POST", body: "{}" }),
   // Who is asking, for the account deciding whether to say yes. Keyed by the
