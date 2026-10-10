@@ -37,7 +37,8 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runCheck, checkSql, checkRows, checkStatements, pasteForm, D1_MAX_COLUMNS, D1_MAX_COMPOUND } from "./lib/check-sql.mjs";
+import { runCheck, checkSql, checkRows, checkStatements, pasteForm, D1_MAX_COLUMNS, D1_MAX_COMPOUND,
+  D1_MAX_EXPR_DEPTH, concatDepth } from "./lib/check-sql.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const M = join(app, "worker", "migrations");
@@ -209,6 +210,16 @@ console.log("\n-- and CHECK.sql can be run against a fresh database --");
     st.replace(/^\s*--.*$/gm, "").split(/\bUNION\s+ALL\b/i).length - 1);
   ck("no statement uses a compound SELECT at all", Math.max(...terms) <= D1_MAX_COMPOUND,
     `UNION ALLs per statement: ${JSON.stringify(terms)}`);
+
+  // AND THE JOINS MUST NOT GROW INTO A TREE D1 REFUSES. A chain of n `||` is n
+  // deep, and the paste after 077 was refused at 100 in BOTH statements. The
+  // pieces are joined in parenthesised chunks so the depth stays near one
+  // chunk plus the number of chunks. The bound is well under D1's own, because
+  // this counts only the joins and the console counts every operator: the old
+  // statement 2 estimated 93 here and was refused.
+  const depths = checkStatements().map(concatDepth);
+  ck("the joins stay far below D1's expression-depth limit", Math.max(...depths) <= D1_MAX_EXPR_DEPTH * 0.4,
+    `join depth per statement: ${JSON.stringify(depths)}, D1 refuses at ${D1_MAX_EXPR_DEPTH}`);
 
   // AND BOTH HALVES GROW FOR FREE, which is the property that stops this coming
   // back a fourth time: a migration adds a line to statement 1's list and an

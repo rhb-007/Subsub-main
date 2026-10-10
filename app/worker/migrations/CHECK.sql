@@ -70,48 +70,52 @@
 -- found rather than 1. That is why the list carries a column NAME LIST rather
 -- than a count: the check is "these columns are present", and a number in the
 -- file would be a second record of the same fact.
+-- JOINED IN BRACKETED GROUPS OF EIGHT. D1 refuses an expression tree deeper
+-- than 100, and a chain of n joins is n deep, so after 077 both statements
+-- were refused. Grouping keeps the depth near one group plus the number of
+-- groups. A new line goes inside the last group, before its closing bracket.
 WITH spec(j) AS (SELECT
-  '[["m018_user_notify","col","users",["notify"]]' ||
+  ('[["m018_user_notify","col","users",["notify"]]' ||
   ',["m019_visits","table","visits",null]' ||
   ',["m020_withdrawn","col","jobs",["withdrawn_at"]]' ||
   ',["m021_declined","col","jobs",["declined_at"]]' ||
   ',["m022_photos","col","jobs",["photos"]]' ||
   ',["m022_report_detail","col","jobs",["report_detail"]]' ||
   ',["m023_severity","col","jobs",["severity"]]' ||
-  ',["m023_emergency_sub","col","accounts",["emergency_company_id"]]' ||
-  ',["m024_pay_kind","col","work_orders",["pay_kind"]]' ||
+  ',["m023_emergency_sub","col","accounts",["emergency_company_id"]]') ||
+  (',["m024_pay_kind","col","work_orders",["pay_kind"]]' ||
   ',["m024_rate_cents","col","work_orders",["rate_cents"]]' ||
   ',["m024_cap_hours","col","work_orders",["cap_hours"]]' ||
   ',["m025_updated_at","col","jobs",["updated_at"]]' ||
   ',["m026_supplier","col","jobs",["material_supplier"]]' ||
   ',["m026_branch","col","jobs",["material_branch"]]' ||
   ',["m027_invite_email","col","sub_invites",["email"]]' ||
-  ',["m027_invite_sent","col","sub_invites",["sent_at"]]' ||
-  ',["m028_user_invites","table","user_invites",null]' ||
+  ',["m027_invite_sent","col","sub_invites",["sent_at"]]') ||
+  (',["m028_user_invites","table","user_invites",null]' ||
   ',["m029_invite_phone","col","sub_invites",["phone"]]' ||
   ',["m030_connect_requests","table","connect_requests",null]' ||
   ',["m030_connect_code","col","companies",["connect_code"]]' ||
   ',["m031_account_company","col","accounts",["company_id"]]' ||
   ',["m032_avatar","col","users",["avatar_key"]]' ||
   ',["m033_milestones","table","wo_milestones",null]' ||
-  ',["m033_events","table","wo_events",null]' ||
-  ',["m033_releases","table","wo_releases",null]' ||
+  ',["m033_events","table","wo_events",null]') ||
+  (',["m033_releases","table","wo_releases",null]' ||
   ',["m034_retainage","col","work_orders",["retainage_bps"]]' ||
   ',["m035_waivers","table","lien_waivers",null]' ||
   ',["m035_lower_tier","table","lower_tier_parties",null]' ||
   ',["m036_scope","col","work_orders",["scope_kind"]]' ||
   ',["m037_docs","table","company_docs",null]' ||
   ',["m037_reminders","table","doc_reminders",null]' ||
-  ',["m038_optin","col","companies",["overflow_opt_in"]]' ||
-  ',["m038_trades","col","companies",["overflow_trades"]]' ||
+  ',["m038_optin","col","companies",["overflow_opt_in"]]') ||
+  (',["m038_trades","col","companies",["overflow_trades"]]' ||
   ',["m038_since","col","companies",["overflow_since"]]' ||
   ',["m038_posts","table","overflow_posts",null]' ||
   ',["m038_invites","table","overflow_invites",null]' ||
   ',["m038_responses","table","overflow_responses",null]' ||
   ',["m039_owner","col","properties",["owner_account_id"]]' ||
   ',["m039_transfers","table","property_transfers",null]' ||
-  ',["m040_declared_at","col","properties",["owner_declared_at"]]' ||
-  ',["m040_declared_by","col","properties",["owner_declared_by"]]' ||
+  ',["m040_declared_at","col","properties",["owner_declared_at"]]') ||
+  (',["m040_declared_by","col","properties",["owner_declared_by"]]' ||
   ',["m041_doc_shares","table","doc_shares",null]' ||
   ',["m043_quote_requests","table","quote_requests",null]' ||
   ',["m043_quote_invites","table","quote_invites",null]' ||
@@ -121,12 +125,12 @@ WITH spec(j) AS (SELECT
   -- 047. Whether this company has been ASKED to be hireable. NULL on a row
   -- means not answered, never "no", and the effective default is open -- so
   -- this counts the column, not the answers.
-  ',["m047_open_to_hire","col","companies",["open_to_hire"]]' ||
+  ',["m047_open_to_hire","col","companies",["open_to_hire"]]') ||
   -- 048. The CRM API: the tokens, and the row that makes a retried webhook
   -- return the job it already made. ux_job_sources_external is counted
   -- separately because it is the constraint doing that work -- the table
   -- without it takes the duplicate and reports success.
-  ',["m048_api_tokens","table","api_tokens",null]' ||
+  (',["m048_api_tokens","table","api_tokens",null]' ||
   ',["m048_job_sources","table","job_sources",null]' ||
   ',["m048_dedupe_index","index","ux_job_sources_external",null]' ||
   -- 049. The account's CRM vocabulary, and the words that meant nothing.
@@ -140,7 +144,7 @@ WITH spec(j) AS (SELECT
   -- ambiguous answer at the moment money is involved.
   ',["m050_payout_accounts","table","payout_accounts",null]' ||
   ',["m050_one_per_company","index","ux_payout_account_company",null]' ||
-  ',["m050_one_per_acct","index","ux_payout_account_processor",null]' ||
+  ',["m050_one_per_acct","index","ux_payout_account_processor",null]') ||
   -- 051. Money in against a work order, money out per release. The live-
   -- transfer index is counted separately because it is the half that holds
   -- when two people press pay at once -- the table alone takes the second
@@ -148,7 +152,7 @@ WITH spec(j) AS (SELECT
   -- exists to make impossible. It is PARTIAL (status <> 'failed') so a
   -- declined attempt can be retried; a plain unique index there would leave
   -- somebody unpayable because a card bounced once.
-  ',["m051_wo_funding","table","wo_funding",null]' ||
+  (',["m051_wo_funding","table","wo_funding",null]' ||
   ',["m051_wo_transfers","table","wo_transfers",null]' ||
   ',["m051_one_live_transfer","index","ux_wo_transfer_live",null]' ||
   ',["m051_one_per_intent","index","ux_wo_funding_intent",null]' ||
@@ -164,11 +168,11 @@ WITH spec(j) AS (SELECT
   -- contractor has instead of buildings. No rows means no restriction, so
   -- there is nothing here that must be non-zero -- the table existing is the
   -- whole of what the migration did.
-  ',["m053_membership_jobs","table","membership_jobs",null]' ||
+  ',["m053_membership_jobs","table","membership_jobs",null]') ||
   -- 055. Move-in and move-out unit inspections. Three tables; no rows is the
   -- ordinary state of a fresh database, so what is checked is that they are
   -- there and carry the columns the routes read.
-  ',["m055_inspections","col","inspections",["kind","status","property_id","unit","job_id","finished_at"]]' ||
+  (',["m055_inspections","col","inspections",["kind","status","property_id","unit","job_id","finished_at"]]' ||
   ',["m055_inspection_rooms","col","inspection_rooms",["inspection_id","name","status","note","position"]]' ||
   ',["m055_inspection_photos","col","inspection_photos",["room_id","file_key","content_type"]]' ||
   -- 056. Who has been sent an inspection report. No rows is the ordinary
@@ -182,9 +186,9 @@ WITH spec(j) AS (SELECT
   -- 059. What they will be to you, carried on the invite until they arrive.
   ',["m059_invite_engaged_as","col","sub_invites",["engaged_as"]]' ||
   -- 060. Who has to be there to let somebody in.
-  ',["m060_job_access","col","jobs",["access"]]' ||
+  ',["m060_job_access","col","jobs",["access"]]') ||
   -- 061. The contractor's half of an appointment.
-  ',["m061_visit_contractor_at","col","visits",["contractor_at"]]' ||
+  (',["m061_visit_contractor_at","col","visits",["contractor_at"]]' ||
   ',["m061_visit_contractor_note","col","visits",["contractor_note"]]' ||
   -- 062. Which tenant has to be let in, when it is not the person who asked.
   ',["m062_job_access_user","col","jobs",["access_user_id"]]' ||
@@ -212,8 +216,8 @@ WITH spec(j) AS (SELECT
   -- 068. Inspections arriving from somebody else's system: the retry key, the
   -- account's dictionary for condition words, and the queue of words that meant
   -- nothing. Three tables, counted by their COLUMNS -- 052's lesson.
-  ',["m068_inspection_sources","col","inspection_sources",["inspection_id","source","external_id","token_id"]]' ||
-  ',["m068_inspection_status_rules","col","inspection_status_rules",["source","match_value","status"]]' ||
+  ',["m068_inspection_sources","col","inspection_sources",["inspection_id","source","external_id","token_id"]]') ||
+  (',["m068_inspection_status_rules","col","inspection_status_rules",["source","match_value","status"]]' ||
   ',["m068_inspection_unmapped","col","inspection_unmapped",["source","match_value","hits","last_seen"]]' ||
   -- The two unique indexes, named because neither is a convenience. Dropping
   -- the first does not slow anything down, it silently allows one walk to
@@ -230,8 +234,8 @@ WITH spec(j) AS (SELECT
   -- turn texts off. Until it is run texts still go; the nightly sweep cannot
   -- record a bill and says so, and the switch answers migration_needed.
   ',["m070_sms_overage","col","sms_overage",["account_id","month","blocks","amount_cents","status","processor_ref"]]' ||
-  ',["m070_sms_overage_unique","index","ux_sms_overage_month",[]]' ||
-  ',["m070_sms_settings","col","account_sms_settings",["account_id","sms_off","updated_by","updated_at"]]' ||
+  ',["m070_sms_overage_unique","index","ux_sms_overage_month",[]]') ||
+  (',["m070_sms_settings","col","account_sms_settings",["account_id","sms_off","updated_by","updated_at"]]' ||
   -- 071. An account's own fee terms from the staff console. Until it is run
   -- every account is on the defaults and the console's fee panel says so.
   ',["m071_fee_terms","col","account_fee_terms",["account_id","fee_bps","cap_cents","free_cents","updated_by"]]' ||
@@ -250,8 +254,8 @@ WITH spec(j) AS (SELECT
   -- 075. Referrals. Until it is run the referral screens answer
   -- migration_needed naming it, signups record no referrer, and the
   -- paid-invoice webhook earns nothing (the nightly sweep catches up after).
-  ',["m075_referral_codes","col","referral_codes",["code","kind","account_id","company_id"]]' ||
-  ',["m075_referral_touches","col","referral_touches",["id","code","channel","at"]]' ||
+  ',["m075_referral_codes","col","referral_codes",["code","kind","account_id","company_id"]]') ||
+  (',["m075_referral_touches","col","referral_touches",["id","code","channel","at"]]' ||
   ',["m075_referral_attributions","col","referral_attributions",["subject_kind","subject_id","code","channel","touched_at"]]' ||
   ',["m075_referral_rewards","col","referral_rewards",["id","code","referred_account_id","kind","beneficiary","amount_cents","status","processor_ref","reference"]]' ||
   ',["m075_referral_invites","col","referral_invites",["id","code","channel","to_email","emailed"]]' ||
@@ -264,9 +268,9 @@ WITH spec(j) AS (SELECT
   -- the routes write reads as run and answers nothing.
   ',["m077_passports","col","passports",["company_id","slug","published_at","trades","founded_year","about","view_count"]]' ||
   ',["m077_passport_photos","col","passport_photos",["id","company_id","file_key","caption","position","removed_at"]]' ||
-  ',["m077_passport_access","col","passport_access",["id","company_id","account_id","status","decided_at"]]' ||
-  ',["m077_license_reminders","col","license_reminders",["company_id","expires_on","days_out","emailed"]]' ||
-  ',["m077_access_live_unique","index","ux_passport_access_live",[]]' ||
+  ',["m077_passport_access","col","passport_access",["id","company_id","account_id","status","decided_at"]]') ||
+  (',["m077_license_reminders","col","license_reminders",["company_id","expires_on","days_out","emailed"]]' ||
+  ',["m077_access_live_unique","index","ux_passport_access_live",[]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -325,6 +329,10 @@ ORDER BY verdict = 'ok', name;
 -- m031_hireable_without, m031_others_with and m039_unowned predate the
 -- `_inv_` marker and are named in the verdict for that reason; nothing new
 -- should join them without it.
+-- JOINED IN BRACKETED GROUPS OF EIGHT. D1 refuses an expression tree deeper
+-- than 100, and a chain of n joins is n deep, so after 077 both statements
+-- were refused. Grouping keeps the depth near one group plus the number of
+-- groups. A new line goes inside the last group, before its closing bracket.
 WITH inv(j) AS (SELECT '['
   -- Not a column check: the point of 031 is that every account that can BE
   -- HIRED has one, and no other kind does. It read `general_contractor` alone
@@ -333,7 +341,7 @@ WITH inv(j) AS (SELECT '['
   -- silently allowing one with no company to be hired as. The list here has to
   -- stay in step with HIREABLE_KINDS in worker/index.js; nothing enforces that
   -- but this comment and the migration-gap test.
-  || json_array('m031_hireable_without', (SELECT COUNT(*) FROM accounts
+  || (json_array('m031_hireable_without', (SELECT COUNT(*) FROM accounts
     WHERE kind IN ('general_contractor','subcontractor')
       AND company_id IS NULL))
   || ',' || json_array('m031_others_with', (SELECT COUNT(*) FROM accounts
@@ -402,14 +410,14 @@ WITH inv(j) AS (SELECT '['
   -- nothing says was paid. That is a transfer nobody can reconcile.
   || ',' || json_array('m051_inv_transfer_without_paid', (SELECT COUNT(*) FROM wo_transfers t
     JOIN wo_releases r ON r.id = t.release_id
-    WHERE t.status = 'paid' AND r.status <> 'paid'))
+    WHERE t.status = 'paid' AND r.status <> 'paid')))
   -- Must read ZERO. SubSub's fee is charged only on money that went through
   -- SubSub, so a release recorded as paid any other way -- a cheque, a bank
   -- transfer somebody made themselves -- must carry none. The settle route
   -- zeroes it in the same write that closes the release; a row here is a
   -- release whose fee the account would be told it paid and never did.
   -- COALESCE, because a NULL method is "not stripe" and must be counted.
-  || ',' || json_array('m033_inv_fee_off_platform', (SELECT COUNT(*) FROM wo_releases
+  || (',' || json_array('m033_inv_fee_off_platform', (SELECT COUNT(*) FROM wo_releases
     WHERE status = 'paid' AND COALESCE(method, '') <> 'stripe' AND fee_cents > 0))
   -- Invariants, both of which must read ZERO.
   --
@@ -467,12 +475,12 @@ WITH inv(j) AS (SELECT '['
   || ',' || json_array('m055_inv_finished_unchecked', (SELECT COUNT(*) FROM inspections i
     WHERE i.status = 'finished'
       AND EXISTS (SELECT 1 FROM inspection_rooms r
-                   WHERE r.inspection_id = i.id AND r.status = 'unchecked')))
+                   WHERE r.inspection_id = i.id AND r.status = 'unchecked'))))
   -- Invariant, must read ZERO: a report sent from an inspection that is not
   -- finished. `canSendInspection` refuses it, because a half-walked document
   -- says nothing while looking like it says everything -- a row here is a
   -- route that stopped asking.
-  || ',' || json_array('m056_inv_sent_unfinished', (SELECT COUNT(*) FROM inspection_sends s
+  || (',' || json_array('m056_inv_sent_unfinished', (SELECT COUNT(*) FROM inspection_sends s
      JOIN inspections i ON i.id = s.inspection_id
     WHERE i.status <> 'finished'))
   -- Invariant, must read ZERO: a note against a photograph that is not
@@ -546,7 +554,7 @@ WITH inv(j) AS (SELECT '['
   -- validating against ACCESS_KINDS.
   || ',' || json_array('m060_inv_unknown_access', (SELECT COUNT(*) FROM jobs
     WHERE access IS NOT NULL
-      AND access NOT IN ('tenant','manager','none')))
+      AND access NOT IN ('tenant','manager','none'))))
   -- Invariant, must read ZERO: a visit marked confirmed that somebody who had
   -- to agree never answered. Scoped to visits on a job whose access answer
   -- asks the tenant, because that is the only side this can be checked for
@@ -555,7 +563,7 @@ WITH inv(j) AS (SELECT '['
   --
   -- A confirmed window with a tick against it that nobody is attending is the
   -- worst of the three states this can be in, because it reads as settled.
-  || ',' || json_array('m061_inv_confirmed_unanswered', (SELECT COUNT(*) FROM visits v
+  || (',' || json_array('m061_inv_confirmed_unanswered', (SELECT COUNT(*) FROM visits v
      JOIN jobs j ON j.id = v.job_id
     WHERE v.status = 'confirmed'
       AND v.responded_at IS NULL
@@ -665,13 +673,13 @@ WITH inv(j) AS (SELECT '['
       AND EXISTS (SELECT 1 FROM memberships m
                    WHERE m.user_id = v.proposed_by
                      AND m.account_id = v.account_id
-                     AND m.role IN ('admin', 'pm'))))
+                     AND m.role IN ('admin', 'pm')))))
   -- 068. A CONDITION RULE NAMING A STATUS THAT DOES NOT EXIST. It fires,
   -- matches the word, and sets nothing -- so the room lands `unchecked`
   -- exactly as it would have with no rule at all, and the screen shows a rule
   -- somebody set up and believes is working. The route validates against
   -- ROOM_STATUSES, so a row here is a route that stopped.
-  || ',' || json_array('m068_inv_bad_status', (SELECT COUNT(*) FROM inspection_status_rules
+  || (',' || json_array('m068_inv_bad_status', (SELECT COUNT(*) FROM inspection_status_rules
     WHERE status NOT IN ('unchecked', 'ok', 'follow_up', 'fail')))
   -- 068. A PROVENANCE ROW AGAINST ANOTHER ACCOUNT'S INSPECTION. The id in a
   -- webhook body is a claim and the insert is what makes it true, so a row
@@ -717,11 +725,11 @@ WITH inv(j) AS (SELECT '['
   -- question "how did we pay them?" with no answer -- the console refuses
   -- the move without a reference.
   || ',' || json_array('m075_inv_paid_unreferenced', (SELECT COUNT(*) FROM referral_rewards
-    WHERE status = 'paid' AND (reference IS NULL OR TRIM(reference) = '')))
+    WHERE status = 'paid' AND (reference IS NULL OR TRIM(reference) = ''))))
   -- Must read ZERO. A month-free credit marked applied with no Stripe balance
   -- transaction behind it is an account told their bill was credited when
   -- nothing carries the credit.
-  || ',' || json_array('m075_inv_credit_unrecorded', (SELECT COUNT(*) FROM referral_rewards
+  || (',' || json_array('m075_inv_credit_unrecorded', (SELECT COUNT(*) FROM referral_rewards
     WHERE status = 'applied' AND (processor_ref IS NULL OR processor_ref = '')))
   -- 077. A Passport address with no random suffix is one somebody can guess
   -- by typing a company's name, which is the directory SubSub refuses to be.
@@ -730,7 +738,7 @@ WITH inv(j) AS (SELECT '['
   -- And an access request marked decided with no record of when: the sub's
   -- yes or no is the thing somebody asks about later.
   || ',' || json_array('m077_inv_decided_undated', (SELECT COUNT(*) FROM passport_access
-    WHERE status IN ('approved', 'declined', 'revoked') AND decided_at IS NULL))
+    WHERE status IN ('approved', 'declined', 'revoked') AND decided_at IS NULL)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

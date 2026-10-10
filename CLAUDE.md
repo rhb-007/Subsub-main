@@ -11638,6 +11638,16 @@ refactor.
   them missing. Same class as the backtick trap: a comment is not inert to every
   reader of the file.
 
+  **AND THE PASTE AFTER IT FOUND CHECK.sql'S THIRD LIMIT: `Expression tree is
+  too large (maximum depth 100)`, in both statements.** A chain of n `||` joins
+  is a tree n deep, and the lists that were meant to grow for free had grown to
+  106 entries and 43 invariants. The joins are now in bracketed groups of
+  eight, and `concatDepth` in `scripts/lib/check-sql.mjs` bounds what they
+  contribute; `test:schemadrift` holds it under 40, well below D1's 100,
+  because the estimate counts only the joins and the console counts every
+  operator -- the old statement 2 estimated 93 and was still refused. Fourth
+  limit nobody here could see locally (SQLite allows 1000).
+
   **Still open:** My QR code still encodes the connect code, not the Passport,
   because changing what an existing printed code opens would break every one
   already handed out; the Passport has its own code on its own tab. And a GC's

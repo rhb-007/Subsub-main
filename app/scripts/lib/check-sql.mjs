@@ -156,3 +156,34 @@ export function checkExpr(name) {
   }
   return sql.slice(at + head.length, i).trim();
 }
+
+// AND THE THIRD LIMIT, found by the paste after 077: `Expression tree is too
+// large (maximum depth 100)`. Both statements build their JSON by joining
+// pieces with `||`, and a chain of n joins is a tree n deep -- so the list
+// that was meant to grow without limit grew into this one, at 84 entries in
+// statement 1 and 33 invariants in statement 2. Local SQLite allows 1000, so
+// only the console could see it, which is the story of every limit here.
+//
+// The fix is grouping, not a smaller list: the pieces are joined in
+// parenthesised chunks, so the depth is about one chunk plus the number of
+// chunks rather than the length of the list. This is an UPPER BOUND on what
+// the `||` chains contribute -- per group, the joins in it plus its deepest
+// child -- skipping strings and comments for the reason every scanner over
+// this file has to.
+export const D1_MAX_EXPR_DEPTH = 100;
+export function concatDepth(sql) {
+  const stack = [{ ops: 0, child: 0 }];
+  for (let i = 0; i < sql.length; i++) {
+    const c = sql[i];
+    if (c === "'") { i++; while (i < sql.length && !(sql[i] === "'" && sql[i + 1] !== "'")) { if (sql[i] === "'") i++; i++; } continue; }
+    if (c === "-" && sql[i + 1] === "-") { while (i < sql.length && sql[i] !== "\n") i++; continue; }
+    if (c === "/" && sql[i + 1] === "*") { i = sql.indexOf("*/", i + 2); if (i < 0) break; i++; continue; }
+    if (c === "(") stack.push({ ops: 0, child: 0 });
+    else if (c === ")" && stack.length > 1) {
+      const g = stack.pop();
+      const top = stack[stack.length - 1];
+      top.child = Math.max(top.child, g.ops + g.child + 1);
+    } else if (c === "|" && sql[i + 1] === "|") { stack[stack.length - 1].ops++; i++; }
+  }
+  return stack[0].ops + stack[0].child;
+}
