@@ -98,6 +98,10 @@ console.log("\n-- the referral snippet is one thing --");
     `${hand.join(",")} | differs: ${off.join(",")}`);
   t.ck("and the generated pages do too", read("check/index.html").includes(REF_SNIPPET) && read("handyman-limits/wa/index.html").includes(REF_SNIPPET));
   const gs = read("get-started.html");
+  const subCard = (gs.match(/<input type="radio" name="role" value="Subcontractor">\s*<span>([\s\S]*?)<\/span><\/label>/) || [])[1] || "";
+  t.ck("the subcontractor card is where a handyman signs up, and says so", /^Subcontractor or handyman</.test(subCard)
+    && /property managers/.test(subCard) && /owners/.test(subCard), subCard);
+  t.ck("and there is no handyman account kind to pick instead", !/value="Handyman"/i.test(gs));
   t.ck("the signup form sends the cookie and the typed code", /referral: ssReadRef\(\)/.test(gs) && /refCode:/.test(gs) && /id="refCode"/.test(gs));
 }
 
