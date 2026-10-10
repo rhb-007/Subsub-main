@@ -6878,6 +6878,15 @@ refactor.
   is the hireable one. Nothing in the product asks them to classify themselves,
   and nothing should.
 
+  **So the signup card has to say handyman, or a handyman will not pick it.**
+  It read *Subcontractor — You do the work for other contractors*. A
+  maintenance business working for property managers read that as not meant
+  for them and could sign up as a property manager, which is a hiring account
+  with nothing to hire. It reads **Subcontractor or handyman — You do the work
+  for contractors, property managers or owners** now. The radio's value is
+  still `Subcontractor`, so the kind stored does not change. `test:sitetools`
+  pins the words and that no `Handyman` value exists to pick instead.
+
 - **THE TIME NEVER REACHED THE PERSON WHO HAS TO TURN UP.** Reported with two
   screenshots of the same job a minute apart. Sound Property Management's Jobs
   screen: *"Proposed Oct 4, 2026 - 11 AM-1:15 PM - waiting on John Smith to
