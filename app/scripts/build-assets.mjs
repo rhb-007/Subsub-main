@@ -144,11 +144,55 @@ function printArt({ inches, bleedIn = 0.125, center, bottom }) {
 export const FLYER_REFER_HEAD = `Bring your GCs. Get $${SUB_CASH_CENTS / 100}.`;
 export const FLYER_REFER_BODY = `When a GC you invite from SubSub starts paying for it, we pay you $${SUB_CASH_CENTS / 100}. Terms at subsub.work/subs.`;
 
-export function flyerHtml() {
-  const q = qrPath(FLYER_URL);
+// Every word on the flyer, per language, so one layout serves both and a
+// change to the design cannot leave the Spanish one a version behind.
+//
+// The Spanish is neutral Latin American Spanish in usted, the register a
+// flyer on a supply-house counter addresses a stranger in. "GC" stays: it is
+// what Spanish-speaking crews in the US call a general contractor. The page
+// the code opens, and the app behind it, are in English, so the referral
+// line says the terms are in English rather than letting somebody find out.
+export const FLYER_COPY = {
+  en: {
+    lang: "en", file: "print/flyer-letter.pdf", url: FLYER_URL,
+    eyebrow: "For subcontractors \u00b7 Free forever",
+    h1: "One profile.<br>Every GC.",
+    sub: "Your license, insurance and W-9 in one live profile. Hand it to any general contractor in seconds, and never email a certificate again.",
+    points: [
+      ["Send it once, it stays current.", "One link carries your certificate of insurance, bond and license with the live expiry date. No stale PDFs in somebody's inbox."],
+      ["Renew once, everyone gets it.", "Upload next year's certificate and every GC you've sent your pack to gets the new one automatically."],
+      ["Every job in one place.", "Work orders, times and job requests from every GC you work for, on your phone, in one list."],
+    ],
+    scan: "Scan to make your free profile",
+    freeHead: "Free forever for subcontractors.",
+    freeBody: "No card, no trial, no catch: a sub never pays for SubSub.",
+    referHead: FLYER_REFER_HEAD, referBody: FLYER_REFER_BODY,
+    more: "Read more at",
+  },
+  es: {
+    lang: "es", file: "print/flyer-letter-es.pdf", url: FLYER_URL + "&utm_content=es",
+    eyebrow: "Para subcontratistas \u00b7 Gratis para siempre",
+    h1: "Un perfil.<br>Todos sus GC.",
+    sub: "Su licencia, su seguro y su W-9 en un perfil siempre al d\u00eda. Mu\u00e9strelo a cualquier GC en segundos y no vuelva a mandar un certificado por correo.",
+    points: [
+      ["Siempre al d\u00eda.", "Un solo enlace con su certificado de seguro, su fianza y su licencia, con la fecha de vencimiento al d\u00eda. Nada de PDF vencidos."],
+      ["Renueve y todos lo reciben.", "Suba el certificado nuevo y cada GC al que le mand\u00f3 sus papeles lo recibe autom\u00e1ticamente."],
+      ["Sus trabajos, en un lugar.", "\u00d3rdenes de trabajo, horarios y solicitudes de cada GC con el que trabaja, en su tel\u00e9fono."],
+    ],
+    scan: "Escanee para crear su perfil gratis",
+    freeHead: "Gratis para siempre.",
+    freeBody: "Sin tarjeta, sin prueba y sin trampa: un subcontratista nunca paga por SubSub.",
+    referHead: `Traiga a sus GC. Gane $${SUB_CASH_CENTS / 100}.`,
+    referBody: `Cuando un GC que usted invite empiece a pagar SubSub, le pagamos $${SUB_CASH_CENTS / 100}. Condiciones (en ingl\u00e9s) en subsub.work/subs.`,
+    more: "M\u00e1s informaci\u00f3n en",
+  },
+};
+
+export function flyerHtml(c = FLYER_COPY.en) {
+  const q = qrPath(c.url);
   const font = (name, file, weight) => `@font-face{font-family:'${name}';font-weight:${weight};src:url('${pathToFileURL(join(MK, "build/fonts", file)).href}')}`;
   const markSvg = (fill, h) => `<svg viewBox="32 58 104 120" height="${h}" aria-hidden="true">${MARK.map((d) => `<path fill="${fill}" d="${d}"/>`).join("")}</svg>`;
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  return `<!DOCTYPE html><html lang="${c.lang}"><head><meta charset="utf-8"><style>
 ${font("Brico", "Bricolage_Grotesque_wght_800.ttf", 800)}
 ${font("Brico", "Bricolage_Grotesque_wght_700.ttf", 700)}
 ${font("Inter", "Inter_wght_600.ttf", 600)}
@@ -181,25 +225,23 @@ li b{display:block;font:800 17pt/1.2 Brico;margin-bottom:.04in}
 </style></head><body>
 <section class="top">
 <div class="brand">${markSvg(BRAND.gold, 46)}<span>SubSub</span></div>
-<span class="eyebrow">For subcontractors · Free forever</span>
-<h1>One profile.<br>Every GC.</h1>
-<p class="sub">Your license, insurance and W-9 in one live profile. Hand it to any general contractor in seconds, and never email a certificate again.</p>
+<span class="eyebrow">${c.eyebrow}</span>
+<h1>${c.h1}</h1>
+<p class="sub">${c.sub}</p>
 </section>
 <section class="body">
 <ul>
-<li><span class="n">1</span><span><b>Send it once, it stays current.</b>One link carries your certificate of insurance, bond and license with the live expiry date. No stale PDFs in somebody's inbox.</span></li>
-<li><span class="n">2</span><span><b>Renew once, everyone gets it.</b>Upload next year's certificate and every GC you've sent your pack to gets the new one automatically.</span></li>
-<li><span class="n">3</span><span><b>Every job in one place.</b>Work orders, times and job requests from every GC you work for, on your phone, in one list.</span></li>
+${c.points.map(([h, b], n) => `<li><span class="n">${n + 1}</span><span><b>${h}</b>${b}</span></li>`).join("\n")}
 </ul>
 <div class="qr">
 <svg viewBox="0 0 ${q.size} ${q.size}" shape-rendering="crispEdges"><rect width="${q.size}" height="${q.size}" fill="#fff"/><path d="${q.path}" fill="${BRAND.ink}"/></svg>
-<p>Scan to make your free profile</p>
+<p>${c.scan}</p>
 <small>subsub.work/subs</small>
 </div>
 </section>
-<div class="row"><div class="free"><b>Free forever for subcontractors.</b>No card, no trial, no catch: a sub never pays for SubSub.</div>
-<div class="refer"><b>${FLYER_REFER_HEAD}</b>${FLYER_REFER_BODY}</div></div>
-<div class="foot"><span>Read more at <b>subsub.work/subs</b></span><span>${markSvg(BRAND.forest, 22)}</span></div>
+<div class="row"><div class="free"><b>${c.freeHead}</b>${c.freeBody}</div>
+<div class="refer"><b>${c.referHead}</b>${c.referBody}</div></div>
+<div class="foot"><span>${c.more} <b>subsub.work/subs</b></span><span>${markSvg(BRAND.forest, 22)}</span></div>
 </body></html>`;
 }
 
@@ -236,26 +278,30 @@ export async function build({ quiet = false } = {}) {
     await pdf(wrap(sticker.art, sticker.size), "print/sticker-3in.pdf", sticker.size, sticker.size);
     // The flyer is read with the fonts; the HTML is loaded from disk so the
     // @font-face file URLs resolve.
-    const flyerPath = join(MK, "build/flyer.html");
-    writeFileSync(flyerPath, flyerHtml());
-    const page = await browser.newPage();
-    await page.goto(pathToFileURL(flyerPath).href, { waitUntil: "load" });
-    await page.evaluate(() => document.fonts?.ready);
-    // On one page, and the bottom row (free forever, and the referral) clear of the footer -- the
-    // first version overlapped them by 30px, which no page-count check sees.
-    const fit = await page.evaluate(() => {
-      const free = document.querySelector(".row").getBoundingClientRect();
-      const foot = document.querySelector(".foot").getBoundingClientRect();
-      return document.body.scrollHeight <= document.body.clientHeight + 1 && free.bottom + 8 <= foot.top;
-    });
-    if (!fit) throw new Error("the flyer runs past one letter page, or into its own footer");
-    await page.pdf({ path: join(MK, "print/flyer-letter.pdf"), width: "8.5in", height: "11in", printBackground: true, pageRanges: "1" });
-    await page.close();
+    for (const c of Object.values(FLYER_COPY)) {
+      const flyerPath = join(MK, `build/flyer-${c.lang}.html`);
+      writeFileSync(flyerPath, flyerHtml(c));
+      const page = await browser.newPage();
+      await page.goto(pathToFileURL(flyerPath).href, { waitUntil: "load" });
+      await page.evaluate(() => document.fonts?.ready);
+      // On one page, and the bottom row (free forever, and the referral) clear
+      // of the footer -- the first version overlapped them by 30px, which no
+      // page-count check sees. Checked per language: Spanish runs about a
+      // fifth longer than English, so a fit in one says nothing about the other.
+      const fit = await page.evaluate(() => {
+        const row = document.querySelector(".row").getBoundingClientRect();
+        const foot = document.querySelector(".foot").getBoundingClientRect();
+        return document.body.scrollHeight <= document.body.clientHeight + 1 && row.bottom + 8 <= foot.top;
+      });
+      if (!fit) throw new Error(`the ${c.lang} flyer runs past one letter page, or into its own footer`);
+      await page.pdf({ path: join(MK, c.file), width: "8.5in", height: "11in", printBackground: true, pageRanges: "1" });
+      await page.close();
+    }
   } finally {
     await browser.close();
   }
   if (!quiet) {
-    console.log("Wrote", Object.keys(files).length, "SVGs and 3 PDFs into marketing/");
+    console.log("Wrote", Object.keys(files).length, "SVGs and", 2 + Object.keys(FLYER_COPY).length, "PDFs into marketing/");
     console.log("Decal QR points at", DECAL_URL);
     console.log("Flyer QR points at", FLYER_URL);
   }

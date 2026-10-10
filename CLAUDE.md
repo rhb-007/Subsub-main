@@ -11691,6 +11691,32 @@ refactor.
   `/subs`. A flyer has no live code to carry, so the sub still invites from
   **Get your GCs on SubSub** in the app, where their own link is.
 
+  **And there is a Spanish flyer, the same layout over its own words.**
+  `FLYER_COPY` holds every string per language, and `flyerHtml(copy)` draws
+  both. A second template would be a version behind the first change made to
+  the design. Three things about it are decisions:
+
+  - **Usted, and *GC* stays.** That is the register for a flyer addressing a
+    stranger on a supply-house counter, and *GC* is what Spanish-speaking crews
+    in the US call a general contractor.
+  - **It says the terms are in English.** `/subs` and the app behind it are
+    English only, so the referral line reads *Condiciones (en inglés)* rather
+    than letting somebody find that out after scanning.
+  - **Its QR code adds `utm_content=es`**, so Spanish scans can be counted
+    apart before anybody decides whether a Spanish `/subs` is worth building.
+
+  **The fit check runs per language, and it is what caught the first draft.**
+  Spanish runs about a fifth longer, so a fit in English says nothing about
+  Spanish. Translated line for line, the Spanish flyer ran 100px past the
+  footer, with every point's heading on two lines. The fix was shorter
+  Spanish, not smaller type. `test:sitetools` pins the same amount, *empiece a
+  pagar* (never a registration), the English-terms note, `lang="es"`, and no
+  English words left in the Spanish copy.
+
+  **Still open:** the page the code opens is English. A Spanish `/subs`, and
+  Spanish in the signup form, are the next step if the Spanish scans justify
+  them.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

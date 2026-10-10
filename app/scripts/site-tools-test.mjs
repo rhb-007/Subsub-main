@@ -22,7 +22,7 @@ import { launch, serveApi, tally, wait } from "./lib/stub-stack.mjs";
 import { plan } from "./build-tools.mjs";
 import { REF_SNIPPET } from "../../content/tools/ref.mjs";
 import { CODE_ALPHABET, REF_COOKIE, REF_COOKIE_DAYS, SUB_CASH_CENTS } from "../shared/referral.js";
-import { FLYER_REFER_HEAD, FLYER_REFER_BODY, flyerHtml } from "./build-assets.mjs";
+import { FLYER_REFER_HEAD, FLYER_REFER_BODY, FLYER_COPY, flyerHtml } from "./build-assets.mjs";
 import { US_STATES } from "../shared/states.js";
 import { HANDYCAP_AS_OF } from "../shared/handycap.js";
 import { asOfLabel } from "../shared/handytool.js";
@@ -118,6 +118,22 @@ console.log("\n-- the referral money, on the flyer and on /subs --");
     && flyer.includes(FLYER_REFER_HEAD) && flyer.includes(FLYER_REFER_BODY));
   t.ck("and pays on the GC starting to pay, never on a signup", /starts paying/.test(FLYER_REFER_BODY) && !/sign(s|ed)? ?up/i.test(FLYER_REFER_BODY), FLYER_REFER_BODY);
   t.ck("and points at the page that holds the terms", FLYER_REFER_BODY.includes("Terms at subsub.work/subs"));
+  // The Spanish flyer is the same layout over its own words, so the same
+  // promises have to hold in Spanish: the amount the ledger pays, paid when the
+  // GC starts paying (empiece a pagar) and never on registering, and a pointer
+  // to terms that are in English -- which it says, rather than letting a
+  // Spanish reader find out on the page.
+  const es = FLYER_COPY.es, en = FLYER_COPY.en;
+  const esHtml = flyerHtml(es);
+  t.ck("the Spanish flyer names the same amount", es.referHead.includes(amount) && es.referBody.includes(amount) && esHtml.includes(es.referBody));
+  t.ck("and pays when the GC starts paying, never on registering", /empiece a pagar/.test(es.referBody) && !/registr|inscrib/i.test(es.referBody), es.referBody);
+  t.ck("and says the terms it points at are in English", /\(en ingl\u00e9s\) en subsub\.work\/subs/.test(es.referBody));
+  t.ck("it is marked Spanish and goes to its own file", /<html lang="es">/.test(esHtml) && es.file !== en.file && /-es\.pdf$/.test(es.file));
+  t.ck("its QR code is told apart from the English one", es.url !== en.url && es.url.startsWith(en.url) && /utm_content=es/.test(es.url));
+  t.ck("and it carries every point the English one does", es.points.length === en.points.length
+    && Object.keys(en).every((k) => k in es && es[k] !== ""));
+  t.ck("with no English left in it", ![es.eyebrow, es.sub, es.scan, es.freeHead, es.freeBody, es.more, ...es.points.flat()]
+    .some((x) => /\b(the|your|and|free|every)\b/i.test(x)));
   const subs = read("subs.html");
   const terms = (subs.match(/<section class="tl-card" id="refer">[\s\S]*?<\/section>/) || [""])[0];
   t.ck("/subs carries the terms the flyer points at (run npm run tools)", !!terms);
