@@ -13,7 +13,7 @@ published to subsub.work: the site's `.assetsignore` is an allow-list and
 | `print/decal-6in-art.svg` + `decal-6in-cutline.svg` | The same art as vector, and the die-cut circle on its own |
 | `print/sticker-3in.pdf` | Sticker, 3 in round, with 1/8 in bleed (3.25 in page) |
 | `print/sticker-3in-art.svg` + `sticker-3in-cutline.svg` | Vector art and cut line |
-| `print/flyer-letter.pdf` | Supply-house flyer, US letter, QR code to `subsub.work/subs` |
+| `print/flyer-letter.pdf` | Supply-house flyer, US letter, QR code to `subsub.work/subs`, with one line on the $100 for bringing in a GC (terms on `/subs`) |
 | `copy-pack.md` | SMS scripts, the GC onboarding emails, video hooks and Facebook posts |
 
 ## For the print shop

@@ -11654,6 +11654,34 @@ refactor.
   pending request is surfaced by email and on the Passport tab, not yet as a
   dashboard row.
 
+- **THE FLYER CARRIES ONE LINE ABOUT THE $100, AND THE TERMS LIVE ON `/subs`,
+  BECAUSE PAPER CANNOT CHANGE WHEN THE OFFER DOES.** Asked whether the
+  supply-house flyer should carry the referral, since it is a recruiting tool.
+  It should, with three limits:
+
+  - **It is a card at the foot, beside *Free forever*, not the headline.**
+    *No card, no trial, no catch* has to sit next to the money. Otherwise the
+    money reads as the catch.
+  - **It says *starts paying*, never *signs up*.** The reward is written at a
+    GC's first paid invoice. A flyer saying "$100 for every GC you bring"
+    would promise money the ledger never pays.
+  - **It states the amount and that one condition, and points at
+    `subsub.work/subs` for the rest.** A flyer sits on a counter for a year. A
+    page can change the day the offer does.
+
+  `/subs` had said nothing about referrals, so it gained a *Bring your GCs*
+  section stating the terms the code already enforces. The $100 is paid once
+  per hiring account, only by a company that hires. The link used last before
+  signup counts, and a link is remembered for `REF_COOKIE_DAYS`. Your own
+  company does not count. Payment is by hand after review.
+
+  **Both read the amount off `SUB_CASH_CENTS`**, the figure the ledger pays,
+  so neither can quote a figure the bill does not. `test:sitetools` pins the
+  amount, the *starts paying* wording and the cookie window on both. Two
+  mutations fire: a flyer promising money on signup, and a second figure on
+  `/subs`. A flyer has no live code to carry, so the sub still invites from
+  **Get your GCs on SubSub** in the app, where their own link is.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

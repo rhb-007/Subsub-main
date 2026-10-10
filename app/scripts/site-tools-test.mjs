@@ -21,7 +21,8 @@ import { fileURLToPath } from "node:url";
 import { launch, serveApi, tally, wait } from "./lib/stub-stack.mjs";
 import { plan } from "./build-tools.mjs";
 import { REF_SNIPPET } from "../../content/tools/ref.mjs";
-import { CODE_ALPHABET, REF_COOKIE, REF_COOKIE_DAYS } from "../shared/referral.js";
+import { CODE_ALPHABET, REF_COOKIE, REF_COOKIE_DAYS, SUB_CASH_CENTS } from "../shared/referral.js";
+import { FLYER_REFER_HEAD, FLYER_REFER_BODY, flyerHtml } from "./build-assets.mjs";
 import { US_STATES } from "../shared/states.js";
 import { HANDYCAP_AS_OF } from "../shared/handycap.js";
 import { asOfLabel } from "../shared/handytool.js";
@@ -98,6 +99,28 @@ console.log("\n-- the referral snippet is one thing --");
   t.ck("and the generated pages do too", read("check/index.html").includes(REF_SNIPPET) && read("handyman-limits/wa/index.html").includes(REF_SNIPPET));
   const gs = read("get-started.html");
   t.ck("the signup form sends the cookie and the typed code", /referral: ssReadRef\(\)/.test(gs) && /refCode:/.test(gs) && /id="refCode"/.test(gs));
+}
+
+console.log("\n-- the referral money, on the flyer and on /subs --");
+{
+  // The flyer prints one line about the $100 and sends people to /subs for
+  // the terms, because a flyer cannot change when the offer does. Both read
+  // the amount off the constant the ledger pays, and both say the GC has to
+  // start PAYING: "$100 for every GC you bring" would promise money on
+  // signups the ledger never pays.
+  const amount = `$${SUB_CASH_CENTS / 100}`;
+  const flyer = flyerHtml();
+  t.ck("the flyer names the amount the ledger pays", FLYER_REFER_HEAD.includes(amount) && FLYER_REFER_BODY.includes(amount)
+    && flyer.includes(FLYER_REFER_HEAD) && flyer.includes(FLYER_REFER_BODY));
+  t.ck("and pays on the GC starting to pay, never on a signup", /starts paying/.test(FLYER_REFER_BODY) && !/sign(s|ed)? ?up/i.test(FLYER_REFER_BODY), FLYER_REFER_BODY);
+  t.ck("and points at the page that holds the terms", FLYER_REFER_BODY.includes("Terms at subsub.work/subs"));
+  const subs = read("subs.html");
+  const terms = (subs.match(/<section class="tl-card" id="refer">[\s\S]*?<\/section>/) || [""])[0];
+  t.ck("/subs carries the terms the flyer points at (run npm run tools)", !!terms);
+  t.ck("with the same amount, and only that amount", terms.includes(amount) && (terms.match(/\$\d+/g) || []).every((m) => m === amount), terms.match(/\$\d+/g)?.join(","));
+  t.ck("saying a signup alone earns nothing", /has to start paying/.test(terms) && /pays for SubSub for the first time/.test(terms));
+  t.ck("and how long a link is remembered, off the cookie's own life", terms.includes(`remembered for ${REF_COOKIE_DAYS} days`));
+  t.ck("and that it has to be a company that hires", /has to be a company that hires/.test(terms) && /Another sub signing up does not count/.test(terms));
 }
 
 console.log("\n-- in a browser --");

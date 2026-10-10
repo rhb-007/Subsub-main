@@ -27,6 +27,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { qrPath } from "../src/lib/qr.js";
 import { launch } from "./lib/stub-stack.mjs";
+import { SUB_CASH_CENTS } from "../shared/referral.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const MK = join(root, "marketing");
@@ -136,7 +137,14 @@ function printArt({ inches, bleedIn = 0.125, center, bottom }) {
 
 // ---- the flyer -------------------------------------------------------------
 
-function flyerHtml() {
+// One line about the referral money, and a pointer to the page that holds the
+// terms. The flyer outlives any offer printed on it, so it states the amount
+// and the one condition that matters (the GC has to start paying) and leaves
+// the rest to subsub.work/subs, which can change when the offer does.
+export const FLYER_REFER_HEAD = `Bring your GCs. Get $${SUB_CASH_CENTS / 100}.`;
+export const FLYER_REFER_BODY = `When a GC you invite from SubSub starts paying for it, we pay you $${SUB_CASH_CENTS / 100}. Terms at subsub.work/subs.`;
+
+export function flyerHtml() {
   const q = qrPath(FLYER_URL);
   const font = (name, file, weight) => `@font-face{font-family:'${name}';font-weight:${weight};src:url('${pathToFileURL(join(MK, "build/fonts", file)).href}')}`;
   const markSvg = (fill, h) => `<svg viewBox="32 58 104 120" height="${h}" aria-hidden="true">${MARK.map((d) => `<path fill="${fill}" d="${d}"/>`).join("")}</svg>`;
@@ -149,22 +157,25 @@ ${font("Inter", "Inter_wght_800.ttf", 800)}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
 body{width:8.5in;height:11in;font-family:Inter;color:${BRAND.ink};background:${BRAND.bone};position:relative;overflow:hidden}
-.top{background:${BRAND.forest};color:#fff;padding:.48in .6in .4in;position:relative}
+.top{background:${BRAND.forest};color:#fff;padding:.42in .6in .34in;position:relative}
 .brand{display:flex;align-items:center;gap:.14in;font:800 30pt Brico;letter-spacing:-.01em}
-.eyebrow{display:inline-block;margin-top:.32in;background:${BRAND.gold};color:#20160A;font:800 12pt Inter;letter-spacing:.08em;text-transform:uppercase;padding:.07in .16in;border-radius:99px}
-h1{font:800 56pt/0.98 Brico;margin:.14in 0 .1in;letter-spacing:-.02em}
+.eyebrow{display:inline-block;margin-top:.26in;background:${BRAND.gold};color:#20160A;font:800 12pt Inter;letter-spacing:.08em;text-transform:uppercase;padding:.07in .16in;border-radius:99px}
+h1{font:800 52pt/0.98 Brico;margin:.12in 0 .1in;letter-spacing:-.02em}
 .sub{font:600 15pt/1.38 Inter;color:#D6E3DC;margin:0;max-width:6.6in}
 .body{padding:.3in .6in 0;display:grid;grid-template-columns:1fr 2.75in;gap:.4in;align-items:start}
 ul{list-style:none;margin:0;padding:0}
-li{display:grid;grid-template-columns:.42in 1fr;gap:.12in;margin:0 0 .18in;font:600 13pt/1.34 Inter}
+li{display:grid;grid-template-columns:.42in 1fr;gap:.12in;margin:0 0 .14in;font:600 13pt/1.32 Inter}
 li b{display:block;font:800 17pt/1.2 Brico;margin-bottom:.04in}
 .n{width:.42in;height:.42in;border-radius:50%;background:${BRAND.forest};color:${BRAND.gold};font:800 15pt Brico;display:flex;align-items:center;justify-content:center}
 .qr{background:#fff;border:3px solid ${BRAND.forest};border-radius:.18in;padding:.18in;text-align:center}
 .qr svg{width:2.3in;height:2.3in;display:block;margin:0 auto}
 .qr p{margin:.1in 0 0;font:800 13.5pt/1.2 Brico}
 .qr small{display:block;margin-top:.05in;font:600 10.5pt Inter;color:#3c4b44}
-.free{margin:.06in .6in 0;background:#fff;border-left:.09in solid ${BRAND.gold};padding:.2in .26in;font:600 14pt/1.4 Inter}
-.free b{font:800 18pt Brico}
+.row{margin:.04in .6in 0;display:grid;grid-template-columns:1fr 1fr;gap:.2in}
+.free,.refer{background:#fff;border-left:.09in solid ${BRAND.gold};padding:.16in .22in;font:600 12pt/1.38 Inter}
+.refer{background:${BRAND.forest};color:#E4EDE8;border-left-color:${BRAND.gold}}
+.free b,.refer b{display:block;font:800 16pt/1.15 Brico;margin-bottom:.04in}
+.refer b{color:${BRAND.gold}}
 .foot{position:absolute;left:.6in;right:.6in;bottom:.4in;display:flex;justify-content:space-between;align-items:center;font:600 11pt Inter;color:#3c4b44;border-top:1px solid #c9d3ce;padding-top:.14in}
 .foot b{color:${BRAND.forest};font:800 13pt Brico}
 </style></head><body>
@@ -186,7 +197,8 @@ li b{display:block;font:800 17pt/1.2 Brico;margin-bottom:.04in}
 <small>subsub.work/subs</small>
 </div>
 </section>
-<div class="free"><b>Free forever for subcontractors.</b> No card, no trial, no catch: a sub never pays for SubSub.</div>
+<div class="row"><div class="free"><b>Free forever for subcontractors.</b>No card, no trial, no catch: a sub never pays for SubSub.</div>
+<div class="refer"><b>${FLYER_REFER_HEAD}</b>${FLYER_REFER_BODY}</div></div>
 <div class="foot"><span>Read more at <b>subsub.work/subs</b></span><span>${markSvg(BRAND.forest, 22)}</span></div>
 </body></html>`;
 }
@@ -229,10 +241,10 @@ export async function build({ quiet = false } = {}) {
     const page = await browser.newPage();
     await page.goto(pathToFileURL(flyerPath).href, { waitUntil: "load" });
     await page.evaluate(() => document.fonts?.ready);
-    // On one page, and the free-forever band clear of the footer -- the
+    // On one page, and the bottom row (free forever, and the referral) clear of the footer -- the
     // first version overlapped them by 30px, which no page-count check sees.
     const fit = await page.evaluate(() => {
-      const free = document.querySelector(".free").getBoundingClientRect();
+      const free = document.querySelector(".row").getBoundingClientRect();
       const foot = document.querySelector(".foot").getBoundingClientRect();
       return document.body.scrollHeight <= document.body.clientHeight + 1 && free.bottom + 8 <= foot.top;
     });

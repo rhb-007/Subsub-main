@@ -33,6 +33,7 @@ import { HANDYMAN_CAPS, HANDYCAP_AS_OF, HANDYMAN_GLOBAL_RULES, CAP_BASES } from 
 import { LIVE_STATES } from "../shared/licenselookup.js";
 import { asOfLabel } from "../shared/handytool.js";
 import { TRADES } from "../shared/trades.js";
+import { SUB_CASH_CENTS, REF_COOKIE_DAYS } from "../shared/referral.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const SITE = "https://subsub.work";
@@ -502,7 +503,26 @@ ${benefit(3, "Every job in one place", "Work orders, times and job requests from
 <li>Your bond and your license, and in Washington the state's own record of it.</li>
 <li>That your W-9 is on file. The form itself stays private: a GC reads it only inside SubSub, never from an emailed link.</li>
 </ul></section>
+${referTerms()}
 <style>${LANDING_CSS}</style>` });
+}
+
+// The referral terms a sub is held to. The supply-house flyer prints one line
+// about the $100 and sends people here for the rest, because a flyer sits on a
+// counter for a year and cannot change when the offer does: this page can.
+// The amount and the window come off the constants the Worker pays and
+// attributes by, so the page cannot promise a figure the ledger does not keep.
+export const SUB_REFER_AMOUNT = `$${SUB_CASH_CENTS / 100}`;
+function referTerms() {
+  return `<section class="tl-card" id="refer"><h2>Bring your GCs. Get ${SUB_REFER_AMOUNT}.</h2>
+<ul class="ld-list">
+<li>Make your free profile, then open <b>Get your GCs on SubSub</b> in the menu and send your link or code to the GCs you work for.</li>
+<li>When a GC signs up through your link or code and pays for SubSub for the first time, we pay you ${SUB_REFER_AMOUNT}. Once per GC, for as many GCs as you bring.</li>
+<li>Signing up is not enough: the GC has to start paying. A GC on the free plan earns you nothing until they upgrade.</li>
+<li>If a GC used more than one link, the one they used last before signing up counts. A link is remembered for ${REF_COOKIE_DAYS} days.</li>
+<li>It has to be a company that hires: a general contractor, a property manager, a portfolio manager or a building owner. Another sub signing up does not count, and neither does your own company.</li>
+<li>Paid by check or bank transfer after a quick review.</li>
+</ul></section>`;
 }
 
 function landingGc(chrome) {
