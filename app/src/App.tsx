@@ -51,6 +51,7 @@ import { US_STATES, stateName } from "../shared/states.js";
 // The money arithmetic and the waiver roll-up, shared with the Worker so a
 // figure on screen and a figure written to the ledger cannot disagree.
 import { splitEven, releaseAmounts } from "../shared/money.js";
+import { checkEntries, fmtHours, hoursAmountCents, hoursErrText, parseHours, onStep } from "../shared/hours.js";
 import { chainReasonText, WAIVER_KINDS } from "../shared/waivers.js";
 import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, renderWaiver,
   waiverStateText } from "../shared/waiverform.js";
@@ -1159,7 +1160,7 @@ const urgencyOf = (ms) => ms === null ? "" : ms <= 0 ? "expired"
 // What a work order pays, in words.
 //
 // The contractor is the one accepting it, so "$240" on its own would be a
-// lie by omission where the deal is thirty an hour up to eight. One
+// lie by omission where the deal is thirty an hour, about eight. One
 // function, used by the screen, the printed order and the text export,
 // because those three disagreeing about the price is the worst possible
 // place for a discrepancy.
@@ -1167,8 +1168,11 @@ function payTerms(a) {
   if (!a) return "—";
   if (a.payKind === "hourly" && a.rate) {
     const h = Number(a.capHours);
-    const hrs = Number.isFinite(h) ? `${h} hour${h === 1 ? "" : "s"}` : "a capped number of hours";
-    return `${formatMoney(a.rate)}/hr, up to ${hrs} (${formatMoney(a.value)} max)`;
+    // 078. AN ESTIMATE, NOT A CEILING ON THE WORK. The pay is the hours the
+    // contractor logs and the hiring side approves; going over the estimate is
+    // a question asked first, not money lost.
+    const hrs = Number.isFinite(h) ? `${h} hour${h === 1 ? "" : "s"}` : "an estimated number of hours";
+    return `${formatMoney(a.rate)}/hr, about ${hrs} (${formatMoney(a.value)} estimated)`;
   }
   return a.value ? formatMoney(a.value) : "—";
 }
@@ -7016,7 +7020,7 @@ export default function SubSub() {
                                     </select>
                                   ) : a.crewName ? <span className="ta-crew-flat"><Users size={11} /> {a.crewName}</span> : null}
                                   {a.value && <span className="ta-val" title={payTerms(a)}>
-                                    {formatMoney(a.value)}{a.payKind === "hourly" && <span className="ta-hr"> max</span>}
+                                    {formatMoney(a.value)}{a.payKind === "hourly" && <span className="ta-hr"> est.</span>}
                                     <RevisedValue a={a} cos={changeOrders} jobId={j.id} trade={t} /></span>}
                                   <button className="ta-wo-link" onClick={() => setViewWO({ job: j, trade: t, a })}>
                                     <ScrollText size={11} /> {a.wo}
@@ -19778,6 +19782,9 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
   // same two paperwork gates and two copies of those is two places for one of
   // them to rot.
   const [settleMode, setSettleMode] = useState("record");
+  // 078. The hours form, open for a new batch ({}) or to correct one that has
+  // not been approved yet ({ milestoneId, entries, note }).
+  const [logging, setLogging] = useState(null);
 
   const load = useCallback(async () => {
     setErr("");
@@ -19816,6 +19823,19 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
 
   const value = plan.valueCents;
   const done = plan.milestones.filter((m) => m.status === "verified");
+  // 078. PAID BY THE HOURS, NOT BY DRAWS CUT UP FRONT. An hourly work order's
+  // parts are the batches of hours the contractor sends, each approved on its
+  // own -- unless it was split into dollar draws before hours were tracked,
+  // which keeps its draws (two answers to what is owed is one too many).
+  const hrs = plan.payKind === "hourly" ? plan.hours : null;
+  const hoursMode = !!(hrs && !hrs.legacyPlan);
+  const subOf = (mid) => (hoursMode ? hrs.submissions.find((x) => x.id === mid) : null);
+  // Why one was sent back, read off the event log the plan already carries.
+  const sentBackWhy = (mid) => {
+    const ev = [...(plan.events || [])].reverse()
+      .find((e) => e.milestoneId === mid && e.kind === "milestone.rejected");
+    return ev?.payload?.reason || "";
+  };
   const relFor = (mid) => plan.releases.find((r) => r.milestoneId === mid);
   const held = plan.releases.reduce((n, r) => n + r.retainageCents, 0);
 
@@ -19838,7 +19858,12 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
     <section className="wop">
       <div className="wop-head">
         <h4>Progress and payment</h4>
-        {value != null && (
+        {hoursMode ? (
+          <span className="wop-total">
+            {formatCents(plan.rateCents)}/hr · {fmtHours(hrs.approvedHours)} approved
+            {held ? <> · {formatCents(held)} held back</> : null}
+          </span>
+        ) : value != null && (
           <span className="wop-total">
             {formatCents(value)} · {done.length} of {plan.milestones.length || "—"} verified
             {held ? <> · {formatCents(held)} held back</> : null}
@@ -19851,7 +19876,19 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
           there is no supplier chain to clear on this one.</p>
       )}
 
-      {!plan.milestones.length && !editing && (
+      {hrs?.migration && (
+        <p className="cov-hint" role="alert">
+          Hours can't be logged until the database is migrated — run {hrs.migration}.sql and reload.
+        </p>
+      )}
+      {hoursMode && (
+        <HoursPanel woId={woId} hrs={hrs} rateCents={plan.rateCents}
+          isMine={isMine} canManage={canManage}
+          logging={logging} setLogging={setLogging}
+          onChanged={() => { load(); onChanged?.(); }} />
+      )}
+
+      {!plan.milestones.length && !editing && !hoursMode && (
         <p className="cov-hint">
           {canManage
             ? "Nothing is broken out yet. Split this into draws and each one can be verified and released on its own."
@@ -19915,9 +19952,17 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                  what is already owed, because the point of funding is that the
                  money is there before the milestone is met. */
               suggestCents={fundSuggestion({
-                milestones: plan.milestones.map((m) => ({
-                  amountCents: m.amountCents, released: !!relFor(m.id),
-                })),
+                milestones: [
+                  ...plan.milestones
+                    .filter((m) => !(hoursMode && m.status === "rejected"))
+                    .map((m) => ({ amountCents: m.amountCents, released: !!relFor(m.id) })),
+                  // 078. The hours not yet sent are still the estimate, and the
+                  // estimate is what gets funded -- so funding is there when
+                  // the last batch is approved, not a top-up behind it.
+                  ...(hoursMode && hrs.remainingHours > 0
+                    ? [{ amountCents: hoursAmountCents(hrs.remainingHours, plan.rateCents), released: false }]
+                    : []),
+                ],
                 priorGross: plan.releases.reduce(
                   (n, r) => n + (r.status === "void" ? 0 : r.grossCents), 0),
                 retainageBps: plan.retainageBps || 0,
@@ -19940,7 +19985,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
               <div key={m.id} className={`wop-row is-${m.status}`}>
                 <span className="wop-seq">{m.seq}</span>
                 <div className="wop-main">
-                  <span className="wop-label">{m.label}</span>
+                  <span className="wop-label">{subOf(m.id) ? hoursLabel(subOf(m.id)) : m.label}</span>
                   <span className="wop-meta">
                     {formatCents(m.amountCents)}
                     {m.status === "verified" ? <> · verified {relTime(m.verifiedAt)}</>
@@ -19951,11 +19996,28 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                       ? `paid ${relTime(rel.settledAt)}`
                       : `${formatCents(rel.netCents)} due`}</> : null}
                   </span>
+                  {subOf(m.id) && (
+                    <span className="hrs-days">
+                      {fmtHours(subOf(m.id).hours)} at {formatCents(plan.rateCents)}/hr
+                      {" · "}{subOf(m.id).entries.map((e) => `${hoursDay(e.date)} ${fmtHours(e.hours)}`).join(", ")}
+                    </span>
+                  )}
                   {m.note && <span className="wop-note">“{m.note}”</span>}
+                  {subOf(m.id) && m.status === "rejected" && sentBackWhy(m.id) && (
+                    <span className="hrs-back">Sent back: {sentBackWhy(m.id)}</span>
+                  )}
                 </div>
                 <div className="wop-row-acts">
+                  {/* 078. A batch of hours is corrected by sending the hours
+                      again, never by marking it done as it stood. */}
+                  {isMine && subOf(m.id) && m.status !== "verified" && (
+                    <button className={m.status === "rejected" ? "btn-solid sm" : "pick"}
+                      onClick={() => setLogging({ milestoneId: m.id, entries: subOf(m.id).entries, note: m.note || "" })}>
+                      {m.status === "rejected" ? "Fix and resend" : "Edit hours"}
+                    </button>
+                  )}
                   {/* The subcontractor's half. */}
-                  {isMine && m.status !== "verified" && (
+                  {isMine && !subOf(m.id) && m.status !== "verified" && (
                     reaching === m.id ? (
                       <>
                         <input className="wop-quick-note" value={note} maxLength={2000}
@@ -19983,7 +20045,8 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
                     <>
                       <button className="btn-solid sm" disabled={!!busy}
                         onClick={() => after(() => api.verifyMilestone(m.id), "verify")}>
-                        <Check size={13} /> {busy === "verify" ? "Verifying…" : "Verify"}
+                        <Check size={13} /> {busy === "verify" ? "Verifying…"
+                          : subOf(m.id) ? `Approve ${fmtHours(subOf(m.id).hours)}` : "Verify"}
                       </button>
                       <button className="pick" disabled={!!busy}
                         onClick={() => {
@@ -20023,7 +20086,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
               </div>
             );
           })}
-          {canManage && !editing && (
+          {canManage && !editing && !hoursMode && (
             <div className="wop-acts">
               <button className="pick" onClick={startEdit}>
                 {plan.milestones.length ? "Change the plan" : "Split into draws"}
@@ -20057,9 +20120,254 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
   );
 }
 
+// ---- 078. Hours on an hourly work order ---------------------------------------
+//
+// The contractor logs the hours they worked, by day; the hiring side approves
+// each batch, and it is paid at the rate. The estimate on the work order is a
+// ceiling on what is APPROVED, not on what happened: going over is a question
+// the contractor asks with a reason, answered before the hours are sent. All
+// the arithmetic is app/shared/hours.js, read by the route as well, so this
+// screen cannot offer a batch the server refuses.
+
+const hoursDay = (k) => {
+  const d = new Date(`${k}T12:00:00`);
+  return isNaN(d) ? k : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+};
+const hoursLabel = (sub) => {
+  const ds = sub.entries.map((e) => e.date);
+  const a = ds[0], b = ds[ds.length - 1];
+  return `Hours, ${hoursDay(a)}${b && b !== a ? ` – ${hoursDay(b)}` : ""}`;
+};
+const todayKey = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+function HoursPanel({ woId, hrs, rateCents, isMine, canManage, logging, setLogging, onChanged }) {
+  const [asking, setAsking] = useState(null);       // hours to prefill, or "" for a blank ask
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [declining, setDeclining] = useState(false);
+  const [why, setWhy] = useState("");
+  const pending = hrs.pendingRequest;
+  // The most recent answer, said to the contractor so a no is not a silence.
+  const lastDecided = [...hrs.requests].reverse().find((r) => r.status !== "pending");
+
+  const act = async (what, fn) => {
+    setBusy(what); setErr("");
+    try { await fn(); onChanged(); return true; }
+    catch (e) { console.error(`[hours] ${what} failed:`, e); setErr(hoursErrText(e)); return false; }
+    finally { setBusy(""); }
+  };
+
+  return (
+    <div className="hrs" data-hours>
+      {/* The four numbers both sides need, worked out rather than left to be
+          worked out. "Left" is against the approved ceiling, which is what
+          decides whether the next batch goes. */}
+      <div className="hrs-figs">
+        <div><span>Estimated</span><b>{fmtHours(hrs.estimateHours)}</b>
+          {hrs.extraHours > 0 && <em>+{fmtHours(hrs.extraHours)} approved extra</em>}</div>
+        <div><span>Logged</span><b>{fmtHours(hrs.usedHours)}</b>
+          {hrs.waitingHours > 0 && <em>{fmtHours(hrs.waitingHours)} waiting on approval</em>}</div>
+        <div><span>Approved</span><b>{fmtHours(hrs.approvedHours)}</b>
+          <em>{formatCents(hrs.approvedCents)}</em></div>
+        <div><span>Left</span><b>{fmtHours(hrs.remainingHours)}</b>
+          <em>at {formatCents(rateCents)}/hr</em></div>
+      </div>
+
+      {pending && (
+        <div className="hrs-ask" role="status">
+          <p><strong>{isMine ? "You asked" : "The contractor asked"} for {fmtHours(pending.hours)} more</strong>
+            {" "}({formatCents(hoursAmountCents(pending.hours, rateCents))}): “{pending.reason}”</p>
+          {canManage ? (
+            declining ? (
+              <div className="hrs-row">
+                <input className="wop-quick-note" value={why} maxLength={1000} autoFocus
+                  placeholder="Why not? They'll see this" onChange={(e) => setWhy(e.target.value)} />
+                <button className="btn-solid sm" disabled={!!busy || !why.trim()}
+                  onClick={async () => { if (await act("decide", () => api.decideHourRequest(pending.id, { approve: false, note: why.trim() }))) { setDeclining(false); setWhy(""); } }}>
+                  {busy === "decide" ? "Sending…" : "Decline"}</button>
+                <button className="pick" onClick={() => { setDeclining(false); setWhy(""); }}>Cancel</button>
+              </div>
+            ) : (
+              <div className="hrs-row">
+                <button className="btn-solid sm" disabled={!!busy}
+                  onClick={() => act("decide", () => api.decideHourRequest(pending.id, { approve: true }))}>
+                  <Check size={13} /> {busy === "decide" ? "Approving…" : `Approve ${fmtHours(pending.hours)} more`}</button>
+                <button className="pick" disabled={!!busy} onClick={() => setDeclining(true)}>Decline</button>
+              </div>
+            )
+          ) : isMine ? (
+            <div className="hrs-row">
+              <span className="fld-note">Waiting on their answer.</span>
+              <button className="pick" disabled={!!busy}
+                onClick={() => act("withdraw", () => api.withdrawHourRequest(pending.id))}>Take it back</button>
+            </div>
+          ) : null}
+        </div>
+      )}
+      {!pending && isMine && lastDecided?.status === "declined" && (
+        <p className="hrs-back">Your ask for {fmtHours(lastDecided.hours)} more was declined
+          {lastDecided.decidedNote ? <>: “{lastDecided.decidedNote}”</> : "."}</p>
+      )}
+
+      {isMine && (logging ? (
+        <HoursForm key={logging.milestoneId || "new"} woId={woId} hrs={hrs} rateCents={rateCents}
+          initial={logging} onAsk={(h) => setAsking(h)} canAsk={!pending}
+          onCancel={() => setLogging(null)}
+          onDone={() => { setLogging(null); onChanged(); }} />
+      ) : (
+        <div className="hrs-row">
+          <button className="btn-solid sm" onClick={() => setLogging({})}>
+            <Plus size={13} /> Log hours</button>
+          {!pending && asking == null && (
+            <button className="pick" onClick={() => setAsking("")}>Ask for more hours</button>
+          )}
+        </div>
+      ))}
+
+      {isMine && asking != null && !pending && (
+        <HoursAsk key={String(asking)} woId={woId} rateCents={rateCents} initialHours={asking}
+          onCancel={() => setAsking(null)}
+          onDone={() => { setAsking(null); onChanged(); }} />
+      )}
+      {!isMine && !canManage && !hrs.submissions.length && (
+        <p className="cov-hint">No hours logged yet.</p>
+      )}
+      {canManage && !hrs.submissions.length && !pending && (
+        <p className="cov-hint">The contractor logs their hours here as they go, and each batch comes to you to approve.
+          They're paid for the hours you approve, at the rate.</p>
+      )}
+      {err && <p className="fld-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+// One batch of hours: a line per day. Opened blank for a new batch, or with
+// the days of one not yet approved, which it replaces rather than adds to.
+function HoursForm({ woId, hrs, rateCents, initial, onAsk, canAsk, onCancel, onDone }) {
+  const [rows, setRows] = useState(() => (initial.entries?.length
+    ? initial.entries.map((e) => ({ date: e.date, hours: String(e.hours), note: e.note || "" }))
+    : [{ date: todayKey(), hours: "", note: "" }]));
+  const [note, setNote] = useState(initial.note || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const total = rows.reduce((n, r) => n + (parseHours(r.hours) > 0 ? parseHours(r.hours) : 0), 0);
+  // What this batch may come to: what is left, plus the hours it replaces --
+  // a correction must not be refused for counting itself twice.
+  const replaced = initial.milestoneId
+    ? (hrs.submissions.find((x) => x.id === initial.milestoneId)?.status === "rejected" ? 0
+      : hrs.submissions.find((x) => x.id === initial.milestoneId)?.hours || 0)
+    : 0;
+  const room = hrs.remainingHours + replaced;
+  const over = Math.max(0, total - room);
+  const check = checkEntries(rows.map((r) => ({ date: r.date, hours: r.hours, note: r.note })), { today: todayKey() });
+  // Said beside the button rather than discovered after the press: a dead
+  // Send with nothing beside it is indistinguishable from a broken one.
+  const holdUp = check.error ? hoursErrText({ error: check.error })
+    : over > 0 ? `That's ${fmtHours(over)} over what's approved (${fmtHours(room)} left). Ask for more hours first.`
+    : "";
+  const set = (i, patch) => setRows(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  const send = async () => {
+    setBusy(true); setErr("");
+    try {
+      await api.submitHours(woId, {
+        entries: check.entries, note: note.trim() || undefined,
+        ...(initial.milestoneId ? { milestoneId: initial.milestoneId } : {}),
+      });
+      onDone();
+    } catch (e) { console.error("[hours] submit failed:", e); setErr(hoursErrText(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="hrs-form">
+      <div className="form-sec">{initial.milestoneId ? "Correct these hours" : "Log your hours"}</div>
+      {rows.map((r, i) => (
+        <div key={i} className="hrs-day">
+          <input type="date" aria-label="Day worked" value={r.date} max={todayKey()}
+            onChange={(e) => set(i, { date: e.target.value })} />
+          <input inputMode="decimal" aria-label="Hours" placeholder="Hours" value={r.hours}
+            className={r.hours && !(parseHours(r.hours) > 0 && onStep(parseHours(r.hours))) ? "bad" : ""}
+            onChange={(e) => set(i, { hours: e.target.value.replace(/[^0-9.,]/g, "") })} />
+          <input aria-label="What you did that day" placeholder="What you did (optional)" value={r.note}
+            maxLength={300} onChange={(e) => set(i, { note: e.target.value })} />
+          {rows.length > 1 && (
+            <button type="button" className="pick" aria-label="Remove this day"
+              onClick={() => setRows(rows.filter((_, j) => j !== i))}><X size={13} /></button>
+          )}
+        </div>
+      ))}
+      <button type="button" className="pick hrs-add"
+        onClick={() => setRows([...rows, { date: "", hours: "", note: "" }])}><Plus size={13} /> Add a day</button>
+      <label className="fld">What was done <span className="fld-note">optional</span>
+        <textarea rows={2} value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <p className="hrs-total">
+        <strong>{fmtHours(total)}</strong> × {formatCents(rateCents)} ={" "}
+        <strong>{formatCents(hoursAmountCents(total, rateCents))}</strong>
+      </p>
+      {holdUp && <p className="fld-note hrs-hold" role="status">{holdUp}</p>}
+      <div className="hrs-row">
+        <button className="btn-solid sm" disabled={busy || !!holdUp} onClick={send}>
+          {busy ? "Sending…" : initial.milestoneId ? "Send the corrected hours" : "Send for approval"}</button>
+        {over > 0 && canAsk && !check.error && (
+          <button className="pick" onClick={() => onAsk(String(Math.ceil(over * 4) / 4))}>
+            Ask for {fmtHours(Math.ceil(over * 4) / 4)} more</button>
+        )}
+        <button className="pick" onClick={onCancel}>Cancel</button>
+      </div>
+      {err && <p className="fld-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+// Asking for more than the estimate. The reason is required, because it is
+// the first thing the hiring side asks and the answer decides theirs.
+function HoursAsk({ woId, rateCents, initialHours, onCancel, onDone }) {
+  const [hours, setHours] = useState(initialHours || "");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const h = parseHours(hours);
+  const ok = h > 0 && onStep(h) && reason.trim();
+  return (
+    <div className="hrs-form">
+      <div className="form-sec">Ask for more hours</div>
+      <p className="fld-note">They approve it before you log hours past the estimate.</p>
+      <div className="hrs-day">
+        <input inputMode="decimal" aria-label="Extra hours" placeholder="Hours" value={hours}
+          onChange={(e) => setHours(e.target.value.replace(/[^0-9.,]/g, ""))} />
+        <input aria-label="Why it needs more hours" placeholder="Why it needs more — e.g. found rot behind the wall"
+          value={reason} maxLength={1000} onChange={(e) => setReason(e.target.value)} />
+      </div>
+      {h > 0 && <p className="hrs-total">{fmtHours(h)} more = {formatCents(hoursAmountCents(h, rateCents))}</p>}
+      <div className="hrs-row">
+        <button className="btn-solid sm" disabled={busy || !ok}
+          onClick={async () => {
+            setBusy(true); setErr("");
+            try { await api.requestHours(woId, { hours: h, reason: reason.trim() }); onDone(); }
+            catch (e) { console.error("[hours] ask failed:", e); setErr(hoursErrText(e)); }
+            finally { setBusy(false); }
+          }}>{busy ? "Sending…" : "Send the request"}</button>
+        <button className="pick" onClick={onCancel}>Cancel</button>
+      </div>
+      {!ok && hours !== "" && (
+        <p className="fld-note">{!(h > 0 && onStep(h)) ? hoursErrText({ error: "quarter_hours" }) : "Say why it needs more hours."}</p>
+      )}
+      {err && <p className="fld-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 // What went wrong, in words somebody can act on.
 function planErrorText(e) {
   const code = e?.body?.error;
+  if (code === "hourly_uses_hours") return "This one is paid by the hours the contractor logs, so it isn't split into draws.";
+  if (code === "use_hours") return "Send the hours again to put this back up for approval.";
   if (code === "does_not_cover") {
     return `The draws come to ${formatMoney(e.body.sum)} and the work order is ${formatMoney(e.body.want)}.`;
   }
@@ -25183,7 +25491,7 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                 {on && lineMax(t) && (
                   <span className="wol-val">
                     {formatMoney(String(lineMax(t)))}
-                    {payKindOf(t) === "hourly" && <span className="wol-max"> max</span>}
+                    {payKindOf(t) === "hourly" && <span className="wol-max"> est.</span>}
                   </span>
                 )}
               </div>
@@ -25225,8 +25533,8 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                           <MoneyInput value={lines[t]?.rate || ""}
                             onChange={(v) => setLine(t, { rate: v })} />
                         </label>
-                        <label className="fld">Not to exceed{" "}
-                          <span className="fld-note">hours</span>
+                        <label className="fld">Estimated hours{" "}
+                          <span className="fld-note">more needs your yes</span>
                           <input inputMode="decimal" value={lines[t]?.capHours ?? ""}
                             placeholder="8"
                             onChange={(e) => setLine(t, { capHours: e.target.value.replace(/[^0-9.]/g, "") })} />
@@ -25236,9 +25544,10 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                           out rather than left to be worked out. */}
                       <p className={`pay-max ${lineMax(t) ? "" : "waiting"}`}>
                         {lineMax(t)
-                          ? <>Most this can cost: <strong>{formatMoney(String(lineMax(t)))}</strong>{" "}
-                              — {lines[t].capHours} hour{Number(lines[t].capHours) === 1 ? "" : "s"} at {formatMoney(lines[t].rate)} an hour.</>
-                          : "Set a rate and a cap. An hourly rate with no ceiling is an open cheque."}
+                          ? <>Estimated: <strong>{formatMoney(String(lineMax(t)))}</strong>{" "}
+                              — {lines[t].capHours} hour{Number(lines[t].capHours) === 1 ? "" : "s"} at {formatMoney(lines[t].rate)} an hour.
+                              {" "}They're paid for the hours they log and you approve. Going over needs your yes first.</>
+                          : "Set a rate and how many hours you expect it to take."}
                       </p>
                     </>
                   )}
@@ -27023,7 +27332,7 @@ const claimErrText = (e) => CLAIM_ERRORS[e?.body?.error]
 
 function claimPay(w) {
   if (w.payKind === "hourly" && w.rateCents != null) {
-    return `${formatCents(w.rateCents)}/hr${w.capHours ? `, up to ${w.capHours} hours` : ""}`;
+    return `${formatCents(w.rateCents)}/hr${w.capHours ? `, about ${w.capHours} hours` : ""}`;
   }
   return w.valueCents != null ? formatCents(w.valueCents) : null;
 }
@@ -32063,7 +32372,7 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       <div className="wo-doc-sec">Compensation</div>
       <div className="wo-value">{a.payKind === "hourly" && a.rate ? formatMoney(a.rate) : (a.value ? formatMoney(a.value) : "—")}
         <span> {a.payKind === "hourly" && a.rate
-          ? `per hour, up to ${a.capHours} hour${Number(a.capHours) === 1 ? "" : "s"} — ${formatMoney(a.value)} maximum`
+          ? `per hour — about ${a.capHours} hour${Number(a.capHours) === 1 ? "" : "s"} estimated (${formatMoney(a.value)}). Paid on the hours approved; more than the estimate needs approval first.`
           : "subcontractor value"}</span></div>
       {coList.length > 0 && (
         <div className="wo-co-sched">
@@ -41523,6 +41832,31 @@ iframe.dv-frame{display:block}
 .wop-quick-note{font:inherit;font-size:13px;padding:7px 9px;border-radius:8px;
   border:1px solid var(--line);min-width:160px}
 .wop-acts{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:12px}
+/* 078. Hours on an hourly work order. No backtick anywhere in this block:
+   the whole stylesheet is one template literal. */
+.hrs{display:flex;flex-direction:column;gap:12px;margin:12px 0 4px}
+.hrs-figs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.hrs-figs>div{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:9px 10px;
+  display:flex;flex-direction:column;gap:1px;min-width:0}
+.hrs-figs span{font-size:11px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em}
+.hrs-figs b{font-size:18px;font-weight:800}
+.hrs-figs em{font-style:normal;font-size:11.5px;color:var(--ink-soft)}
+.hrs-ask{border:1px solid var(--amber,#E0A43A);background:var(--amber-tint,#FFF6E5);border-radius:10px;padding:10px 12px}
+.hrs-ask p{margin:0 0 8px;font-size:13px}
+.hrs-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.hrs-form{border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.hrs-day{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+.hrs-day input{font:inherit;font-size:14px;padding:9px 10px;border-radius:8px;border:1px solid var(--line);min-height:42px}
+.hrs-day input[type=date]{flex:0 0 auto;min-width:150px}
+.hrs-day input[inputmode=decimal]{flex:0 0 84px;width:84px}
+.hrs-day input:not([type=date]):not([inputmode=decimal]){flex:1 1 180px;min-width:0}
+.hrs-day input.bad{border-color:var(--red)}
+.hrs-add{align-self:flex-start}
+.hrs-total{margin:0;font-size:13.5px}
+.hrs-hold{color:var(--amber-ink,#7A5410)}
+.hrs-days{font-size:12px;color:var(--ink-soft)}
+.hrs-back{margin:0;font-size:12.5px;color:var(--red)}
+@media (max-width:620px){.hrs-figs{grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* 051. Money in against a work order. A tinted strip rather than a card,
    because it sits inside a panel that is already a card -- a second border
    around it reads as a separate screen. */

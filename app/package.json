@@ -88,6 +88,8 @@
     "test:request": "node scripts/request-detail-test.mjs",
     "test:proplinks": "node scripts/property-links-test.mjs",
     "test:hourly": "node scripts/hourly-test.mjs",
+    "test:hours": "node --no-warnings scripts/hours-test.mjs",
+    "test:hoursui": "node --no-warnings scripts/hours-ui-test.mjs",
     "test:activity": "node scripts/job-activity-test.mjs",
     "test:scheduled": "node scripts/tenant-scheduled-test.mjs",
     "test:schedule": "node scripts/schedule-test.mjs",

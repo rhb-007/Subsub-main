@@ -42,6 +42,8 @@ import { pickPlace } from "../shared/geopick.js";
 // Money, and whether a chain of waivers is clear. Shared with the browser
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
+import { checkEntries, totalHours, hoursAmountCents, hoursPicture, submitRefusal,
+  requestRefusal, parseHours } from "../shared/hours.js";
 import { feeTerms, feeFor, feeTermsRefusal, DEFAULT_FEE_TERMS } from "../shared/fee.js";
 import { chainStatus, SCOPE_KINDS, waiverKindFor } from "../shared/waivers.js";
 // The paper each link in that chain is made of, and which state takes which.
@@ -8184,6 +8186,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\bpassport(s|_photos|_access)\b|\blicense_reminders\b|ux_passport_|ux_license_reminder/i.test(m)) return "077_passport";
   if (/\bleads\b/i.test(m)) return "076_leads";
   if (/\breferral_(codes|touches|attributions|rewards|invites)\b|ux_referral_/i.test(m)) return "075_referrals";
@@ -13615,6 +13618,13 @@ app.get("/api/work-orders/:id/plan", async (c) => {
     scopeKind: wo.scope_kind || "labor_materials",
     retainageBps: wo.retainage_bps || 0,
     milestones: (ms.results || []).map(milestoneToJs),
+    // 078. How it is paid, and for an hourly one the hours behind it, in the
+    // same call: the screen draws the draws OR the hours, never both, and a
+    // second fetch would be a second moment to disagree with the first.
+    payKind: wo.pay_kind || "fixed",
+    rateCents: wo.rate_cents ?? null,
+    capHours: wo.cap_hours ?? null,
+    hours: await hoursFor(c.env, wo),
     events: (evs.results || []).map((e) => ({
       id: e.id, kind: e.kind, at: e.at, milestoneId: e.milestone_id || null,
       actorUserId: e.actor_user_id || null, actorRole: e.actor_role || null,
@@ -13647,6 +13657,13 @@ app.put("/api/work-orders/:id/plan", requireRole("admin", "pm"), async (c) => {
     `SELECT COUNT(*) AS n FROM wo_milestones WHERE work_order_id = ? AND status = 'verified'`
   ).bind(wo.id).first();
   if (settled?.n) return c.json({ error: "already_verified", verified: settled.n }, 409);
+
+  // 078. An hourly work order is paid by the hours approved, and its parts are
+  // the submissions of those hours -- so a plan cut up front in dollars is a
+  // second answer to what is owed. Only a work order already split into draws
+  // before hours were tracked keeps its plan editable.
+  const hrs = await hoursFor(c.env, wo);
+  if (hrs && !hrs.migration && !hrs.legacyPlan) return c.json({ error: "hourly_uses_hours" }, 409);
 
   const rows = Array.isArray(b.milestones) ? b.milestones : [];
   if (!rows.length) return c.json({ error: "no_milestones" }, 400);
@@ -13723,6 +13740,11 @@ app.post("/api/milestones/:id/reach", async (c) => {
     return c.json({ error: "not_yours_to_mark" }, 403);
   }
   if (m.status === "verified") return c.json({ error: "already_verified" }, 409);
+  // 078. A submission of hours is put back up by sending the hours again, not
+  // by flipping its status: marking a sent-back timesheet "done" as it stood
+  // would put the same hours in front of the hiring side that they just
+  // refused, with nothing changed.
+  if (await isHoursMilestone(c.env, m.id)) return c.json({ error: "use_hours" }, 409);
 
   const b = await c.req.json().catch(() => ({}));
   const photos = Array.isArray(b.photos) ? b.photos.slice(0, 12) : [];
@@ -13846,6 +13868,255 @@ app.post("/api/milestones/:id/reject", requireRole("admin", "pm"), async (c) => 
   await woEvent(c, { workOrderId: wo.id, milestoneId: m.id, kind: "milestone.rejected",
     payload: { reason: why } });
   return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// 078. Hours on an hourly work order
+// ---------------------------------------------------------------------------
+// A rate and an estimate used to be the whole of an hourly work order, and it
+// was paid as rate x estimate whatever the job took. Now the sub sends the
+// hours they worked, the hiring side approves them, and the pay is approved
+// hours x rate. A submission is a MILESTONE -- the existing verify, reject,
+// release, fee, retainage, cover gate and waiver all apply unchanged -- plus
+// one row per day saying what the hours were. See app/shared/hours.js.
+
+const hourRequestToJs = (r) => ({
+  id: r.id, workOrderId: r.work_order_id, hours: Number(r.hours), reason: r.reason,
+  status: r.status, requestedBy: r.requested_by || null, requestedAt: r.requested_at,
+  decidedBy: r.decided_by || null, decidedAt: r.decided_at || null, decidedNote: r.decided_note || null,
+});
+
+async function isHoursMilestone(env, milestoneId) {
+  try {
+    const r = await env.DB.prepare(`SELECT 1 AS x FROM wo_hour_entries WHERE milestone_id = ? LIMIT 1`)
+      .bind(milestoneId).first();
+    return !!r;
+  } catch (err) {
+    // No 078 means no hours were ever logged, which is the answer.
+    if (!missingSchema(err)) throw err;
+    return false;
+  }
+}
+
+// Everything about the hours on one work order, or null for a fixed price.
+// `legacyPlan` is a work order split into draws in dollars before hours were
+// tracked: it keeps its draws, and hours are not offered on it, because two
+// answers to what is owed is one too many.
+async function hoursFor(env, wo) {
+  if ((wo.pay_kind || "fixed") !== "hourly") return null;
+  const ms = (await env.DB.prepare(
+    `SELECT * FROM wo_milestones WHERE work_order_id = ? ORDER BY seq`
+  ).bind(wo.id).all()).results || [];
+  let entries = [], requests = [];
+  try {
+    entries = (await env.DB.prepare(
+      `SELECT * FROM wo_hour_entries WHERE work_order_id = ? ORDER BY work_date, rowid`
+    ).bind(wo.id).all()).results || [];
+    requests = (await env.DB.prepare(
+      `SELECT * FROM wo_hour_requests WHERE work_order_id = ? ORDER BY requested_at, rowid`
+    ).bind(wo.id).all()).results || [];
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    // Said rather than assumed: the screen keeps the old draws and names the
+    // file, instead of drawing an empty timesheet that cannot be written to.
+    return { migration, legacyPlan: true, submissions: [], requests: [] };
+  }
+  const byMs = new Map();
+  for (const e of entries) {
+    if (!byMs.has(e.milestone_id)) byMs.set(e.milestone_id, []);
+    byMs.get(e.milestone_id).push({ date: e.work_date, hours: Number(e.hours), note: e.note || null });
+  }
+  const submissions = ms.filter((m) => byMs.has(m.id)).map((m) => {
+    const days = byMs.get(m.id);
+    return {
+      id: m.id, seq: m.seq, status: m.status, hours: totalHours(days),
+      amountCents: m.amount_cents, note: m.note || null,
+      reachedAt: m.reached_at || null, verifiedAt: m.verified_at || null,
+      entries: days,
+    };
+  });
+  const reqs = requests.map(hourRequestToJs);
+  return {
+    legacyPlan: ms.some((m) => !byMs.has(m.id)),
+    rateCents: wo.rate_cents ?? null,
+    capHours: wo.cap_hours ?? null,
+    submissions,
+    requests: reqs,
+    ...hoursPicture({ capHours: wo.cap_hours, rateCents: wo.rate_cents, submissions, requests: reqs }),
+  };
+}
+
+// The checks every hours write shares, in the order that answers the most
+// useful question first.
+async function hoursWriteGate(c, wo) {
+  const { role, companyId } = c.get("auth");
+  if (role !== "contractor" || wo.company_id !== companyId) {
+    return { error: c.json({ error: "not_yours_to_mark" }, 403) };
+  }
+  if ((wo.pay_kind || "fixed") !== "hourly") return { error: c.json({ error: "not_hourly" }, 409) };
+  if (wo.voided_at || wo.status !== "accepted") return { error: c.json({ error: "not_accepted" }, 409) };
+  const hrs = await hoursFor(c.env, wo);
+  if (hrs.migration) return { error: c.json({ error: "migration_needed", migration: hrs.migration }, 503) };
+  if (hrs.legacyPlan) return { error: c.json({ error: "drawn_plan" }, 409) };
+  return { hrs };
+}
+
+// Send hours. With `milestoneId`, replace a submission that has not been
+// approved yet -- the way a sent-back timesheet is corrected -- rather than
+// adding a second one beside it.
+app.post("/api/work-orders/:id/hours", async (c) => {
+  const { userId } = c.get("auth");
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const gate = await hoursWriteGate(c, wo);
+  if (gate.error) return gate.error;
+  const { hrs } = gate;
+
+  const b = await c.req.json().catch(() => ({}));
+  const chk = checkEntries(b.entries, { today: dayKeyUtc() });
+  if (chk.error) return c.json(chk, 400);
+
+  let replacing = null;
+  if (b.milestoneId) {
+    replacing = hrs.submissions.find((x) => x.id === b.milestoneId);
+    if (!replacing) return c.json({ error: "not_found" }, 404);
+    if (replacing.status === "verified") return c.json({ error: "not_editable" }, 409);
+  }
+  const refuse = submitRefusal({ hours: chk.hours, capHours: wo.cap_hours,
+    submissions: hrs.submissions, requests: hrs.requests, replacing: replacing?.id || null });
+  if (refuse) return c.json(refuse, 409);
+
+  const amountCents = hoursAmountCents(chk.hours, wo.rate_cents);
+  const first = chk.entries[0].date, last = chk.entries[chk.entries.length - 1].date;
+  const label = `Hours, ${first}${last !== first ? ` to ${last}` : ""}`;
+  const note = String(b.note || "").trim().slice(0, 2000) || null;
+  const photos = Array.isArray(b.photos) ? b.photos.slice(0, 12) : [];
+  const msId = replacing ? replacing.id : uid();
+
+  // ONE BATCH, so a timesheet is never half written: a milestone whose amount
+  // says 7.5 hours over entries saying 5 is money owed for hours nobody
+  // claimed. The entry writes are conditioned on the milestone being open, so
+  // a replacement that lost a race with an approval writes nothing at all.
+  const stmts = [];
+  if (replacing) {
+    stmts.push(c.env.DB.prepare(
+      `UPDATE wo_milestones SET amount_cents = ?, label = ?, status = 'reached',
+         reached_at = CURRENT_TIMESTAMP, reached_by = ?, note = ?
+       WHERE id = ? AND status <> 'verified'`
+    ).bind(amountCents, label, userId, note, msId));
+    stmts.push(c.env.DB.prepare(
+      `DELETE FROM wo_hour_entries WHERE milestone_id = ?
+         AND EXISTS (SELECT 1 FROM wo_milestones WHERE id = ? AND status = 'reached')`
+    ).bind(msId, msId));
+  } else {
+    stmts.push(c.env.DB.prepare(
+      `INSERT INTO wo_milestones (id, work_order_id, account_id, seq, label, amount_cents,
+         status, reached_at, reached_by, note)
+       VALUES (?, ?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM wo_milestones WHERE work_order_id = ?),
+         ?, ?, 'reached', CURRENT_TIMESTAMP, ?, ?)`
+    ).bind(msId, wo.id, wo.account_id, wo.id, label, amountCents, userId, note));
+  }
+  for (const e of chk.entries) {
+    stmts.push(c.env.DB.prepare(
+      `INSERT INTO wo_hour_entries (id, work_order_id, milestone_id, work_date, hours, note)
+       SELECT ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM wo_milestones WHERE id = ? AND status = 'reached')`
+    ).bind(uid(), wo.id, msId, e.date, e.hours, e.note, msId));
+  }
+  try {
+    await c.env.DB.batch(stmts);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  if (replacing) {
+    const now = await c.env.DB.prepare(`SELECT status FROM wo_milestones WHERE id = ?`).bind(msId).first();
+    if (now?.status !== "reached") return c.json({ error: "not_editable" }, 409);
+  }
+
+  await woEvent(c, { workOrderId: wo.id, milestoneId: msId, kind: "hours.submitted",
+    payload: { hours: chk.hours, amountCents, entries: chk.entries, note, photos,
+      hadPhotos: photos.length > 0, replaced: !!replacing } });
+  return c.json({ ok: true, milestoneId: msId, hours: chk.hours, amountCents }, replacing ? 200 : 201);
+});
+
+// Ask for more hours than were estimated. The sub asks; the hiring side
+// answers. One open question at a time.
+app.post("/api/work-orders/:id/hour-requests", async (c) => {
+  const { userId } = c.get("auth");
+  const { wo, error } = await loadWorkOrder(c, c.req.param("id"));
+  if (error) return error;
+  const gate = await hoursWriteGate(c, wo);
+  if (gate.error) return gate.error;
+  const b = await c.req.json().catch(() => ({}));
+  const refuse = requestRefusal({ hours: b.hours, reason: b.reason, requests: gate.hrs.requests });
+  if (refuse) return c.json(refuse, refuse.error === "already_pending" ? 409 : 400);
+  const id = uid();
+  const hours = parseHours(b.hours);
+  const reason = String(b.reason).trim().slice(0, 1000);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO wo_hour_requests (id, work_order_id, account_id, hours, reason, requested_by)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(id, wo.id, wo.account_id, hours, reason, userId).run();
+  } catch (err) {
+    // The partial unique index doing its job: two presses, one question.
+    if (/UNIQUE constraint failed/i.test(String(err?.message || err))) {
+      return c.json({ error: "already_pending" }, 409);
+    }
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await woEvent(c, { workOrderId: wo.id, kind: "hours.extra_requested", payload: { requestId: id, hours, reason } });
+  return c.json({ ok: true, id, hours }, 201);
+});
+
+// The sub takes their own question back -- they found it would fit after all.
+app.post("/api/hour-requests/:id/withdraw", async (c) => {
+  const { role, companyId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_hour_requests WHERE id = ?`)
+    .bind(c.req.param("id")).first().catch((err) => { if (missingSchema(err)) return null; throw err; });
+  if (!r) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  if (role !== "contractor" || wo.company_id !== companyId) return c.json({ error: "not_yours_to_mark" }, 403);
+  const res = await c.env.DB.prepare(
+    `UPDATE wo_hour_requests SET status = 'withdrawn', decided_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'pending'`
+  ).bind(r.id).run();
+  if (!res.meta?.changes) return c.json({ error: "already_decided" }, 409);
+  await woEvent(c, { workOrderId: wo.id, kind: "hours.extra_withdrawn", payload: { requestId: r.id } });
+  return c.json({ ok: true });
+});
+
+// The hiring side answers. Approving raises the ceiling by exactly what was
+// asked; declining needs a reason, because a no nobody can read is a no
+// somebody has to telephone about.
+app.post("/api/hour-requests/:id/decide", requireRole("admin", "pm"), async (c) => {
+  const { userId } = c.get("auth");
+  const r = await c.env.DB.prepare(`SELECT * FROM wo_hour_requests WHERE id = ?`)
+    .bind(c.req.param("id")).first().catch((err) => { if (missingSchema(err)) return null; throw err; });
+  if (!r) return c.json({ error: "not_found" }, 404);
+  const { wo, error } = await loadWorkOrder(c, r.work_order_id);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const approve = b.approve === true;
+  const note = String(b.note || "").trim().slice(0, 1000) || null;
+  if (!approve && !note) return c.json({ error: "reason_required" }, 400);
+  // Guarded on the status it moves FROM, in the UPDATE, so two presses decide
+  // once -- and a sub withdrawing at the same moment wins or loses cleanly.
+  const res = await c.env.DB.prepare(
+    `UPDATE wo_hour_requests SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP,
+       decided_note = ? WHERE id = ? AND status = 'pending'`
+  ).bind(approve ? "approved" : "declined", userId, note, r.id).run();
+  if (!res.meta?.changes) return c.json({ error: "already_decided" }, 409);
+  await woEvent(c, { workOrderId: wo.id, kind: approve ? "hours.extra_approved" : "hours.extra_declined",
+    payload: { requestId: r.id, hours: Number(r.hours), note } });
+  const hrs = await hoursFor(c.env, wo);
+  return c.json({ ok: true, status: approve ? "approved" : "declined", ceilingHours: hrs?.ceilingHours ?? null });
 });
 
 // Is this release's chain clear, and through when?

@@ -270,7 +270,12 @@ WITH spec(j) AS (SELECT
   ',["m077_passport_photos","col","passport_photos",["id","company_id","file_key","caption","position","removed_at"]]' ||
   ',["m077_passport_access","col","passport_access",["id","company_id","account_id","status","decided_at"]]') ||
   (',["m077_license_reminders","col","license_reminders",["company_id","expires_on","days_out","emailed"]]' ||
-  ',["m077_access_live_unique","index","ux_passport_access_live",[]]') ||
+  ',["m077_access_live_unique","index","ux_passport_access_live",[]]' ||
+  -- 078. Hours worked on an hourly work order. Until it is run the work order
+  -- shows the old draws and logging hours says which file.
+  ',["m078_wo_hour_entries","col","wo_hour_entries",["id","work_order_id","milestone_id","work_date","hours"]]' ||
+  ',["m078_wo_hour_requests","col","wo_hour_requests",["id","work_order_id","hours","reason","status","decided_at"]]' ||
+  ',["m078_hour_request_pending_unique","index","ux_wo_hour_request_pending",[]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -738,7 +743,20 @@ WITH inv(j) AS (SELECT '['
   -- And an access request marked decided with no record of when: the sub's
   -- yes or no is the thing somebody asks about later.
   || ',' || json_array('m077_inv_decided_undated', (SELECT COUNT(*) FROM passport_access
-    WHERE status IN ('approved', 'declined', 'revoked') AND decided_at IS NULL)))
+    WHERE status IN ('approved', 'declined', 'revoked') AND decided_at IS NULL))
+  -- 078. A submission of hours whose amount is not its hours times the rate is
+  -- money paid for a number of hours nobody claimed. Quarter hours are exact in
+  -- binary, so the two sides of this agree to the cent when nothing is wrong.
+  || ',' || json_array('m078_inv_hours_amount', (SELECT COUNT(*) FROM wo_milestones m
+    JOIN work_orders w ON w.id = m.work_order_id
+    WHERE EXISTS (SELECT 1 FROM wo_hour_entries h WHERE h.milestone_id = m.id)
+      AND m.amount_cents <> CAST(ROUND((SELECT SUM(h.hours) FROM wo_hour_entries h
+        WHERE h.milestone_id = m.id) * COALESCE(w.rate_cents, 0)) AS INTEGER)))
+  -- And hours logged against a work order that is not paid by the hour: a
+  -- fixed price with a timesheet on it reads as two answers to what is owed.
+  || ',' || json_array('m078_inv_hours_on_fixed', (SELECT COUNT(*) FROM wo_hour_entries h
+    JOIN work_orders w ON w.id = h.work_order_id
+    WHERE COALESCE(w.pay_kind, 'fixed') <> 'hourly')))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

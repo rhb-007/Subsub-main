@@ -615,6 +615,17 @@ export const api = {
       { method: "PATCH", body: JSON.stringify(patch) }),
   reachMilestone: (id, body) =>
     request(`/milestones/${needId(id, "milestone")}/reach`, { method: "POST", body: JSON.stringify(body || {}) }),
+  // 078. Hours on an hourly work order. The sub sends them (with milestoneId,
+  // a correction of one not yet approved), asks for more than the estimate,
+  // or takes that question back; the hiring side answers it.
+  submitHours: (woId, body) =>
+    request(`/work-orders/${needId(woId, "work_order")}/hours`, { method: "POST", body: JSON.stringify(body || {}) }),
+  requestHours: (woId, body) =>
+    request(`/work-orders/${needId(woId, "work_order")}/hour-requests`, { method: "POST", body: JSON.stringify(body || {}) }),
+  withdrawHourRequest: (id) =>
+    request(`/hour-requests/${needId(id, "hour_request")}/withdraw`, { method: "POST", body: "{}" }),
+  decideHourRequest: (id, body) =>
+    request(`/hour-requests/${needId(id, "hour_request")}/decide`, { method: "POST", body: JSON.stringify(body || {}) }),
   verifyMilestone: (id) =>
     request(`/milestones/${needId(id, "milestone")}/verify`, { method: "POST", body: "{}" }),
   rejectMilestone: (id, reason) =>

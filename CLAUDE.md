@@ -11739,6 +11739,75 @@ refactor.
     first build caught the intro starting one pixel under the caption, and the
     fix for that was eaten by margin collapse once before it held.
 
+- **AN HOURLY JOB IS PAID FOR THE HOURS WORKED, AND THE ESTIMATE IS A CEILING
+  THE SUB CAN ASK TO RAISE.** Asked as *"if hourly can the subcontractor say how
+  many hours he spent on the project … how do we know? … should we add the
+  ability to leave the hourly open ended instead of capping"*, then *"build both
+  parts"*. 024 stored a rate and a cap and nothing else, so an hourly job was
+  paid as rate × cap, as though every estimated hour had been used, and the real
+  number had nowhere to go but a free-text note. Migration 078,
+  `app/shared/hours.js`.
+
+  **A SUBMISSION OF HOURS IS A MILESTONE**, which is the decision everything
+  else hangs off. The sub logs one or more days, each with hours and an optional
+  note, and sends them as one batch: that becomes a `wo_milestones` row marked
+  `reached` with amount = hours × rate, plus one `wo_hour_entries` row per day.
+  Approving it is the existing verify, sending it back is the existing reject
+  with its reason, and paying it goes through the releases, the fee, retainage,
+  the cover gate and the lien waiver exactly as a draw does. A second money path
+  for hourly work would be a second set of gates to keep in step, and the one
+  that drifted would be the one nobody pays through often. `m078_inv_hours_amount`
+  counts a milestone whose amount disagrees with its own days.
+
+  **HOW WE KNOW: WE DO NOT, AND THE PRODUCT DOES NOT PRETEND TO.** The sub says
+  what they worked, day by day with what was done, and the hiring side approves
+  or sends it back with a reason. That is a timesheet, which is how the trade
+  already runs; a clock-in with GPS was deliberately not built. What makes it
+  checkable is that every day is on the record with its note, and nothing is
+  paid that the hiring side did not approve.
+
+  **QUARTER HOURS, REFUSED RATHER THAN ROUNDED.** A quarter is exact in binary,
+  so the total, the amount and the invariant that recomputes it in SQLite all
+  agree to the cent; tenths would not. Rounding a 7.3 would pay for time nobody
+  claimed or not pay for time they did, so the form says so beside the box.
+
+  **THE ESTIMATE IS A CEILING ON WHAT IS APPROVED, NOT ON WHAT HAPPENED.** Over
+  it is refused as *not yet agreed*, with the exact overage, so the form offers
+  *Ask for 1.5 h more* in one press. A request carries hours and a reason, the
+  hiring side approves or declines (declining needs a reason), and approved
+  extras raise the ceiling. **Derived, never written onto the work order**: a
+  work order is not edited once accepted, and two records of one ceiling would
+  disagree the first time somebody changed one. One open request per work
+  order, held by `ux_wo_hour_request_pending` as well as the route's pre-check.
+  Open-ended with no estimate at all was not built: the hiring account has to
+  fund the job, and *we have no idea* is not a number anybody can fund against.
+
+  **A BATCH WAITING ON APPROVAL COUNTS AGAINST THE CEILING**, or a second batch
+  could squeeze past on the strength of the first not having been answered yet.
+  A sent-back batch does not count, and correcting one replaces its days rather
+  than adding to them.
+
+  **AN HOURLY WORK ORDER ALREADY SPLIT INTO DOLLAR DRAWS KEEPS THEM.** Hours are
+  not offered there (`drawn_plan`), because two answers to what is owed is one
+  too many. And on an hours work order the dollar plan is refused
+  (`hourly_uses_hours`) and *Mark it done* is withdrawn from hour rows
+  (`use_hours`), for the same reason from the other side. The funding suggestion
+  adds the estimate not yet logged, so the account funds what the job is likely
+  to cost rather than only what was sent.
+
+  `test:hours` (66) and `test:hoursui` (36). Ten mutations fire, each on its own
+  assertion: the ceiling check, the contractor gate, the legacy gate, paying the
+  estimate, entries not replaced on correction, reach allowed, the dollar plan
+  allowed, Send not gated when over, a correction losing its batch, and *Mark it
+  done* back on an hour row. Both invariants are seeded both ways against the
+  real `CHECK.sql`. **`test:scopeseed` had been red since job cards became
+  lines** (it never opened the card), and opens them now.
+
+  **Not verified here:** the full-stack `test:hourly`, which needs the local
+  stack, and a live hourly job. **Pasting 078 is required** before any of it
+  works on the live database; until then the routes answer `migration_needed`
+  naming it and the work order still loads.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
