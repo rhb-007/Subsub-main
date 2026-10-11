@@ -11808,6 +11808,46 @@ refactor.
   works on the live database; until then the routes answer `migration_needed`
   naming it and the work order still loads.
 
+- **THE ASSIGN LIST SAID "DOCS COMPLETE" OVER DOCUMENTS NOBODY HAD READ, AND
+  THE REFUSAL ARRIVED AS A TOAST BEHIND THE WINDOW.** Reported with the assign
+  window open on a contractor reading *Docs complete* and *Select anyway*, the
+  press refused, and a note at the foot of the page saying their certificate,
+  bond and agreement were *on file and waiting on your review*: *"needs to have
+  reason and an action item why I can't assign, document review must happen (by
+  me) with a call to action to doc review."*
+
+  **THE ROW READ PRESENCE AND THE ROUTE READS A VERDICT.** `PickContractor`
+  computed `docs` as `s.bond && s.insurance && s.contract`: three files
+  uploaded. The assign route refuses until the account has **verified**
+  `ASSIGN_KINDS`. So the screen was looser than its route on the press that
+  sends somebody to a job, and nothing static could see it, because both halves
+  read exactly as intended. It reads `assignBlockers` now, the browser's copy of
+  the route's own list, and the blocked row stopped naming the W-9 and the
+  licence, which that route does not check (the stricter-than-the-route half of
+  the same fault).
+
+  **EACH REASON CARRIES THE ONE PRESS THAT FIXES IT, and which press follows
+  whose job it is.** On file and unread is this account's own review, which the
+  contractor cannot clear however often they are chased: it reads *Waiting on
+  your review* on a pale amber panel with a solid **Review certificate of
+  insurance**, which opens the document review **over** the assign window. That
+  modal is drawn after this one, so it stacks on top, and verifying updates the
+  roster this window ranks: verify, close, and the row offers Select. Not
+  uploaded, or sent back, is the contractor's, so it keeps **Request docs**.
+
+  **AND A REFUSAL STAYS IN THE WINDOW.** The window closed on any refusal and
+  the reason went to a toast at the foot of the page behind it, so it arrived
+  where nobody was looking, with the fix two screens away. Now the window stays
+  open with the reason in it and, for an unread document, the same Review
+  button. The toast is kept for the other door (assigning from a contractor's
+  card), which has no window to stay in.
+
+  `test:assignref` drives both list states and both refusals. Three mutations
+  fire: the presence check restored (which reproduces the report, *Docs
+  complete · Select*), the window closing on refusal, and the Review button
+  removed. `test:handycapui` had been red since job cards became lines (it
+  never opened the card) and opens them now.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -2463,6 +2463,13 @@ export default function SubSub() {
   // create path keeps its own presets.
   const [editingJob, setEditingJob] = useState(null);
   const [assigning, setAssigning] = useState(null);       // { job, trade } -> pick contractor
+  // Why the route refused, drawn INSIDE the assign window rather than as a
+  // toast at the foot of the page behind it. The window used to close on a
+  // refusal, so the reason arrived somewhere the person was no longer looking
+  // and the one action that fixes it -- reviewing the document -- was two
+  // screens away. Cleared whenever the window opens on something new.
+  const [assignErr, setAssignErr] = useState(null);
+  useEffect(() => { setAssignErr(null); }, [assigning]);
   const [viewWO, setViewWO] = useState(null);   // { job, trade, a }
   // 061. The contractor offering a different window. { job, trade, a }
   const [proposeWO, setProposeWO] = useState(null);
@@ -3270,6 +3277,26 @@ export default function SubSub() {
         : e === "not_approved"
           ? "No work order was issued. This job is still a request nobody has approved."
         : "Could not issue that work order. It has not been sent — try again.");
+      // From the assign window, the window stays open and says it there, with
+      // Review on the document the route is waiting on.
+      if (assigning) {
+        setBillingNote("");
+        setAssignErr({
+          text: e === "documents_incomplete"
+            ? (unreviewed.length
+                ? `${names(unreviewed)} ${unreviewed.length > 1 ? "are" : "is"} on file and waiting on your review.`
+                  + (absent.length ? ` ${sub.company} has not uploaded ${names(absent)} yet.` : "")
+                : `${sub.company} has not uploaded ${names(absent)} yet — request it from them.`)
+            : e === "documents_lapse_before_job"
+              ? `${sub.company} is not covered for this job's date. ${err.body.detail || ""}`
+            : e === "trade_not_handyman"
+              ? `${sub.company} is on your roster as a handyman. ${ENGAGED_REFUSALS.trade_not_handyman}`
+            : e === "not_approved" ? "This job is still a request nobody has approved."
+            : "It has not been sent — try again.",
+          sub, review: e === "documents_incomplete" ? (unreviewed[0] || null) : null,
+        });
+        return;
+      }
       setAssigning(null);
       setAssignSub(null);
       return;
@@ -7700,6 +7727,11 @@ export default function SubSub() {
           workState={accountProperties.find((p) => p.id === assigning.job.propertyId)?.state || null}
           onPick={(sub, details) => assignContractor(assigning.job.id, assigning.trade, sub, details)}
           onNotify={(sub) => requestDocs(sub, assigning.job, assigning.trade)}
+          /* Opens over this window and lands back on it: the review modal is
+             drawn after this one, so it stacks on top, and the roster it
+             updates is the list this window ranks -- verify, close, Select. */
+          onReviewDoc={(sb, kind) => { setAssignErr(null); setReviewing({ sub: sb, kind }); }}
+          issueError={assignErr}
           onAddSub={() => addContractorForSlot(assigning.job, assigning.trade)}
           onCancel={() => setAssigning(null)} /></Modal>}
       {assignSub && <Modal onClose={() => setAssignSub(null)} wide>
@@ -25266,7 +25298,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
 }
 // ---- Pick a contractor for one trade slot --------------------------------
 function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing, onPick, onNotify, onAddSub, onCancel,
-  workState = null, tradeScopes = {},
+  workState = null, tradeScopes = {}, onReviewDoc = null, issueError = null,
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   // When re-matching after an expiry, the sub who didn't reply drops off the list.
   const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
@@ -25388,7 +25420,18 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
     .filter((s) => s.categories.includes(trade))
     .map((s) => {
       const prox = job.zip ? coversZip(s, job.zip) : null;
-      const docs = s.bond && s.insurance && s.contract;
+      // WHAT THE ASSIGN ROUTE ASKS, not whether three files are present. This
+      // read \`s.bond && s.insurance && s.contract\` -- uploaded, not reviewed --
+      // so a contractor whose certificates were on file and unread drew "Docs
+      // complete" and a Select button, and the route refused the press with
+      // documents_incomplete. A screen looser than its route, on the one press
+      // that sends somebody to a job. \`assignBlockers\` is the browser's copy of
+      // the route's own list (ASSIGN_KINDS, narrowed for a handyman).
+      const blockers = assignBlockers(s);
+      const docs = blockers.length === 0;
+      const toReview = blockers.filter((k) => docStatus(s, k) === "pending");
+      const sentBack = blockers.filter((k) => docStatus(s, k) === "rejected");
+      const notIn = blockers.filter((k) => docStatus(s, k) === "missing");
       const day = dayStatus(s, allJobs || jobs, job.date, job.id, accountId);
       // Bundling bonus: one sub covering several of this job's open trades
       // means one crew, one mobilization and one point of contact, so rank
@@ -25407,7 +25450,7 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       if (day?.kind === "free") score += 25;
       if (day?.kind === "booked") score -= 40;
       if (day?.kind === "off") score -= 60;
-      return { sub: s, prox, docs, day, score, covers, onProperty, dup: alreadyOn.includes(s.id) };
+      return { sub: s, prox, docs, toReview, sentBack, notIn, day, score, covers, onProperty, dup: alreadyOn.includes(s.id) };
     })
     .filter((r) => r.onProperty)
     .sort((a, b) => b.score - a.score), [pool, trade, job, jobs, allJobs, accountId]);
@@ -25428,6 +25471,19 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       <div className="form">
         <h2>Work order details</h2>
         <p className="form-sub">{chosen.company} · {M.label} · {job.title}</p>
+        {issueError && (
+          <div className="assign-refused" role="alert">
+            <AlertTriangle size={16} />
+            <div>
+              <strong>No work order was issued.</strong> {issueError.text}
+              {issueError.review && onReviewDoc && (
+                <div><button className="btn-solid" onClick={() => onReviewDoc(issueError.sub, issueError.review)}>
+                  <ClipboardCheck size={14} /> Review {DOC_LABELS[issueError.review]?.toLowerCase() || "documents"}
+                </button></div>
+              )}
+            </div>
+          </div>
+        )}
         <label className="fld">Response deadline{" "}
         <span className="fld-note">how long they have to accept before the offer expires</span>
         <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
@@ -25627,6 +25683,19 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
         {job.date ? ` · ${formatWhen(job.date, job.time) || job.date}` : " · no date set"}
         {job.zip ? ` · from ${job.zip}` : ""}</p>
       {job.date && <p className="pick-hint">{words.Many} free on this date are ranked first.</p>}
+      {issueError && (
+        <div className="assign-refused" role="alert">
+          <AlertTriangle size={16} />
+          <div>
+            <strong>No work order was issued.</strong> {issueError.text}
+            {issueError.review && onReviewDoc && (
+              <div><button className="btn-solid" onClick={() => onReviewDoc(issueError.sub, issueError.review)}>
+                <ClipboardCheck size={14} /> Review {DOC_LABELS[issueError.review]?.toLowerCase() || "documents"}
+              </button></div>
+            )}
+          </div>
+        </div>
+      )}
       {ranked.length === 0 ? (
         /* This was a dead end: it said nobody covered the trade and offered
            nothing to do about it. Then it grew a way out, but still only
@@ -25662,7 +25731,7 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
         </div>
       ) : (
         <div className="pick-list">
-          {ranked.map(({ sub, prox, docs, day, covers, dup }, i) => (
+          {ranked.map(({ sub, prox, docs, toReview, sentBack, notIn, day, covers, dup }, i) => (
             <div key={sub.id} className="pick-row">
               <div className="rec-rank">{i + 1}</div>
               <div className="rec-main">
@@ -25678,7 +25747,9 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                     <span className={`prox-badge ${prox.inRange ? "in" : "out"}`}><Target size={11} /> {prox.distance} mi{prox.inRange ? "" : " · out"}</span>
                   )}
                   {docs ? <span className="rec-ok"><Shield size={11} /> Docs complete</span>
-                    : <span className="rec-warn"><AlertTriangle size={11} /> {complianceGaps(sub).length} outstanding</span>}
+                    : toReview.length && !notIn.length && !sentBack.length
+                      ? <span className="rec-warn"><ClipboardCheck size={11} /> {toReview.length} to review</span>
+                      : <span className="rec-warn"><AlertTriangle size={11} /> {toReview.length + notIn.length + sentBack.length} outstanding</span>}
                   {covers && covers.length > 1 && (
                     <span className="rec-bundle">
                       <Layers size={11} /> covers {covers.length} trades on this job
@@ -25698,14 +25769,37 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                    looking for Select was left to work out why it was not
                    there. Compliance is the reason and it is not a guessing
                    game: name the papers that are missing. */
+                /* WHICH WAY it is short, and the one press that fixes each.
+                   On file and unread is THIS account's review: the contractor
+                   cannot clear it however often they are chased, so the
+                   action is Review, opened over this window and landing
+                   back on it. Not uploaded, or sent back, is theirs: ask. */
                 <div className="rec-blocked">
-                  <span className="rec-blocked-why">
-                    Can&rsquo;t be assigned until their documents are in:{" "}
-                    {complianceGaps(sub).join(", ")}
-                  </span>
-                  <button className="btn-notify rec-send" onClick={() => onNotify(sub)}>
-                    <Mail size={14} /> Request docs
-                  </button>
+                  {toReview.length > 0 && (
+                    <div className="rec-why rec-why-review">
+                      <span className="rec-blocked-why">
+                        <strong>Waiting on your review:</strong>{" "}
+                        {toReview.map((k) => DOC_LABELS[k]).join(", ")}. They&rsquo;re on file;
+                        approve {toReview.length > 1 ? "them" : "it"} and you can assign.
+                      </span>
+                      {onReviewDoc && (
+                        <button className="btn-solid rec-send rec-review" onClick={() => onReviewDoc(sub, toReview[0])}>
+                          <ClipboardCheck size={14} /> Review {DOC_LABELS[toReview[0]]?.toLowerCase() || "documents"}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {(notIn.length > 0 || sentBack.length > 0) && (
+                    <div className="rec-why">
+                      <span className="rec-blocked-why">
+                        {notIn.length > 0 && <><strong>Not uploaded yet:</strong> {notIn.map((k) => DOC_LABELS[k]).join(", ")}. </>}
+                        {sentBack.length > 0 && <><strong>Sent back to them:</strong> {sentBack.map((k) => DOC_LABELS[k]).join(", ")}. </>}
+                      </span>
+                      <button className="btn-notify rec-send" onClick={() => onNotify(sub)}>
+                        <Mail size={14} /> Request docs
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -41300,6 +41394,25 @@ iframe.dv-frame{display:block}
 /* Why a contractor on the list cannot be picked. */
 .rec-blocked{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:260px}
 .rec-blocked-why{font-size:11.5px;line-height:1.4;color:var(--amber-ink);text-align:right;font-weight:600}
+/* Each reason carries its own action. Waiting on review is this account's
+   own job, so it reads on a pale amber panel with a solid Review beside it;
+   not uploaded is theirs, so it keeps the quieter Request docs. At 13.5px,
+   because the reason is the thing being read here and 11.5px was a footnote. */
+.rec-blocked{max-width:340px}
+.rec-why{display:flex;flex-direction:column;align-items:flex-end;gap:7px}
+.rec-why .rec-blocked-why{font-size:13.5px;font-weight:500;color:var(--ink)}
+.rec-why .rec-blocked-why strong{color:var(--amber-ink);font-weight:700}
+.rec-why-review{padding:10px 12px;border-radius:10px;background:#fdf3e1;border:1px solid #f1d9a8}
+.rec-review{min-height:44px;font-size:14.5px}
+/* The route's refusal, inside the window where the press was made. */
+.assign-refused{display:flex;gap:10px;align-items:flex-start;margin:12px 0 4px;padding:12px 14px;
+  border-radius:10px;background:#faece7;border:1px solid #f0c8bb;font-size:14px;line-height:1.45}
+.assign-refused > svg{flex:none;margin-top:2px;color:#b3412b}
+.assign-refused button{margin-top:9px;min-height:44px}
+@media (max-width:620px){
+  .rec-blocked,.rec-why{max-width:none;align-items:stretch}
+  .rec-why .rec-blocked-why{text-align:left}
+}
 /* and on the manager's job */
 .visit-block{margin-top:14px}
 /* A SENTENCE IS TEXT, NOT A ROW OF FLEX ITEMS.

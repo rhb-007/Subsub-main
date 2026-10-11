@@ -43,6 +43,16 @@ const USERS = () => [{ id: "usr_r", name: "Chris Lane", email: "chris@x.test", p
   role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }];
 
 const verified = { status: "verified", checks: {}, limits: {} };
+// What the roster row says about the documents, per block. "ok" is the
+// fixture the server-refusal blocks need: a row that looks assignable.
+let ROSTER = "ok";
+const reviewFor = () => ROSTER === "ok"
+  ? { insurance: verified, bond: verified, contract: verified, w9: verified }
+  : ROSTER === "toReview"
+    // On file and unread: this account's own job.
+    ? { insurance: { status: "pending" }, bond: verified, contract: verified, w9: verified }
+    // Not uploaded: theirs.
+    : { insurance: verified, contract: verified, w9: verified };
 // THE FIXTURE IS A CONTRACTOR WHO LOOKS ASSIGNABLE FROM HERE. The roster row
 // carries verified documents, because the refusal under test is the SERVER's
 // -- a row the screen already knew was short would never reach the button, and
@@ -55,10 +65,10 @@ const SUBS = () => [{
   licenseCheck: null,
   crews: [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "Joe", role: "Lead" }] }],
   coverage: { mode: "cities", cities: ["Seattle"] }, available: true, unavailableDays: [],
-  warranty: null, insurance: 1, bond: 1, contract: 1, w9: 1,
+  warranty: null, insurance: 1, bond: ROSTER === "notIn" ? 0 : 1, contract: 1, w9: 1,
   docFiles: { insurance: "coi.pdf", bond: "bond.pdf", contract: "a.pdf", w9: "w9.pdf" },
   notify: { email: true, sms: false },
-  docReview: { insurance: verified, bond: verified, contract: verified, w9: verified },
+  docReview: reviewFor(),
   categories: ["painting"], caps: [], rating: 4.5, ratedJobs: 4, accepted: 4, declined: 0,
   notes: "", status: "active", propertyIds: [], hasPortal: false, answersForItself: false,
   autoSchedule: false, engagedAs: "subcontractor",
@@ -150,6 +160,11 @@ const pressIssue = async () => {
       .test(document.querySelector(".job-card, .jobs-list, main")?.innerText || ""),
     body: (document.body.innerText || "").replace(/\s+/g, " "),
     note: (document.querySelector(".billing-note")?.innerText || "").replace(/\s+/g, " ").trim(),
+    // THE REASON IN THE WINDOW. It used to close on a refusal and put the
+    // reason in a toast at the foot of the page behind it.
+    modalOpen: !!document.querySelector(".modal"),
+    refused: (document.querySelector(".modal .assign-refused")?.innerText || "").replace(/\s+/g, " ").trim(),
+    refusedReview: !!document.querySelector(".modal .assign-refused button"),
   }));
   await ctx.close();
   return { opened, picked, pressed, ...seen };
@@ -178,12 +193,17 @@ try {
     // project has now recorded a dozen times.
     t.ck("and the contractor is not named against the trade either",
       r.namedOnJob === false, String(r.namedOnJob));
-    t.ck("the note says plainly that nothing was issued",
-      /No work order was issued/i.test(r.note), r.note);
+    t.ck("the window stays open after the refusal", r.modalOpen === true, String(r.modalOpen));
+    t.ck("and says plainly, inside it, that nothing was issued",
+      /No work order was issued/i.test(r.refused), r.refused);
     t.ck("and names the documents rather than the error code",
-      /certificate of insurance/i.test(r.note) && !/documents_incomplete/.test(r.note), r.note);
+      /certificate of insurance/i.test(r.refused) && !/documents_incomplete/.test(r.refused), r.refused);
     t.ck("and tells this account to ask, because nothing is on file",
-      /has not uploaded/i.test(r.note), r.note);
+      /has not uploaded/i.test(r.refused), r.refused);
+    t.ck("with no Review button, because there is nothing to review",
+      r.refusedReview === false, String(r.refusedReview));
+    t.ck("and no toast at the foot of the page saying it a second time",
+      !/No work order was issued/i.test(r.note), r.note);
   }
 
   console.log("\n-- on file, and waiting on THIS account's review --");
@@ -195,9 +215,66 @@ try {
       absent: [], unreviewed: ["insurance"] }];
     const r = await pressIssue();
     t.ck("still nothing drawn", r.stillOpen === true, String(r.stillOpen));
-    t.ck("and the note sends them to their own review rather than to the contractor",
-      /waiting on your review/i.test(r.note) && !/has not uploaded/i.test(r.note), r.note);
+    t.ck("and the window sends them to their own review rather than to the contractor",
+      /waiting on your review/i.test(r.refused) && !/has not uploaded/i.test(r.refused), r.refused);
+    t.ck("with a Review button right there", r.refusedReview === true, String(r.refusedReview));
   }
+
+  console.log("\n-- the list says it before anybody presses --");
+  for (const mode of ["toReview", "notIn"]) {
+    // THE REPORTED CASE: certificates on file and unread drew "Docs complete"
+    // and a Select button, because the row read three presence flags rather
+    // than what the route asks. The route then refused the press.
+    ROSTER = mode;
+    const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
+      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1340, height: 1500 } });
+    await wait(2600);
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
+    await wait(800);
+    await openCards(page);
+    await page.evaluate(() => document.querySelector(".trade-assign")?.click());
+    await wait(800);
+    const row = await page.evaluate(() => {
+      const r = document.querySelector(".modal .pick-row");
+      if (!r) return null;
+      return {
+        text: (r.innerText || "").replace(/\s+/g, " "),
+        buttons: [...r.querySelectorAll("button")].map((b) => (b.innerText || "").trim()),
+      };
+    });
+    t.ck(`${mode}: the contractor is on the list`, !!row, JSON.stringify(row));
+    t.ck(`${mode}: not called complete`, !!row && !/Docs complete/i.test(row.text), row?.text);
+    t.ck(`${mode}: and offers no Select the route would refuse`,
+      !!row && row.buttons.length > 0 && !row.buttons.some((b) => /^Select/.test(b)), JSON.stringify(row?.buttons));
+    if (mode === "toReview") {
+      t.ck("toReview: says it is waiting on YOUR review, naming the document",
+        /Waiting on your review/i.test(row?.text || "") && /Certificate of insurance/i.test(row?.text || ""), row?.text);
+      t.ck("toReview: the action is Review, not Request docs",
+        (row?.buttons || []).some((b) => /^Review certificate of insurance/i.test(b))
+          && !(row?.buttons || []).some((b) => /Request docs/i.test(b)), JSON.stringify(row?.buttons));
+      // Pressing it opens the review over the assign window, which is still
+      // underneath to come back to.
+      await page.evaluate(() => [...document.querySelectorAll(".modal .pick-row button")]
+        .find((b) => /^Review/i.test((b.innerText || "").trim()))?.click());
+      await wait(700);
+      const after = await page.evaluate(() => {
+        const ms = [...document.querySelectorAll(".modal")];
+        return { count: ms.length, top: (ms[ms.length - 1]?.innerText || "").slice(0, 400).replace(/\s+/g, " ") };
+      });
+      t.ck("toReview: Review opens the document review over the assign window",
+        after.count >= 2 && /insurance/i.test(after.top) && !/Assign painting contractor/i.test(after.top),
+        JSON.stringify(after));
+    } else {
+      t.ck("notIn: says what is not uploaded, and asks them",
+        /Not uploaded yet/i.test(row?.text || "") && /Surety bond/i.test(row?.text || "")
+          && (row?.buttons || []).some((b) => /Request docs/i.test(b)), JSON.stringify(row));
+      t.ck("notIn: and no Review button, because there is nothing on file to review",
+        !(row?.buttons || []).some((b) => /^Review/i.test(b)), JSON.stringify(row?.buttons));
+    }
+    await ctx.close();
+  }
+  ROSTER = "ok";
 
   console.log("\n-- and the press the server took --");
   {
