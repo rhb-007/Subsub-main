@@ -30,8 +30,8 @@ export const isInspectionKind = (k) => Object.prototype.hasOwnProperty.call(INSP
 export const ROOM_STATUSES = {
   unchecked: { label: "Not checked", tone: "plain", flagged: false, done: false },
   ok: { label: "OK", tone: "ok", flagged: false, done: true },
-  follow_up: { label: "Follow-up", tone: "warn", flagged: true, done: true },
-  fail: { label: "Fail", tone: "bad", flagged: true, done: true },
+  follow_up: { label: "Needs work", tone: "warn", flagged: true, done: true },
+  fail: { label: "Damage", tone: "bad", flagged: true, done: true },
 };
 export const ROOM_STATUS_ORDER = ["ok", "follow_up", "fail"];
 export const isRoomStatus = (s) => Object.prototype.hasOwnProperty.call(ROOM_STATUSES, String(s));

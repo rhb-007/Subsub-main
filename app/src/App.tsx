@@ -33973,7 +33973,7 @@ function InspectionWalk({ step, busy, onPoint, onRaise, onFinish, onGoJob, first
     },
     walk: {
       head: `${n} room${n === 1 ? "" : "s"} still to mark`,
-      note: "Mark each one OK, follow-up or fail, and photograph anything wrong. "
+      note: "Mark each one OK, needs work or damage, and photograph anything wrong. "
         + "A room nobody has walked and a room that was fine must not read the same, "
         + "so an unmarked one is what stops this being finished.",
       act: firstTodo
@@ -34632,7 +34632,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         return (
           <div className="insp-nojob">
             <p><Hammer size={14} /> <b>No job to raise yet.</b> A job is raised from the rooms marked
-              {" "}<b>Follow-up</b> or <b>Fail</b>, and none here are.
+              {" "}<b>Needs work</b> or <b>Damage</b>, and none here are.
               {finished && !suspects.length ? " Reopen it to mark the room that needs work." : ""}</p>
             {suspects.slice(0, 3).map((r) => (
               <div key={r.id} className="insp-nojob-room">
@@ -34646,7 +34646,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
                 ) : (
                   <button className="btn-solid small" disabled={!!busy}
                     onClick={() => run(`flag-${r.id}`, () => patchRoom(r.id, { status: "follow_up" }))}>
-                    <AlertTriangle size={13} /> {busy === `flag-${r.id}` ? "Marking…" : `Mark ${r.name} Follow-up`}</button>
+                    <AlertTriangle size={13} /> {busy === `flag-${r.id}` ? "Marking…" : `Mark ${r.name} Needs work`}</button>
                 )}
               </div>
             ))}

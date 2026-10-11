@@ -147,7 +147,7 @@ export const STATUS_WORDS = {
   // Something to come back for, and not a failure. A scuffed wall and a
   // cracked basin need different words and the same next step, which is why
   // both of these are flagged -- `docs.js`'s expired-and-never-added rule.
-  follow_up: ["follow up", "followup", "fair", "minor", "needs attention", "attention",
+  follow_up: ["needs work", "follow up", "followup", "fair", "minor", "needs attention", "attention",
     "monitor", "watch", "worn", "wear", "wear and tear", "marginal", "cosmetic",
     "average", "needs cleaning", "touch up"],
   fail: ["fail", "failed", "poor", "bad", "damaged", "damage", "broken", "unacceptable",

@@ -597,6 +597,17 @@ console.log("\n-- the CHECK.sql invariants, against real rows --");
 // along shipped with its whole webhook address undocumented, found by exactly
 // this check.
 {
+  console.log("\n-- the screen's own words are read back --");
+  // The verdicts are called Needs work and Damage on screen, so an
+  // inspection app configured to send what it sees there must land on them.
+  {
+    const { roomStatusFor } = await import("../shared/inspectingest.js");
+    ck("\"Needs work\" reads as needs work", roomStatusFor("Needs work", [])?.status === "follow_up",
+      JSON.stringify(roomStatusFor("Needs work", [])));
+    ck("\"Damage\" reads as damage", roomStatusFor("Damage", [])?.status === "fail",
+      JSON.stringify(roomStatusFor("Damage", [])));
+  }
+
   console.log("\n-- and the docs say what the route does --");
   const { INSPECT_REQUIRED_FIELDS, INSPECT_OPTIONAL_FIELDS, INSPECT_PRESETS } =
     await import("../shared/inspectingest.js");

@@ -98,17 +98,17 @@ try {
     const s = await read(page);
     t.ck("the inspection opened", s.open, JSON.stringify(s));
     t.ck("there is no Raise a job, because nothing is flagged", s.raise === null, String(s.raise));
-    t.ck("and the screen says why", /No job to raise/.test(s.box || "") && /Follow-up/.test(s.box || ""), String(s.box));
+    t.ck("and the screen says why", /No job to raise/.test(s.box || "") && /Needs work/.test(s.box || ""), String(s.box));
     t.ck("it names the room whose note describes work", s.rows.length === 1 && /Kitchen/.test(s.rows[0]?.text || ""),
       JSON.stringify(s.rows));
     t.ck("and quotes what the note says", /refinished and polished/.test(s.rows[0]?.text || ""));
     t.ck("but not the room whose note only names a thing", !/Hallway/.test(s.box || ""));
-    t.ck("offering to mark it Follow-up", /Mark Kitchen Follow-up/.test(s.rows[0]?.btn || ""), String(s.rows[0]?.btn));
+    t.ck("offering to mark it Needs work", /Mark Kitchen Needs work/.test(s.rows[0]?.btn || ""), String(s.rows[0]?.btn));
 
     await page.evaluate(() => document.querySelector(".insp-nojob-room button")?.click());
     await wait(900);
     const after = await read(page);
-    t.ck("one press sends Follow-up for that room and no other",
+    t.ck("one press marks that room Needs work and no other",
       patches.length === 1 && patches[0].room === "r1" && patches[0].body?.status === "follow_up", JSON.stringify(patches));
     t.ck("and Raise a job appears", /Raise a job/.test(after.raise || ""), String(after.raise));
     t.ck("and the explanation goes", after.box === null, String(after.box));

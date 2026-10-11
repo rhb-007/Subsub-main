@@ -11899,6 +11899,24 @@ refactor.
   fallback dropped, the line's name dropped, and the *Assigned to* label
   dropped.
 
+- **THE TWO FLAGGED VERDICTS ARE "NEEDS WORK" AND "DAMAGE", AND THERE ARE
+  STILL THREE CHOICES.** Asked whether three were needed when Follow-up and Fail
+  both lead to a job. They do lead to the same next step, and that is
+  deliberate: a scuffed wall and a cracked basin need different words in a
+  deposit argument. What was wrong was the words. *Fail* reads as a verdict on
+  the tenant, and *Follow-up* says nothing about why. The owner chose
+  **Needs work** and **Damage**.
+
+  **Labels only. The stored values `follow_up` and `fail` do not move**, so
+  nothing already walked, no invariant and no API caller changes. Every screen,
+  the job scope and the summary source read `ROOM_STATUSES[...].label`, so one
+  edit renames them everywhere a person reads them. Jobs raised before this
+  keep their stamped scope text, which is the stamping rule.
+  The ingest reads `needs work` as a built-in word, so an inspection app set
+  up to send what the screen says lands on the right verdict (`damage` was
+  already there). `test:inspectionui` pins the three button words, and putting
+  the old label back fails three assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

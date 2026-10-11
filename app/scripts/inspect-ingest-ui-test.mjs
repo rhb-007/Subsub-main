@@ -235,7 +235,7 @@ try {
       /Grade C/.test(document.querySelector(".insp-answer")?.innerText || "")));
 
     await page.evaluate(() => [...document.querySelectorAll(".insp-answer-row .chip")]
-      .find((b) => /^Fail$/i.test(b.innerText.trim()))?.click());
+      .find((b) => /^Damage$/i.test(b.innerText.trim()))?.click());
     for (let n = 0; n < 30 && !saved.length; n++) await wait(150);
 
     t.ck("it saves", saved.length === 1, JSON.stringify(saved));
@@ -254,7 +254,7 @@ try {
     t.ck("and it leaves the queue", after.gaps.length === 0, JSON.stringify(after.gaps));
     t.ck("appearing as a word instead", after.rows.some((r) => /Grade C/.test(r)),
       JSON.stringify(after.rows));
-    t.ck("which reads as what it now means", after.rows.some((r) => /reads as Fail/i.test(r)),
+    t.ck("which reads as what it now means", after.rows.some((r) => /reads as Damage/i.test(r)),
       JSON.stringify(after.rows));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
@@ -292,7 +292,7 @@ try {
     });
     await wait(300);
     await page.evaluate(() => [...document.querySelectorAll(".crm-add .insp-answer-row .chip")]
-      .find((b) => /^Follow-up$/i.test(b.innerText.trim()))?.click());
+      .find((b) => /^Needs work$/i.test(b.innerText.trim()))?.click());
     for (let n = 0; n < 30 && !saved.length; n++) await wait(150);
     t.ck("it saves the typed word", saved[0]?.value === "Needs a deep clean", JSON.stringify(saved[0]));
     t.ck("with the answer picked", saved[0]?.status === "follow_up", JSON.stringify(saved[0]));

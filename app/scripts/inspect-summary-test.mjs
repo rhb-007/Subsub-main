@@ -212,8 +212,8 @@ try {
     ck("nor is a room that was fine", !src.includes("Nothing to report"), src);
     ck("nor the tenant's name", !src.includes("Threeby"), src);
     ck("the room names and statuses are, so a reader can match it to the list",
-      src.includes("Shower and bath") && src.includes("Fail")
-      && src.includes("Walls and floors") && src.includes("Follow-up"), src);
+      src.includes("Shower and bath") && src.includes("Damage")
+      && src.includes("Walls and floors") && src.includes("Needs work"), src);
 
     ck("a note and a kept caption each count as a comment",
       countComments(INS_OUT, ROOMS_OUT) === 3, String(countComments(INS_OUT, ROOMS_OUT)));

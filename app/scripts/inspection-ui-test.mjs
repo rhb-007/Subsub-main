@@ -245,6 +245,13 @@ try {
     // anything, which is what a phone in an empty flat needs.
     t.ck("each carries all three verdicts",
       v.rooms.every((r) => r.verdicts.length === 3), JSON.stringify(v.rooms[0]?.verdicts));
+    // NEEDS WORK AND DAMAGE, not Follow-up and Fail. Asked for in those words:
+    // "Fail" reads as a verdict on the tenant and "Follow-up" says nothing about
+    // why. The stored values (follow_up, fail) are unchanged, so nothing
+    // already walked moves.
+    t.ck("the three verdicts read OK, Needs work and Damage",
+      v.rooms.length > 0 && v.rooms.every((r) => r.verdicts.join("|") === "OK|Needs work|Damage"),
+      JSON.stringify(v.rooms[0]?.verdicts));
     // FOLLOW-UP IS YELLOW AND FAIL IS RED, read off the drawn pixels. They
     // were the product's amber and brick, close enough in hue to be reported
     // as the same colour. A pair of probes styled by the real stylesheet: the
@@ -259,14 +266,14 @@ try {
       const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!d) return 0;
       const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
       return (h * 60 + 360) % 360; };
-    t.ck("a selected Follow-up reads yellow (hue 40-60)", hue(tone.follow.bg) >= 40 && hue(tone.follow.bg) <= 60,
+    t.ck("a selected Needs work reads yellow (hue 40-60)", hue(tone.follow.bg) >= 40 && hue(tone.follow.bg) <= 60,
       JSON.stringify({ ...tone, hue: hue(tone.follow.bg) }));
-    t.ck("and a selected Fail reads red (hue under 12)", hue(tone.fail.bg) < 12 || hue(tone.fail.bg) > 348,
+    t.ck("and a selected Damage reads red (hue under 12)", hue(tone.fail.bg) < 12 || hue(tone.fail.bg) > 348,
       JSON.stringify({ ...tone, hue: hue(tone.fail.bg) }));
-    t.ck("and Follow-up carries dark text, because white on yellow cannot be read",
+    t.ck("and Needs work carries dark text, because white on yellow cannot be read",
       (tone.follow.fg.match(/\d+/g) || []).slice(0, 3).every((n) => +n < 90), tone.follow.fg);
     t.ck("and the one that was marked shows which",
-      v.rooms[0].on.join("") === "OK" && v.rooms[1].on.join("") === "Follow-up",
+      v.rooms[0].on.join("") === "OK" && v.rooms[1].on.join("") === "Needs work",
       JSON.stringify(v.rooms.map((r) => r.on)));
     // THE FOURTH STATE IS DRAWN AS NONE OF THE THREE, and the row is plain
     // rather than tinted: not got to yet is a to-do, not a problem.
@@ -698,7 +705,7 @@ try {
     const { ctx, page } = await openOne();
     const v = await read(page);
     t.ck("every room is still shown", v.rooms.length >= 3, String(v.rooms.length));
-    t.ck("with its verdict", v.rooms[1].on.join("") === "Follow-up", JSON.stringify(v.rooms[1].on));
+    t.ck("with its verdict", v.rooms[1].on.join("") === "Needs work", JSON.stringify(v.rooms[1].on));
     // AN INSPECTION IS EVIDENCE MONTHS LATER. A record that can be edited
     // afterwards is one the other side can say was edited afterwards.
     t.ck("but nothing on it can be typed into",
