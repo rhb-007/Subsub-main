@@ -186,7 +186,36 @@ export const FLYER_COPY = {
     referBody: `Cuando un GC que usted invite empiece a pagar SubSub, le pagamos $${SUB_CASH_CENTS / 100}. Condiciones (en ingl\u00e9s) en subsub.work/subs.`,
     more: "M\u00e1s informaci\u00f3n en",
   },
-};
+  // THE WASHINGTON EDITIONS carry the SubSub Verified seal, and only they do.
+  // The badge needs a licence SubSub has checked, and the one register it
+  // reads is Washington L&I -- so on a flyer at an Oregon or California supply
+  // house it would be a badge most readers can never earn. In Washington every
+  // registered contractor can. It is the plain seal, never the decal: the
+  // decal's centre is a QR code, and two codes on one page is somebody
+  // scanning the wrong one. And the line beside it says it is EARNED, because
+  // a seal sitting beside "make your free profile" reads as "sign up and you
+  // are verified". It promises the profile and nothing printed: a decal is not
+  // a programme anybody has committed to.
+  wa: {
+    lang: "en", file: "print/flyer-letter-wa.pdf", url: FLYER_URL + "&utm_content=wa",
+    eyebrow: "For Washington subcontractors",
+    badge: {
+      head: "Earn the SubSub Verified badge",
+      body: "Your L&I registration checks out and your insurance is current. It shows on your SubSub profile.",
+    },
+  },
+  "es-wa": {
+    lang: "es", file: "print/flyer-letter-es-wa.pdf", url: FLYER_URL + "&utm_content=es-wa",
+    eyebrow: "Para subcontratistas de Washington",
+    badge: {
+      head: "Gane la insignia SubSub Verified",
+      body: "Su registro de L&I est\u00e1 en regla y su seguro vigente. Aparece en su perfil de SubSub.",
+    },
+  },
+};// An edition says only what differs from its language's base; everything else
+// is the base's, so a fix to the national copy reaches the Washington one.
+for (const [key, base] of [["wa", "en"], ["es-wa", "es"]]) FLYER_COPY[key] = { ...FLYER_COPY[base], ...FLYER_COPY[key] };
+
 
 export function flyerHtml(c = FLYER_COPY.en) {
   const q = qrPath(c.url);
@@ -206,6 +235,12 @@ body{width:8.5in;height:11in;font-family:Inter;color:${BRAND.ink};background:${B
 .eyebrow{display:inline-block;margin-top:.26in;background:${BRAND.gold};color:#20160A;font:800 12pt Inter;letter-spacing:.08em;text-transform:uppercase;padding:.07in .16in;border-radius:99px}
 h1{font:800 52pt/0.98 Brico;margin:.12in 0 .1in;letter-spacing:-.02em}
 .sub{font:600 15pt/1.38 Inter;color:#D6E3DC;margin:0;max-width:6.6in}
+.badge{position:absolute;right:.6in;top:.34in;width:2.1in;text-align:center;color:#D6E3DC}
+.badge svg{width:1.45in;height:1.45in;display:block;margin:0 auto .1in;border-radius:50%;box-shadow:0 0 0 3px ${BRAND.gold}}
+.badge b{display:block;font:800 13pt/1.15 Brico;color:${BRAND.gold};margin-bottom:.03in}
+.badge span{display:block;font:600 10pt/1.3 Inter}
+.has-badge .eyebrow,.has-badge h1{max-width:4.9in}
+.has-badge .sub{margin-top:.15in}
 .body{padding:.3in .6in 0;display:grid;grid-template-columns:1fr 2.75in;gap:.4in;align-items:start}
 ul{list-style:none;margin:0;padding:0}
 li{display:grid;grid-template-columns:.42in 1fr;gap:.12in;margin:0 0 .14in;font:600 13pt/1.32 Inter}
@@ -223,8 +258,9 @@ li b{display:block;font:800 17pt/1.2 Brico;margin-bottom:.04in}
 .foot{position:absolute;left:.6in;right:.6in;bottom:.4in;display:flex;justify-content:space-between;align-items:center;font:600 11pt Inter;color:#3c4b44;border-top:1px solid #c9d3ce;padding-top:.14in}
 .foot b{color:${BRAND.forest};font:800 13pt Brico}
 </style></head><body>
-<section class="top">
+<section class="top${c.badge ? " has-badge" : ""}">
 <div class="brand">${markSvg(BRAND.gold, 46)}<span>SubSub</span></div>
+${c.badge ? `<div class="badge"><svg viewBox="0 0 600 600" aria-hidden="true">${seal({ mode: "color" })}</svg><b>${c.badge.head}</b><span>${c.badge.body}</span></div>` : ""}
 <span class="eyebrow">${c.eyebrow}</span>
 <h1>${c.h1}</h1>
 <p class="sub">${c.sub}</p>
@@ -278,8 +314,8 @@ export async function build({ quiet = false } = {}) {
     await pdf(wrap(sticker.art, sticker.size), "print/sticker-3in.pdf", sticker.size, sticker.size);
     // The flyer is read with the fonts; the HTML is loaded from disk so the
     // @font-face file URLs resolve.
-    for (const c of Object.values(FLYER_COPY)) {
-      const flyerPath = join(MK, `build/flyer-${c.lang}.html`);
+    for (const [key, c] of Object.entries(FLYER_COPY)) {
+      const flyerPath = join(MK, `build/flyer-${key}.html`);
       writeFileSync(flyerPath, flyerHtml(c));
       const page = await browser.newPage();
       await page.goto(pathToFileURL(flyerPath).href, { waitUntil: "load" });
@@ -291,9 +327,17 @@ export async function build({ quiet = false } = {}) {
       const fit = await page.evaluate(() => {
         const row = document.querySelector(".row").getBoundingClientRect();
         const foot = document.querySelector(".foot").getBoundingClientRect();
-        return document.body.scrollHeight <= document.body.clientHeight + 1 && row.bottom + 8 <= foot.top;
+        // The seal sits beside the headline rather than in the flow, so nothing
+        // pushes it aside: it has to clear the eyebrow, the headline and the
+        // intro by measurement, or it is printed over the words.
+        const badge = document.querySelector(".badge")?.getBoundingClientRect();
+        const clear = !badge || [".eyebrow", "h1", ".sub"].every((sel) => {
+          const r = document.querySelector(sel).getBoundingClientRect();
+          return r.right + 8 <= badge.left || r.top >= badge.bottom + 6 || r.bottom <= badge.top;
+        });
+        return clear && document.body.scrollHeight <= document.body.clientHeight + 1 && row.bottom + 8 <= foot.top;
       });
-      if (!fit) throw new Error(`the ${c.lang} flyer runs past one letter page, or into its own footer`);
+      if (!fit) throw new Error(`the ${key} flyer runs past one letter page, or into its own footer`);
       await page.pdf({ path: join(MK, c.file), width: "8.5in", height: "11in", printBackground: true, pageRanges: "1" });
       await page.close();
     }

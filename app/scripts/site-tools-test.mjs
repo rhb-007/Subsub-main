@@ -134,6 +134,24 @@ console.log("\n-- the referral money, on the flyer and on /subs --");
     && Object.keys(en).every((k) => k in es && es[k] !== ""));
   t.ck("with no English left in it", ![es.eyebrow, es.sub, es.scan, es.freeHead, es.freeBody, es.more, ...es.points.flat()]
     .some((x) => /\b(the|your|and|free|every)\b/i.test(x)));
+  // The SubSub Verified seal goes on the Washington editions and nowhere
+  // else: it needs a licence SubSub has checked, and the one register read is
+  // Washington L&I, so on a national flyer it is a badge most readers can
+  // never earn. It is the plain seal, never the decal, because the decal's
+  // centre is a QR code and two codes on one page is somebody scanning the
+  // wrong one. And it says EARN, or it reads as "sign up and be verified".
+  const editions = Object.entries(FLYER_COPY);
+  const withSeal = editions.filter(([, c]) => /class="badge"/.test(flyerHtml(c))).map(([k]) => k).sort();
+  t.ck("only the Washington editions carry the seal", withSeal.join(",") === "es-wa,wa", withSeal.join(","));
+  t.ck("and each of them names Washington on its eyebrow", ["wa", "es-wa"].every((k) => /Washington/.test(FLYER_COPY[k].eyebrow)));
+  t.ck("and says the badge is earned, against L&I", /^Earn /.test(FLYER_COPY.wa.badge.head) && /^Gane /.test(FLYER_COPY["es-wa"].badge.head)
+    && /L&I/.test(FLYER_COPY.wa.badge.body) && /L&I/.test(FLYER_COPY["es-wa"].badge.body));
+  t.ck("every edition has one QR code, so the seal is not the decal", editions.every(([, c]) => (flyerHtml(c).match(/crispEdges/g) || []).length === 1));
+  t.ck("every edition is its own file and its own scan",
+    new Set(editions.map(([, c]) => c.file)).size === editions.length && new Set(editions.map(([, c]) => c.url)).size === editions.length);
+  t.ck("the Washington editions keep the referral line and the free line of their base",
+    FLYER_COPY.wa.referBody === FLYER_COPY.en.referBody && FLYER_COPY["es-wa"].referBody === FLYER_COPY.es.referBody
+    && FLYER_COPY["es-wa"].freeHead === FLYER_COPY.es.freeHead);
   const subs = read("subs.html");
   const terms = (subs.match(/<section class="tl-card" id="refer">[\s\S]*?<\/section>/) || [""])[0];
   t.ck("/subs carries the terms the flyer points at (run npm run tools)", !!terms);

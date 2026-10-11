@@ -11717,6 +11717,28 @@ refactor.
   Spanish in the signup form, are the next step if the Spanish scans justify
   them.
 
+  **AND THE SEAL GOES ON THE WASHINGTON EDITIONS ONLY.** Asked whether the
+  flyer should show the SubSub Verified decal. A national flyer cannot: the
+  badge needs a licence SubSub has checked, and Washington L&I is the one
+  register it reads, so an Oregon or California roofer reading a flyer at their
+  supply house is shown a badge they can never earn. So there are two more
+  editions, `wa` and `es-wa`, in English and Spanish. Each carries only what
+  differs from its language's base (the eyebrow and the badge), so a fix to the
+  national copy reaches them.
+
+  - **The seal, never the decal.** The decal's centre is a QR code, and two
+    codes on one page means somebody scans the wrong one. The test counts one
+    code per edition.
+  - **It says EARN, and against what.** *Earn the SubSub Verified badge: your
+    L&I registration checks out and your insurance is current.* A seal beside
+    "make your free profile" otherwise reads as "sign up and you are verified".
+    It promises the profile and nothing printed, because a decal is not a
+    programme anybody has committed to.
+  - **The seal sits beside the headline, out of the flow, so the build
+    measures that it clears the eyebrow, the headline and the intro.** The
+    first build caught the intro starting one pixel under the caption, and the
+    fix for that was eaten by margin collapse once before it held.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
