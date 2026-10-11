@@ -145,6 +145,22 @@ const fundMoney = (db, cents) => db.exec(`
     VALUES ('f_1','wo_1','acc_pm',${cents},'funded','2026-10-02');`);
 
 try {
+  console.log("\n-- the jobs list names who each trade is assigned to --");
+  // Reported as "very difficult to understand who this particular job was
+  // assigned to": the trade row drew a crew, a price and a WO number, and the
+  // company's name only ever arrived through the optimistic patch -- the
+  // server's assignment shape never carried it, so after a reload it was gone.
+  {
+    const { env } = seed();
+    const [s, b] = await json(await get(env, "/api/jobs"));
+    const job = Array.isArray(b) ? b.find((j) => j.id === "job_1") : null;
+    ck("the jobs list answers", s === 200 && !!job, String(s));
+    ck("each assignment carries the company's name",
+      job?.assignments?.plumbing?.company === "Pacific apartment maintenance"
+        && job?.assignments?.roofing?.company === "Pacific apartment maintenance",
+      JSON.stringify(job?.assignments));
+  }
+
   console.log("\n-- the rule, before any route --");
   {
     ck("the three a person chooses from", CHOOSABLE_ENDINGS.join() === "cancelled,deferred,no_work",

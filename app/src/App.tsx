@@ -6857,6 +6857,17 @@ export default function SubSub() {
                           <span className="jl-meta">
                             <span className="jl-when"><Calendar size={11} /> {formatWhen(j.date, j.time) || j.date || "No date"}</span>
                             <span className="jl-where"><MapPin size={11} /> {[j.address, j.area].filter(Boolean).join(", ") || "No address"}</span>
+                            {/* Who has it, on the line too, so the list answers
+                                that without opening forty cards. One name, or
+                                the first and how many more. */}
+                            {(() => {
+                              const names = [...new Set(slots.filter(Boolean)
+                                .map((a) => a.company || subs.find((s) => s.id === a.subId)?.company)
+                                .filter(Boolean))];
+                              return names.length > 0 && (
+                                <span className="jl-who"><Users size={11} /> {names[0]}{names.length > 1 ? ` + ${names.length - 1} more` : ""}</span>
+                              );
+                            })()}
                           </span>
                         </span>
                         <span className="jl-side">
@@ -7033,8 +7044,22 @@ export default function SubSub() {
                             <div className="trade-main">
                               <span className="trade-name">{M.label}</span>
                               {a ? (
+                                <>
+                                {/* WHO IS ON IT, AS ITS OWN LINE. The name sat
+                                    inline among the crew, the price and the
+                                    work order number at 12.5px -- and the
+                                    server never sent it at all, so after a
+                                    reload the row named a crew and a WO and
+                                    nobody. It reads "Assigned to <company>"
+                                    with the relationship beside it, because
+                                    that is the question somebody opens a job
+                                    to answer. */}
+                                <div className="ta-who">
+                                  <span className="ta-who-lbl">Assigned to</span>{" "}
+                                  <span className="ta-company">{a.company || sub?.company || "a company no longer on your roster"}</span>
+                                  {sub && <span className="ta-rel">{engagedSeatLabel(sub.engagedAs, rosterWords(account).One)}</span>}
+                                </div>
                                 <div className="trade-assigned">
-                                  <span className="ta-company">{a.company}</span>
                                   {sub && sub.crews?.length > 1 ? (
                                     <select className="ta-crew" value={a.crewName || ""}
                                       onChange={(e) => setTradeCrew(j.id, t, e.target.value)}>
@@ -7054,6 +7079,7 @@ export default function SubSub() {
                                   </button>
                                   {a.signedWO && <span className="ta-signed"><CheckCircle2 size={11} /> signed</span>}
                                 </div>
+                                </>
                               ) : j.inherited ? (
                                 // On inherited work there IS no assignments
                                 // object, by design -- so "no contractor, no
@@ -38416,7 +38442,11 @@ p.fld-note{margin:6px 0 0}
 .trade-name{display:block;font-size:13.5px;font-weight:700}
 .trade-open-note{font-size:12px;color:var(--ink-soft)}
 .trade-assigned{display:flex;flex-wrap:wrap;align-items:center;gap:9px;margin-top:3px}
-.ta-company{font-size:12.5px;font-weight:600;color:var(--brand)}
+.ta-who{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 6px;margin-top:3px;font-size:13.5px}
+.ta-who-lbl{color:var(--ink-soft);font-size:12.5px}
+.ta-company{font-size:14px;font-weight:700;color:var(--ink)}
+.ta-rel{font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:#e8f1ec;color:#1f6b4a}
+.jl-who{color:var(--ink);font-weight:600}
 .ta-crew{font-size:11.5px;border:1px solid var(--line);border-radius:6px;padding:2px 6px;background:var(--card);color:var(--ink-soft);font-family:inherit}
 .ta-crew-flat{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--ink-soft)}
 .ta-wo{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;color:var(--ink-soft)}

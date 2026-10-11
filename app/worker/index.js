@@ -8803,7 +8803,14 @@ app.get("/api/jobs", async (c) => {
   const woByJob = {};
   if (jobIds.length) {
     const { results: wos } = await c.env.DB.prepare(
-      `SELECT wo.* FROM work_orders wo
+      // The company's NAME rides along. It never did: the browser drew it off
+      // a field only the optimistic patch after Assign ever set, so after a
+      // reload every trade row named a crew, a price and a work order number
+      // and not who holds it. One join on a row this account already sees by
+      // id; the other trades' companies are stripped below for a contractor
+      // seat exactly as their ids are.
+      `SELECT wo.*, c.company AS company_name FROM work_orders wo
+         LEFT JOIN companies c ON c.id = wo.company_id
         WHERE wo.voided_at IS NULL AND wo.job_id IN (${jobIds.map(() => "?").join(",")})`
     ).bind(...jobIds).all();
     for (const w of wos) (woByJob[w.job_id] ||= []).push(w);
@@ -8988,7 +8995,7 @@ function jobRowToJs(j, workOrders) {
   const assignments = {};
   for (const w of workOrders) {
     assignments[w.trade] = {
-      id: w.id, subId: w.company_id, wo: w.wo_number, woIssued: w.issued_at?.slice(0, 10),
+      id: w.id, subId: w.company_id, company: w.company_name || null, wo: w.wo_number, woIssued: w.issued_at?.slice(0, 10),
       crewName: w.crew_name, tradeScope: w.trade_scope, value: w.value_cents != null ? String(w.value_cents / 100) : "",
       // How it is priced. value stays the ceiling either way, so anything
       // that only cares what this might cost need not know the difference.
@@ -9324,7 +9331,8 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
 
   const saved = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
   const wos = saved ? (await c.env.DB.prepare(
-    `SELECT * FROM work_orders WHERE job_id = ? AND voided_at IS NULL`).bind(id).all()).results : [];
+    `SELECT wo.*, c.company AS company_name FROM work_orders wo LEFT JOIN companies c ON c.id = wo.company_id
+      WHERE wo.job_id = ? AND wo.voided_at IS NULL`).bind(id).all()).results : [];
   return c.json({ id, requested: !!requestedBy, severity,
     emergency, job: saved ? jobRowToJs(saved, wos) : null }, 201);
 });

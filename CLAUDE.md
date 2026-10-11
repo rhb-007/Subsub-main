@@ -11872,6 +11872,33 @@ refactor.
   walk in the same place; drawing the chip on every row fails the finished
   branch.
 
+- **THE JOB NEVER SAID WHO IT WAS ASSIGNED TO, BECAUSE THE SERVER NEVER SENT
+  THE NAME.** Reported with a job open, three trade rows each showing a crew, a
+  price and a WO number: *"make it more obvious who the job has been assigned
+  to ... this is very difficult to understand who this particular job was
+  assigned to"*. The row did have a slot for the company, inline at 12.5px
+  among the work-order details. But `jobRowToJs` built `assignments` from the
+  work-order rows and never set `company`. Only the browser's optimistic patch
+  after Assign did, so the name was there for the minute after the press and
+  blank after every reload.
+
+  **The server joins `companies` and carries the name** on `/api/jobs` and on
+  the job the create route returns. **The row reads "Assigned to <company>" on
+  its own line**, bold at 14px, with the relationship beside it (*Handyman*,
+  or the account's roster word) from the same `engagedSeatLabel` the drawer
+  uses. The crew, price and WO stay on the line below. A row the server sent
+  with no name **falls back to the roster** rather than naming nobody, and one
+  for a company no longer on the roster says so rather than drawing a blank.
+  **The minimized job line names them too**: the first company, plus how many
+  more. That way a list of forty answers *who has it* without opening forty
+  cards, and a job nobody is on names nobody.
+
+  `test:jobwho` drives the line and the row with one assignment carrying the
+  name and one without it. `test:jobend` pins the server shape. Four mutations
+  fire, each on its own assertion: the server field dropped, the roster
+  fallback dropped, the line's name dropped, and the *Assigned to* label
+  dropped.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
