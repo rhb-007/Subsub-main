@@ -35326,7 +35326,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
           onClear={() => { setIq(""); setIKind(""); setIShow(""); setIProp(""); }}
           filters={[
             { id: "show", label: "Inspections", all: "Every inspection", icon: Filter, value: iShow, onChange: setIShow,
-              options: [["draft", "Still being walked"], ["finished", "Finished"], ["flagged", "With flagged rooms"],
+              options: [["draft", "Drafts"], ["finished", "Finished"], ["flagged", "With flagged rooms"],
                 ...(canEdit ? [["nojob", "Flagged, no job raised"]] : [])] },
             { id: "kind", label: "Kinds", all: "Move-in and move-out", icon: ClipboardCheck, value: iKind, onChange: setIKind,
               options: Object.entries(INSPECTION_KINDS).map(([k, v]) => [k, v.label]) },
@@ -35359,6 +35359,14 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
               </div>
               {/* The two numbers worth seeing from a list: what still needs
                   walking, and what needs work. */}
+              {/* DRAFT, SAID ON THE ROW. Every room, verdict, note and photo
+                  is saved the moment it is made, so walking away mid-unit
+                  loses nothing -- but the list did not say the walk was
+                  unfinished, so a half-done inspection read like a finished
+                  one with a flag on it. The detail screen has always said
+                  Draft; this is the same word one screen up. First, because
+                  it is what the record IS before what is in it. */}
+              {i.status !== "finished" && <span className="tn-chip draft">Draft</span>}
               {i.unchecked > 0 && <span className="tn-chip wait">{i.unchecked} to mark</span>}
               {i.flagged > 0 && <span className="tn-chip sos">{i.flagged} flagged</span>}
               {i.status === "finished" && i.flagged === 0 && <span className="tn-chip ok">All clear</span>}
@@ -39266,6 +39274,9 @@ p.fld-note{margin:6px 0 0}
 }
 .tn-row-meta{display:block;margin-top:3px;font-size:12px;color:var(--ink-soft)}
 .tn-chip{flex:none;font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:20px;white-space:nowrap}
+/* An unfinished inspection: a to-do, not a problem, so dashed and plain
+   rather than tinted -- the never-added document dot's hollow, as a chip. */
+.tn-chip.draft{background:var(--card);color:var(--ink-soft);border:1.5px dashed #b9bfb6}
 .tn-chip.wait{background:#fbf0dd;color:#8a5a12}
 .tn-chip.busy{background:#e8eff8;color:#2b4d7a}
 .tn-chip.ok{background:#e6f2ec;color:#1d5740}

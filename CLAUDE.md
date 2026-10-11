@@ -11859,6 +11859,19 @@ refactor.
   the drawn hue of each; putting Follow-up back on `--amber` fails two
   assertions.
 
+- **AN UNFINISHED INSPECTION SAYS DRAFT ON THE LIST.** Asked for as *"if I'm in
+  the middle of doing an inspection and sidetracked and leave the page,
+  automatically say that inspection is a Draft."* Nothing was ever lost: every
+  room, verdict, note and photo is written the moment it is made, and the walk
+  stays `draft` until Finish. What was missing is the word. The detail screen
+  always said Draft, while the list row said only *1 flagged*, which reads like a
+  finished walk with a fault in it. The row now leads with a dashed, plain
+  **Draft** chip (a to-do, not a problem, so it is hollow like the never-added
+  document dot), and the list filter's *Still being walked* is now **Drafts**, so
+  the two say the same word. `test:inspectionui` drives a draft and a finished
+  walk in the same place; drawing the chip on every row fails the finished
+  branch.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

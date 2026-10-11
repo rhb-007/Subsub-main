@@ -200,6 +200,29 @@ try {
     await ctx.close().catch(() => {});
   }
 
+  console.log("\n-- an unfinished walk says Draft on the list --");
+  for (const st of ["draft", "finished"]) {
+    // Both branches in one place: a chip drawn on every row passes the draft
+    // half and says nothing.
+    const was = DETAIL.status;
+    DETAIL.status = st;
+    const { ctx, page } = await open();
+    await go(page, "^inspections");
+    await wait(900);
+    const row = await page.evaluate(() => {
+      const r = document.querySelector(".insp-row");
+      return r ? { chips: [...r.querySelectorAll(".tn-chip")].map((c) => (c.innerText || "").trim()) } : null;
+    });
+    t.ck(`${st}: the inspection is on the list`, !!row, JSON.stringify(row));
+    if (st === "draft") {
+      t.ck("draft: the row says Draft, first", row?.chips?.[0] === "Draft", JSON.stringify(row?.chips));
+    } else {
+      t.ck("finished: and a finished one does not", !(row?.chips || []).includes("Draft"), JSON.stringify(row?.chips));
+    }
+    await ctx.close().catch(() => {});
+    DETAIL.status = was;
+  }
+
   console.log("\n-- and not for one that has no units to walk --");
   {
     // A general contractor works job to job and has no building list, so
