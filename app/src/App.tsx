@@ -39470,8 +39470,13 @@ p.fld-note{margin:6px 0 0}
 .insp-room{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--line);
   border-radius:12px;padding:13px 14px;display:flex;flex-direction:column;gap:9px}
 .insp-room.st-ok{border-left-color:var(--brand)}
-.insp-room.st-follow_up{border-left-color:var(--amber)}
-.insp-room.st-fail{border-left-color:var(--red)}
+/* FOLLOW-UP IS YELLOW AND FAIL IS RED, and not the product's amber and brick.
+   Those two sit close enough in hue (#c8871e, #b5442e) that a selected
+   Follow-up and a selected Fail were reported as the same colour, which they
+   very nearly were. A yellow carries dark text, because white on yellow is
+   unreadable in daylight. */
+.insp-room.st-follow_up{border-left-color:#eab308}
+.insp-room.st-fail{border-left-color:#c62f2a}
 .insp-room-head{display:flex;align-items:center;gap:8px}
 .insp-name{flex:1;min-width:0;font:700 15px Inter,sans-serif;color:var(--ink);
   background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:9px 11px}
@@ -39488,8 +39493,8 @@ strong.insp-name{background:none;border:0;padding:0}
   border-radius:10px;font:700 13px Inter,sans-serif;color:var(--ink-soft);cursor:pointer}
 .insp-v:disabled{opacity:.6;cursor:default}
 .insp-v.on.v-ok{background:var(--brand);border-color:var(--brand);color:#fff}
-.insp-v.on.v-follow_up{background:var(--amber);border-color:var(--amber);color:#fff}
-.insp-v.on.v-fail{background:var(--red);border-color:var(--red);color:#fff}
+.insp-v.on.v-follow_up{background:#f5c518;border-color:#e0ad00;color:#3a2a00}
+.insp-v.on.v-fail{background:#c62f2a;border-color:#c62f2a;color:#fff}
 .insp-note{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
   font:inherit;font-size:13.5px;background:var(--paper);color:var(--ink);resize:vertical}
 .insp-note-ro{margin:0;font-size:13.5px;color:var(--ink)}
@@ -39589,8 +39594,8 @@ strong.insp-name{background:none;border:0;padding:0}
   font-size:13px;color:var(--ink)}
 .insp-flagged li{display:flex;align-items:baseline;gap:8px}
 .insp-dot{flex:none;width:9px;height:9px;border-radius:50%;background:var(--line)}
-.insp-dot.d-follow_up{background:var(--amber)}
-.insp-dot.d-fail{background:var(--red)}
+.insp-dot.d-follow_up{background:#eab308}
+.insp-dot.d-fail{background:#c62f2a}
 /* Sending the finished report to the building's owner. A short list of
    names with a tick each, on the quiet surface the header fields use: this is
    the last thing on a long screen and it is one press, not a form.

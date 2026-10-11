@@ -11848,6 +11848,17 @@ refactor.
   removed. `test:handycapui` had been red since job cards became lines (it
   never opened the card) and opens them now.
 
+- **FOLLOW-UP IS YELLOW AND FAIL IS RED.** Reported with a room marked Fail
+  beside its Follow-up button: *"follow up and fail have the exact same color."*
+  They were the product's `--amber` (#c8871e) and `--red` (#b5442e), which sit
+  about 35 degrees of hue apart and both read as rust on an iPad in daylight. The
+  verdict buttons, the room's left edge and the flagged-room dot now use a true
+  yellow (#f5c518, with dark text, because white on yellow cannot be read) and a
+  clear red (#c62f2a). Local to the inspection screen, not the tokens, which
+  every other amber and red in the product reads. `test:inspectionui` measures
+  the drawn hue of each; putting Follow-up back on `--amber` fails two
+  assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

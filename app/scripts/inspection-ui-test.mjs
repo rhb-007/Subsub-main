@@ -222,6 +222,26 @@ try {
     // anything, which is what a phone in an empty flat needs.
     t.ck("each carries all three verdicts",
       v.rooms.every((r) => r.verdicts.length === 3), JSON.stringify(v.rooms[0]?.verdicts));
+    // FOLLOW-UP IS YELLOW AND FAIL IS RED, read off the drawn pixels. They
+    // were the product's amber and brick, close enough in hue to be reported
+    // as the same colour. A pair of probes styled by the real stylesheet: the
+    // hue gap has to be wide and Follow-up has to read yellow, not orange.
+    const tone = await page.evaluate(() => {
+      const mk = (c) => { const b = document.createElement("button"); b.className = `insp-v on ${c}`;
+        document.querySelector(".insp-detail").appendChild(b); const st = getComputedStyle(b);
+        const out = { bg: st.backgroundColor, fg: st.color }; b.remove(); return out; };
+      return { follow: mk("v-follow_up"), fail: mk("v-fail") };
+    });
+    const hue = (rgb) => { const [r, g, b] = (rgb.match(/\d+/g) || []).slice(0, 3).map((n) => +n / 255);
+      const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn; if (!d) return 0;
+      const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+      return (h * 60 + 360) % 360; };
+    t.ck("a selected Follow-up reads yellow (hue 40-60)", hue(tone.follow.bg) >= 40 && hue(tone.follow.bg) <= 60,
+      JSON.stringify({ ...tone, hue: hue(tone.follow.bg) }));
+    t.ck("and a selected Fail reads red (hue under 12)", hue(tone.fail.bg) < 12 || hue(tone.fail.bg) > 348,
+      JSON.stringify({ ...tone, hue: hue(tone.fail.bg) }));
+    t.ck("and Follow-up carries dark text, because white on yellow cannot be read",
+      (tone.follow.fg.match(/\d+/g) || []).slice(0, 3).every((n) => +n < 90), tone.follow.fg);
     t.ck("and the one that was marked shows which",
       v.rooms[0].on.join("") === "OK" && v.rooms[1].on.join("") === "Follow-up",
       JSON.stringify(v.rooms.map((r) => r.on)));
