@@ -105,7 +105,12 @@ console.log("\n-- the referral snippet is one thing --");
   const auds = (read("index.html").match(/<div class="auds">([\s\S]*?)<\/div>\s*<\/div>\s*<\/section>/) || [])[1] || "";
   const handyCard = (auds.match(/<a class="aud" href="([^"]+)">\s*<h3>Handymen and maintenance<\/h3>/) || [])[1];
   t.ck("the index has a card for handymen, so the grid has no empty cell", !!handyCard && (auds.match(/class="aud"/g) || []).length % 2 === 0, String(handyCard));
-  t.ck("and it goes to a page that exists", !!handyCard && existsSync(join(root, handyCard, "index.html")), String(handyCard));
+  t.ck("and it goes to the handyman page, which exists", handyCard === "for-handymen.html" && existsSync(join(root, handyCard)), String(handyCard));
+  const hp = read("for-handymen.html");
+  t.ck("the handyman page signs up through the subcontractor-or-handyman card", /href="get-started\.html\?as=subcontractor"/.test(hp));
+  t.ck("and links the state limits", /href="handyman-limits\/"/.test(hp));
+  t.ck("and is its own page, not a copy wearing the subcontractor's canonical",
+    hp.includes('<link rel="canonical" href="https://subsub.work/for-handymen.html">') && !/for-subcontractors\.html"\s*>|"name":"For subcontractors"/.test(hp.slice(0, hp.indexOf("<main>"))));
   t.ck("the signup form sends the cookie and the typed code", /referral: ssReadRef\(\)/.test(gs) && /refCode:/.test(gs) && /id="refCode"/.test(gs));
 }
 

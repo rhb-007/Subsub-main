@@ -49,7 +49,7 @@ const FOOTER_PAGES = readdirSync(root)
 // relevant copy is how a reader does.
 const AUDIENCE = ["for-general-contractors.html", "for-property-managers.html",
   "for-building-owners.html", "for-portfolio-managers.html",
-  "for-subcontractors.html"];
+  "for-subcontractors.html", "for-handymen.html"];
 
 const footerOf = (html) => {
   const a = html.indexOf('<footer class="site">');

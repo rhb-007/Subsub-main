@@ -11582,11 +11582,22 @@ refactor.
   WORKER READS "SUBCONTRACTORS" AS NOT THEM.** Reported as the empty sixth cell
   beside Subcontractors. Handyman is still not an account kind; the card is the
   same door the signup card's *Subcontractor or handyman* wording is, one page
-  earlier. It links `/handyman-limits/`, the only handyman page there is, and
-  claims only what the engagement does: a property manager or owner can take
-  them on as a handyman, so no contractor's bond is asked for, and the W-9 still
-  is. `test:sitetools` pins the card, an even card count, and that its link
-  resolves; removing the card fails both.
+  earlier. It claims only what the engagement does: a property manager or owner
+  can take them on as a handyman, so no contractor's bond is asked for, and the
+  W-9 still is. `test:sitetools` pins the card, an even card count, and that it
+  goes to `for-handymen.html`.
+
+  **`for-handymen.html` is the sixth audience page**, built on the subcontractor
+  page's layout and in every footer's *Who it's for* column (the generated
+  pages too, through `npm run licensing`, `compare` and `tools`). It signs up
+  through `get-started.html?as=subcontractor`, because there is no handyman kind
+  to sign up as. Its claims are the ones the code makes: the thirteen
+  `HANDYMAN_TRADES`, insurance and bond excused and the W-9 kept, hours logged
+  by the day, the access panel, and the limit warning on the hiring side, which
+  warns and never blocks. Its *where the line is* section names no state's
+  figure, because a third of the dataset carries `verify: true`; it sends the
+  reader to `/handyman-limits/` instead. It is in `test:discover`'s `AUDIENCE`
+  list, so it must link `licensing/` from its body.
 
 - **THE LAUNCH ASSETS LIVE IN `/marketing`, AND THE DECAL CARRIES A QR CODE
   BECAUSE A PRINTED BADGE CANNOT EXPIRE.** "SubSub Verified" on a screen is
