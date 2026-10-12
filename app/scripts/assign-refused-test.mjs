@@ -45,6 +45,8 @@ const USERS = () => [{ id: "usr_r", name: "Chris Lane", email: "chris@x.test", p
 const verified = { status: "verified", checks: {}, limits: {} };
 // What the roster row says about the documents, per block. "ok" is the
 // fixture the server-refusal blocks need: a row that looks assignable.
+// Whether the contractor has granted auto-schedule.
+let AUTO = false;
 let ROSTER = "ok";
 const reviewFor = () => ROSTER === "ok"
   ? { insurance: verified, bond: verified, contract: verified, w9: verified }
@@ -71,7 +73,7 @@ const SUBS = () => [{
   docReview: reviewFor(),
   categories: ["painting"], caps: [], rating: 4.5, ratedJobs: 4, accepted: 4, declined: 0,
   notes: "", status: "active", propertyIds: [], hasPortal: false, answersForItself: false,
-  autoSchedule: false, engagedAs: "subcontractor",
+  autoSchedule: AUTO, engagedAs: "subcontractor",
   docs: { insurance: { fileName: "coi.pdf", expiresOn: "2030-01-01" },
     bond: { fileName: "bond.pdf", expiresOn: "2030-01-01" },
     contract: { fileName: "a.pdf", expiresOn: null }, w9: { fileName: "w9.pdf", expiresOn: null } },
@@ -140,6 +142,13 @@ const pressIssue = async () => {
   await wait(700);
   await typeMoney(page, "1800");
   await wait(250);
+  // THE DEADLINE CONTROL, read before the press. Auto-schedule means the work
+  // order goes out accepted, so there is nothing to set a deadline on.
+  const form = await page.evaluate(() => ({
+    deadline: [...document.querySelectorAll(".modal label")]
+      .some((l) => /Response deadline/i.test(l.innerText || "") && l.querySelector("select")),
+    autoNote: (document.querySelector(".modal .wo-auto-note")?.innerText || "").replace(/\s+/g, " ").trim(),
+  }));
   const pressed = await page.evaluate(() => {
     const b = [...document.querySelectorAll(".modal .form-actions button")]
       .find((x) => /^Issue/i.test((x.innerText || "").trim()));
@@ -167,7 +176,7 @@ const pressIssue = async () => {
     refusedReview: !!document.querySelector(".modal .assign-refused button"),
   }));
   await ctx.close();
-  return { opened, picked, pressed, ...seen };
+  return { opened, picked, pressed, ...form, ...seen };
 };
 
 try {
@@ -289,6 +298,23 @@ try {
       /Work order sent to Pacific apartment maintenance/i.test(r.note), r.note);
     t.ck("and nothing says it was not issued",
       !/No work order was issued/i.test(r.note), r.note);
+    t.ck("a contractor without auto-schedule gets the response deadline", r.deadline === true, String(r.deadline));
+    t.ck("and no auto-schedule note", r.autoNote === "", r.autoNote);
+  }
+
+  console.log("\n-- a contractor who has granted auto-schedule --");
+  {
+    // BOTH BRANCHES IN THE SAME PLACE: the deadline is withheld only where it
+    // means nothing, and asserted present just above.
+    AUTO = true;
+    REPLY = [201, { id: "wo_2", woNumber: "WO-2", status: "accepted",
+      notified: { emailed: true, to: "juan@pacific.test" } }];
+    const r = await pressIssue();
+    t.ck("auto-schedule: no response deadline drop-down", r.deadline === false, String(r.deadline));
+    t.ck("auto-schedule: one line says why, naming the contractor",
+      /Auto-schedule is on/i.test(r.autoNote) && /Pacific apartment maintenance/.test(r.autoNote), r.autoNote);
+    t.ck("auto-schedule: Issue still works", r.pressed === true && CALLS === 1, `${r.pressed} ${CALLS}`);
+    AUTO = false;
   }
 } finally {
   await browser.close(); web.close(); api.close();

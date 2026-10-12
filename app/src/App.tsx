@@ -35,7 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, ChartGantt,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -26008,21 +26008,30 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
             </div>
           </div>
         )}
-        <label className="fld">Response deadline{" "}
-        <span className="fld-note">how long they have to accept before the offer expires</span>
-        <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
-          {RESPONSE_WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
-        </select>
-      </label>
-      {chosen && chosen.autoSchedule ? (
-        <p className="cov-hint">{chosen.company} has auto-schedule on — the job books straight
-          onto their calendar, so no deadline applies.</p>
-      ) : (
-        <p className="cov-hint">Expires {new Date(Date.now() + windowMins(respWindow) * 60000)
-          .toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric",
-            hour: "numeric", minute: "2-digit" })}. If they don't reply by then you'll be
-          prompted to match someone else.</p>
-      )}
+        {/* AUTO-SCHEDULE MEANS THERE IS NOTHING TO ACCEPT. The work order goes
+            out accepted, so a deadline control here was a choice that changed
+            nothing -- the screen-that-lies rule pointed at a drop-down. The
+            control goes and one line says why. */}
+        {chosen.autoSchedule ? (
+          <div className="wo-auto-note">
+            <CalendarCheck size={15} />
+            <span><b>Auto-schedule is on.</b> {chosen.company} has said yes in advance,
+              so this books straight onto their calendar — there is no deadline to set.</span>
+          </div>
+        ) : (
+          <>
+            <label className="fld">Response deadline{" "}
+              <span className="fld-note">how long they have to accept before the offer expires</span>
+              <select value={respWindow} onChange={(e) => setRespWindow(e.target.value)}>
+                {RESPONSE_WINDOWS.map((w) => <option key={w.id} value={w.id}>{w.label}</option>)}
+              </select>
+            </label>
+            <p className="cov-hint">Expires {new Date(Date.now() + windowMins(respWindow) * 60000)
+              .toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric",
+                hour: "numeric", minute: "2-digit" })}. If they don't reply by then you'll be
+              prompted to match someone else.</p>
+          </>
+        )}
 
       {freeForDay.length > 0 && (
         <label className="fld">Crew <span className="fld-note">crews free on {formatDay(job.date) || "this job"}</span>
@@ -41333,6 +41342,11 @@ strong.insp-name{background:none;border:0;padding:0}
   padding:12px;border-radius:9px;margin-top:2px}
 
 /* work order document */
+.wo-auto-note{display:flex;align-items:flex-start;gap:9px;background:color-mix(in srgb, var(--brand) 9%, var(--card, #fff));
+  border:1px solid var(--line);border-radius:9px;padding:11px 13px;margin-bottom:16px;
+  font-size:13px;color:var(--ink-soft);line-height:1.45}
+.wo-auto-note svg{flex:none;margin-top:2px;color:var(--brand)}
+.wo-auto-note b{color:var(--ink)}
 .wo-inherit{display:flex;align-items:flex-start;gap:9px;background:var(--paper);border:1px solid var(--line);
   border-radius:9px;padding:11px 13px;margin-bottom:16px;font-size:12px;color:var(--ink-soft);line-height:1.45}
 .wo-inherit svg{flex:none;margin-top:1px;color:var(--brand)}

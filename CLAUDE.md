@@ -11991,6 +11991,17 @@ refactor.
   edit form shows both, so they are changed together. And the hiring side is
   not emailed when a crew suggests a length; it shows on the trade row.
 
+- **AN AUTO-SCHEDULED CONTRACTOR HAS NO RESPONSE DEADLINE, SO THE FORM DOES
+  NOT ASK FOR ONE.** Reported with the work-order form open on a contractor who
+  had granted auto-schedule: the *Response deadline* drop-down sat above a line
+  saying no deadline applies. The work order goes out accepted, so the control
+  changed nothing. That is the screen-that-lies rule pointed at a drop-down. The
+  control is withheld and one line says why, naming the contractor. A contractor
+  without the grant still gets the deadline and its expiry line, and
+  `test:assignref` asserts both branches in the same place. Drawing the
+  drop-down for everybody fails two assertions. The change-order form keeps its
+  deadline, because a change to an accepted work order is still answered.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
