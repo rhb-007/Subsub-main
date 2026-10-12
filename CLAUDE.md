@@ -12034,12 +12034,39 @@ refactor.
   their own report cannot name somebody else. A database without 062 loses the
   tenant and keeps the job.
 
-  **It is on Create only.** The edit form does not carry it yet, and the
-  picker shows only where the access answer can be set (`mayChooseAccess` and
-  `maySetAccess`). `test:jobtenant` (19) and `test:jobtenantui` (17). Five
+  The picker shows only where the access answer can be set (`mayChooseAccess`
+  and `maySetAccess`). `test:jobtenant` (19) and `test:jobtenantui` (17). Five
   mutations fire, each on its own assertion: the building check, the 062
   fallback, the building filter, keeping the tenant across a building change,
   and the pre-set access answer.
+
+  **AND THE EDIT FORM CARRIES IT TOO, beside Homeowner / client on both.**
+  Asked for as *"add tenant to the other form as well — Homeowner / Client /
+  Tenant"*. A repair at 10A is often raised before anybody has looked up who
+  lives there, so naming them afterwards is the ordinary case. The two fields
+  share one row: the client is who the work is done for, the tenant is whose
+  home it is in, and they read as one question.
+
+  `PATCH /api/jobs/:id` takes `accessUserId` through the same
+  `buildingTenant` check the create route now calls, so the two doors cannot
+  disagree about who counts. It is checked against the building the job will
+  be at **after** the save, so moving the job and naming that building's
+  tenant is one press. Three more rules:
+  - **Moving the job without naming anybody drops a tenant of the old
+    building.** A tenant of Ballard is not the person who lets anybody into
+    Press Apartments.
+  - **A tenant newly named on a job whose access was never answered** gets
+    *the tenant needs to be in*, the same pre-answer the create form makes.
+    Otherwise `accessFor` reads a manager-raised job as "no access needed"
+    and the tenant just named is never asked.
+  - **Not on a job somebody requested** (`tenant_from_request`): the requester
+    is who it is about, and the form does not draw the picker there.
+
+  The save sends `accessUserId` only when the form carried the picker, so an
+  edit that says nothing about a tenant leaves them alone. The suites are now
+  30 and 25. Six more mutations fire: the picker off the edit mount, the row
+  unshared, the edit not sending it, the server not checking it, no access
+  pre-answer, and a stale tenant kept across a move.
 
 ## Working here
 

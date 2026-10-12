@@ -9332,14 +9332,8 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   let accessUser = null;
   if (!requestedBy && b.accessUserId) {
     if (!propertyId || crossAccount) return c.json({ error: "bad_tenant" }, 400);
-    const t = await c.env.DB.prepare(
-      `SELECT m.user_id FROM memberships m
-         JOIN membership_properties mp ON mp.membership_id = m.id
-        WHERE m.account_id = ? AND m.role = 'tenant' AND m.user_id = ? AND mp.property_id = ?
-        LIMIT 1`
-    ).bind(accountId, String(b.accessUserId), propertyId).first();
-    if (!t) return c.json({ error: "bad_tenant" }, 400);
-    accessUser = t.user_id;
+    accessUser = await buildingTenant(c.env, accountId, b.accessUserId, propertyId);
+    if (!accessUser) return c.json({ error: "bad_tenant" }, 400);
   }
 
   // 079. How long each trade takes, when the hiring side already knows.
@@ -10711,6 +10705,21 @@ app.post("/api/jobs/:id/reopen", requireRole("admin", "pm"), async (c) => {
 // Only the keys sent are written, which is the shape that once deleted a W-9
 // through `SubForm`: a form that edits part of a record must not replace the
 // whole of it.
+// A TENANT OF THIS BUILDING, ON THIS ACCOUNT, or nobody. The one check both
+// job doors make before naming somebody as the person who lets the crew in:
+// naming anybody else would ask a stranger to confirm a time at somebody
+// else's home. Answers the user id, or null.
+async function buildingTenant(env, accountId, userId, propertyId) {
+  if (!userId || !propertyId) return null;
+  const t = await env.DB.prepare(
+    `SELECT m.user_id FROM memberships m
+       JOIN membership_properties mp ON mp.membership_id = m.id
+      WHERE m.account_id = ? AND m.role = 'tenant' AND m.user_id = ? AND mp.property_id = ?
+      LIMIT 1`
+  ).bind(accountId, String(userId), propertyId).first();
+  return t?.user_id || null;
+}
+
 app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
@@ -10728,7 +10737,7 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
     for (const cols of ["access, access_user_id", "access", ""]) {
       try {
         return await c.env.DB.prepare(
-          `SELECT id, account_id, date, time, requested_by${cols ? ", " + cols : ""}
+          `SELECT id, account_id, property_id, date, time, requested_by${cols ? ", " + cols : ""}
              FROM jobs WHERE id = ? AND account_id = ?`
         ).bind(id, accountId).first();
       } catch (err) { if (!missingSchema(err)) throw err; }
@@ -10850,6 +10859,35 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   if (b.access !== undefined) {
     if (b.access !== null && !isAccess(b.access)) return c.json({ error: "bad_access" }, 400);
     sets.push("access = ?"); vals.push(b.access || null);
+  }
+  // 062, ON A JOB THAT ALREADY EXISTS. The tenant named on the create form,
+  // named or changed afterwards -- the repair at 10A was often raised before
+  // anybody looked up who lives there. Same check as create, against the
+  // building the job will be at AFTER this save. Not on a job somebody
+  // requested: the requester is who it is about, and naming somebody else over
+  // them would ask the wrong person to be in. A tenant newly named on a job
+  // whose access was never answered gets "the tenant needs to be in", or
+  // `accessFor` reads a manager-raised job as "no access needed" and the
+  // tenant just named is never asked -- the same pre-answer the create form
+  // makes, visible on the card's visit block and changeable there.
+  const pidAfter = b.propertyId !== undefined ? (b.propertyId || null) : (before?.property_id || null);
+  if (b.accessUserId !== undefined) {
+    const want = b.accessUserId ? String(b.accessUserId) : null;
+    if (want && before?.requested_by) return c.json({ error: "tenant_from_request" }, 400);
+    let who = null;
+    if (want) {
+      who = await buildingTenant(c.env, accountId, want, pidAfter);
+      if (!who) return c.json({ error: "bad_tenant" }, 400);
+    }
+    if (who !== (before?.access_user_id || null)) {
+      sets.push("access_user_id = ?"); vals.push(who);
+      if (who && b.access === undefined && !before?.access) { sets.push("access = ?"); vals.push("tenant"); }
+    }
+  } else if (b.propertyId !== undefined && before?.access_user_id && pidAfter !== (before.property_id || null)
+    && !(await buildingTenant(c.env, accountId, before.access_user_id, pidAfter))) {
+    // The building moved and the tenant did not come with it: a tenant of the
+    // old building is not the person who lets anybody into the new one.
+    sets.push("access_user_id = ?"); vals.push(null);
   }
   if (!sets.length && !spanPlan) return c.json({ ok: true });
   // AND THE JOB FLOATS, because somebody just worked on it. 025 added this

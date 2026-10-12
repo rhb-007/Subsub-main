@@ -16,7 +16,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, openCards } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-job-tenant-test");
@@ -38,6 +38,18 @@ const ten = (userId, name, unit, propertyId) => ({ userId, name, email: `${userI
 const TENANTS = [ten("u_john", "John Smith", "10A", "p_ballard"), ten("u_ann", "Ann Lee", "2B", "p_ballard"),
   ten("u_mary", "Mary Press", "3B", "p_press")];
 const sent = [];
+// A job the account raised itself at Ballard, already naming John -- the one
+// the edit form is opened on.
+let JOBS = [];
+const EDIT_JOB = () => ({
+  id: "j_edit", accountId: "acc_pm", propertyId: "p_ballard", title: "Ballard Apts — sink",
+  status: "active", date: "2027-11-04", time: "09:00", address: "2028 NW 59th St", area: "Seattle",
+  zip: "98107", trades: ["plumbing"], assignments: {}, notes: "", createdAt: "2026-10-01", photos: [],
+  severity: null, client: "Ballard LLC", sqft: null, stories: null, scope: "", measurementDocs: [],
+  materialSource: null, materialsPaidBy: "Sound Property Management", requestedBy: null,
+  approvedAt: null, declinedAt: null, withdrawnAt: null, completedAt: null, access: "tenant",
+  accessUserId: "u_john", reportDetail: null, propertyName: "Ballard Apts", visit: null, spans: {},
+});
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -54,7 +66,9 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     email: "chris@soundpm.test", phone: null, role: "admin", subId: null, propertyIds: [], unit: null,
     hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
   if (path === "/api/jobs" && method === "POST") return [201, { id: "j_new", requested: false, job: null }];
-  if (["/api/jobs", "/api/subs", "/api/invites", "/api/clients", "/api/connect-requests", "/api/my-connect-requests",
+  if (path === "/api/jobs" && method === "GET") return [200, JOBS];
+  if (path === "/api/jobs/j_edit" && method === "PATCH") return [200, { ok: true, rescheduled: null }];
+  if (["/api/subs", "/api/invites", "/api/clients", "/api/connect-requests", "/api/my-connect-requests",
     "/api/doc-shares", "/api/property-transfers", "/api/overflow-posts", "/api/inspections", "/api/my-quotes",
     "/api/visits", "/api/change-orders"].includes(path)) return [200, []];
   return undefined;
@@ -95,6 +109,17 @@ const tenantField = (page) => page.evaluate(() => {
   return { options: s ? [...s.options].map((o) => o.textContent.trim()) : null, value: s?.value ?? null,
     hint: l.querySelector(".job-no-tenant")?.innerText.trim() || null };
 });
+// Homeowner / client and Tenant drawn as one row: their tops agree and the
+// tenant is to the right.
+const sideBySide = (page) => page.evaluate(() => {
+  const own = (x) => [...x.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim();
+  const ls = [...document.querySelectorAll(".modal label.fld")];
+  const c = ls.find((x) => /^Homeowner \/ client/.test(own(x)));
+  const tn = ls.find((x) => /^Tenant/.test(own(x)));
+  if (!c || !tn) return { missing: !c ? "client" : "tenant" };
+  const a = c.getBoundingClientRect(), b = tn.getBoundingClientRect();
+  return { same: Math.abs(a.top - b.top) < 4 && b.left > a.left, a: [a.left, a.top], b: [b.left, b.top] };
+});
 const next = (page) => page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
   .find((b) => /^Next/.test(b.innerText.trim()))?.click());
 
@@ -131,6 +156,8 @@ try {
   await selectVal(page, selectFor("tenant"), "u_john");
   await wait(300);
   t.ck("a tenant can be picked", (await tenantField(page))?.value === "u_john");
+  const row1 = await sideBySide(page);
+  t.ck("and the tenant sits beside Homeowner / client, on one line", row1?.same === true, JSON.stringify(row1));
 
   await tagSelects(page);
   await selectVal(page, selectFor("property"), "p_press");
@@ -193,6 +220,43 @@ try {
   t.ck("naming the tenant", post?.body?.accessUserId === "u_john", JSON.stringify(post?.body?.accessUserId));
   t.ck("with the access answer that came with them", post?.body?.access === "tenant", JSON.stringify(post?.body?.access));
   t.ck("and nothing threw on the way", errs.length === 0, errs.join(" | "));
+  await page.close();
+
+  console.log("\n-- and on the edit form, seeded from the job --");
+  JOBS = [EDIT_JOB()];
+  const { page: p2 } = await visitApp(browser, { host: "soundpm", webPort: WEB,
+    seat: { userId: "u_mgr", accountId: "acc_pm" }, viewport: { width: 1180, height: 1500 } });
+  const errs2 = [];
+  p2.on("pageerror", (e) => errs2.push(String(e).slice(0, 200)));
+  await wait(2600);
+  await p2.evaluate(() => [...document.querySelectorAll("nav button")]
+    .find((b) => /^jobs/i.test(b.innerText.trim()))?.click());
+  await wait(1200);
+  await openCards(p2);
+  const opened = await p2.evaluate(() => {
+    const b = document.querySelector(".job-card .job-title-edit");
+    if (!b) return false;
+    b.click(); return true;
+  });
+  await wait(900);
+  t.ck("the edit form opened", opened && await p2.evaluate(() => /Edit job/.test(document.querySelector(".modal h2")?.innerText || "")));
+  const e1 = await tenantField(p2);
+  t.ck("it carries the tenant picker too", !!e1?.options, JSON.stringify(e1));
+  t.ck("with the tenant already named on the job selected", e1?.value === "u_john", JSON.stringify(e1));
+  t.ck("listing that building's tenants only", !!e1?.options && e1.options.includes("Ann Lee · unit 2B")
+    && !e1.options.some((o) => /Mary/.test(o)), JSON.stringify(e1?.options));
+  const row2 = await sideBySide(p2);
+  t.ck("beside Homeowner / client here as well", row2?.same === true, JSON.stringify(row2));
+  await tagSelects(p2);
+  await selectVal(p2, selectFor("tenant"), "u_ann");
+  await wait(300);
+  sent.length = 0;
+  await p2.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
+    .find((b) => /Save changes/.test(b.innerText))?.click());
+  await wait(900);
+  const pt = sent.find((x) => x.path === "/api/jobs/j_edit" && x.method === "PATCH");
+  t.ck("saving sends the tenant picked", pt?.body?.accessUserId === "u_ann", JSON.stringify(pt?.body?.accessUserId));
+  t.ck("and nothing threw on the edit", errs2.length === 0, errs2.join(" | "));
 } catch (e) {
   t.ck("the suite ran to the end", false, e?.stack || String(e));
 } finally {

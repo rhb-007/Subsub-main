@@ -3131,6 +3131,9 @@ export default function SubSub() {
       materialSupplier: f.materialSupplier || "", materialBranch: f.materialBranch || "",
       materialOther: f.materialOther || "", materialsPaidBy: f.materialsPaidBy,
       measurementDocs: f.measurementDocs,
+      // 062. Only when the form carried the picker; absent, the route leaves
+      // the tenant alone.
+      ...(f.accessUserId !== undefined ? { accessUserId: f.accessUserId || null } : {}),
     };
     // 079. Sent, but never merged into state as typed: the finish is the
     // server's, worked out with the crew's days off, so the reply's copy wins.
@@ -3139,6 +3142,10 @@ export default function SubSub() {
     setJobs((js) => js.map((j) => j.id !== id ? j : {
       ...j, ...body,
       ...(out?.spans ? { spans: out.spans } : {}),
+      // Naming a tenant on a job whose access was never answered pre-answers
+      // it, the same rule the route applies, so the card agrees before a
+      // reload does.
+      ...(body.accessUserId && !j.accessUserId && !j.access ? { access: "tenant" } : {}),
       // The line a contractor reads is composed by the SERVER from the
       // supplier list, never sent from here, so the browser cannot know it
       // until the next load -- and inventing one would disagree with the work
@@ -7816,6 +7823,7 @@ export default function SubSub() {
              rather than offering a chip whose removal the save will reject. */
           lockedTrades={Object.keys(editingJob.assignments || {})}
           canSetAccess={mayChooseAccess(kindOf(account))}
+          canPickTenant={mayChooseAccess(kindOf(account)) && maySetAccess(role)}
           onSubmit={(job) => editJob(editingJob.id, job)}
           onCancel={() => setEditingJob(null)} /></Modal>}
       {assigning && <Modal onClose={() => setAssigning(null)} wide>
@@ -25414,6 +25422,10 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     materialBranch: existing.materialBranch || "", materialOther: "",
     materialsPaidBy: existing.materialsPaidBy || accountName || "",
     access: existing.access || "",
+    // 062. The tenant named on the job, editable here too -- except on a job
+    // somebody requested, where the requester is who it is about. The key is
+    // absent there, so the save sends nothing about a tenant at all.
+    ...(canPickTenant && !existing.requestedBy ? { accessUserId: existing.accessUserId || "" } : {}),
     measurementDocs: [...(existing.measurementDocs || [])],
     // 079. How long each trade takes, as the fields hold them (strings).
     spans: Object.fromEntries(Object.entries(existing.spans || {}).map(([t, sp]) =>
@@ -25456,23 +25468,25 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     setF((s) => ({ ...s, propertyId: id,
       // A tenant belongs to a building, so a new building forgets them -- and
       // the "they need to be in" answer that came with naming them.
-      accessUserId: "", access: s.accessUserId && s.access === "tenant" ? "" : s.access,
+      ...("accessUserId" in s ? { accessUserId: "" } : {}),
+      access: s.accessUserId && s.access === "tenant" ? "" : s.access,
       ...(p ? { address: p.address || "", area: p.city || "", zip: p.zip || "",
                 title: s.title || `${p.name} — ` } : {}) }));
   };
   // THE TENANTS OF THE CHOSEN BUILDING, for the picker on step 1. Fetched
   // once, only for a seat the route serves (admin or pm on a kind with
-  // buildings) and never on a request or an edit; filtered here by building,
+  // buildings) and never on a job somebody requested; filtered here by building,
   // because the list is this account's own and the building is a choice made
   // on this screen.
   const [tenantList, setTenantList] = useState(null);
+  const tenantField = canPickTenant && !(existing && existing.requestedBy);
   useEffect(() => {
-    if (!canPickTenant || existing) return;
+    if (!tenantField) return;
     let live = true;
     api.listTenants().then((r) => { if (live) setTenantList(Array.isArray(r) ? r : []); })
       .catch(() => { if (live) setTenantList([]); });
     return () => { live = false; };
-  }, [canPickTenant, existing]);
+  }, [tenantField]);
   const buildingTenants = (tenantList || []).filter((t) => f.propertyId && t.propertyId === f.propertyId);
   // Naming a tenant pre-answers who lets them in with "the tenant needs to be
   // in" -- visibly, on step 2, where it can be changed -- because the reason
@@ -25498,6 +25512,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
   // form follows the building rather than the role of whoever opened it.
   const picked = (properties || []).find((x) => x.id === f.propertyId);
   const asking = asOwner || !!picked?.ownedNotOperated;
+  const tenantShown = tenantField && !asking && !!f.propertyId;
   // A request has to name a building: it is the only thing that decides whose
   // it is, and the server refuses one without.
   const valid = f.title && f.trades.length && f.address && (!asOwner || f.propertyId);
@@ -25654,13 +25669,19 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         </label>
       )}
 
+      <label className="fld">Job name<input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. 1420 Maple St — full exterior" /></label>
+      {/* WHO THE JOB IS FOR, AND WHO LIVES THERE, side by side: the client
+          is who it is done for, the tenant is whose home it is in, and the two
+          read as one question on this form. */}
+      <div className={tenantShown ? "fld-row" : undefined}>
+        <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
       {/* THE TENANT, CHOSEN FROM THE BUILDING. Asked for as a drop-down of
           the tenants of whichever building was picked. Naming one is what
           lets them be asked to confirm the visit, see the appointment on
           Tenant HQ and get the access panel -- a manager-raised job had no way
           to say whose home it was. Only the selected building's tenants are
           offered, and the server refuses anybody else. */}
-      {canPickTenant && !asking && !edit && f.propertyId && (
+      {tenantShown && (
         <label className="fld">Tenant{" "}
           <span className="fld-note">optional — they're asked to confirm the visit time</span>
           {tenantList === null ? (
@@ -25680,8 +25701,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         </label>
       )}
 
-      <label className="fld">Job name<input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. 1420 Maple St — full exterior" /></label>
-      <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
+      </div>
       <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
       <div className="fld-row">
         <label className="fld">City

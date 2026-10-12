@@ -130,6 +130,42 @@ try {
     ck("and the name they sent is ignored", row?.access_user_id === null, JSON.stringify(row));
   }
 
+  console.log("\n-- named, changed and cleared on an existing job --");
+  {
+    const { db, env } = seed();
+    const [, made] = await json(await call(env, "/api/jobs", { method: "POST", body: job() }));
+    const row = () => db.prepare(`SELECT access, access_user_id, requested_by FROM jobs WHERE id = ?`).get(made.id);
+    const patch = (body, who = "u_mgr") => call(env, `/api/jobs/${made.id}`, { method: "PATCH", body, who });
+    const [s1] = await json(await patch({ accessUserId: "u_ten" }));
+    ck("a tenant of the building can be named on an edit", s1 === 200 && row().access_user_id === "u_ten", JSON.stringify(row()));
+    ck("and the access nobody answered becomes the tenant needs to be in", row().access === "tenant", JSON.stringify(row()));
+    ck("still never as somebody who asked", row().requested_by === null);
+    const [s2, b2] = await json(await patch({ accessUserId: "u_ten2" }));
+    ck("a tenant of another building is refused on an edit", s2 === 400 && b2.error === "bad_tenant" && row().access_user_id === "u_ten",
+      JSON.stringify({ s2, b2, r: row() }));
+    const [s3, b3] = await json(await patch({ accessUserId: "u_far" }));
+    ck("and so is another account's", s3 === 400 && b3.error === "bad_tenant", JSON.stringify({ s3, b3 }));
+    const [s4] = await json(await patch({ accessUserId: "u_ten2", propertyId: "p_press" }));
+    ck("moving the job and naming that building's tenant in one save is checked against the NEW building",
+      s4 === 200 && row().access_user_id === "u_ten2", JSON.stringify({ s4, r: row() }));
+    await json(await patch({ propertyId: "p_ballard" }));
+    ck("moving the job without naming anybody drops a tenant of the old building", row().access_user_id === null, JSON.stringify(row()));
+    await json(await patch({ accessUserId: "u_ten" }));
+    const [s5] = await json(await patch({ accessUserId: null }));
+    ck("and a tenant can be taken off", s5 === 200 && row().access_user_id === null, JSON.stringify(row()));
+    const [s6] = await json(await patch({ title: "Renamed" }));
+    ck("an edit that says nothing about a tenant leaves them be", s6 === 200, String(s6));
+  }
+  {
+    const { db, env } = seed();
+    const [, req] = await json(await call(env, "/api/jobs", { method: "POST", who: "u_ten", body: job() }));
+    const [s, b] = await json(await call(env, `/api/jobs/${req.id}`, { method: "PATCH", body: { accessUserId: "u_ten" } }));
+    ck("a job a tenant requested cannot have somebody named over them", s === 400 && b.error === "tenant_from_request",
+      JSON.stringify({ s, b }));
+    const r = db.prepare(`SELECT access_user_id FROM jobs WHERE id = ?`).get(req.id);
+    ck("and nothing was written", r.access_user_id === null, JSON.stringify(r));
+  }
+
   console.log("\n-- a database without 062 --");
   {
     const { db, env } = seed({ drop062: true });
