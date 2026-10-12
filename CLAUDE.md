@@ -11578,6 +11578,16 @@ refactor.
   `setup-check` caught both new settings on its first run, which is that check
   doing its job.
 
+- **THE INDEX'S AUDIENCE GRID HAS A HANDYMAN CARD, BECAUSE A MAINTENANCE
+  WORKER READS "SUBCONTRACTORS" AS NOT THEM.** Reported as the empty sixth cell
+  beside Subcontractors. Handyman is still not an account kind; the card is the
+  same door the signup card's *Subcontractor or handyman* wording is, one page
+  earlier. It links `/handyman-limits/`, the only handyman page there is, and
+  claims only what the engagement does: a property manager or owner can take
+  them on as a handyman, so no contractor's bond is asked for, and the W-9 still
+  is. `test:sitetools` pins the card, an even card count, and that its link
+  resolves; removing the card fails both.
+
 - **THE LAUNCH ASSETS LIVE IN `/marketing`, AND THE DECAL CARRIES A QR CODE
   BECAUSE A PRINTED BADGE CANNOT EXPIRE.** "SubSub Verified" on a screen is
   drawn only while the licence and insurance are current; on a truck door it

@@ -102,6 +102,10 @@ console.log("\n-- the referral snippet is one thing --");
   t.ck("the subcontractor card is where a handyman signs up, and says so", /^Subcontractor or handyman</.test(subCard)
     && /property managers/.test(subCard) && /owners/.test(subCard), subCard);
   t.ck("and there is no handyman account kind to pick instead", !/value="Handyman"/i.test(gs));
+  const auds = (read("index.html").match(/<div class="auds">([\s\S]*?)<\/div>\s*<\/div>\s*<\/section>/) || [])[1] || "";
+  const handyCard = (auds.match(/<a class="aud" href="([^"]+)">\s*<h3>Handymen and maintenance<\/h3>/) || [])[1];
+  t.ck("the index has a card for handymen, so the grid has no empty cell", !!handyCard && (auds.match(/class="aud"/g) || []).length % 2 === 0, String(handyCard));
+  t.ck("and it goes to a page that exists", !!handyCard && existsSync(join(root, handyCard, "index.html")), String(handyCard));
   t.ck("the signup form sends the cookie and the typed code", /referral: ssReadRef\(\)/.test(gs) && /refCode:/.test(gs) && /id="refCode"/.test(gs));
 }
 
