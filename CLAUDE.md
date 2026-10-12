@@ -11917,6 +11917,80 @@ refactor.
   already there). `test:inspectionui` pins the three button words, and putting
   the old label back fails three assertions.
 
+- **A JOB TAKES TIME, AND THE TIME BELONGS TO EACH TRADE.** Asked for as *"a
+  start/end date estimate so that the calendar can be more of a Gantt chart
+  with beginning and ending estimates for each job"*. A three-week remodel and
+  a tap washer were both a dot on one day, and the auto-scheduler could book a
+  crew onto day two of a job they were in the middle of. Migration 079
+  (`job_trade_spans`), `app/shared/span.js`.
+
+  **Per trade, rolled up to the job, and the roll-up is never stored.** Demo,
+  plumbing and paint run in sequence, so one start and end for the whole job
+  would show every trade busy for all of it. Each trade carries a start and a
+  length; the job's span is earliest start to latest finish, derived, because a
+  job span stored beside its trade spans is two records of one fact. Chosen
+  over a job-level span on request ("A").
+
+  **The length is in WORKING days and the finish is computed, never typed.**
+  Weekends are skipped unless the estimate says the crew works them, and so are
+  the days the crew holding the trade has marked off: a holiday mid-job pushes
+  the end, it does not shorten the work. The server computes the finish with
+  that company's `offDays`, so every screen draws the same end. A start typed on
+  a Saturday begins work on the Monday, which is what happens on site.
+
+  **No estimate is not a one-day job.** Nothing is backfilled; a trade without
+  one has no key at all, and the timeline draws it as a DOT on the job's date,
+  not a one-day bar, because a bar would claim somebody said it takes a day.
+
+  **Only the trades named are touched, and a trade the job does not have is
+  refused** (`span_trade_not_on_job`), on create, edit and the span route alike,
+  because they share `planJobSpans`. The plan runs before anything is written,
+  so a bad figure cannot leave half a save. Taking a trade off a job deletes its
+  estimate; `m079_inv_span_off_job` counts one that survived. A null removes an
+  estimate.
+
+  **A contractor reads their own trade's estimate only**, stripped with the
+  other trades' assignments, for the reason those are: the account's sequencing
+  of somebody else's work is not theirs to read.
+
+  **The crew suggests; the hiring side decides.** The office estimates three
+  days for a bathroom and the plumber knows it is five once the floor is up, so
+  the company holding a live work order for the trade can put figures forward.
+  With no estimate yet theirs simply becomes it; with one, theirs is a
+  suggestion (`proposed_*`) and the office's stands until it presses **Use
+  theirs** or **Keep ours**, because everything after it is sequenced around it.
+  New figures from the office clear an open suggestion.
+
+  **The auto-scheduler treats every day of a span as busy**, not just the visit
+  days, and places a trade only where all of its days are free (`slotFor`'s
+  `length`). Issuing to an auto-scheduled crew prefers the trade's own planned
+  start over the job's date. The job being scheduled is left out of its own
+  diary.
+
+  **On screen:** an *Est.* line on every trade row with *Change* (or *How long
+  will it take?* when there is none) and the crew's suggestion under it; a *How
+  long each trade takes* block on the job form's Trades step, with the finish
+  worked out as it is typed; a **Timeline** tab beside List and Calendar on
+  Jobs, four weeks across on a tablet and two on a phone; and on the crew's
+  side, the estimate and *Suggest a different length* on their card, and every
+  day of it banded on their calendar with *Day 3 of 5* in the day panel.
+
+  `test:jobspan` (58) and `test:jobspanui` (32). Eight server mutations and
+  eight browser ones fire, each on its own assertion. **The timeline assertion
+  measures the bar against its own header days**, because a bar off by one
+  column looks right in the source. One fixture fault worth keeping: the bar
+  first measured "wrong" because the job form's save a moment earlier had
+  changed it to four days, which was the product drawing the server's answer
+  correctly.
+
+  And `test:owncrews` had been failing two days in seven for a date reason:
+  its second fixture landed on the day the first job was moved to whenever
+  that one fell on a Saturday. Moved a week further out.
+
+  **Still open:** an estimate does not move when the job's date moves; the
+  edit form shows both, so they are changed together. And the hiring side is
+  not emailed when a crew suggests a length; it shows on the trade row.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

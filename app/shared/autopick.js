@@ -21,6 +21,7 @@
 // one that drifted would be the one nobody watches.
 
 import { mayCover } from "./engaged.js";
+import { spanDates } from "./span.js";
 
 // WHICH JOBS. "These jobs only", in those words, and it is a short list on
 // purpose: everything here assumes an empty unit and a known scope.
@@ -63,9 +64,21 @@ const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 //
 // `from` is passed rather than read off the clock, so the same inputs always
 // give the same answer and a test is not a race against midnight.
-export function slotFor({ from, busy = [], unavailable = [], skip = 0, days = WORK_DAYS } = {}) {
+//
+// 079. AND THE WHOLE SPAN MUST BE FREE, not just its first morning. A job
+// that takes five working days put on a Monday where the crew is booked on the
+// Wednesday is a crew asked to be in two places that week. `length` is the
+// trade's estimate in working days; the span skips the days they marked off,
+// the way it does on every screen, and none of its days may be one they are
+// already on site for.
+export function slotFor({ from, busy = [], unavailable = [], skip = 0, days = WORK_DAYS, length = 1 } = {}) {
   if (!isDay(from)) return null;
-  const out = new Set([...(busy || []), ...(unavailable || [])].filter(isDay));
+  const busySet = new Set((busy || []).filter(isDay));
+  const out = new Set([...busySet, ...(unavailable || [])].filter(isDay));
+  const n = Number.isInteger(length) && length > 1 ? length : 1;
+  const clear = (day) => n === 1 || spanDates({ start: day, days: n,
+    weekends: days.includes(0) || days.includes(6), off: unavailable || [] })
+    .every((k) => !busySet.has(k));
   let d = parse(from);
   d = new Date(d.getTime() + AUTO_LEAD_DAYS * DAY);
   let found = 0;
@@ -73,7 +86,7 @@ export function slotFor({ from, busy = [], unavailable = [], skip = 0, days = WO
   // company that has marked itself unavailable for ever.
   for (let i = 0; i < 400; i += 1) {
     const day = iso(d);
-    if (days.includes(d.getUTCDay()) && !out.has(day)) {
+    if (days.includes(d.getUTCDay()) && !out.has(day) && clear(day)) {
       if (found === skip) return day;
       found += 1;
     }
@@ -111,7 +124,7 @@ export const AUTO_SKIP = {
 // Deliberately NOT ranked on whether they have granted auto-schedule. That
 // would quietly steer every turnaround to the crews who gave up their
 // accept/decline, which is paying for consent with work.
-export function rankCandidates(cands = [], { trade, from } = {}) {
+export function rankCandidates(cands = [], { trade, from, length = 1 } = {}) {
   const skipped = [];
   const ok = [];
   for (const cnd of cands || []) {
@@ -138,7 +151,7 @@ export function rankCandidates(cands = [], { trade, from } = {}) {
       skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "paused" });
       continue;
     }
-    const day = slotFor({ from, busy: cnd.busy, unavailable: cnd.unavailable });
+    const day = slotFor({ from, busy: cnd.busy, unavailable: cnd.unavailable, length });
     if (!day) {
       skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "no_slot" });
       continue;

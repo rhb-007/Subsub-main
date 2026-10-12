@@ -112,6 +112,8 @@
     "test:ownportal": "node --no-warnings scripts/own-portal-ui-test.mjs",
     "test:autoturn": "node --no-warnings scripts/auto-turnaround-test.mjs",
     "test:autobook": "node --no-warnings scripts/auto-book-test.mjs",
+    "test:jobspan": "node --no-warnings scripts/job-span-test.mjs",
+    "test:jobspanui": "node scripts/job-span-ui-test.mjs",
     "test:owncrews": "node --no-warnings scripts/own-crews-test.mjs",
     "test:owncrewsui": "node --no-warnings scripts/own-crews-ui-test.mjs",
     "test:visitparty": "node --no-warnings scripts/visit-party-test.mjs",

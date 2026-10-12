@@ -275,7 +275,10 @@ WITH spec(j) AS (SELECT
   -- shows the old draws and logging hours says which file.
   ',["m078_wo_hour_entries","col","wo_hour_entries",["id","work_order_id","milestone_id","work_date","hours"]]' ||
   ',["m078_wo_hour_requests","col","wo_hour_requests",["id","work_order_id","hours","reason","status","decided_at"]]' ||
-  ',["m078_hour_request_pending_unique","index","ux_wo_hour_request_pending",[]]') ||
+  ',["m078_hour_request_pending_unique","index","ux_wo_hour_request_pending",[]]' ||
+  -- 079. How long each trade takes. Until it is run jobs keep their single
+  -- date, the timeline draws dots, and saving an estimate says which file.
+  ',["m079_job_trade_spans","col","job_trade_spans",["job_id","trade","start_date","work_days","weekends","proposed_start","proposed_days"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -756,7 +759,13 @@ WITH inv(j) AS (SELECT '['
   -- fixed price with a timesheet on it reads as two answers to what is owed.
   || ',' || json_array('m078_inv_hours_on_fixed', (SELECT COUNT(*) FROM wo_hour_entries h
     JOIN work_orders w ON w.id = h.work_order_id
-    WHERE COALESCE(w.pay_kind, 'fixed') <> 'hourly')))
+    WHERE COALESCE(w.pay_kind, 'fixed') <> 'hourly'))
+  -- 079. An estimate for a trade the job no longer has is a bar on the
+  -- timeline for work nobody is doing, and busy days on a crew's diary that
+  -- keep them from being offered anything else.
+  || ',' || json_array('m079_inv_span_off_job', (SELECT COUNT(*) FROM job_trade_spans s
+    JOIN jobs j ON j.id = s.job_id
+    WHERE NOT EXISTS (SELECT 1 FROM json_each(COALESCE(j.trades, '[]')) t WHERE t.value = s.trade))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

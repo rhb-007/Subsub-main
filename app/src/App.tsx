@@ -35,7 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, ChartGantt,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -88,6 +88,9 @@ import { ENGAGED_AS, engagedAs, isHandyman, engagedSeatLabel, jobHiresWord,
 import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS, windowEnd } from "../shared/schedule.js";
+import { spanView, spanText, jobSpan, spanDates, spanDaysFrom, isDayKey as isSpanDay,
+  MAX_SPAN_DAYS } from "../shared/span.js";
+import { offDays as companyOffDays } from "../shared/crews.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/accessplan.js";
@@ -2384,7 +2387,7 @@ export default function SubSub() {
   // localStorage throws in a private window, on both read and write, so both
   // are guarded and it simply opens on the list.
   const [jobView, setJobView] = useState(() => {
-    try { return localStorage.getItem("subsub.jobs.view") === "calendar" ? "calendar" : "list"; }
+    try { const v = localStorage.getItem("subsub.jobs.view"); return v === "calendar" || v === "timeline" ? v : "list"; }
     catch { return "list"; }
   });
   const pickJobView = (v) => {
@@ -3074,6 +3077,37 @@ export default function SubSub() {
   // A trade being taken off a job from its own row. Held by id, so the modal
   // reads the job as it is now rather than as it was when the press happened.
   const [removingTrade, setRemovingTrade] = useState(null);
+  // 079. The crew's own suggestion of how long their trade takes. Awaited,
+  // then the work list re-read: the row's span comes from /api/my-work, and a
+  // locally patched copy would disagree with the server's finish.
+  const [spanSuggest, setSpanSuggest] = useState(null);
+  const suggestSpan = async (jb, trade, body) => {
+    const out = await api.proposeJobSpan(jb.id, trade, body);
+    if (out?.span) setJobs((js) => js.map((x) => (x.id !== jb.id ? x
+      : { ...x, spans: { ...(x.spans || {}), [trade]: out.span } })));
+    await refreshMyWork();
+    logEvent("job_edited", out?.proposed
+      ? `Suggested ${body.days} working day${body.days === 1 ? "" : "s"} for ${catMeta(trade).label} on ${jb.title}`
+      : `Set ${catMeta(trade).label} on ${jb.title} to ${body.days} working day${body.days === 1 ? "" : "s"}`);
+  };
+  // 079. The trade whose estimate is being set, held by id so the window reads
+  // the job as it is now.
+  const [spanEditing, setSpanEditing] = useState(null);
+  // AWAITED, AND THEN DRAWN FROM THE SERVER'S ANSWER. The finish is computed
+  // there with the days off of whoever holds the trade, so a locally invented
+  // one would disagree the moment a crew has a holiday in the middle of it.
+  const applySpans = (jobId, spans) => setJobs((js) => js.map((x) => (x.id !== jobId ? x
+    : { ...x, spans: spans || {}, updatedAt: new Date().toISOString() })));
+  const saveSpans = async (jobId, spans) => {
+    const out = await api.saveJobSpans(jobId, spans);
+    applySpans(jobId, out?.spans);
+    const jb = allJobs.find((x) => x.id === jobId);
+    logEvent("job_edited", `Set how long ${Object.keys(spans).map((t) => catMeta(t).label).join(", ")} will take${jb ? ` on ${jb.title}` : ""}`);
+  };
+  const answerSpan = async (jobId, trade, accept) => {
+    const out = await api.answerJobSpan(jobId, trade, accept);
+    applySpans(jobId, out?.spans);
+  };
   const removeTrade = async (jobId, trade) => {
     const jb = allJobs.find((x) => x.id === jobId);
     if (!jb) return;
@@ -3098,9 +3132,13 @@ export default function SubSub() {
       materialOther: f.materialOther || "", materialsPaidBy: f.materialsPaidBy,
       measurementDocs: f.measurementDocs,
     };
-    const out = await api.patchJob(id, body);
+    // 079. Sent, but never merged into state as typed: the finish is the
+    // server's, worked out with the crew's days off, so the reply's copy wins.
+    const hasSpans = f.spans && Object.keys(f.spans).length > 0;
+    const out = await api.patchJob(id, hasSpans ? { ...body, spans: f.spans } : body);
     setJobs((js) => js.map((j) => j.id !== id ? j : {
       ...j, ...body,
+      ...(out?.spans ? { spans: out.spans } : {}),
       // The line a contractor reads is composed by the SERVER from the
       // supplier list, never sent from here, so the browser cannot know it
       // until the next load -- and inventing one would disagree with the work
@@ -3617,6 +3655,14 @@ export default function SubSub() {
     return m;
   }, [myWork]);
 
+  // 079. How long OUR trade takes, per job and trade, from the same single
+  // source -- the cross-account half of the list has no /api/jobs row at all.
+  const mySpans = useMemo(() => {
+    const m = {};
+    for (const w of myWork) if (w.span) (m[w.jobId] ||= {})[w.trade] = w.span;
+    return m;
+  }, [myWork]);
+
   // job slots assigned to me, for the contractor dashboard + tab badge
   const myAssignments = mySub ? jobs.flatMap((j) =>
     Object.entries(j.assignments || {})
@@ -3624,7 +3670,8 @@ export default function SubSub() {
       .map(([trade, a]) => ({
         job: { ...j, visit: myVisits[j.id] || null,
           access: myAccess[j.id] || j.accessEffective || null,
-          accessPlan: myAccessPlan[j.id] || null },
+          accessPlan: myAccessPlan[j.id] || null,
+          spans: { ...(j.spans || {}), ...(mySpans[j.id] || {}) } },
         trade, a }))) : [];
 
   // The same thing at every OTHER client. /api/jobs is one account at a time,
@@ -3650,6 +3697,7 @@ export default function SubSub() {
       // account's rows and not on the other twenty-four clients'.
       access: w.access || null,
       accessPlan: w.accessPlan || null,
+      spans: w.span ? { [w.trade]: w.span } : {},
       scope: w.tradeScope || null, propertyName: w.propertyName,
       // Absent on this shape rather than undefined: every card reads them and
       // the jobs list has white-screened on a missing one before.
@@ -6749,7 +6797,8 @@ export default function SubSub() {
                     answers "what is happening in October", which the list
                     could not. */}
                 <div className="seg-tabs sm jv-seg">
-                  {[["list", "List", ClipboardList], ["calendar", "Calendar", Calendar]].map(([id, l, Icon]) => (
+                  {[["list", "List", ClipboardList], ["calendar", "Calendar", Calendar],
+                    ["timeline", "Timeline", ChartGantt]].map(([id, l, Icon]) => (
                     <button key={id} className={jobView === id ? "on" : ""} onClick={() => pickJobView(id)}
                       aria-pressed={jobView === id}>
                       <Icon size={13} /> {l}
@@ -6810,7 +6859,11 @@ export default function SubSub() {
                   it has a key of its own for done and not done, and hiding
                   last month's finished work would make it lie about the
                   month it is showing. */}
-              {jobView === "calendar" ? (
+              {jobView === "timeline" ? (
+                <JobsTimeline subs={subs}
+                  jobs={jobs.filter((j) => !jobProperty || j.propertyId === jobProperty)}
+                  onOpenJob={openJob} />
+              ) : jobView === "calendar" ? (
                 <JobsCalendar
                   jobs={jobs.filter((j) => !jobProperty || j.propertyId === jobProperty)}
                   selected={jobDay} onSelect={setJobDay} onOpenJob={openJob}
@@ -7093,6 +7146,16 @@ export default function SubSub() {
                                     : "No work order yet"}
                                 </span>
                               ) : <span className="trade-open-note">No contractor · no work order issued</span>}
+                              {/* 079. How long this trade takes. On the row,
+                                  because sequencing is per trade -- and set
+                                  here without opening the whole edit form. */}
+                              {!j.inherited && (
+                                <TradeSpanLine job={j} trade={t}
+                                  editable={maySetAccess(role) && !j.readOnly && !done}
+                                  crewName={a ? (a.company || sub?.company) : ""}
+                                  onEdit={(jb, tr) => setSpanEditing({ jobId: jb.id, trade: tr })}
+                                  onAnswer={answerSpan} />
+                              )}
                             </div>
                             {/* Every action on a trade row, gated in ONE place.
                                 A building somebody else runs is theirs to
@@ -7587,6 +7650,8 @@ export default function SubSub() {
             onGoClient={goToSeat}
             /* 061. Answering the time, from the side that drives to it. */
             onAnswerVisit={answerVisit} onProposeVisit={setProposeWO}
+            /* 079. The crew saying how long their trade really takes. */
+            onSuggestSpan={setSpanSuggest}
             quotes={myQuotes}
             // A whole card at once: every line it priced or passed on, then ONE
             // re-read. Re-reading after each would drop the answered line out
@@ -7710,6 +7775,17 @@ export default function SubSub() {
           the trade grid, the supplier chooser, the property picker and the
           access answer -- the rule this file records about the apply form and
           the QR panel, pointed at the biggest form in the product. */}
+      {spanEditing && (() => {
+        const jb = allJobs.find((x) => x.id === spanEditing.jobId);
+        if (!jb) return null;
+        const a = jb.assignments?.[spanEditing.trade];
+        const holder = a && subs.find((x) => x.id === a.subId);
+        return (
+          <SpanModal job={jb} trade={spanEditing.trade}
+            off={holder ? companyOffDays({ unavailableDays: holder.unavailableDays || [], crews: holder.crews || [] }).days : []}
+            onSave={saveSpans} onClose={() => setSpanEditing(null)} />
+        );
+      })()}
       {removingTrade && (() => {
         const rj = allJobs.find((x) => x.id === removingTrade.jobId);
         if (!rj) return null;
@@ -7938,6 +8014,11 @@ export default function SubSub() {
           a reason to turn a job down. It is the SAME form the manager proposes
           from -- one component, because two copies of three inputs and a
           window validation is two things to keep in step. */}
+      {spanSuggest && (
+        <SpanSuggestModal job={spanSuggest.job} trade={spanSuggest.trade}
+          off={mySub ? companyOffDays({ unavailableDays: mySub.unavailableDays || [], crews: mySub.crews || [] }).days : []}
+          onSend={suggestSpan} onClose={() => setSpanSuggest(null)} />
+      )}
       {proposeWO && <Modal onClose={() => setProposeWO(null)}>
         <div className="form-sec">{proposeWO.first ? "Propose a time" : "Propose a different time"}</div>
         <p className="pw-job">{proposeWO.job.title}</p>
@@ -23700,6 +23781,369 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
   );
 }
 
+// 079. HOW LONG EACH TRADE TAKES, on screen. See shared/span.js for the rules;
+// these are the three places they are drawn: a line on each trade row, the
+// window that sets one, and the timeline that turns them into bars.
+//
+// The dates go through `formatExpiry`, which carries the year only when it is
+// not the current one -- the rule the compliance pack's date column follows,
+// so the common line stays short enough to sit beside a button.
+const spanLine = (sp) => spanText(sp, formatExpiry);
+// A suggestion has no "first working day" of its own on the wire, so it is
+// worked out with the same rule the estimate uses; its end is the server's.
+const proposalView = (sp) => sp?.proposal
+  ? { ...(spanView({ start: sp.proposal.start, days: sp.proposal.days, weekends: sp.weekends }) || {}),
+      end: sp.proposal.end || sp.proposal.start }
+  : null;
+// The refusals a span save can answer, named, because "that didn't save" over
+// a 400 day estimate says nothing about which box is wrong.
+function spanErrText(e) {
+  const err = e?.body?.error;
+  if (err === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration}.sql and try again.`;
+  if (err === "bad_span_start") return "Give it a start date.";
+  if (err === "bad_span_days") return `How long is a whole number of days, from 1 to ${MAX_SPAN_DAYS}.`;
+  if (err === "span_trade_not_on_job") return "That trade isn't on the job any more.";
+  if (err === "nothing_proposed") return "That suggestion has already been answered.";
+  if (err === "job_not_found") return "That job isn't one you can change here.";
+  return "That didn't save. Check your connection and try again.";
+}
+
+// One line on a trade row: the estimate, who suggested different figures, and
+// -- for whoever runs the job -- the way to change or answer it. A trade with
+// no estimate offers to set one rather than drawing a blank, because a blank
+// reads as "one day", which is exactly the dot this exists to replace.
+function TradeSpanLine({ job, trade, editable, crewName, onEdit, onAnswer }) {
+  const sp = job.spans?.[trade] || null;
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const answer = async (accept) => {
+    setBusy(accept ? "use" : "keep"); setErr("");
+    try { await onAnswer(job.id, trade, accept); }
+    catch (e) { setErr(spanErrText(e)); }
+    finally { setBusy(""); }
+  };
+  if (!sp) {
+    return editable ? (
+      <button className="tsp-add" onClick={() => onEdit(job, trade)}>
+        <CalendarRange size={12} /> How long will it take?
+      </button>
+    ) : null;
+  }
+  const prop = proposalView(sp);
+  return (
+    <div className="tsp" data-trade={trade}>
+      <div className="tsp-line">
+        <CalendarRange size={12} />
+        <span className="tsp-est">Est.</span>
+        <span className="tsp-range">{spanLine(sp)}</span>
+        {editable && <button className="tsp-edit" onClick={() => onEdit(job, trade)}>Change</button>}
+      </div>
+      {prop && (
+        <div className="tsp-prop">
+          <span className="tsp-prop-text">
+            <strong>{crewName || "The contractor"}</strong> suggests {spanLine(prop)}
+            {sp.proposal.note ? <> — “{sp.proposal.note}”</> : null}
+          </span>
+          {editable && (
+            <span className="tsp-prop-acts">
+              <button className="btn-solid tsp-use" disabled={!!busy} onClick={() => answer(true)}>
+                {busy === "use" ? "Saving…" : "Use theirs"}</button>
+              <button className="btn-ghost tsp-keep" disabled={!!busy} onClick={() => answer(false)}>
+                {busy === "keep" ? "Saving…" : "Keep ours"}</button>
+            </span>
+          )}
+        </div>
+      )}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
+// THE FIGURES, in one set of fields used by the job form, the trade-row
+// window and the crew's suggestion: a start, a number of working days, and
+// whether the crew works weekends -- with the finish worked out underneath,
+// because a number of days nobody can turn into a date is not an estimate
+// anybody can plan around. `off` is the days off of whoever holds the trade,
+// so the preview pushes past a holiday the way the server will.
+function SpanFields({ value, onChange, fallbackStart = "", off = [], compact = false }) {
+  const v = value || {};
+  const start = v.start || fallbackStart || "";
+  const preview = spanView({ start, days: v.days, weekends: !!v.weekends }, { off });
+  const daysBad = v.days !== "" && v.days != null && !spanDaysFrom(v.days);
+  return (
+    <div className={`spf ${compact ? "spf-compact" : ""}`}>
+      <label className="fld spf-start">Starts
+        <input type="date" value={v.start || ""} placeholder={fallbackStart}
+          onChange={(e) => onChange({ ...v, start: e.target.value })} />
+      </label>
+      <label className="fld spf-days">Working days
+        <input type="number" inputMode="numeric" min="1" max={MAX_SPAN_DAYS} step="1"
+          value={v.days ?? ""} placeholder="e.g. 3"
+          onChange={(e) => onChange({ ...v, days: e.target.value.replace(/[^0-9]/g, "") })} />
+      </label>
+      <label className="spf-wk">
+        <input type="checkbox" checked={!!v.weekends}
+          onChange={(e) => onChange({ ...v, weekends: e.target.checked })} />
+        Works weekends
+      </label>
+      <p className="spf-out" aria-live="polite">
+        {daysBad ? <span className="spf-bad">A whole number of days, 1 to {MAX_SPAN_DAYS}.</span>
+          : preview ? <>Finishes <strong>{formatExpiry(preview.end)}</strong>
+            {preview.first !== start ? <> · starts work {formatExpiry(preview.first)}</> : null}</>
+          : !start && v.days ? <span className="spf-bad">Give it a start date.</span>
+          : <span className="spf-none">No estimate — it shows as a single day.</span>}
+      </p>
+    </div>
+  );
+}
+
+// The window a trade row's "Change" opens. Only this trade is sent, so
+// setting plumbing's length cannot touch paint's.
+function SpanModal({ job, trade, off = [], onSave, onClose }) {
+  const sp = job.spans?.[trade];
+  const [v, setV] = useState({
+    start: sp?.start || job.date || "", days: sp?.days ? String(sp.days) : "", weekends: !!sp?.weekends,
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const days = spanDaysFrom(v.days);
+  const ok = days && isSpanDay(v.start);
+  const save = async (clear = false) => {
+    setBusy(true); setErr("");
+    try {
+      await onSave(job.id, { [trade]: clear ? null : { start: v.start, days, weekends: !!v.weekends } });
+      onClose();
+    } catch (e) { setErr(spanErrText(e)); setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <div className="form span-modal">
+        <h2>How long will {catMeta(trade).label.toLowerCase()} take?</h2>
+        <p className="form-sub">{job.title}. An estimate in working days; the finish is worked out from it,
+          skipping weekends and any days the crew holding it has marked off.</p>
+        <SpanFields value={v} onChange={setV} fallbackStart={job.date || ""} off={off} />
+        {err && <p className="billing-err" role="alert">{err}</p>}
+        <div className="form-actions">
+          {sp && <button className="btn-ghost danger" disabled={busy} onClick={() => save(true)}>Remove estimate</button>}
+          <button className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="btn-solid" disabled={!ok || busy} onClick={() => save(false)}>
+            <Check size={15} /> {busy ? "Saving…" : "Save estimate"}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// THE CREW'S SUGGESTION. A suggestion, not an edit: the hiring side's figures
+// stand until it accepts these, because the rest of the job is sequenced
+// around them. With no estimate yet, the crew's simply becomes the estimate.
+function SpanSuggestModal({ job, trade, off = [], onSend, onClose }) {
+  const sp = job.spans?.[trade];
+  const [v, setV] = useState({
+    start: sp?.start || job.visit?.date || job.date || "", days: sp?.days ? String(sp.days) : "",
+    weekends: !!sp?.weekends,
+  });
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const days = spanDaysFrom(v.days);
+  const ok = days && isSpanDay(v.start) && (!sp || days !== sp.days || v.start !== sp.start);
+  const send = async () => {
+    setBusy(true); setErr("");
+    try { await onSend(job, trade, { start: v.start, days, weekends: !!v.weekends, note }); onClose(); }
+    catch (e) { setErr(spanErrText(e)); setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <div className="form span-modal">
+        <h2>{sp ? "Suggest a different length" : "How long will this take?"}</h2>
+        <p className="form-sub">{sp
+          ? <>They have it down as {spanLine(sp)}. Your figures go to them to accept; theirs stand until they do.</>
+          : "Nobody has put a length on this yet, so yours becomes the estimate on their schedule."}</p>
+        <SpanFields value={v} onChange={setV} fallbackStart={job.date || ""} off={off} />
+        {sp && (
+          <label className="fld">Why <span className="fld-note">optional</span>
+            <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. the subfloor needs replacing first" />
+          </label>
+        )}
+        {err && <p className="billing-err" role="alert">{err}</p>}
+        <div className="form-actions">
+          <button className="btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="btn-solid" disabled={!ok || busy} onClick={send}>
+            {busy ? "Sending…" : sp ? "Send suggestion" : "Save estimate"}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// THE TIMELINE: every job as a bar across the weeks, split into its trades.
+//
+// The month grid answers "what is on Tuesday"; this answers what was asked
+// for -- *"more of a Gantt chart with beginning and ending estimates for each
+// job"* -- which is "what is happening over the next month, and how long does
+// each piece of it run". One row per job, a bar per trade underneath it.
+//
+// A trade with no estimate is a single DOT on the job's date, drawn
+// differently from a bar on purpose: a one-day bar would claim somebody said
+// it takes a day, and nobody did. Tapping a row opens the job, the same as
+// every other way of finding one.
+//
+// Four weeks on a tablet, two on a phone -- a 28-column grid at 390px is a
+// grid of 12px columns nobody can tap.
+const startOfWeekKey = (k) => {
+  const d = dayFromKey(k);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return dayKey(d);
+};
+const shiftKey = (k, n) => { const d = dayFromKey(k); d.setDate(d.getDate() + n); return dayKey(d); };
+
+function JobsTimeline({ jobs, subs = [], onOpenJob }) {
+  const todayK = dayKey();
+  const narrow = typeof window !== "undefined" && window.innerWidth < 700;
+  const span = narrow ? 14 : 28;
+  // Where the work is: the nearest live estimate or date from today, so a
+  // fortnight with nothing on it does not open on an empty chart.
+  const aim = useMemo(() => {
+    const keys = [];
+    jobs.forEach((j) => {
+      Object.values(j.spans || {}).forEach((sp) => { if (sp?.end >= todayK) keys.push(sp.first > todayK ? sp.first : todayK); });
+      if (j.date && j.date >= todayK) keys.push(j.date);
+    });
+    return keys.sort()[0] || todayK;
+  }, [jobs, todayK]);
+  const [from, setFrom] = useState(null);
+  const start = from || startOfWeekKey(aim < shiftKey(todayK, 14) ? todayK : aim);
+  const end = shiftKey(start, span - 1);
+  const days = Array.from({ length: span }, (_, i) => shiftKey(start, i));
+  const col = (k) => days.indexOf(k);
+  const clamp = (k) => (k < start ? start : k > end ? end : k);
+
+  const rows = jobs
+    .map((j) => {
+      const trades = (j.trades || []).map((t) => {
+        const sp = j.spans?.[t] || null;
+        const a = j.assignments?.[t];
+        const who = a ? (a.company || subs.find((x) => x.id === a.subId)?.company || "") : "";
+        return { t, sp, a, who };
+      });
+      const js = jobSpan(j.spans || {}, j.trades);
+      const lo = js?.start || j.date;
+      const hi = js?.end || j.date;
+      return { j, trades, js, lo, hi };
+    })
+    .filter((r) => r.lo && r.hi && r.hi >= start && r.lo <= end)
+    .sort((a, b) => (a.lo < b.lo ? -1 : a.lo > b.lo ? 1 : String(a.j.title).localeCompare(String(b.j.title))));
+  const undated = jobs.filter((j) => !j.date && !jobSpan(j.spans || {}, j.trades)).length;
+  const noEst = rows.filter((r) => !r.js).length;
+  const label = `${formatExpiry(start)} – ${formatExpiry(end)}`;
+  const tone = (j, x) => isClosed(j) ? "done"
+    : !x.a ? "open" : x.a.status === "accepted" || x.a.auto ? "full" : x.a.status === "declined" ? "open" : "wait";
+
+  return (
+    <div className="jtl" style={{ "--jtl-days": span }}>
+      <div className="jcal-top">
+        <button className="jcal-nav" onClick={() => setFrom(shiftKey(start, -7))} aria-label="Previous week">
+          <ChevronLeft size={16} />
+        </button>
+        <div className="jcal-month">
+          <strong>{label}</strong>
+          <span>{rows.length === 1 ? "1 job" : `${rows.length} jobs`}</span>
+        </div>
+        <button className="jcal-nav" onClick={() => setFrom(shiftKey(start, 7))} aria-label="Next week">
+          <ChevronRight size={16} />
+        </button>
+        <button className="jcal-today" onClick={() => setFrom(startOfWeekKey(todayK))}>Today</button>
+      </div>
+
+      <div className="jtl-scroll">
+        <div className="jtl-head">
+          <span className="jtl-lbl" />
+          <div className="jtl-days">
+            {days.map((k) => {
+              const d = dayFromKey(k);
+              const wk = d.getDay() === 0 || d.getDay() === 6;
+              return (
+                <span key={k} className={`jtl-day ${wk ? "wk" : ""} ${k === todayK ? "today" : ""}`}
+                  title={niceDay(k)} data-day={k}>
+                  <i>{d.toLocaleDateString(undefined, { weekday: "narrow" })}</i>
+                  <b>{d.getDate()}</b>
+                </span>
+              );
+            })}
+          </div>
+        </div>
+        {rows.length === 0 && (
+          <div className="dash-empty"><ChartGantt size={22} />
+            <p>Nothing scheduled between {label}.</p></div>
+        )}
+        {rows.map((r) => (
+          <button key={r.j.id} className={`jtl-job ${isClosed(r.j) ? "done" : ""}`} data-job-id={r.j.id}
+            onClick={() => onOpenJob(r.j.id)}>
+            <span className="jtl-lbl">
+              <span className="jtl-title">{r.j.title}</span>
+              <span className="jtl-sub">{r.js
+                ? `${formatExpiry(r.js.start)} – ${formatExpiry(r.js.end)}`
+                : `${r.j.date ? formatExpiry(r.j.date) : "No date"} · no estimate`}</span>
+            </span>
+            <span className="jtl-lanes">
+              {r.trades.map((x) => {
+                const M = catMeta(x.t);
+                const bar = x.sp && x.sp.end >= start && x.sp.first <= end;
+                const dotDay = !x.sp && r.j.date >= start && r.j.date <= end ? r.j.date : null;
+                return (
+                  <span key={x.t} className="jtl-lane" data-trade={x.t}>
+                    <span className="jtl-grid" aria-hidden="true">
+                      {days.map((k) => {
+                        const g = dayFromKey(k).getDay();
+                        return <i key={k} className={`${g === 0 || g === 6 ? "wk" : ""} ${k === todayK ? "today" : ""}`} />;
+                      })}
+                    </span>
+                    {bar && (
+                      <span className={`jtl-bar t-${tone(r.j, x)} ${x.sp.proposal ? "has-prop" : ""}`}
+                        style={{ gridColumn: `${col(clamp(x.sp.first)) + 1} / ${col(clamp(x.sp.end)) + 2}` }}
+                        title={`${M.label}${x.who ? ` — ${x.who}` : ""}: ${spanLine(x.sp)}`}>
+                        <span className="jtl-bar-txt">{M.label}{x.who ? ` · ${x.who}` : ""}</span>
+                      </span>
+                    )}
+                    {dotDay && (
+                      <span className={`jtl-dot t-${tone(r.j, x)}`}
+                        style={{ gridColumn: `${col(dotDay) + 1} / ${col(dotDay) + 2}` }}
+                        title={`${M.label}: no estimate yet — ${formatExpiry(dotDay)}`}>
+                        <span className="sr-only">{M.label}, no estimate</span>
+                      </span>
+                    )}
+                    {!bar && !dotDay && <span className="jtl-off">{M.label}{x.sp ? ` · ${spanLine(x.sp)}` : ""}</span>}
+                  </span>
+                );
+              })}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      <div className="jcal-key">
+        <span><i className="jtl-key t-full" /> Booked</span>
+        <span><i className="jtl-key t-wait" /> Waiting on a reply</span>
+        <span><i className="jtl-key t-open" /> Needs a contractor</span>
+        <span><i className="jtl-key-dot" /> No estimate yet</span>
+      </div>
+      {noEst > 0 && (
+        <p className="jcal-undated">
+          {noEst === 1 ? "1 job has" : `${noEst} jobs have`} no estimate, so {noEst === 1 ? "it shows" : "they show"} as a dot on {noEst === 1 ? "its" : "their"} date.
+          Open a job and press <strong>How long will it take?</strong> on a trade.
+        </p>
+      )}
+      {undated > 0 && (
+        <p className="jcal-undated">
+          {undated === 1 ? "1 job has no date on it" : `${undated} jobs have no date on them`}, so nothing here can show {undated === 1 ? "it" : "them"}.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // A dashboard section's rows: one line, and the rest on a page of its own.
 //
 // Ten sections, most of them drawing every row they had, on a page whose
@@ -24970,6 +25414,9 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     materialsPaidBy: existing.materialsPaidBy || accountName || "",
     access: existing.access || "",
     measurementDocs: [...(existing.measurementDocs || [])],
+    // 079. How long each trade takes, as the fields hold them (strings).
+    spans: Object.fromEntries(Object.entries(existing.spans || {}).map(([t, sp]) =>
+      [t, { start: sp.start || "", days: sp.days ? String(sp.days) : "", weekends: !!sp.weekends }])),
   } : {
     title: start ? `${start.name} — ` : "",
     client: "", propertyId: start ? start.id : "",
@@ -24998,6 +25445,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     // project has already paid for on the trade grid.
     access: "",
     measurementDocs: [],
+    spans: {},
   });
   // Picking a property fills the address, so it isn't retyped per job.
   const pickProperty = (id) => {
@@ -25043,8 +25491,20 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     { n: 4, label: "Materials" },
   ];
   const [step, setStep] = useState(1);
+  // 079. A length somebody typed with no start to count it from -- no date on
+  // the trade and none on the job -- is a figure nobody can turn into a date.
+  // Named, because a dead Next is indistinguishable from a broken one.
+  const spanProblem = (() => {
+    for (const t of f.trades) {
+      const v = f.spans?.[t];
+      if (!v || v.days === "" || v.days == null) continue;
+      if (!spanDaysFrom(v.days)) return `${catMeta(t).label}: a whole number of working days, 1 to ${MAX_SPAN_DAYS}.`;
+      if (!isSpanDay(v.start || f.date)) return `${catMeta(t).label}: give it a start date, or set the job's start date.`;
+    }
+    return "";
+  })();
   const stepOk = (n) => n === 1 ? !!(f.title && f.address && (!asOwner || f.propertyId))
-    : n === 3 ? f.trades.length > 0 : true;
+    : n === 3 ? f.trades.length > 0 && !spanProblem : true;
   // A tab is reachable when every step before it is answered; editing an
   // existing job, every tab is, because nothing on it is unanswered.
   const reachable = (n) => edit || STEPS.slice(0, n - 1).every((x) => stepOk(x.n));
@@ -25052,11 +25512,28 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     ? (asOwner && !f.propertyId ? "Choose the building."
       : !f.title ? "Give the job a name." : !f.address ? "Add the service address." : "")
     : step === 3 && !f.trades.length ? "Pick at least one trade — each becomes a slot a contractor fills."
+    : step === 3 && spanProblem ? spanProblem
     : "";
+  // 079. What the save sends: an estimate for each trade with a length on it,
+  // counted from its own start or the job's. On an edit, a trade that HAD an
+  // estimate and has been cleared sends null, which removes it -- and only the
+  // trades named are touched on the server, so nothing else moves.
+  const builtSpans = () => {
+    const out = {};
+    for (const t of f.trades) {
+      const v = f.spans?.[t];
+      const days = spanDaysFrom(v?.days);
+      const start = v?.start || f.date;
+      if (days && isSpanDay(start)) out[t] = { start, days, weekends: !!v.weekends };
+      else if (existing?.spans?.[t]) out[t] = null;
+    }
+    return out;
+  };
+  const setSpan = (t, v) => setF((st) => ({ ...st, spans: { ...(st.spans || {}), [t]: v } }));
 
   const save = async () => {
     setSaving(true); setSaveErr("");
-    try { await onSubmit(f); }
+    try { await onSubmit({ ...f, spans: builtSpans() }); }
     catch (e) {
       console.error(edit ? "[job] edit failed:" : "[job] create failed:", e);
       const err = e?.body?.error;
@@ -25071,6 +25548,8 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           : err === "trades_required" ? "Pick at least one trade."
           : err === "bad_date" || err === "bad_time" ? "Check the date and time."
           : err === "property_not_found" ? "That building isn't on this account any more."
+          : String(err || "").startsWith("bad_span") || err === "span_trade_not_on_job"
+            ? `${e.body.trade ? `${catMeta(e.body.trade).label}: ` : ""}${spanErrText(e)}`
           : "That didn't save. Check your connection and try again — nothing here has been lost.");
       setSaving(false);
     }
@@ -25255,6 +25734,25 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         )}
         {f.trades.length > 1 && <p className="cov-hint">{f.trades.length} trades — each gets its own contractor and work order.</p>}
       </div>
+      {/* 079. HOW LONG EACH TRADE TAKES. Optional, and per trade, because a
+          job runs its trades in sequence -- demo, then plumbing, then paint --
+          and one length for the whole job would show every trade busy for all
+          of it. Not asked of somebody requesting work: how long it takes is
+          the managing side's estimate to make. */}
+      {!asking && f.trades.length > 0 && (
+        <div className="fld job-spans">
+          <div className="form-sec">How long each trade takes</div>
+          <p className="cov-hint">Optional. Working days from each trade's start — the timeline draws a bar for
+            each, and the finish skips weekends unless you say the crew works them.</p>
+          {f.trades.map((t) => (
+            <div key={t} className="js-row" data-trade={t}>
+              <span className="js-trade">{catMeta(t).label}</span>
+              <SpanFields compact value={f.spans?.[t]} fallbackStart={f.date}
+                onChange={(v) => setSpan(t, v)} />
+            </div>
+          ))}
+        </div>
+      )}
       <label className="fld">Overall scope<textarea rows={3} value={f.scope} onChange={(e) => set("scope", e.target.value)} placeholder="What the job covers end to end…" /></label>
 
       </>)}
@@ -28568,6 +29066,19 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
   const dated = rows
     .map((m) => ({ m, when: workWhen(m.job) }))
     .filter((x) => !!x.when.date);
+  // 079. EVERY DAY OF EVERY SPAN, not only the day it starts. A five-day job
+  // drawn as one dot on a Monday leaves Tuesday to Friday looking free on the
+  // one screen a crew reads to decide whether to take more work.
+  // The same days off the server counted when it worked out the finish, so
+  // the last day drawn here is the finish the office sees.
+  const crewDaysOff = companyOffDays({ crews }).days;
+  const onSite = {};
+  rows.forEach((m) => {
+    const sp = m.job.spans?.[m.trade];
+    if (!sp) return;
+    const list = spanDates({ start: sp.start, days: sp.days, weekends: sp.weekends, off: crewDaysOff });
+    list.forEach((k, n) => { (onSite[k] ||= []).push({ m, n: n + 1, of: list.length }); });
+  });
   const byDay = {};
   dated.forEach((x) => { (byDay[x.when.date] ||= []).push(x); });
   Object.values(byDay).forEach((list) => list.sort((a, b) =>
@@ -28670,9 +29181,10 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
             if (!k) return <span key={`pad${i}`} className="jcal-cell empty" />;
             const list = byDay[k] || [];
             const off = offOn(k);
+            const site = onSite[k] || [];
             return (
               <button key={k} data-day={k}
-                className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}${off ? ` crew-${off}` : ""}`}
+                className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}${off ? ` crew-${off}` : ""}${site.length ? " on-site" : ""}`}
                 onClick={() => setSelected(k === selected ? "" : k)}
                 aria-pressed={k === selected}
                 title={list.length ? `${list.length} job${list.length === 1 ? "" : "s"} on ${niceDay(k)}` : niceDay(k)}>
@@ -28690,6 +29202,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                 {/* Read out, because three coloured dots say nothing at all to
                     a screen reader. */}
                 {off && <span className={`jc-off ${off}`} aria-hidden="true">{off === "off" ? "Off" : "Part"}</span>}
+                {site.length > 0 && <span className="jc-site" aria-hidden="true" />}
                 <span className="sr-only">{list.length
                   ? `${list.length} job${list.length === 1 ? "" : "s"}, ${tone(list) === "open" ? "not all confirmed" : "confirmed"}`
                   : "nothing booked"}{off === "off" ? ", every crew off" : off === "part" ? ", some crews off" : ""}</span>
@@ -28702,6 +29215,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
           <span><i className="jc-dot full" /> Time agreed</span>
           <span><i className="jc-dot open" /> Waiting on a yes</span>
           <span><i className="jc-dot done" /> Been and gone</span>
+          <span><i className="jc-sitekey" /> On site (estimate)</span>
           {working.length > 0 && <span><i className="jc-offkey off" /> Every crew off</span>}
           {working.length > 1 && <span><i className="jc-offkey part" /> Some crews off</span>}
         </div>
@@ -28734,7 +29248,22 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                 })}
               </div>
             )}
-            {dayRows.length === 0 ? (
+            {/* 079. The jobs this day falls inside, by their estimate --
+                "day 3 of 5" is what tells somebody they are already
+                committed, which a bare date never could. */}
+            {(onSite[selected] || []).map((x) => (
+              <button key={`site-${x.m.job.id}-${x.m.trade}`} className="jcd-row jcd-site"
+                onClick={() => onOpen?.(x.m)}>
+                <span className="jcd-time">Day {x.n} of {x.of}</span>
+                <span className="jcd-main">
+                  <span className="jcd-title">{x.m.job.title}</span>
+                  <span className="jcd-meta">{[catMeta(x.m.trade).label,
+                    x.m.elsewhere ? `for ${x.m.elsewhere.name}` : null,
+                    spanLine(x.m.job.spans[x.m.trade])].filter(Boolean).join(" · ")}</span>
+                </span>
+              </button>
+            ))}
+            {dayRows.length === 0 && !(onSite[selected] || []).length ? (
               <div className="dash-empty"><ClipboardList size={22} /><p>Nothing booked for this day.</p></div>
             ) : dayRows.map((x) => (
               <button key={`${x.m.job.id}-${x.m.trade}`} className="jcd-row"
@@ -28923,7 +29452,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage, crewSaveErr = "",
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
-  onAnswerVisit, onProposeVisit, onGoPane, aimAuto = null }) {
+  onAnswerVisit, onProposeVisit, onSuggestSpan = null, onGoPane, aimAuto = null }) {
   const [sub2, setSub2] = useState("trades");
   // Arriving from the auto-schedule request email: open Availability and ring
   // the switch. Keyed on a counter so asking twice lands twice.
@@ -29218,7 +29747,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {fPending.length > 0 && (
             <section className="dash-sec">
               <h3><Clock size={15} /> Job requests <span className="sec-count amber">{fPending.length}</span></h3>
-              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} showActions />)}
+              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} showActions />)}
             </section>
           )}
 
@@ -29227,7 +29756,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <h3><Calendar size={15} /> Current &amp; upcoming {fUpcoming.length > 0 && <span className="sec-count">{fUpcoming.length}</span>}</h3>
             {fUpcoming.length === 0
               ? <div className="dash-empty"><ClipboardList size={24} /><p>{narrowed ? "No upcoming jobs match these filters." : "No upcoming jobs booked."}</p></div>
-              : fUpcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
+              : fUpcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} />)}
           </section>
           )}
 
@@ -29266,14 +29795,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {fPast.length > 0 && (
             <section className="dash-sec">
               <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{fPast.length}</span></h3>
-              {fPast.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} past />)}
+              {fPast.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} past />)}
             </section>
           )}
 
           {fDeclined.length > 0 && (
             <section className="dash-sec">
               <h3><XCircle size={15} /> Declined <span className="sec-count">{fDeclined.length}</span></h3>
-              {fDeclined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} />)}
+              {fDeclined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} />)}
             </section>
           )}
         </>
@@ -30956,7 +31485,7 @@ function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, 
   );
 }
 
-function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient, onAnswerVisit, onProposeVisit }) {
+function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient, onAnswerVisit, onProposeVisit, onSuggestSpan = null }) {
   const M = catMeta(trade);
   const left = msLeft(a, now);
   const expired = isExpired(a, now);
@@ -31165,6 +31694,32 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         : ACCESS_KINDS[job.access] && (
           <p className="jr-access"><Key size={12} /> {ACCESS_KINDS[job.access].forContractor}</p>
         )}
+      {/* 079. HOW LONG, which is the question somebody asks before saying
+          yes to a job: a day off a roof and a fortnight on one are different
+          answers to "can I take this". Their own trade only. And the way to
+          say the office has it wrong, because the crew are the people who
+          know -- as a suggestion the office accepts, not an edit, since the
+          rest of the job is sequenced around it. Only at this account, and
+          only while the work is theirs or on offer to them. */}
+      {(() => {
+        const sp = job.spans?.[trade] || null;
+        const canSuggest = !away && !past && onSuggestSpan && a.status !== "declined";
+        if (!sp && !canSuggest) return null;
+        const prop = proposalView(sp);
+        return (
+          <div className="jr-span" data-trade={trade}>
+            <CalendarRange size={13} />
+            <span className="jr-span-txt">{sp
+              ? <>Estimated <b>{spanLine(sp)}</b>{prop
+                ? <span className="jr-span-wait"> · your suggestion of {spanLine(prop)} is with the office</span> : null}</>
+              : "No length on this yet."}</span>
+            {canSuggest && (
+              <button className="sh-link jr-span-btn" onClick={() => onSuggestSpan({ job, trade, a })}>
+                {sp ? "Suggest a different length" : "Say how long it takes"}</button>
+            )}
+          </div>
+        );
+      })()}
       {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
       {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
       {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
@@ -40258,6 +40813,102 @@ strong.insp-name{background:none;border:0;padding:0}
 .mcal-crew:disabled{cursor:default}
 .mcal-nocrew{margin:0;font-size:13px;color:var(--ink-soft)}
 .mcal-paused{display:flex;align-items:center;gap:6px;margin:0 0 12px;font-size:13px;font-weight:600;color:#a3431f}
+
+/* ---- 079: how long each trade takes ---------------------------------- */
+/* A day the crew is on site by an estimate: a band along the foot of the
+   cell, so it reads as a run across the week rather than as another dot. */
+.jcal-cell.on-site{background:#eef6f1;border-color:#cfe3d7}
+.jc-site{position:absolute;left:4px;right:4px;bottom:4px;height:4px;border-radius:3px;background:var(--brand);opacity:.55}
+.jc-sitekey{display:inline-block;width:14px;height:4px;border-radius:3px;background:var(--brand);opacity:.55}
+.jcd-site{background:#eef6f1;border-color:#cfe3d7}
+.jcd-site .jcd-time{color:var(--brand)}
+
+/* The estimate on a trade row, and a suggestion from the crew under it. */
+.tsp{margin-top:5px;display:flex;flex-direction:column;gap:5px}
+.tsp-line{display:flex;flex-wrap:wrap;align-items:center;gap:5px;font-size:12.5px;color:var(--ink-soft)}
+.tsp-est{font-weight:800;text-transform:uppercase;letter-spacing:.04em;font-size:10.5px;color:var(--ink-soft)}
+.tsp-range{color:var(--ink);font-weight:600}
+.tsp-edit,.tsp-add{background:none;border:0;padding:2px 0;font:700 12.5px Inter,sans-serif;color:var(--brand);cursor:pointer}
+.tsp-add{display:inline-flex;align-items:center;gap:5px;margin-top:5px}
+.tsp-edit:hover,.tsp-add:hover{text-decoration:underline}
+.tsp-prop{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;background:#fdf6e7;border:1px solid #efd9a6;
+  border-radius:9px;padding:8px 10px;font-size:12.5px;color:var(--ink)}
+.tsp-prop-text{flex:1 1 220px;min-width:0}
+.tsp-prop-acts{display:flex;gap:6px;flex:none}
+.tsp-prop-acts button{min-height:36px;padding:6px 12px;font-size:12.5px}
+
+/* The figures: a start, working days, weekends, and the finish under them. */
+.spf{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto;gap:6px 12px;align-items:end}
+.spf .fld{margin:0}
+.spf-wk{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ink-soft);
+  min-height:40px;white-space:nowrap}
+.spf-out{grid-column:1 / -1;margin:0;font-size:12.5px;color:var(--ink-soft)}
+.spf-out strong{color:var(--ink)}
+.spf-bad{color:var(--red);font-weight:600}
+.spf-none{font-style:italic}
+.job-spans{margin-top:6px}
+.js-row{border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-top:8px;background:var(--paper)}
+.js-trade{display:block;font-size:13px;font-weight:800;margin-bottom:6px}
+@media (max-width:560px){
+  .spf{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+  .spf-wk{grid-column:1 / -1;min-height:0}
+}
+
+/* On the crew's card: how long, and the way to say otherwise. */
+.jr-span{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin:8px 0 2px;font-size:13px;color:var(--ink-soft)}
+.jr-span-txt b{color:var(--ink)}
+.jr-span-wait{color:#8a5a12}
+.jr-span-btn{font-size:13px}
+
+/* ---- the timeline: a bar per trade across the weeks ------------------ */
+/* One grid per lane with a column per day, so a bar is just a grid-column
+   span and lines up with the day headers above it whatever the width. */
+.jtl{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:var(--shadow)}
+.jtl-scroll{overflow-x:auto}
+.jtl-head,.jtl-job{display:grid;grid-template-columns:minmax(150px,210px) minmax(0,1fr);gap:10px;align-items:start}
+.jtl-head{position:sticky;top:0;background:var(--card);padding-bottom:4px;border-bottom:1px solid var(--line)}
+.jtl-days,.jtl-lane,.jtl-grid{display:grid;grid-template-columns:repeat(var(--jtl-days),minmax(18px,1fr))}
+.jtl-day{display:flex;flex-direction:column;align-items:center;font-size:10px;color:var(--ink-soft);line-height:1.25}
+.jtl-day i{font-style:normal;font-weight:700;text-transform:uppercase}
+.jtl-day b{font-size:11.5px;color:var(--ink)}
+.jtl-day.wk b,.jtl-day.wk i{opacity:.55}
+.jtl-day.today b{background:var(--brand);color:#fff;border-radius:50%;width:20px;height:20px;
+  display:inline-flex;align-items:center;justify-content:center}
+.jtl-job{width:100%;text-align:left;font:inherit;background:none;border:0;border-bottom:1px solid var(--line);
+  padding:9px 0;cursor:pointer}
+.jtl-job:hover{background:#f6faf7}
+.jtl-job.done{opacity:.6}
+.jtl-lbl{display:flex;flex-direction:column;min-width:0}
+.jtl-title{font-size:13.5px;font-weight:700;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.jtl-sub{font-size:11.5px;color:var(--ink-soft)}
+.jtl-lanes{display:flex;flex-direction:column;gap:4px;min-width:0}
+.jtl-lane{position:relative;min-height:24px}
+.jtl-grid{grid-column:1 / -1;grid-row:1;height:100%}
+.jtl-grid i{border-left:1px solid #eef1ee}
+.jtl-grid i.wk{background:#f6f7f5}
+.jtl-grid i.today{background:#e6f3ea}
+.jtl-bar{grid-row:1;align-self:center;height:22px;border-radius:6px;display:flex;align-items:center;
+  padding:0 7px;min-width:0;overflow:hidden;z-index:1}
+.jtl-bar-txt{font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.jtl-bar.t-full{background:var(--brand);color:#fff}
+.jtl-bar.t-wait{background:#f6e3b8;color:#6d4a0c;border:1px solid #e3c47c}
+.jtl-bar.t-open{background:#fff;color:#8a5a12;border:1.5px dashed var(--amber)}
+.jtl-bar.t-done{background:#d8ded9;color:#4b544e}
+.jtl-bar.has-prop{box-shadow:0 0 0 2px #f0c35a}
+.jtl-dot{grid-row:1;align-self:center;justify-self:center;width:12px;height:12px;border-radius:50%;z-index:1;
+  background:#fff;border:2px solid var(--ink-soft)}
+.jtl-dot.t-full{border-color:var(--brand)}
+.jtl-dot.t-open{border-color:var(--amber)}
+.jtl-off{grid-column:1 / -1;grid-row:1;align-self:center;font-size:11px;color:var(--ink-soft);padding-left:4px;z-index:1}
+.jtl-key{display:inline-block;width:16px;height:9px;border-radius:3px}
+.jtl-key.t-full{background:var(--brand)}
+.jtl-key.t-wait{background:#f6e3b8;border:1px solid #e3c47c}
+.jtl-key.t-open{background:#fff;border:1.5px dashed var(--amber)}
+.jtl-key-dot{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink-soft)}
+@media (max-width:700px){
+  .jtl-head,.jtl-job{grid-template-columns:minmax(0,1fr)}
+  .jtl-head .jtl-lbl{display:none}
+}
 .jcd-crews{display:flex;flex-direction:column;gap:6px;margin:0 0 10px}
 .jcd-crew{display:flex;align-items:center;gap:10px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
 .jcd-crew .avail-dot{margin-top:0}

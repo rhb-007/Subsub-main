@@ -297,6 +297,16 @@ export const api = {
   listAllBookings: () => request("/jobs/all-bookings"),
   createJob: (job) => request("/jobs", { method: "POST", body: JSON.stringify(job) }),
   patchJob: (jobId, patch) => request(`/jobs/${jobId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  // 079. How long each trade takes. Only the trades named are touched; a null
+  // removes that trade's estimate.
+  saveJobSpans: (jobId, spans) => request(`/jobs/${jobId}/spans`,
+    { method: "PUT", body: JSON.stringify({ spans }) }),
+  // The crew suggesting different figures for their own trade.
+  proposeJobSpan: (jobId, trade, body) => request(`/jobs/${jobId}/spans/${encodeURIComponent(trade)}/propose`,
+    { method: "POST", body: JSON.stringify(body) }),
+  // The hiring side answering it: use their figures, or keep its own.
+  answerJobSpan: (jobId, trade, accept) => request(`/jobs/${jobId}/spans/${encodeURIComponent(trade)}/answer`,
+    { method: "POST", body: JSON.stringify({ accept: !!accept }) }),
   // Turns a building owner's or tenant's request into a job that can be assigned.
   approveJob: (jobId) => request(`/jobs/${jobId}/approve`, { method: "POST" }),
   // Saying no to a request, with the reason the person who asked will see.

@@ -42,7 +42,12 @@ const today = new Date().toISOString().slice(0, 10);
 const plus = (n) => new Date(Date.parse(today + "T12:00:00Z") + n * DAY).toISOString().slice(0, 10);
 const AHEAD = plus(10);
 const BOTH_OFF = plus(12);
-const ONE_OFF = plus(14);
+// Three weeks out rather than two: j_both's day is moved to the next free
+// working day after BOTH_OFF, and when BOTH_OFF fell on a Saturday that was
+// exactly plus(14) -- so the crew was already booked on ONE_OFF and the
+// assertion about it failed on two days in seven. A fixture that depends on
+// which weekday the suite runs on is a suite nobody believes when it is red.
+const ONE_OFF = plus(21);
 const VERIFIED = `{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"},"w9":{"status":"verified"}}`;
 
 const CREWS = [

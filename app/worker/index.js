@@ -145,6 +145,7 @@ import { normalizeCode, mintCode, CODE_LENGTH, isChannel, isGcKind, referrerKind
 import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck, licenseReminderDue,
   LICENSE_CHASE_AT } from "../shared/licensecheck.js";
 import { validCrews, offDays, isOffOn } from "../shared/crews.js";
+import { validSpan, spanView, busyFromSpans, spanDates, spanDaysFrom, isDayKey } from "../shared/span.js";
 import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passportBadge,
   ACCESS_KINDS as PASSPORT_ACCESS_KINDS, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
   CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
@@ -8187,6 +8188,7 @@ export function missingSchema(err) {
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
+  if (/\bjob_trade_spans\b/i.test(m)) return "079_job_spans";
   if (/\bpassport(s|_photos|_access)\b|\blicense_reminders\b|ux_passport_|ux_license_reminder/i.test(m)) return "077_passport";
   if (/\bleads\b/i.test(m)) return "076_leads";
   if (/\breferral_(codes|touches|attributions|rewards|invites)\b|ux_referral_/i.test(m)) return "075_referrals";
@@ -8879,8 +8881,11 @@ app.get("/api/jobs", async (c) => {
 
   // Every job leaving this route goes through the same two redactions, rather
   // than each list remembering to apply them.
+  // 079. The estimates, in one query for every list, stitched on before the
+  // redactions so a contractor's copy is narrowed with the rest of it.
+  const spanByJob = await spansForJobs(c.env, [...jobs, ...ownedJobs, ...pastReports].map((j) => j.id));
   const forCaller = (j) => stripOtherTrades(auth,
-    stripMoney(auth, jobRowToJs(withEnding(j), woByJob[j.id] || [])));
+    stripMoney(auth, { ...jobRowToJs(withEnding(j), woByJob[j.id] || []), spans: spanByJob[j.id] || {} }));
   return c.json([
     ...jobs.map((j) => ({
       ...forCaller(j),
@@ -9109,7 +9114,101 @@ function stripOtherTrades(auth, job) {
   for (const [trade, a] of Object.entries(job.assignments || {})) {
     if (a && a.subId === auth.companyId) assignments[trade] = a;
   }
-  return { ...job, assignments };
+  // 079. And the other trades' estimates, for the same reason: when the
+  // electrician is booked and for how long is the account's sequencing of
+  // somebody else's work, not theirs to read.
+  const spans = {};
+  for (const t of Object.keys(assignments)) if (job.spans?.[t]) spans[t] = job.spans[t];
+  return { ...job, assignments, ...(job.spans ? { spans } : {}) };
+}
+
+// 079. EVERY TRADE ESTIMATE FOR A SET OF JOBS, as the screens read them.
+//
+// The finish is computed here with the days off of the company holding that
+// trade's live work order, because a holiday in the middle of a job pushes its
+// end -- and only the server can see that company's crews for a job on another
+// account's roster. A trade nobody holds yet counts weekends and nothing else.
+//
+// A database without 079 has no estimates, which is exactly what every job
+// had before it: one date, drawn as a dot.
+async function spansForJobs(env, jobIds = []) {
+  const ids = [...new Set(jobIds.filter(Boolean))];
+  if (!ids.length) return {};
+  const out = {};
+  try {
+    const marks = ids.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT s.*, pu.name AS proposed_by_name, co.crews, co.unavailable_days
+         FROM job_trade_spans s
+         LEFT JOIN users pu ON pu.id = s.proposed_by
+         LEFT JOIN work_orders w ON w.job_id = s.job_id AND w.trade = s.trade
+                                AND w.voided_at IS NULL AND w.status != 'declined'
+         LEFT JOIN companies co ON co.id = w.company_id
+        WHERE s.job_id IN (${marks})`).bind(...ids).all();
+    for (const r of results || []) {
+      const off = r.crews || r.unavailable_days
+        ? offDays({ unavailableDays: parseJson(r.unavailable_days, []), crews: parseJson(r.crews, []) }).days
+        : [];
+      const v = spanView(r, { off });
+      if (v) (out[r.job_id] ||= {})[r.trade] = v;
+    }
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  return out;
+}
+
+// 079. WRITE A JOB'S ESTIMATES, one trade at a time. `spans` is a map of
+// trade -> {start, days, weekends} or null, and ONLY THE TRADES NAMED ARE
+// TOUCHED, which is the shape that once deleted a W-9 through a form that
+// edited part of a record and replaced the whole of it.
+//
+// Every trade must be on the job: an estimate for a trade the job does not
+// have is a bar on the timeline for work nobody is doing, and busy days on a
+// crew's diary keeping them from being offered anything else -- which is the
+// invariant CHECK.sql counts. A null removes the estimate.
+//
+// Setting figures clears a proposal the crew made on that trade, because the
+// hiring side has now answered it with figures of its own.
+//
+// Returns { ok, written } or { error, trade } with the refusal named.
+//
+// Split in two -- the plan, then the write -- so a route that also writes the
+// job itself can refuse a bad estimate BEFORE anything is written, rather
+// than answering 400 over a job it has already changed.
+function planJobSpans(spans, trades) {
+  if (!spans || typeof spans !== "object" || Array.isArray(spans)) return { error: "bad_span" };
+  const ops = [];
+  for (const [trade, raw] of Object.entries(spans)) {
+    // Removing an estimate is harmless whatever the trade; setting one for a
+    // trade the job does not have is the bar for work nobody is doing.
+    if (raw === null) { ops.push({ trade, del: true }); continue; }
+    if (!trades.includes(trade)) return { error: "span_trade_not_on_job", trade };
+    const got = validSpan(raw);
+    if (got.error) return { error: got.error, trade };
+    ops.push({ trade, ...got.span });
+  }
+  return { ops };
+}
+
+async function writeJobSpans(env, { jobId, trades, spans, userId, plan = null }) {
+  const { ops, error, trade } = plan || planJobSpans(spans, trades);
+  if (error) return { error, trade };
+  for (const op of ops) {
+    if (op.del) {
+      await env.DB.prepare(`DELETE FROM job_trade_spans WHERE job_id = ? AND trade = ?`)
+        .bind(jobId, op.trade).run();
+      continue;
+    }
+    await env.DB.prepare(
+      `INSERT INTO job_trade_spans (job_id, trade, start_date, work_days, weekends, set_by, set_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(job_id, trade) DO UPDATE SET
+         start_date = excluded.start_date, work_days = excluded.work_days,
+         weekends = excluded.weekends, set_by = excluded.set_by, set_at = excluded.set_at,
+         proposed_start = NULL, proposed_days = NULL, proposed_note = NULL,
+         proposed_by = NULL, proposed_at = NULL`
+    ).bind(jobId, op.trade, op.start, op.days, op.weekends ? 1 : 0, userId || null).run();
+  }
+  return { ok: true, written: ops.length };
 }
 
 // An owner may raise work, which is why this is not requireRole("admin","pm"):
@@ -9222,6 +9321,17 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // tenant book themselves out of their own confirmation step.
   const access = requestedBy ? null : (b.access || null);
 
+  // 079. How long each trade takes, when the hiring side already knows.
+  // Planned before the insert so a bad figure refuses the whole create rather
+  // than leaving a job with half its estimates. Not taken from a request: how
+  // long the work takes is the managing side's estimate to make, the same
+  // reason the access answer is not a requester's.
+  let spanPlan = null;
+  if (!requestedBy && b.spans && typeof b.spans === "object" && Object.keys(b.spans).length) {
+    spanPlan = planJobSpans(b.spans, (Array.isArray(b.trades) ? b.trades : []).filter((t) => TRADE_IDS.has(t)));
+    if (spanPlan.error) return c.json({ error: spanPlan.error, trade: spanPlan.trade || null }, 400);
+  }
+
   const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
     "date", "time", "trades", "scope", "material_source", "materials_paid_by", "measurement_docs",
     "created_by", "property_id", "requested_by", "photos", "report_detail", "severity"];
@@ -9273,6 +9383,18 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     const migration = missingSchema(err);
     if (!migration) throw err;
     return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  // 079. After the insert, and tolerant of a database without 079: the job is
+  // the thing somebody asked for, and losing the estimate must not cost it.
+  let spansSaved = null;
+  if (spanPlan) {
+    try { await writeJobSpans(c.env, { jobId: id, plan: spanPlan, userId }); spansSaved = true; }
+    catch (err) {
+      const migration = missingSchema(err);
+      if (!migration) throw err;
+      spansSaved = { error: "migration_needed", migration };
+    }
   }
 
   // A NARROWED SEAT KEEPS WHAT IT JUST MADE. Without this, a project manager
@@ -9333,8 +9455,10 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   const wos = saved ? (await c.env.DB.prepare(
     `SELECT wo.*, c.company AS company_name FROM work_orders wo LEFT JOIN companies c ON c.id = wo.company_id
       WHERE wo.job_id = ? AND wo.voided_at IS NULL`).bind(id).all()).results : [];
+  const savedSpans = saved ? (await spansForJobs(c.env, [id]))[id] || {} : {};
   return c.json({ id, requested: !!requestedBy, severity,
-    emergency, job: saved ? jobRowToJs(saved, wos) : null }, 201);
+    emergency, job: saved ? { ...jobRowToJs(saved, wos), spans: savedSpans } : null,
+    ...(spansSaved ? { spansSaved } : {}) }, 201);
 });
 
 // Turning an owner's request into a job somebody can be assigned to. Only the
@@ -10678,6 +10802,19 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
     }
     sets.push("property_id = ?"); vals.push(pid);
   }
+  // 079. HOW LONG EACH TRADE TAKES, planned against the trades the job will
+  // have AFTER this save -- so taking plumbing off and dropping its estimate
+  // in one press is one coherent change -- and refused before anything is
+  // written, so a bad figure cannot leave half a save behind it.
+  let spanPlan = null;
+  if (b.spans !== undefined) {
+    const after = b.trades !== undefined
+      ? (Array.isArray(b.trades) ? b.trades : []).filter((t) => TRADE_IDS.has(t))
+      : parseJson((await c.env.DB.prepare(`SELECT trades FROM jobs WHERE id = ? AND account_id = ?`)
+        .bind(id, accountId).first())?.trades, []);
+    spanPlan = planJobSpans(b.spans, after);
+    if (spanPlan.error) return c.json({ error: spanPlan.error, trade: spanPlan.trade || null }, 400);
+  }
   // 060. Changing it AFTER the job exists is most of the point: what a repair
   // turns out to need is often only clear once somebody has looked at it, and
   // "sometimes you need to be there" is a judgement made at scheduling time
@@ -10687,7 +10824,7 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
     if (b.access !== null && !isAccess(b.access)) return c.json({ error: "bad_access" }, 400);
     sets.push("access = ?"); vals.push(b.access || null);
   }
-  if (!sets.length) return c.json({ ok: true });
+  if (!sets.length && !spanPlan) return c.json({ ok: true });
   // AND THE JOB FLOATS, because somebody just worked on it. 025 added this
   // column so a job being worked on rises to the top of the list, and a route
   // that changes the job and not the column leaves the edit somewhere nobody
@@ -10700,6 +10837,31 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   // that is a save that reports success. `maySeeJob` as well, so a scoped
   // project manager cannot edit a job outside their list.
   if (!res.meta?.changes) return c.json({ error: "job_not_found" }, 404);
+  // 079. The estimates, now the job row is known to be this account's. A
+  // database without 079 names the file rather than throwing a 500 over a
+  // job that has already been saved -- the edit stands, the estimate is what
+  // is missing, and the reply says which.
+  let spansSaved = null;
+  if (spanPlan) {
+    try {
+      await writeJobSpans(c.env, { jobId: id, plan: spanPlan, userId });
+      spansSaved = true;
+    } catch (err) {
+      const migration = missingSchema(err);
+      if (!migration) throw err;
+      spansSaved = { error: "migration_needed", migration };
+    }
+  }
+  // A trade taken off takes its estimate with it, whatever the body said:
+  // an estimate for a trade the job does not have is the bar for work nobody
+  // is doing that CHECK.sql counts.
+  if (droppedTrades.length) {
+    try {
+      await c.env.DB.prepare(
+        `DELETE FROM job_trade_spans WHERE job_id = ? AND trade IN (${droppedTrades.map(() => "?").join(",")})`
+      ).bind(id, ...droppedTrades).run();
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
   // A TRADE TAKEN OFF TAKES ITS OPEN QUESTIONS WITH IT. Companies asked to
   // price that trade, or answering an overflow post for it, would otherwise
   // spend an afternoon on work the job no longer has -- the reason ending a
@@ -10773,7 +10935,136 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
         : { error: got.body?.error || "propose_failed" };
     }
   }
-  return c.json({ ok: true, rescheduled });
+  // The estimates as stored, when any moved, so the screen draws the server's
+  // finish rather than one it invented.
+  const spansNow = spanPlan || droppedTrades.length ? (await spansForJobs(c.env, [id]))[id] || {} : undefined;
+  return c.json({ ok: true, rescheduled, ...(spansSaved ? { spansSaved } : {}),
+    ...(spansNow !== undefined ? { spans: spansNow } : {}) });
+});
+
+// 079. HOW LONG EACH TRADE TAKES, set on its own -- from a trade row on the
+// job card, without opening the whole edit form. The same plan and the same
+// write the create and edit routes use, so three doors cannot store three
+// shapes. Only the trades named are touched.
+app.put("/api/jobs/:id/spans", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
+  const job = await c.env.DB.prepare(`SELECT id, title, trades FROM jobs WHERE id = ? AND account_id = ?`)
+    .bind(id, accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const plan = planJobSpans(b.spans, parseJson(job.trades, []));
+  if (plan.error) return c.json({ error: plan.error, trade: plan.trade || null }, 400);
+  try { await writeJobSpans(c.env, { jobId: id, plan, userId }); }
+  catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await touchJob(c.env, id);
+  await logActivity(c.env, accountId, userId, "job_spans",
+    `Set how long ${plan.ops.map((o) => tradeLabel(o.trade)).join(", ")} will take on "${job.title}"`);
+  return c.json({ ok: true, spans: (await spansForJobs(c.env, [id]))[id] || {} });
+});
+
+// 079. THE CREW SAYS HOW LONG IT WILL REALLY TAKE.
+//
+// They are the people who know. The office estimates "three days" for a
+// bathroom and the plumber knows it is five once the floor is up -- and a
+// timeline built only from the office's guess is a schedule the crew then
+// silently misses. So the company holding the trade can put different figures
+// forward, the same way they can put a different TIME forward on a visit.
+//
+// A SUGGESTION, NOT AN EDIT. The hiring side's estimate stands until they
+// accept it, because the estimate is what the rest of the job is sequenced
+// around and changing one trade's length moves everything after it. With NO
+// estimate yet, theirs simply becomes the estimate: there is nothing to
+// replace, and "nobody has said" is strictly worse than the crew's answer.
+//
+// Only the company holding a LIVE work order for that trade -- pending or
+// accepted. Somebody who declined, or whose work order was voided, is not on
+// the job any more. A seat with no work order there gets not_found, so this
+// cannot be walked to find which trades a job has.
+app.post("/api/jobs/:id/spans/:trade/propose", requireRole("contractor"), async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const trade = c.req.param("trade");
+  const wo = await c.env.DB.prepare(
+    `SELECT w.id, j.title, j.account_id FROM work_orders w JOIN jobs j ON j.id = w.job_id
+      WHERE w.job_id = ? AND w.trade = ? AND w.company_id = ? AND j.account_id = ?
+        AND w.voided_at IS NULL AND w.status IN ('pending', 'accepted')`
+  ).bind(id, trade, auth.companyId || "", auth.accountId).first();
+  if (!wo) return c.json({ error: "job_not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const got = validSpan(b);
+  if (got.error) return c.json({ error: got.error }, 400);
+  const note = String(b.note || "").trim().slice(0, 500) || null;
+  const now = new Date().toISOString();
+  try {
+    const had = await c.env.DB.prepare(
+      `SELECT start_date FROM job_trade_spans WHERE job_id = ? AND trade = ?`).bind(id, trade).first();
+    if (!had) {
+      await c.env.DB.prepare(
+        `INSERT INTO job_trade_spans (job_id, trade, start_date, work_days, weekends, set_by, set_at)
+         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+      ).bind(id, trade, got.span.start, got.span.days, got.span.weekends ? 1 : 0, auth.userId).run();
+    } else {
+      await c.env.DB.prepare(
+        `UPDATE job_trade_spans SET proposed_start = ?, proposed_days = ?, proposed_note = ?,
+                proposed_by = ?, proposed_at = ? WHERE job_id = ? AND trade = ?`
+      ).bind(got.span.start, got.span.days, note, auth.userId, now, id, trade).run();
+    }
+    await touchJob(c.env, id);
+    await logActivity(c.env, auth.accountId, auth.userId, "job_span_proposed",
+      had
+        ? `Suggested ${got.span.days} working day${got.span.days === 1 ? "" : "s"} from ${got.span.start} for ${tradeLabel(trade)} on "${wo.title}"`
+        : `Set ${tradeLabel(trade)} on "${wo.title}" to ${got.span.days} working day${got.span.days === 1 ? "" : "s"} from ${got.span.start}`);
+    return c.json({ ok: true, proposed: !!had,
+      span: ((await spansForJobs(c.env, [id]))[id] || {})[trade] || null });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
+// 079. THE HIRING SIDE ANSWERS IT: use their figures, or keep its own. Either
+// way the suggestion is cleared, because a question that has been answered
+// and is still drawn is a button somebody presses twice.
+app.post("/api/jobs/:id/spans/:trade/answer", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = c.req.param("id");
+  const trade = c.req.param("trade");
+  if (!maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
+  const job = await c.env.DB.prepare(`SELECT id, title FROM jobs WHERE id = ? AND account_id = ?`)
+    .bind(id, accountId).first();
+  if (!job) return c.json({ error: "job_not_found" }, 404);
+  const accept = (await c.req.json().catch(() => ({})))?.accept === true;
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT proposed_start, proposed_days FROM job_trade_spans WHERE job_id = ? AND trade = ?`
+    ).bind(id, trade).first();
+    if (!row?.proposed_days) return c.json({ error: "nothing_proposed" }, 409);
+    await c.env.DB.prepare(
+      `UPDATE job_trade_spans SET
+          start_date = CASE WHEN ? THEN proposed_start ELSE start_date END,
+          work_days  = CASE WHEN ? THEN proposed_days  ELSE work_days  END,
+          set_by     = CASE WHEN ? THEN ? ELSE set_by END,
+          set_at     = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE set_at END,
+          proposed_start = NULL, proposed_days = NULL, proposed_note = NULL,
+          proposed_by = NULL, proposed_at = NULL
+        WHERE job_id = ? AND trade = ? AND proposed_days IS NOT NULL`
+    ).bind(accept ? 1 : 0, accept ? 1 : 0, accept ? 1 : 0, userId, accept ? 1 : 0, id, trade).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await touchJob(c.env, id);
+  await logActivity(c.env, accountId, userId, "job_span_answered",
+    `${accept ? "Used" : "Kept our own figures over"} the suggested length for ${tradeLabel(trade)} on "${job.title}"`);
+  return c.json({ ok: true, accepted: accept, spans: (await spansForJobs(c.env, [id]))[id] || {} });
 });
 
 // ---------------------------------------------------------------------------
@@ -13095,9 +13386,14 @@ app.get("/api/my-work", async (c) => {
       .catch((err) => { console.warn("[my-work] access plan:", err?.message || err); return null; })
       : null;
   }
+  // 079. How long THIS company's trade takes, on each row -- the one figure
+  // somebody needs to know whether they can take next Thursday too. Their own
+  // trade only, which is what the row already is.
+  const spanByJob = await spansForJobs(c.env, (rows || []).map((r) => r.job_id));
   return c.json({
     work: (rows || []).map((r) => ({
       woId: r.wo_id, wo: r.wo_number, jobId: r.job_id, trade: r.trade,
+      span: spanByJob[r.job_id]?.[r.trade] || null,
       accessPlan: plans[r.job_id] || null,
       // The account this is for. `here` is what lets the screen offer the
       // accept and decline buttons on the rows it can actually act on: this
@@ -16928,7 +17224,7 @@ const asSelf = async (c, path, body, as = null) => {
 // WHO COULD TAKE IT. The roster, with the three facts the ranking needs that
 // are not on the engagement: what they already have on, the days they have
 // marked themselves out, and whether their documents are in order.
-async function autoCandidates(env, accountId, trade, companyState) {
+async function autoCandidates(env, accountId, trade, companyState, { exceptJobId = "" } = {}) {
   const { results } = await env.DB.prepare(
     `SELECT e.company_id, e.categories, e.engaged_as, e.rating, e.doc_review,
             c.company, c.insurance, c.bond, c.contract, c.w9, c.unavailable_days, c.crews
@@ -16948,29 +17244,41 @@ async function autoCandidates(env, accountId, trade, companyState) {
     // What they already have on, this account's half of it. SubSub cannot see
     // the other four accounts' diaries, which is why the window is an OFFER
     // and the chain is what settles it.
+    // The job being scheduled is left out of its own diary: its estimate is
+    // the span being placed, not a booking that stands in the way of it.
     const { results: busy } = await env.DB.prepare(
       `SELECT DISTINCT v.date FROM visits v
          JOIN work_orders w ON w.job_id = v.job_id
-        WHERE w.company_id = ? AND w.voided_at IS NULL
+        WHERE w.company_id = ? AND w.voided_at IS NULL AND v.job_id != ?
           AND v.status IN ('proposed', 'confirmed')`
-    ).bind(r.company_id).all().catch(() => ({ results: [] }));
+    ).bind(r.company_id, exceptJobId).all().catch(() => ({ results: [] }));
+    // 079. AND EVERY DAY OF EVERY ESTIMATE THEY HOLD. A crew five days into a
+    // seven-day job is not free on day six because nobody booked a visit for
+    // it -- which is exactly what reading the visits alone answered. Their own
+    // trade on each job only, and live work only.
+    const { results: held } = await env.DB.prepare(
+      `SELECT s.start_date, s.work_days, s.weekends FROM job_trade_spans s
+         JOIN work_orders w ON w.job_id = s.job_id AND w.trade = s.trade
+         JOIN jobs j ON j.id = s.job_id
+        WHERE w.company_id = ? AND w.voided_at IS NULL AND w.status != 'declined'
+          AND j.status = 'active' AND s.job_id != ?`
+    ).bind(r.company_id, exceptJobId).all().catch(() => ({ results: [] }));
     const { results: open } = await env.DB.prepare(
       `SELECT COUNT(*) AS n FROM work_orders w JOIN jobs j ON j.id = w.job_id
         WHERE w.company_id = ? AND w.voided_at IS NULL AND j.status = 'active'`
     ).bind(r.company_id).all().catch(() => ({ results: [{ n: 0 }] }));
+    // The days they cannot be booked, worked out from their CREWS as well
+    // as the old company-wide list -- which no screen writes any more, so
+    // reading it alone booked a crew on a day every crew had marked off.
+    const o = offDays({ unavailableDays: parseJson(r.unavailable_days, []),
+      crews: parseJson(r.crews, []) });
     out.push({
       companyId: r.company_id, company: r.company,
       categories: parseJson(r.categories, []), engagedAs: r.engaged_as,
       rating: r.rating, blockers, shape,
-      busy: (busy || []).map((x) => x.date),
-      // The days they cannot be booked, worked out from their CREWS as well
-      // as the old company-wide list -- which no screen writes any more, so
-      // reading it alone booked a crew on a day every crew had marked off.
-      ...(() => {
-        const o = offDays({ unavailableDays: parseJson(r.unavailable_days, []),
-          crews: parseJson(r.crews, []) });
-        return { unavailable: o.days, paused: o.allPaused };
-      })(),
+      busy: [...new Set([...(busy || []).map((x) => x.date),
+        ...busyFromSpans(held || [], { off: o.days })])].sort(),
+      unavailable: o.days, paused: o.allPaused,
       openJobs: (open || [])[0]?.n || 0,
     });
   }
@@ -16997,7 +17305,7 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
   // after it rather than at the first gap in the diary.
   const from = (job?.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
   const trade = trades[0];
-  const cands = await autoCandidates(c.env, auth.accountId, trade);
+  const cands = await autoCandidates(c.env, auth.accountId, trade, null, { exceptJobId: jobId });
   const { picked, skipped } = rankCandidates(cands, { trade, from });
   if (!picked) {
     await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
@@ -17080,15 +17388,27 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
     if (live?.yes) return { proposed: false, reason: "already_timed" };
     const job = await c.env.DB.prepare(`SELECT date, time FROM jobs WHERE id = ?`)
       .bind(jobId).first().catch(() => null);
-    const cands = await autoCandidates(c.env, accountId, null);
+    const cands = await autoCandidates(c.env, accountId, null, null, { exceptJobId: jobId });
     const mine = cands.find((x) => x.companyId === companyId);
     const today = dayKeyUtc();
     if (mine?.paused) return { proposed: false, reason: "paused" };
-    const off = new Set([...(mine?.busy || []), ...(mine?.unavailable || [])]);
-    const jd = String(job?.date || "").slice(0, 10);
-    const day = DATE_RE.test(jd) && jd >= today && !off.has(jd) ? jd
+    // 079. THE TRADE'S OWN ESTIMATE, when it has one: its start is the day
+    // somebody planned this trade for -- which on a sequenced job is not the
+    // job's date at all -- and its length is how many free days are needed.
+    const span = await c.env.DB.prepare(
+      `SELECT s.start_date, s.work_days FROM job_trade_spans s
+         JOIN work_orders w ON w.job_id = s.job_id AND w.trade = s.trade
+        WHERE s.job_id = ? AND w.company_id = ? AND w.voided_at IS NULL LIMIT 1`
+    ).bind(jobId, companyId).first().catch(() => null);
+    const length = spanDaysFrom(span?.work_days) || 1;
+    const busySet = new Set(mine?.busy || []);
+    const off = new Set([...busySet, ...(mine?.unavailable || [])]);
+    const free = (k) => !off.has(k) && (length === 1 || spanDates({ start: k, days: length,
+      off: mine?.unavailable || [] }).every((d) => !busySet.has(d)));
+    const jd = String((isDayKey(span?.start_date) ? span.start_date : job?.date) || "").slice(0, 10);
+    const day = DATE_RE.test(jd) && jd >= today && free(jd) ? jd
       : slotFor({ from: DATE_RE.test(jd) && jd > today ? jd : today,
-        busy: mine?.busy, unavailable: mine?.unavailable });
+        busy: mine?.busy, unavailable: mine?.unavailable, length });
     if (!day) return { proposed: false, reason: "no_slot" };
     // The time on the job when the window lands on the job's own day, because
     // somebody typed it; the standing morning otherwise.
@@ -17151,7 +17471,7 @@ async function autoProposeOnAccept(c, wo) {
     .bind(job.id).first().catch(() => null);
   if (already?.yes) return null;
 
-  const cands = await autoCandidates(c.env, job.account_id, null);
+  const cands = await autoCandidates(c.env, job.account_id, null, null, { exceptJobId: job.id });
   const mine = cands.find((x) => x.companyId === wo.company_id);
   if (mine?.paused) return { stopped: "paused" };
   const from = (job.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
@@ -17212,7 +17532,7 @@ async function autoRepropose(c, visit) {
     `SELECT company_id FROM work_orders WHERE job_id = ? AND voided_at IS NULL LIMIT 1`)
     .bind(job.id).first().catch(() => null);
   if (!wo?.company_id) return null;
-  const cands = await autoCandidates(c.env, job.account_id, null);
+  const cands = await autoCandidates(c.env, job.account_id, null, null, { exceptJobId: job.id });
   const mine = cands.find((x) => x.companyId === wo.company_id);
   // The day that was just refused is on the row, so the search starts from it
   // rather than from the job's target -- otherwise the next try offers the

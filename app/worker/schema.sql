@@ -2410,3 +2410,21 @@ CREATE INDEX IF NOT EXISTS ix_wo_hour_requests_wo ON wo_hour_requests(work_order
 -- correct when two presses arrive at once.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_wo_hour_request_pending
   ON wo_hour_requests(work_order_id) WHERE status = 'pending';
+
+-- 079: how long each trade takes. See migrations/079_job_spans.sql.
+CREATE TABLE IF NOT EXISTS job_trade_spans (
+  job_id          TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  trade           TEXT NOT NULL,
+  start_date      TEXT NOT NULL,
+  work_days       INTEGER NOT NULL CHECK (work_days BETWEEN 1 AND 365),
+  weekends        INTEGER NOT NULL DEFAULT 0,
+  set_by          TEXT REFERENCES users(id),
+  set_at          TEXT DEFAULT CURRENT_TIMESTAMP,
+  proposed_start  TEXT,
+  proposed_days   INTEGER CHECK (proposed_days IS NULL OR proposed_days BETWEEN 1 AND 365),
+  proposed_note   TEXT,
+  proposed_by     TEXT REFERENCES users(id),
+  proposed_at     TEXT,
+  PRIMARY KEY (job_id, trade)
+);
+CREATE INDEX IF NOT EXISTS ix_job_trade_spans_start ON job_trade_spans(start_date);
