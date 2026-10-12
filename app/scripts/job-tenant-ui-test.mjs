@@ -109,16 +109,12 @@ const tenantField = (page) => page.evaluate(() => {
   return { options: s ? [...s.options].map((o) => o.textContent.trim()) : null, value: s?.value ?? null,
     hint: l.querySelector(".job-no-tenant")?.innerText.trim() || null };
 });
-// Homeowner / client and Tenant drawn as one row: their tops agree and the
-// tenant is to the right.
-const sideBySide = (page) => page.evaluate(() => {
+// ONE FIELD: which of the two is on the form. At a building it is the
+// tenant picker alone; anywhere else, the homeowner / client box alone.
+const whoField = (page) => page.evaluate(() => {
   const own = (x) => [...x.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join(" ").trim();
   const ls = [...document.querySelectorAll(".modal label.fld")];
-  const c = ls.find((x) => /^Homeowner \/ client/.test(own(x)));
-  const tn = ls.find((x) => /^Tenant/.test(own(x)));
-  if (!c || !tn) return { missing: !c ? "client" : "tenant" };
-  const a = c.getBoundingClientRect(), b = tn.getBoundingClientRect();
-  return { same: Math.abs(a.top - b.top) < 4 && b.left > a.left, a: [a.left, a.top], b: [b.left, b.top] };
+  return { client: ls.some((x) => /^Homeowner \/ client/.test(own(x))), tenant: ls.some((x) => /^Tenant/.test(own(x))) };
 });
 const next = (page) => page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
   .find((b) => /^Next/.test(b.innerText.trim()))?.click());
@@ -139,6 +135,8 @@ try {
 
   console.log("\n-- nothing is asked before a building is picked --");
   t.ck("no tenant field with no building", (await tenantField(page)) === null);
+  const w0 = await whoField(page);
+  t.ck("the homeowner / client box is the field instead", w0.client === true && w0.tenant === false, JSON.stringify(w0));
 
   console.log("\n-- only that building's tenants --");
   await tagSelects(page);
@@ -156,8 +154,8 @@ try {
   await selectVal(page, selectFor("tenant"), "u_john");
   await wait(300);
   t.ck("a tenant can be picked", (await tenantField(page))?.value === "u_john");
-  const row1 = await sideBySide(page);
-  t.ck("and the tenant sits beside Homeowner / client, on one line", row1?.same === true, JSON.stringify(row1));
+  const w1 = await whoField(page);
+  t.ck("at a building the tenant picker REPLACES homeowner / client", w1.tenant === true && w1.client === false, JSON.stringify(w1));
 
   await tagSelects(page);
   await selectVal(page, selectFor("property"), "p_press");
@@ -245,8 +243,8 @@ try {
   t.ck("with the tenant already named on the job selected", e1?.value === "u_john", JSON.stringify(e1));
   t.ck("listing that building's tenants only", !!e1?.options && e1.options.includes("Ann Lee · unit 2B")
     && !e1.options.some((o) => /Mary/.test(o)), JSON.stringify(e1?.options));
-  const row2 = await sideBySide(p2);
-  t.ck("beside Homeowner / client here as well", row2?.same === true, JSON.stringify(row2));
+  const w2 = await whoField(p2);
+  t.ck("in place of homeowner / client here as well", w2.tenant === true && w2.client === false, JSON.stringify(w2));
   await tagSelects(p2);
   await selectVal(p2, selectFor("tenant"), "u_ann");
   await wait(300);

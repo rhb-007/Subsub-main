@@ -25670,18 +25670,18 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
       )}
 
       <label className="fld">Job name<input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. 1420 Maple St — full exterior" /></label>
-      {/* WHO THE JOB IS FOR, AND WHO LIVES THERE, side by side: the client
-          is who it is done for, the tenant is whose home it is in, and the two
-          read as one question on this form. */}
-      <div className={tenantShown ? "fld-row" : undefined}>
-        <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
+      {/* ONE QUESTION, WHOSE JOB IS IT. At a building it is the tenant who
+          lives there, chosen from that building's list; anywhere else it is
+          the homeowner or client, typed. Asked for as "it should be the same
+          form": two fields side by side read as two answers wanted. A client
+          name already on a job at a building is kept as it was. */}
       {/* THE TENANT, CHOSEN FROM THE BUILDING. Asked for as a drop-down of
           the tenants of whichever building was picked. Naming one is what
           lets them be asked to confirm the visit, see the appointment on
           Tenant HQ and get the access panel -- a manager-raised job had no way
           to say whose home it was. Only the selected building's tenants are
           offered, and the server refuses anybody else. */}
-      {tenantShown && (
+      {tenantShown ? (
         <label className="fld">Tenant{" "}
           <span className="fld-note">optional — they're asked to confirm the visit time</span>
           {tenantList === null ? (
@@ -25699,9 +25699,9 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
             <span className="cov-hint job-no-tenant">No tenants on this building yet. Add them in Account → Tenants.</span>
           )}
         </label>
+      ) : (
+        <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
       )}
-
-      </div>
       <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
       <div className="fld-row">
         <label className="fld">City

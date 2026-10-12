@@ -12040,12 +12040,17 @@ refactor.
   fallback, the building filter, keeping the tenant across a building change,
   and the pre-set access answer.
 
-  **AND THE EDIT FORM CARRIES IT TOO, beside Homeowner / client on both.**
-  Asked for as *"add tenant to the other form as well — Homeowner / Client /
-  Tenant"*. A repair at 10A is often raised before anybody has looked up who
-  lives there, so naming them afterwards is the ordinary case. The two fields
-  share one row: the client is who the work is done for, the tenant is whose
-  home it is in, and they read as one question.
+  **AND THE EDIT FORM CARRIES IT TOO, and it is ONE field, not two.** Asked
+  for as *"add tenant to the other form as well"*, then corrected: *"should be
+  the same form — if a building is selected it should only be tenants drop
+  down, otherwise homeowner or client"*. So at a building the Tenant picker
+  replaces the Homeowner / client box, and anywhere else the box is the field.
+  Two fields side by side read as two answers wanted. A client name already on
+  a job at a building is kept as it was rather than cleared. The fallback to
+  the box still applies wherever the picker is not offered (a request, or a
+  seat that cannot set access). A repair at 10A is often raised before anybody
+  has looked up who lives there, so naming them on an edit is the ordinary
+  case.
 
   `PATCH /api/jobs/:id` takes `accessUserId` through the same
   `buildingTenant` check the create route now calls, so the two doors cannot
@@ -12064,8 +12069,8 @@ refactor.
 
   The save sends `accessUserId` only when the form carried the picker, so an
   edit that says nothing about a tenant leaves them alone. The suites are now
-  30 and 25. Six more mutations fire: the picker off the edit mount, the row
-  unshared, the edit not sending it, the server not checking it, no access
+  30 and 26. Six more mutations fire: the picker off the edit mount, the box
+  drawn at a building, the edit not sending it, the server not checking it, no access
   pre-answer, and a stale tenant kept across a move.
 
 ## Working here
