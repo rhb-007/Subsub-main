@@ -12160,6 +12160,28 @@ refactor.
   modal (correcting a report within ten minutes) does not draft from photos
   added there.
 
+  **AND THE AUTOMATED VERSION CAN BE HAD BACK.** Asked for as *"a way to rescan
+  the image if you changed it and decide to go back to the automated
+  description"*. Once a tenant had typed over the draft it was theirs for good,
+  which is the right default and left no way back. **Scan photos again** sits
+  on the AI line after every settled read (and after an unclear or failed
+  one). It reads the photos fresh, sends **none of their own words or pick as
+  context** (handing them back would make the "automated" version their
+  sentence again), and replaces the title, the description and the problem.
+  The one exception is an **Emergency** label they picked, which stays: the
+  model may never choose one, so it may never take one away either. Once they
+  have changed anything, the button says *Replaces what you changed below*
+  before the press, because it is the one control on the form that overwrites
+  their words.
+
+  **And a clear read with no matching problem files under *Something else***,
+  rather than none. The form draws the title and the description only once a
+  problem is picked, so a null there was reported as *Filled in from your
+  photo* over an empty picker with no fields at all. The route logs a pick that
+  was not on the list. **Not verified:** that this was the live cause; it is
+  the only path that produces that screen. Two more UI mutations fire (the
+  force ignored, the button removed); the suites are now 31 and 31.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

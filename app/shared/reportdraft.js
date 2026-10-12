@@ -133,7 +133,12 @@ export function reportDraftContext({ count = 1, problem = "", words = "" } = {})
 // capped; and an unclear answer keeps its words so the screen can say what
 // could not be seen, but is not offered as the report.
 export function readReportDraft(parsed, choices) {
-  const problem = choices.includes(parsed?.problem) ? parsed.problem : null;
+  // A clear answer with no usable problem still files under Something else,
+  // rather than nothing: the form draws the title and the description only
+  // once a problem is picked, so a null here filled in a report nobody could
+  // see -- "Filled in from your photo" over an empty picker.
+  const picked = choices.includes(parsed?.problem) ? parsed.problem : null;
+  const problem = picked || (choices.includes(SOMETHING_ELSE) ? SOMETHING_ELSE : null);
   const title = String(parsed?.title || "").trim().replace(/\.$/, "").slice(0, MAX_DRAFT_TITLE);
   const description = String(parsed?.description || "").trim().slice(0, MAX_DRAFT_DESCRIPTION);
   const unclear = !!parsed?.unclear || (!title && !description);

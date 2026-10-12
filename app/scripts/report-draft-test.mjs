@@ -60,7 +60,8 @@ try {
     REPORT_DRAFT_MODEL === DRAFT_MODEL && knowsThinking(REPORT_DRAFT_MODEL));
   ck("the schema's problem is the list, as an enum", JSON.stringify(reportDraftSchema(home).properties.problem.enum) === JSON.stringify(home));
   let d = readReportDraft({ problem: "Not a real label", title: "Leak.", description: "Water.", unclear: false, urgent: false }, home);
-  ck("a problem not on the list is dropped, and the title loses its period", d.problem === null && d.title === "Leak");
+  ck("a problem not on the list files under Something else, so the fields still draw, and the title loses its period",
+    d.problem === SOMETHING_ELSE && d.title === "Leak", JSON.stringify(d));
   d = readReportDraft({ problem: "My sink is leaking", title: "x", description: "It is dark.", unclear: true, urgent: false }, home);
   ck("an unclear answer offers no problem and no title", d.problem === null && d.title === "" && d.unclear);
   const sys = reportDraftSystem();

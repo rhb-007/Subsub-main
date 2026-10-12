@@ -157,6 +157,48 @@ try {
   t.ck("nothing crashed", !crashes.length, crashes.join(" | "));
   await ctx.close();
 
+  console.log("\n-- scan again brings the automated description back --");
+  drafts.length = 0;
+  nextDraft = { ok: true, problem: "My sink is leaking", title: "Water under the sink",
+    description: "Water is pooling under my kitchen sink.", unclear: false, urgent: false };
+  ({ ctx, page } = await openForm());
+  await (await page.$(".tn-form input[type=file]")).uploadFile(PHOTO2);
+  await wait(2500);
+  const againBtn = () => page.evaluate(() => {
+    const b = document.querySelector(".tn-form .rd-again-btn");
+    return b ? { text: b.innerText.trim(), note: document.querySelector(".tn-form .rd-again-note")?.innerText || "" } : null;
+  });
+  let ag = await againBtn();
+  t.ck("a settled read offers Scan photo again", !!ag && /Scan photo again/.test(ag.text), JSON.stringify(ag));
+  t.ck("and says nothing about replacing while nothing was changed", ag && !ag.note, ag?.note);
+  await typeInto(page, ".tn-form textarea", "My own words about it.");
+  await wait(300);
+  ag = await againBtn();
+  t.ck("once they change it, it says it will replace that", /Replaces what you changed/.test(ag?.note || ""), ag?.note);
+  nextDraft = { ...nextDraft, title: "Fresh title", description: "A fresh description from the photo." };
+  const before = drafts.length;
+  await page.evaluate(() => document.querySelector(".tn-form .rd-again-btn")?.click());
+  await wait(2000);
+  s = await read(page);
+  t.ck("pressing it reads the photos again", drafts.length === before + 1, `${before} -> ${drafts.length}`);
+  t.ck("without sending their own words as context", !drafts.at(-1)?.words, drafts.at(-1)?.words);
+  t.ck("and replaces their words with the automated description",
+    s?.scope === "A fresh description from the photo." && s?.scopeDraft, s?.scope);
+  t.ck("and the title with the fresh one", s?.title === "Fresh title", s?.title);
+  t.ck("and the line says it was read again", /again/.test(s?.line || ""), s?.line);
+  await ctx.close();
+
+  console.log("\n-- a read with no problem it can name still fills the report in --");
+  nextDraft = { ok: true, problem: "Something else — I'll describe it", title: "Shelving pulled away",
+    description: "The shelf in the closet has come away from the wall.", unclear: false, urgent: false };
+  ({ ctx, page } = await openForm());
+  await (await page.$(".tn-form input[type=file]")).uploadFile(PHOTO2);
+  await wait(2500);
+  s = await read(page);
+  t.ck("Something else is picked", /Something else/.test(s?.chosen || ""), s?.chosen);
+  t.ck("so the description is on screen", /closet/.test(s?.scope || ""), s?.scope);
+  await ctx.close();
+
   console.log("\n-- an unreadable photo fills in nothing --");
   drafts.length = 0;
   nextDraft = { ok: true, problem: null, title: "", description: "The photo is too dark to see what is wrong.",

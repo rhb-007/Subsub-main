@@ -16856,7 +16856,13 @@ app.post("/api/report-draft", requireRole("tenant"), async (c) => {
       ...(reportDraftThinking() ? { thinking: reportDraftThinking() } : {}),
       output_config: { format: { type: "json_schema", schema: reportDraftSchema(choices) } },
     });
-    draft = readReportDraft(replyJson(msg), choices);
+    const parsed = replyJson(msg);
+    draft = readReportDraft(parsed, choices);
+    // Said in the log when the model's pick was not on the list, so a run of
+    // Something else can be told from the model genuinely not knowing.
+    if (parsed?.problem && !choices.includes(parsed.problem)) {
+      console.warn("[report-draft] problem not on the list:", String(parsed.problem).slice(0, 120));
+    }
   } catch (err) {
     // Nothing was written, so the form is exactly as it was and the tenant
     // picks for themselves. Said rather than swallowed: they are watching the

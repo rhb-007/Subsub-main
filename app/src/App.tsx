@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles,
+  Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
   Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt,
 } from "lucide-react";
@@ -15641,10 +15641,21 @@ function ProblemPicker({ where, chosen, onPick, onClear, label = "What is it?" }
 // What the photo reading is doing, said where the photos are. A form that
 // changes itself without saying so reads as a form that is broken, and one
 // that says nothing when it could not read them leaves somebody waiting.
-function ReportDraftLine({ draft, brandName, count }) {
+function ReportDraftLine({ draft, brandName, count, edited, onAgain }) {
   const st = draft?.state || "idle";
   if (st === "idle" || !count) return null;
   const them = count === 1 ? "your photo" : "your photos";
+  // The way back to the automated description, and the way to have a changed
+  // photo read afresh. Offered on every settled state, including a failure,
+  // where it is "try again". It says what it will replace before the press.
+  const again = onAgain && (
+    <span className="rd-again">
+      <button type="button" className="rd-again-btn" onClick={onAgain}>
+        <RotateCcw size={13} /> Scan {count === 1 ? "photo" : "photos"} again
+      </button>
+      {edited && <span className="rd-again-note">Replaces what you changed below</span>}
+    </span>
+  );
   if (st === "reading") return (
     <p className="rd-line is-reading" aria-live="polite"><Sparkles size={14} /> Reading {them}&hellip;</p>
   );
@@ -15657,7 +15668,8 @@ function ReportDraftLine({ draft, brandName, count }) {
   if (st === "done") return (
     <>
       <p className="rd-line is-done" aria-live="polite">
-        <Sparkles size={14} /> Filled in from {them}. Check it below and change anything that's wrong.
+        <Sparkles size={14} /> {draft.again ? `Read ${them} again and filled it back in.` : `Filled in from ${them}.`} Check it below and change anything that's wrong.
+        {again}
       </p>
       {urgent}
     </>
@@ -15667,6 +15679,7 @@ function ReportDraftLine({ draft, brandName, count }) {
       <p className="rd-line is-unclear" aria-live="polite">
         We couldn't tell what's wrong from {them}.{draft.text ? ` ${draft.text}` : ""}
         {" "}Pick it below and tell us in your own words.
+        {again}
       </p>
       {urgent}
     </>
@@ -15677,6 +15690,7 @@ function ReportDraftLine({ draft, brandName, count }) {
       {REPORT_DRAFT_REFUSALS[draft.why] || (draft.why === "decode"
         ? "We couldn't open that photo to read it. Pick what's wrong below — it still goes with the report."
         : REPORT_DRAFT_REFUSALS.ai_unavailable)}
+      {draft.why !== "ai_not_configured" && draft.why !== "rate_limited" && again}
     </p>
   );
 }
@@ -16260,63 +16274,80 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
     return () => { live = false; };
   }, [form, aiOn]);
   const shotKey = shots.map((sh) => sh.id).join("|");
+  // One read of the photos in hand. Two callers: adding or removing a photo
+  // (after a short wait, so three picks are one read), and "Scan photos
+  // again", which is somebody who edited what the read wrote and wants the
+  // automated description back. The second is FORCE: their own words are
+  // deliberately not sent as context and every field is replaced, because
+  // replacing them is what was pressed for.
+  const runDraft = async (force) => {
+    const ticket = ++drafting.current;
+    setDraft({ state: "reading" });
+    try {
+      const photos = [];
+      for (const sh of shots.slice(0, MAX_REPORT_PHOTOS)) {
+        // The object URL belongs to useShots; jpegForDraft revokes nothing.
+        try { photos.push(await jpegForDraft(sh.url)); }
+        catch { /* a picture this browser cannot decode (HEIC outside Safari) is skipped */ }
+      }
+      if (ticket !== drafting.current) return;
+      if (!photos.length) { setDraft({ state: "failed", why: "decode" }); return; }
+      const f0 = formRef.current || {};
+      const r = await api.draftReport({
+        photos, where,
+        problem: !force && f0.problem && f0.problem.label !== seeded.current.problem ? f0.problem.label : "",
+        words: !force && (f0.scope || "").trim() !== seeded.current.scope ? f0.scope : "",
+      });
+      if (ticket !== drafting.current) return;
+      if (r?.unclear) { setDraft({ state: "unclear", text: r.description || "", urgent: !!r.urgent }); return; }
+      applyDraft(r, force);
+      setDraft({ state: "done", urgent: !!r.urgent, again: !!force });
+    } catch (e) {
+      if (ticket !== drafting.current) return;
+      const code = e?.body?.error || "";
+      if (code === "ai_not_configured") { setAiOn(false); setDraft({ state: "idle" }); return; }
+      setDraft({ state: "failed", why: code });
+    }
+  };
   useEffect(() => {
     if (!form || !aiOn) return;
     if (!shots.length) { drafting.current += 1; setDraft({ state: "idle" }); return; }
-    const ticket = ++drafting.current;
-    // A short wait, so picking three photos one after another is one read
-    // rather than three.
-    const t = setTimeout(async () => {
-      setDraft({ state: "reading" });
-      try {
-        const photos = [];
-        for (const sh of shots.slice(0, MAX_REPORT_PHOTOS)) {
-          // The object URL belongs to useShots; jpegForDraft revokes nothing.
-          try { photos.push(await jpegForDraft(sh.url)); }
-          catch { /* a picture this browser cannot decode (HEIC outside Safari) is skipped */ }
-        }
-        if (!photos.length) { if (ticket === drafting.current) setDraft({ state: "failed", why: "decode" }); return; }
-        const f0 = formRef.current || {};
-        const r = await api.draftReport({
-          photos, where,
-          problem: f0.problem && f0.problem.label !== seeded.current.problem ? f0.problem.label : "",
-          words: (f0.scope || "").trim() !== seeded.current.scope ? f0.scope : "",
-        });
-        if (ticket !== drafting.current) return;
-        if (r?.unclear) { setDraft({ state: "unclear", text: r.description || "", urgent: !!r.urgent }); return; }
-        applyDraft(r);
-        setDraft({ state: "done", urgent: !!r.urgent });
-      } catch (e) {
-        if (ticket !== drafting.current) return;
-        const code = e?.body?.error || "";
-        if (code === "ai_not_configured") { setAiOn(false); setDraft({ state: "idle" }); return; }
-        setDraft({ state: "failed", why: code });
-      }
-    }, 450);
+    const t = setTimeout(() => runDraft(false), 450);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shotKey, aiOn, !!form]);
   // Fill only what is still untouched. A field the tenant has typed in, or a
-  // problem they picked themselves, is theirs and stays exactly as it is.
-  const applyDraft = (r) => {
+  // problem they picked themselves, is theirs and stays exactly as it is --
+  // unless they pressed "Scan photos again", which is them asking for the
+  // automated version back. Even then an Emergency they picked stays picked:
+  // the model never chooses one, and a rescan quietly undoing a 911 pick is
+  // the one replacement nobody pressing that button meant.
+  const applyDraft = (r, force = false) => {
     const prob = r.problem ? TENANT_PROBLEMS.find((x) => x.label === r.problem
       && (x.where === "both" || x.where === where)) || null : null;
     setForm((f) => {
       if (!f) return f;
       const next = { ...f };
       const s0 = seeded.current;
-      if (prob && (!f.problem || f.problem.label === s0.problem)) {
+      const keepEmergency = f.problem && severityOf(f.problem.label);
+      if (prob && (!f.problem || f.problem.label === s0.problem || (force && !keepEmergency))) {
         next.problem = prob; next.query = "";
         s0.problem = prob.label;
       }
       const label = (next.problem || prob)?.label || "";
       const title = r.title && r.title !== label ? r.title : "";
-      if (!f.title.trim() || f.title === s0.title) { next.title = title; s0.title = title; }
-      if (r.description && (!f.scope.trim() || f.scope === s0.scope)) { next.scope = r.description; s0.scope = r.description; }
+      if (force || !f.title.trim() || f.title === s0.title) { next.title = title; s0.title = title; }
+      if (r.description && (force || !f.scope.trim() || f.scope === s0.scope)) { next.scope = r.description; s0.scope = r.description; }
       return next;
     });
     if (prob) setSafeAck(false);
   };
+  // Whether pressing "Scan photos again" would change anything they wrote --
+  // the button says so before the press rather than after it.
+  const draftEdited = !!form && (
+    (!!form.scope.trim() && form.scope !== seeded.current.scope)
+    || (!!form.title.trim() && form.title !== seeded.current.title)
+    || (!!form.problem && form.problem.label !== seeded.current.problem && !!seeded.current.problem));
   const isSeeded = (k) => !!form && !!form[k] && form[k] === seeded.current[k];
 
   // What they picked IS the title. Copying it into the box below as well
@@ -16412,7 +16443,8 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
               hint={aiOn
                 ? "Start with a photo and we'll fill in the rest for you. Your photos are read by an AI service to describe the problem; nothing else about you goes with them."
                 : undefined} />
-            {aiOn && <ReportDraftLine draft={draft} brandName={brand.name} count={shots.length} />}
+            {aiOn && <ReportDraftLine draft={draft} brandName={brand.name} count={shots.length}
+              edited={draftEdited} onAgain={() => runDraft(true)} />}
           </>
         )}
 
@@ -40096,6 +40128,12 @@ p.fld-note{margin:6px 0 0}
   line-height:1.45;background:var(--paper);color:var(--ink-soft)}
 .rd-line svg{display:inline-block;vertical-align:-2px;margin-right:6px}
 .rd-line.is-done{background:color-mix(in srgb,var(--brand) 9%,var(--card));color:var(--ink)}
+.rd-again{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:8px}
+.rd-again-btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:6px 12px;
+  border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);
+  font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.rd-again-btn svg{margin:0}
+.rd-again-note{font-size:12.5px;color:var(--ink-soft)}
 .rd-line.is-urgent{background:color-mix(in srgb,var(--amber) 14%,var(--card));color:var(--ink);margin-top:-12px}
 /* Eighty things is a lot to put in front of somebody, so it is never all of
    them at once: six areas, or whatever a typed word matches. */
