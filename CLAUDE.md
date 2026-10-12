@@ -12046,7 +12046,19 @@ refactor.
   down, otherwise homeowner or client"*. So at a building the Tenant picker
   replaces the Homeowner / client box, and anywhere else the box is the field.
   Two fields side by side read as two answers wanted. A client name already on
-  a job at a building is kept as it was rather than cleared. The fallback to
+  a job at a building is kept as it was rather than cleared.
+
+  **AND THE PROPERTY'S OWN TENANTS DECIDE IT, NOT WHETHER A PROPERTY WAS
+  PICKED.** Corrected again: *"it could still be at a managed property, but the
+  property is a single family residence"*. A house a manager runs may be lived
+  in by its owner, so a property with **no tenants** gets the Homeowner /
+  client box, with a line saying a renter can be added in Account → Tenants. A
+  property **with** tenants gets one drop-down, labelled *Tenant or homeowner*,
+  listing them, and its last choice is *Homeowner / client — type a name*,
+  which opens the box under it. No property type was added: that would be a
+  second record of a fact the tenant list already carries, and the two would
+  disagree the day somebody rents the house out. An edit that already names a
+  client and no tenant opens with the box showing. The fallback to
   the box still applies wherever the picker is not offered (a request, or a
   seat that cannot set access). A repair at 10A is often raised before anybody
   has looked up who lives there, so naming them on an edit is the ordinary
@@ -12069,9 +12081,10 @@ refactor.
 
   The save sends `accessUserId` only when the form carried the picker, so an
   edit that says nothing about a tenant leaves them alone. The suites are now
-  30 and 26. Six more mutations fire: the picker off the edit mount, the box
+  30 and 31. Nine more mutations fire: the picker off the edit mount, the box
   drawn at a building, the edit not sending it, the server not checking it, no access
-  pre-answer, and a stale tenant kept across a move.
+  pre-answer, a stale tenant kept across a move, the field ignoring an empty
+  tenant list, the homeowner choice removed, and its box never opening.
 
 ## Working here
 

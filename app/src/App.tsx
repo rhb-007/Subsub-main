@@ -25492,6 +25492,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
   // in" -- visibly, on step 2, where it can be changed -- because the reason
   // to name them is that it is their home. Clearing them takes that answer
   // with it, since nobody would be left to ask.
+  // A HOMEOWNER OR CLIENT INSTEAD, at a property that does have tenants: a
+  // house a manager runs may be lived in by its owner, or the work may be for
+  // somebody who is not the tenant. Chosen from the same drop-down, which then
+  // opens the box. Starts open on an edit that already names a client and no
+  // tenant, so a stored name is shown rather than hidden behind a choice.
+  const [typeClient, setTypeClient] = useState(!!(existing && existing.client && !existing.accessUserId));
   const pickTenant = (uid) => setF((s) => ({ ...s, accessUserId: uid,
     access: uid ? (s.access || "tenant") : (s.access === "tenant" ? "" : s.access) }));
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
@@ -25513,6 +25519,10 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
   const picked = (properties || []).find((x) => x.id === f.propertyId);
   const asking = asOwner || !!picked?.ownedNotOperated;
   const tenantShown = tenantField && !asking && !!f.propertyId;
+  // The property's own tenants decide the field, not whether a property was
+  // picked: a single-family house with nobody renting it has no tenant to
+  // name, and its homeowner is the answer.
+  const hasTenants = buildingTenants.length > 0;
   // A request has to name a building: it is the only thing that decides whose
   // it is, and the server refuses one without.
   const valid = f.title && f.trades.length && f.address && (!asOwner || f.propertyId);
@@ -25653,7 +25663,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           <span className="fld-note">{asOwner
             ? "Only the buildings you have access to"
             : "fills the address and scopes vendor matching"}</span>
-          <select value={f.propertyId} onChange={(e) => pickProperty(e.target.value)}>
+          <select value={f.propertyId} onChange={(e) => { setTypeClient(false); pickProperty(e.target.value); }}>
             {/* An owner has no "somewhere else" to pick: work they ask for is
                 at one of their own buildings or it is not theirs to ask for. */}
             {!asOwner && <option value="">Not at a managed property</option>}
@@ -25681,26 +25691,38 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           Tenant HQ and get the access panel -- a manager-raised job had no way
           to say whose home it was. Only the selected building's tenants are
           offered, and the server refuses anybody else. */}
-      {tenantShown ? (
-        <label className="fld">Tenant{" "}
-          <span className="fld-note">optional — they're asked to confirm the visit time</span>
-          {tenantList === null ? (
-            <select disabled><option>Loading tenants…</option></select>
-          ) : buildingTenants.length ? (
-            <select value={f.accessUserId} onChange={(e) => pickTenant(e.target.value)}>
-              <option value="">No tenant on this job</option>
-              {buildingTenants.map((t) => (
-                <option key={t.userId} value={t.userId}>
-                  {t.name || t.email}{t.unit ? ` · unit ${t.unit}` : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <span className="cov-hint job-no-tenant">No tenants on this building yet. Add them in Account → Tenants.</span>
+      {tenantShown && tenantList === null ? (
+        <label className="fld">Tenant or homeowner
+          <select disabled><option>Loading tenants…</option></select>
+        </label>
+      ) : tenantShown && hasTenants ? (
+        <label className="fld">Tenant or homeowner{" "}
+          <span className="fld-note">a tenant is asked to confirm the visit time</span>
+          <select value={typeClient ? "__client" : f.accessUserId}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "__client") { setTypeClient(true); pickTenant(""); }
+              else { setTypeClient(false); pickTenant(v); }
+            }}>
+            <option value="">No tenant on this job</option>
+            {buildingTenants.map((t) => (
+              <option key={t.userId} value={t.userId}>
+                {t.name || t.email}{t.unit ? ` · unit ${t.unit}` : ""}
+              </option>
+            ))}
+            <option value="__client">Homeowner / client — type a name</option>
+          </select>
+          {typeClient && (
+            <input className="job-client-in" value={f.client} onChange={(e) => set("client", e.target.value)}
+              placeholder="Homeowner or client name" />
           )}
         </label>
       ) : (
-        <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
+        <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" />
+          {tenantShown && (
+            <span className="cov-hint job-no-tenant">No tenants on this property. If somebody rents it, add them in Account → Tenants and they can confirm visit times.</span>
+          )}
+        </label>
       )}
       <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
       <div className="fld-row">

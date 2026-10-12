@@ -156,6 +156,24 @@ try {
   t.ck("a tenant can be picked", (await tenantField(page))?.value === "u_john");
   const w1 = await whoField(page);
   t.ck("at a building the tenant picker REPLACES homeowner / client", w1.tenant === true && w1.client === false, JSON.stringify(w1));
+  t.ck("and it offers a homeowner or client instead, as its last choice",
+    (await tenantField(page))?.options?.slice(-1)[0] === "Homeowner / client — type a name",
+    JSON.stringify((await tenantField(page))?.options));
+
+  console.log("\n-- a homeowner instead of a tenant, at a property that has tenants --");
+  await tagSelects(page);
+  await selectVal(page, selectFor("tenant"), "__client");
+  await wait(300);
+  const box = await page.evaluate(() => !!document.querySelector(".modal .job-client-in"));
+  t.ck("choosing it opens a box to type the name", box === true);
+  t.ck("and nobody is named as the tenant any more", (await tenantField(page))?.value === "__client");
+  await setInput(page, ".modal .job-client-in", "Pat Owner");
+  await wait(200);
+  await tagSelects(page);
+  await selectVal(page, selectFor("tenant"), "u_john");
+  await wait(300);
+  t.ck("picking a tenant again closes the box",
+    !(await page.evaluate(() => !!document.querySelector(".modal .job-client-in"))));
 
   await tagSelects(page);
   await selectVal(page, selectFor("property"), "p_press");
@@ -182,9 +200,11 @@ try {
   await tagSelects(page);
   await selectVal(page, selectFor("property"), "p_empty");
   await wait(300);
-  const f3 = await tenantField(page);
-  t.ck("a building with no tenants says so instead of an empty drop-down",
-    f3?.options === null && /No tenants on this building yet/.test(f3?.hint || ""), JSON.stringify(f3));
+  const w3 = await whoField(page);
+  const hint3 = await page.evaluate(() => document.querySelector(".modal .job-no-tenant")?.innerText.trim() || null);
+  t.ck("a property with no tenants (a house its owner lives in) asks for the homeowner / client",
+    w3.client === true && w3.tenant === false, JSON.stringify(w3));
+  t.ck("and says how a renter would be added", /No tenants on this property/.test(hint3 || ""), String(hint3));
 
   console.log("\n-- naming one pre-answers who lets them in, and the save sends both --");
   await tagSelects(page);
