@@ -7768,6 +7768,7 @@ export default function SubSub() {
              the kinds that have buildings -- the same predicate the module
              exports rather than a second list written here. */
           canSetAccess={mayChooseAccess(kindOf(account))}
+          canPickTenant={mayChooseAccess(kindOf(account)) && maySetAccess(role)}
           onSubmit={(job) => createJob(job, jobForm.forSub)}
           onCancel={() => setJobForm(null)} /></Modal>}
       {/* THE SAME FORM OVER A JOB THAT ALREADY EXISTS. One component, not a
@@ -25376,7 +25377,7 @@ function MaterialSource({ value, onChange }) {
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false, canSetAccess = false, existing = null, lockedTrades = [] }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false, canSetAccess = false, canPickTenant = false, existing = null, lockedTrades = [] }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   // EDITING, which this form could not do. Asked for as *"when you click on a
@@ -25444,6 +25445,8 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     // A guess here would be a preselection mistaken for a choice, which this
     // project has already paid for on the trade grid.
     access: "",
+    // 062. Which tenant lives where the work is. Empty is nobody named.
+    accessUserId: "",
     measurementDocs: [],
     spans: {},
   });
@@ -25451,9 +25454,32 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
   const pickProperty = (id) => {
     const p = (properties || []).find((x) => x.id === id);
     setF((s) => ({ ...s, propertyId: id,
+      // A tenant belongs to a building, so a new building forgets them -- and
+      // the "they need to be in" answer that came with naming them.
+      accessUserId: "", access: s.accessUserId && s.access === "tenant" ? "" : s.access,
       ...(p ? { address: p.address || "", area: p.city || "", zip: p.zip || "",
                 title: s.title || `${p.name} — ` } : {}) }));
   };
+  // THE TENANTS OF THE CHOSEN BUILDING, for the picker on step 1. Fetched
+  // once, only for a seat the route serves (admin or pm on a kind with
+  // buildings) and never on a request or an edit; filtered here by building,
+  // because the list is this account's own and the building is a choice made
+  // on this screen.
+  const [tenantList, setTenantList] = useState(null);
+  useEffect(() => {
+    if (!canPickTenant || existing) return;
+    let live = true;
+    api.listTenants().then((r) => { if (live) setTenantList(Array.isArray(r) ? r : []); })
+      .catch(() => { if (live) setTenantList([]); });
+    return () => { live = false; };
+  }, [canPickTenant, existing]);
+  const buildingTenants = (tenantList || []).filter((t) => f.propertyId && t.propertyId === f.propertyId);
+  // Naming a tenant pre-answers who lets them in with "the tenant needs to be
+  // in" -- visibly, on step 2, where it can be changed -- because the reason
+  // to name them is that it is their home. Clearing them takes that answer
+  // with it, since nobody would be left to ask.
+  const pickTenant = (uid) => setF((s) => ({ ...s, accessUserId: uid,
+    access: uid ? (s.access || "tenant") : (s.access === "tenant" ? "" : s.access) }));
   const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
   const toggleTrade = (id) => {
     // A trade somebody already holds a work order on is not removable: the
@@ -25548,6 +25574,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
           : err === "trades_required" ? "Pick at least one trade."
           : err === "bad_date" || err === "bad_time" ? "Check the date and time."
           : err === "property_not_found" ? "That building isn't on this account any more."
+          : err === "bad_tenant" ? "That tenant isn't on this building any more. Pick again."
           : String(err || "").startsWith("bad_span") || err === "span_trade_not_on_job"
             ? `${e.body.trade ? `${catMeta(e.body.trade).label}: ` : ""}${spanErrText(e)}`
           : "That didn't save. Check your connection and try again — nothing here has been lost.");
@@ -25627,6 +25654,32 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         </label>
       )}
 
+      {/* THE TENANT, CHOSEN FROM THE BUILDING. Asked for as a drop-down of
+          the tenants of whichever building was picked. Naming one is what
+          lets them be asked to confirm the visit, see the appointment on
+          Tenant HQ and get the access panel -- a manager-raised job had no way
+          to say whose home it was. Only the selected building's tenants are
+          offered, and the server refuses anybody else. */}
+      {canPickTenant && !asking && !edit && f.propertyId && (
+        <label className="fld">Tenant{" "}
+          <span className="fld-note">optional — they're asked to confirm the visit time</span>
+          {tenantList === null ? (
+            <select disabled><option>Loading tenants…</option></select>
+          ) : buildingTenants.length ? (
+            <select value={f.accessUserId} onChange={(e) => pickTenant(e.target.value)}>
+              <option value="">No tenant on this job</option>
+              {buildingTenants.map((t) => (
+                <option key={t.userId} value={t.userId}>
+                  {t.name || t.email}{t.unit ? ` · unit ${t.unit}` : ""}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="cov-hint job-no-tenant">No tenants on this building yet. Add them in Account → Tenants.</span>
+          )}
+        </label>
+      )}
+
       <label className="fld">Job name<input value={f.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. 1420 Maple St — full exterior" /></label>
       <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" /></label>
       <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
@@ -25695,7 +25748,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
                 on offer -- it would be a control the server ignores. On a
                 TENANT'S report it is, and that picker is beside the time on
                 the job card, which is where the question actually arises. */}
-            {accessChoices({}).map((k) => (
+            {accessChoices({ accessUserId: f.accessUserId }).map((k) => (
               <button key={k.id} type="button"
                 className={`pick ${f.access === k.id ? "on" : ""}`}
                 onClick={() => set("access", f.access === k.id ? "" : k.id)}>{k.label}</button>

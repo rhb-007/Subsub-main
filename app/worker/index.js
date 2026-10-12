@@ -9321,6 +9321,27 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // tenant book themselves out of their own confirmation step.
   const access = requestedBy ? null : (b.access || null);
 
+  // 062, from the form. WHICH TENANT, named by the manager raising it -- the
+  // half 060 recorded as open ("a manager cannot put a tenant INTO a job the
+  // tenant did not report") and 062 closed only for jobs raised from an
+  // inspection. A tenant seat on THIS account, narrowed to THIS building:
+  // naming anybody else would ask a stranger to confirm a time at somebody
+  // else's home, so a name that fails either check is refused rather than
+  // dropped. Never from a requester, for the reason `access` is not.
+  // Written to `access_user_id` and never to `requested_by`: they did not ask.
+  let accessUser = null;
+  if (!requestedBy && b.accessUserId) {
+    if (!propertyId || crossAccount) return c.json({ error: "bad_tenant" }, 400);
+    const t = await c.env.DB.prepare(
+      `SELECT m.user_id FROM memberships m
+         JOIN membership_properties mp ON mp.membership_id = m.id
+        WHERE m.account_id = ? AND m.role = 'tenant' AND m.user_id = ? AND mp.property_id = ?
+        LIMIT 1`
+    ).bind(accountId, String(b.accessUserId), propertyId).first();
+    if (!t) return c.json({ error: "bad_tenant" }, 400);
+    accessUser = t.user_id;
+  }
+
   // 079. How long each trade takes, when the hiring side already knows.
   // Planned before the insert so a bad figure refuses the whole create rather
   // than leaving a job with half its estimates. Not taken from a request: how
@@ -9346,8 +9367,8 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   // the question for never touches a column 060 added -- which is what keeps a
   // database behind the code able to create one at all. The same reason
   // `material_supplier` is an extra rather than a base column.
-  const accessCols = access ? ["access"] : [];
-  const accessVals = access ? [access] : [];
+  const accessCols = [...(access ? ["access"] : []), ...(accessUser ? ["access_user_id"] : [])];
+  const accessVals = [...(access ? [access] : []), ...(accessUser ? [accessUser] : [])];
 
   const insertJob = (extraCols, extraVals) => {
     const all = [...cols, ...extraCols];
@@ -9371,7 +9392,13 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
       // costs a round trip with the tenant that was not needed, and refusing
       // the job entirely costs the repair.
       const which = missingSchema(err);
-      if (which === "060_job_access") {
+      if (which === "062_job_access_user") {
+        // The tenant is lost, never the job: without 062 there is no column
+        // to name them in, and refusing the repair over it is the worse trade.
+        console.warn("[jobs] 062_job_access_user not applied - saving without the tenant");
+        await insertJob(["material_supplier", "material_branch", ...(access ? ["access"] : [])],
+          [supplier, branch, ...(access ? [access] : [])]);
+      } else if (which === "060_job_access") {
         console.warn("[jobs] 060_job_access not applied - saving without who lets them in");
         await insertJob(["material_supplier", "material_branch"], [supplier, branch]);
       } else if (which === "026_material_supplier") {

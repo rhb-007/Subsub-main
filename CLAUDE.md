@@ -12002,6 +12002,45 @@ refactor.
   drop-down for everybody fails two assertions. The change-order form keeps its
   deadline, because a change to an accepted work order is still answered.
 
+- **A JOB CAN NAME ITS TENANT WHEN IT IS CREATED, NOT ONLY WHEN IT IS RAISED
+  FROM AN INSPECTION.** Asked as *"should we also add a Tenant here with a
+  selection and drop down of tenants depending on what building was
+  selected?"*, with Create job's Homeowner / client box circled. 062 already
+  put `jobs.access_user_id` on the job, and the scheduling chain and the
+  tenant's own visit list already read it. Only a job raised from a move-in
+  inspection could set it. A manager typing a repair at flat 10A had no way to
+  say who lives there, so the tenant could not be asked about the time. No
+  migration.
+
+  **It is `access_user_id` and never `requested_by`**, for the reason 062
+  records: the tenant did not ask for the work, and writing them as the
+  requester would put a request on the dashboard they never made.
+
+  **The picker lists the tenants of the building picked, and only those.**
+  Picking another building clears the tenant, and also clears the "the tenant
+  needs to be in" answer that came with naming them. A select reads blank over
+  a value that is not one of its options, so the select alone cannot tell a
+  cleared tenant from a hidden one. The suite reads step 2 to tell them apart.
+  A building with no tenants says so rather than drawing an empty drop-down.
+
+  **Naming a tenant pre-answers who lets the crew in**, visibly and changeably
+  on step 2. Without that, `accessFor` reads a job nobody reported as "no
+  access needed", and the named tenant would never be asked.
+
+  **The server checks the claim.** The tenant must hold a tenant seat on this
+  account, scoped to this building. A tenant of another building, of another
+  account, a job at no building, or somebody who is not a tenant at all are
+  each refused with `bad_tenant` before anything is written. A tenant raising
+  their own report cannot name somebody else. A database without 062 loses the
+  tenant and keeps the job.
+
+  **It is on Create only.** The edit form does not carry it yet, and the
+  picker shows only where the access answer can be set (`mayChooseAccess` and
+  `maySetAccess`). `test:jobtenant` (19) and `test:jobtenantui` (17). Five
+  mutations fire, each on its own assertion: the building check, the 062
+  fallback, the building filter, keeping the tenant across a building change,
+  and the pre-set access answer.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -114,6 +114,8 @@
     "test:autobook": "node --no-warnings scripts/auto-book-test.mjs",
     "test:jobspan": "node --no-warnings scripts/job-span-test.mjs",
     "test:jobspanui": "node scripts/job-span-ui-test.mjs",
+    "test:jobtenant": "node --no-warnings scripts/job-tenant-test.mjs",
+    "test:jobtenantui": "node scripts/job-tenant-ui-test.mjs",
     "test:owncrews": "node --no-warnings scripts/own-crews-test.mjs",
     "test:owncrewsui": "node --no-warnings scripts/own-crews-ui-test.mjs",
     "test:visitparty": "node --no-warnings scripts/visit-party-test.mjs",
