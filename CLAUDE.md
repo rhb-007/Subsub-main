@@ -12107,6 +12107,59 @@ refactor.
   pre-answer, a stale tenant kept across a move, the field ignoring an empty
   tenant list, the homeowner choice removed, and its box never opening.
 
+- **A TENANT'S REPORT FILLS ITSELF IN FROM THEIR PHOTOS, AND ADDING ONE IS THE
+  PRESS.** Asked for as *"AI should be able to scan the image and automatically
+  write a description of the issues in the picture ... fully automated on the
+  tenant side"*. The inspection screen drafted photo notes for a manager; a
+  tenant reporting a leak was still picking from ninety labels and typing what
+  the photo they had just taken already showed. `shared/reportdraft.js`,
+  `POST /api/report-draft`, and the list moved to `shared/tenantproblems.js` so
+  the server can offer the model the same labels the picker shows.
+
+  **Photos come first on the form**, and adding them reads the set with no
+  button: the problem is picked, the title and the description are written, and
+  a line under the photos says *Filled in from your photos*. Same model, same
+  thinking setting and same downscale as the inspection drafts, so there is one
+  model constant and one size. **Nothing is stored**: the answer goes back into
+  the form, and it reaches the manager only as the tenant's own report once they
+  press Send.
+
+  **What the draft wrote is dashed until they change it, and what they typed is
+  never overwritten.** A field still holding exactly the draft's text (or
+  nothing) may be filled again by a later read; anything else is theirs, and a
+  problem they picked themselves stays picked. Derived from the seeded values
+  rather than a touched flag. Their own words go to the model as context and are
+  not handed back.
+
+  **The model never picks an emergency.** An Emergency label puts the 911 notice
+  up and dispatches the account's emergency contractor at their expense, so it
+  is the tenant's call: the group is absent from the enum, and a photo that
+  looks dangerous comes back `urgent` and the screen points them at Emergency.
+  The photos stay hidden while the 911 notice is unanswered, as before.
+
+  **Unreadable is an answer**: `unclear` picks nothing and says what could not
+  be seen. A failed read says so and leaves the form to them. With no key,
+  `GET /api/report-draft` says off and the form draws no AI line at all. The
+  line saying what leaves is drawn under the photo box before anything is sent;
+  no name, address or account goes with the photos, asserted on the wire.
+  Tenant seats only, on `TENANT_ALLOWED`; rate-limited per person and per
+  account; six photos, each under the drafts' byte ceiling.
+
+  **And two smaller tenant fixes in the same change.** The confirmation read
+  *"You'll see it below, and it will update as they get on with it"*, which is
+  British; it says *You can track it below, and it updates as they work on it*.
+  And **"Did your vendor show up?" failed for a tenant a manager named on the
+  job**: `POST /api/visits/:id/outcome` checked `requested_by` alone, so the
+  tenant on `access_user_id` got 403 and the screen said *try again*. It reads
+  `accessTenant` now, the refusal is named (`visitOutcomeErrText`), and a stale
+  row re-reads the visits. **Not verified:** whether that was the cause on the
+  live row; a stale visit list answering `not_open` produces the same screen.
+
+  `test:reportdraft` (31) and `test:reportdraftui` (21), `test:visitoutcome`
+  (7). Eight mutations fire, each on its own assertion. **Still open:** the edit
+  modal (correcting a report within ten minutes) does not draft from photos
+  added there.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

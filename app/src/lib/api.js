@@ -417,6 +417,10 @@ export const api = {
   // caller's own row.
   myContact: () => request("/me/contact"),
   myManager: () => request("/my-manager"),
+  // A tenant's report, drafted from the photos they have picked but not yet
+  // sent. Downscaled first, like the inspection drafts, and nothing is stored.
+  reportDraftInfo: () => request("/report-draft"),
+  draftReport: (body) => request("/report-draft", { method: "POST", body: JSON.stringify(body) }),
   saveMyContact: (body) => request("/me/contact", { method: "PUT", body: JSON.stringify(body) }),
   listNotices: () => request("/notices"),
   postNotice: (body) => request("/notices", { method: "POST", body: JSON.stringify(body) }),

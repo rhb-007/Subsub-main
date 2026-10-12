@@ -43,6 +43,8 @@ import { inPool } from "./lib/photoshrink.js";
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
+import { TENANT_PROBLEMS, tenantGroups, tenantWhere } from "../shared/tenantproblems.js";
+import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -4418,9 +4420,21 @@ export default function SubSub() {
   // job -- "yes" leaves the manager to close it, "no" leaves them to propose
   // the next time -- so only the visit changes here.
   const visitOutcome = async (id, body) => {
-    const v = await api.visitOutcome(id, body);
-    setVisits((vs) => vs.map((x) => x.id === id ? v : x));
-    return v;
+    try {
+      const v = await api.visitOutcome(id, body);
+      setVisits((vs) => vs.map((x) => x.id === id ? v : x));
+      return v;
+    } catch (e) {
+      // A refusal that means the screen is behind the server -- the time was
+      // changed, settled or taken away since this list was read -- re-reads
+      // the visits, so the row stops asking a question that no longer
+      // stands rather than refusing the same press for ever.
+      if (["not_open", "not_found", "forbidden", "no_contractor"].includes(e?.body?.error)) {
+        const vs = await api.listVisits().catch(() => null);
+        if (Array.isArray(vs)) setVisits(vs);
+      }
+      throw e;
+    }
   };
   const confirmServiceCall = (id, patch = {}) => {
     persist("confirmServiceCall", api.confirmServiceCall(id, patch));
@@ -14139,161 +14153,6 @@ function tenantStage(job, visit) {
   return { key: "approved", label: "Approved — arranging a contractor", tone: "busy" };
 }
 
-// The trades a tenant would actually name, in the words they would use. The
-// account's full list runs to thirty and includes excavation and coping,
-// which is not a menu to hand somebody whose faucet is dripping.
-// What a tenant would actually say, in the words they would say it in.
-//
-// The first version of this listed trades -- "Plumbing", "HVAC" -- which is
-// how the account thinks and not how anybody else does. Nobody standing in a
-// apartment with water coming through the ceiling picks "restoration". They say
-// the sink is leaking, so that is what the list says, and the trade is
-// worked out from it behind the scenes.
-//
-// `where` splits the two kinds of building: an office tenant has no bath to
-// report and an apartment has no server room. "both" covers the things that go
-// wrong in either.
-//
-// `trade` is what gets attached to the job so it can be matched to a
-// subcontractor. null means nobody can tell from the description alone, and
-// the account picks when they approve it -- better than guessing wrong and
-// sending the request to a plumber because the list had to say something.
-const TENANT_PROBLEMS = [
-  // ---- Get out and call emergency services ----
-  // Listed first so they are the first thing a search turns up, and given
-  // their own group so nobody scrolling for a dripping tap has to read them.
-  // Their severity lives in shared/emergency.js, next to the Worker's copy
-  // of the same decision.
-  { g: "Emergency", trade: null, where: "both", label: "There's a fire, or I can smell smoke" },
-  { g: "Emergency", trade: null, where: "both", label: "I can smell gas" },
-  { g: "Emergency", trade: "electrical", where: "both", label: "An outlet or switch is sparking" },
-  { g: "Emergency", trade: null, where: "both", label: "The carbon monoxide alarm is going off" },
-  { g: "Emergency", trade: null, where: "both", label: "Someone is trapped in the elevator" },
-  { g: "Emergency", trade: "plumbing", where: "both", label: "Water is flooding in" },
-  { g: "Emergency", trade: "plumbing", where: "both", label: "A pipe has burst" },
-  { g: "Emergency", trade: "plumbing", where: "both", label: "My toilet is overflowing" },
-  { g: "Emergency", trade: "hvac", where: "both", label: "It's dangerously cold in here" },
-  { g: "Emergency", trade: "hvac", where: "both", label: "It's dangerously hot in here" },
-  { g: "Emergency", trade: "electrical", where: "both", label: "I have no power at all" },
-
-  // ---- Water, drains and plumbing ----
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My sink is leaking" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's water under the sink" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A faucet is dripping" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A faucet won't shut off" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet won't stop running" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet is clogged" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "My toilet won't flush" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The shower has no water pressure" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "The tub or shower won't drain" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "The sink is draining slowly" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "I have no hot water" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "I have no water at all" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "A pipe is leaking" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My garbage disposal isn't working" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My washer hookup is leaking" },
-  { g: "Water & plumbing", trade: "plumbing", where: "home", label: "My dishwasher is leaking" },
-  { g: "Water & plumbing", trade: "plumbing", where: "both", label: "There's a sewer smell from the drains" },
-  { g: "Water & plumbing", trade: "plumbing", where: "office", label: "A restroom needs attention" },
-  { g: "Water & plumbing", trade: "plumbing", where: "office", label: "The break room sink is clogged" },
-
-  // ---- Heating and cooling ----
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "I have no heat" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The heat is on too high and I can't turn it down" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The AC is on too low — it's freezing" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The AC isn't working" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The AC is blowing warm air" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The thermostat isn't responding" },
-  { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator or baseboard heater is cold" },
-  { g: "Heating & cooling", trade: "hvac", where: "home", label: "A radiator is leaking" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "It's too cold in here" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "It's too warm in here" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "The vents are noisy" },
-  { g: "Heating & cooling", trade: "hvac", where: "both", label: "There's a smell when the heat comes on" },
-  { g: "Heating & cooling", trade: "hvac", where: "office", label: "The AC runs all night" },
-  { g: "Heating & cooling", trade: "hvac", where: "office", label: "The server room is overheating" },
-
-  // ---- Electrical ----
-  { g: "Electrical", trade: "electrical", where: "both", label: "An outlet has stopped working" },
-  { g: "Electrical", trade: "electrical", where: "both", label: "There's no power in one room" },
-  { g: "Electrical", trade: "electrical", where: "both", label: "The breaker keeps tripping" },
-  { g: "Electrical", trade: "electrical", where: "both", label: "A light has gone out" },
-  { g: "Electrical", trade: "electrical", where: "both", label: "The lights keep flickering" },
-  { g: "Electrical", trade: "electrical", where: "both", label: "A light fixture is hanging loose" },
-  { g: "Electrical", trade: "electrical", where: "home", label: "The smoke detector keeps chirping" },
-  { g: "Electrical", trade: "electrical", where: "home", label: "The buzzer or intercom isn't working" },
-  { g: "Electrical", trade: "electrical", where: "home", label: "The exhaust fan isn't working" },
-  { g: "Electrical", trade: "electrical", where: "home", label: "The garbage disposal has no power" },
-  { g: "Electrical", trade: "electrical", where: "office", label: "The lighting in the open area is out" },
-  { g: "Electrical", trade: "electrical", where: "both", label: "There's a burning smell from an outlet" },
-
-  // ---- Doors, windows and locks ----
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My door won't lock" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My door won't close properly" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "I'm locked out" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "My key or fob has stopped working" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "A window won't open" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "A window won't close" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's broken glass" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "There's a draft around a window" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "home", label: "The screen is torn or missing" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "both", label: "The main entry door isn't closing" },
-  { g: "Doors, windows & locks", trade: "windows_doors", where: "office", label: "A conference room door won't lock" },
-
-  // ---- Walls, ceilings and floors ----
-  { g: "Walls, ceilings & floors", trade: "roofing", where: "both", label: "Water is dripping from the ceiling" },
-  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a water stain on the wall or ceiling" },
-  { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's mold" },
-  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a crack in the wall or ceiling" },
-  { g: "Walls, ceilings & floors", trade: "drywall", where: "both", label: "There's a hole that needs patching" },
-  { g: "Walls, ceilings & floors", trade: "painting", where: "both", label: "The paint is peeling" },
-  { g: "Walls, ceilings & floors", trade: "flooring", where: "both", label: "The floor is damaged" },
-  { g: "Walls, ceilings & floors", trade: "flooring", where: "both", label: "The carpet is lifting or torn" },
-  { g: "Walls, ceilings & floors", trade: "tile_stone", where: "both", label: "A tile is loose or cracked" },
-  { g: "Walls, ceilings & floors", trade: "restoration", where: "both", label: "There's damage after a leak" },
-
-  // ---- Cabinets and fixtures ----
-  { g: "Cabinets & fixtures", trade: "cabinets_counters", where: "both", label: "A cabinet door has come off" },
-  { g: "Cabinets & fixtures", trade: "cabinets_counters", where: "home", label: "The countertop is damaged" },
-  { g: "Cabinets & fixtures", trade: "trim_carpentry", where: "home", label: "A closet rod or shelf has pulled out of the wall" },
-  { g: "Cabinets & fixtures", trade: "trim_carpentry", where: "both", label: "A door knob or handle has come off" },
-  { g: "Cabinets & fixtures", trade: "trim_carpentry", where: "both", label: "Baseboard or trim has come loose" },
-
-  // ---- Outside and common areas ----
-  { g: "Outside & common areas", trade: "electrical", where: "both", label: "A light in the hallway or common area is out" },
-  { g: "Outside & common areas", trade: "cleaning", where: "both", label: "The common areas need cleaning" },
-  { g: "Outside & common areas", trade: "cleaning", where: "home", label: "The trash or recycling area needs attention" },
-  { g: "Outside & common areas", trade: "gutters", where: "both", label: "The gutter is overflowing" },
-  { g: "Outside & common areas", trade: "roofing", where: "both", label: "The roof is leaking" },
-  { g: "Outside & common areas", trade: "landscaping", where: "both", label: "The landscaping needs attention" },
-  { g: "Outside & common areas", trade: "garage_doors", where: "both", label: "The parking gate isn't working" },
-  { g: "Outside & common areas", trade: "masonry", where: "both", label: "There's damage to the brickwork or siding" },
-  { g: "Outside & common areas", trade: null, where: "both", label: "The elevator isn't working" },
-  { g: "Outside & common areas", trade: "cleaning", where: "office", label: "The cleaning crew missed an area" },
-
-  // ---- Anything else ----
-  // No trade: nobody can tell from "something else" what it needs, and the
-  // account works it out when they read it.
-  { g: "Something else", trade: null, where: "both", label: "Something else — I'll describe it" },
-];
-
-// The groups, in the order they are offered. Derived rather than written out
-// twice, so adding a problem to a new group cannot leave the group unlisted.
-const tenantGroups = (where) => {
-  const seen = [];
-  for (const p of TENANT_PROBLEMS) {
-    if (p.where !== "both" && p.where !== where) continue;
-    if (!seen.includes(p.g)) seen.push(p.g);
-  }
-  return seen;
-};
-
-// An office tenant has no bathtub to report and an apartment has no server room. The
-// account type is the only signal there is -- a commercial portfolio is
-// offices, everything else is treated as homes -- and it only decides what is
-// offered first, never what can be said, since the description is free text.
-const tenantWhere = (accountKind) => accountKind === "portfolio_manager" ? "office" : "home";
-
 // When it started. Four answers rather than a date, because "a couple of
 // weeks ago" is the true answer and a date picker forces somebody to invent
 // a precise one -- and it is the difference between urgent and not.
@@ -15093,6 +14952,14 @@ function tenantVisitErrText(e) {
   return `That didn't go through (${code || `error ${e.status}`}). Try again, and if it keeps happening tell us that code.`;
 }
 
+// What the show-up answer was refused with, in words that say what to do.
+function visitOutcomeErrText(e) {
+  const code = e?.body?.error || "";
+  if (code === "not_yet") return "That visit hasn't happened yet. You can answer once its day has passed.";
+  if (code === "no_contractor") return "Nobody is booked on this repair any more, so there's no visit to answer about. Reload to see where it stands.";
+  return tenantVisitErrText(e);
+}
+
 // And the question afterwards. Nothing in the system knew whether a visit
 // had actually happened: the window passed and the row went on reading
 // "Scheduled" until somebody closed the job, which could be weeks. The one
@@ -15111,7 +14978,10 @@ function TenantVisitOutcome({ visit, brandName, onSay }) {
     try { await onSay(visit.id, { happened, note: note.trim() }); }
     catch (e) {
       console.error("[visit] outcome failed:", e);
-      setErr("That didn't go through. Try again in a moment.");
+      // Named, because "try again" fixes none of the answers this route
+      // refuses with: a time already changed, one not passed yet, or a
+      // report that is not theirs.
+      setErr(visitOutcomeErrText(e));
     } finally { setBusy(""); }
   };
   return (
@@ -15768,6 +15638,49 @@ function ProblemPicker({ where, chosen, onPick, onClear, label = "What is it?" }
   );
 }
 
+// What the photo reading is doing, said where the photos are. A form that
+// changes itself without saying so reads as a form that is broken, and one
+// that says nothing when it could not read them leaves somebody waiting.
+function ReportDraftLine({ draft, brandName, count }) {
+  const st = draft?.state || "idle";
+  if (st === "idle" || !count) return null;
+  const them = count === 1 ? "your photo" : "your photos";
+  if (st === "reading") return (
+    <p className="rd-line is-reading" aria-live="polite"><Sparkles size={14} /> Reading {them}&hellip;</p>
+  );
+  const urgent = draft.urgent && (
+    <p className="rd-line is-urgent" role="alert">
+      <AlertTriangle size={14} /> This looks like it could be serious. If anybody is in danger, call 911.
+      If water is flooding in or something is sparking, pick it under <b>Emergency</b> so {brandName} treats it as one.
+    </p>
+  );
+  if (st === "done") return (
+    <>
+      <p className="rd-line is-done" aria-live="polite">
+        <Sparkles size={14} /> Filled in from {them}. Check it below and change anything that's wrong.
+      </p>
+      {urgent}
+    </>
+  );
+  if (st === "unclear") return (
+    <>
+      <p className="rd-line is-unclear" aria-live="polite">
+        We couldn't tell what's wrong from {them}.{draft.text ? ` ${draft.text}` : ""}
+        {" "}Pick it below and tell us in your own words.
+      </p>
+      {urgent}
+    </>
+  );
+  // failed
+  return (
+    <p className="rd-line is-failed" aria-live="polite">
+      {REPORT_DRAFT_REFUSALS[draft.why] || (draft.why === "decode"
+        ? "We couldn't open that photo to read it. Pick what's wrong below — it still goes with the report."
+        : REPORT_DRAFT_REFUSALS.ai_unavailable)}
+    </p>
+  );
+}
+
 // Pictures a tenant is about to send, before the report exists.
 //
 // Two limits, and both are said out loud rather than enforced silently: a
@@ -15779,7 +15692,7 @@ const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif"];
 const niceBytes = (n) => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 
-function PhotoPicker({ shots, onAdd, onRemove, note, busy }) {
+function PhotoPicker({ shots, onAdd, onRemove, note, busy, hint }) {
   const inputRef = useRef(null);
   const left = MAX_REPORT_PHOTOS - shots.length;
   return (
@@ -15787,7 +15700,7 @@ function PhotoPicker({ shots, onAdd, onRemove, note, busy }) {
       {/* A block, not a span: JSX eats the newline between "Photos" and this,
           so as an inline element it ran straight on from the label with no
           space -- and left the Add button sharing their line. */}
-      <p className="fld-note">Optional. A picture usually saves a visit just to look.</p>
+      <p className="fld-note">{hint || "Optional. A picture usually saves a visit just to look."}</p>
       {shots.length > 0 && (
         <div className="ph-grid">
           {shots.map((sh) => (
@@ -16285,11 +16198,23 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const [openId, setOpenId] = useState(null);
   const { shots, note: shotNote, add: addShots, remove: removeShot,
     clear: clearShots, upload: uploadShots } = useShots();
+  // `aiOn` is null until the Worker says whether there is a key, so the
+  // line saying what leaves is never drawn over a feature that cannot run.
+  const [aiOn, setAiOn] = useState(null);
+  const [draft, setDraft] = useState({ state: "idle" });
+  // What the draft last put in each field. A field still holding exactly
+  // that, or nothing, is untouched and may be filled again; anything else is
+  // theirs. Derived rather than a "touched" flag set by three onChanges,
+  // because a flag is a second record of one fact and one gets missed.
+  const seeded = useRef({ problem: null, title: "", scope: "" });
+  const drafting = useRef(0);
   // "Report a problem" in the nav. Same as the button on this screen, reachable
   // from anywhere in the tenant's view.
   useEffect(() => {
     if (!reportKey) return;
     setSent(false);
+    seeded.current = { problem: null, title: "", scope: "" };
+    setDraft({ state: "idle" });
     setForm({ propertyId: (properties[0] || {}).id || "", group: "", query: "",
       problem: null, title: "", when: "", scope: "" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -16305,11 +16230,94 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const mine = [...jobs].sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   const building = properties[0] || null;
   const where = tenantWhere(accountKind);
-  const start = () => setForm({
-    propertyId: building?.id || "", group: "", query: "",
-    problem: null, title: "", when: "", scope: "",
-  });
+  const start = () => {
+    seeded.current = { problem: null, title: "", scope: "" };
+    setDraft({ state: "idle" });
+    setForm({
+      propertyId: building?.id || "", group: "", query: "",
+      problem: null, title: "", when: "", scope: "",
+    });
+  };
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+
+  // ---- Their photos, read for them --------------------------------------
+  // Asked for as "AI should scan the image and automatically write a
+  // description of the issue". Adding a photo IS the press: the form reads
+  // the set, picks the problem, writes a title and the description, and the
+  // tenant checks it and sends. Rules for the request are in
+  // shared/reportdraft.js; nothing is stored until they press Send.
+  //
+  // The form as it is NOW, read by the draft when it answers -- the effect's
+  // own copy is the form as it was when the photos were picked.
+  const formRef = useRef(form);
+  formRef.current = form;
+  useEffect(() => {
+    if (!form || aiOn !== null) return;
+    let live = true;
+    api.reportDraftInfo()
+      .then((r) => { if (live) setAiOn(!!r?.configured); })
+      .catch(() => { if (live) setAiOn(false); });
+    return () => { live = false; };
+  }, [form, aiOn]);
+  const shotKey = shots.map((sh) => sh.id).join("|");
+  useEffect(() => {
+    if (!form || !aiOn) return;
+    if (!shots.length) { drafting.current += 1; setDraft({ state: "idle" }); return; }
+    const ticket = ++drafting.current;
+    // A short wait, so picking three photos one after another is one read
+    // rather than three.
+    const t = setTimeout(async () => {
+      setDraft({ state: "reading" });
+      try {
+        const photos = [];
+        for (const sh of shots.slice(0, MAX_REPORT_PHOTOS)) {
+          // The object URL belongs to useShots; jpegForDraft revokes nothing.
+          try { photos.push(await jpegForDraft(sh.url)); }
+          catch { /* a picture this browser cannot decode (HEIC outside Safari) is skipped */ }
+        }
+        if (!photos.length) { if (ticket === drafting.current) setDraft({ state: "failed", why: "decode" }); return; }
+        const f0 = formRef.current || {};
+        const r = await api.draftReport({
+          photos, where,
+          problem: f0.problem && f0.problem.label !== seeded.current.problem ? f0.problem.label : "",
+          words: (f0.scope || "").trim() !== seeded.current.scope ? f0.scope : "",
+        });
+        if (ticket !== drafting.current) return;
+        if (r?.unclear) { setDraft({ state: "unclear", text: r.description || "", urgent: !!r.urgent }); return; }
+        applyDraft(r);
+        setDraft({ state: "done", urgent: !!r.urgent });
+      } catch (e) {
+        if (ticket !== drafting.current) return;
+        const code = e?.body?.error || "";
+        if (code === "ai_not_configured") { setAiOn(false); setDraft({ state: "idle" }); return; }
+        setDraft({ state: "failed", why: code });
+      }
+    }, 450);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shotKey, aiOn, !!form]);
+  // Fill only what is still untouched. A field the tenant has typed in, or a
+  // problem they picked themselves, is theirs and stays exactly as it is.
+  const applyDraft = (r) => {
+    const prob = r.problem ? TENANT_PROBLEMS.find((x) => x.label === r.problem
+      && (x.where === "both" || x.where === where)) || null : null;
+    setForm((f) => {
+      if (!f) return f;
+      const next = { ...f };
+      const s0 = seeded.current;
+      if (prob && (!f.problem || f.problem.label === s0.problem)) {
+        next.problem = prob; next.query = "";
+        s0.problem = prob.label;
+      }
+      const label = (next.problem || prob)?.label || "";
+      const title = r.title && r.title !== label ? r.title : "";
+      if (!f.title.trim() || f.title === s0.title) { next.title = title; s0.title = title; }
+      if (r.description && (!f.scope.trim() || f.scope === s0.scope)) { next.scope = r.description; s0.scope = r.description; }
+      return next;
+    });
+    if (prob) setSafeAck(false);
+  };
+  const isSeeded = (k) => !!form && !!form[k] && form[k] === seeded.current[k];
 
   // What they picked IS the title. Copying it into the box below as well
   // showed the same sentence twice in a row and made people wonder which one
@@ -16392,6 +16400,22 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           </label>
         )}
 
+        {/* PHOTOS FIRST. Taking a picture is the quickest way anybody has of
+            saying what is wrong, and with the drafting on it is the whole of
+            the report: the rest fills itself in from it. Hidden only while the
+            call-911 notice is up and unanswered -- filling in a form is never
+            the first thing somebody does about a fire. */}
+        {!(sev === "911" && !safeAck) && (
+          <>
+            <PhotoPicker shots={shots} onAdd={addShots} onRemove={removeShot}
+              note={shotNote} busy={sending}
+              hint={aiOn
+                ? "Start with a photo and we'll fill in the rest for you. Your photos are read by an AI service to describe the problem; nothing else about you goes with them."
+                : undefined} />
+            {aiOn && <ReportDraftLine draft={draft} brandName={brand.name} count={shots.length} />}
+          </>
+        )}
+
         <ProblemPicker where={where} chosen={form.problem}
           onPick={pick} onClear={() => { setSafeAck(false); setForm((f) => ({ ...f, problem: null })); }} />
 
@@ -16406,8 +16430,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           <>
             <label className="fld">Want to put it differently?
               <input value={form.title} onChange={(e) => set("title", e.target.value)}
+                className={isSeeded("title") ? "is-draft" : ""}
                 placeholder={form.problem.label} />
-              <span className="fld-note">Optional — leave it and we'll use what you picked.</span>
+              <span className="fld-note">{isSeeded("title")
+                ? "Written from your photos — change it if it's wrong."
+                : "Optional — leave it and we'll use what you picked."}</span>
             </label>
 
             <div className="fld">When did it start?
@@ -16422,11 +16449,12 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 
             <label className="fld">Tell us more, in your own words
               <textarea rows={5} value={form.scope} onChange={(e) => set("scope", e.target.value)}
+                className={isSeeded("scope") ? "is-draft" : ""}
                 placeholder="Where exactly it is, whether it's getting worse, whether anything has been done about it before, and when someone can get in." />
+              {isSeeded("scope") && (
+                <span className="fld-note">Written from your photos. Check it, add anything it missed, and it goes as yours.</span>
+              )}
             </label>
-
-            <PhotoPicker shots={shots} onAdd={addShots} onRemove={removeShot}
-              note={shotNote} busy={sending} />
           </>
         )}
 
@@ -16459,7 +16487,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
       {sent && (
         <div className="tn-sent" role="status">
           <CheckCircle2 size={16} />
-          <span>Sent to {brand.name}. You'll see it below, and it will update as they get on with it.</span>
+          <span>Sent to {brand.name}. You can track it below, and it updates as they work on it.</span>
         </div>
       )}
 
@@ -16472,7 +16500,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           <span className="tn-cta-icon" aria-hidden="true"><Plus size={22} /></span>
           <span className="tn-cta-text">
             <span className="tn-act-title">Report a problem</span>
-            <span className="tn-act-sub">Pick what's wrong, add a photo, and it goes straight to {brand.name}.</span>
+            <span className="tn-act-sub">Snap a photo or pick what's wrong, and it goes straight to {brand.name}.</span>
           </span>
         </button>
         <TenantAiLine brandName={brand.name} />
@@ -40058,6 +40086,17 @@ p.fld-note{margin:6px 0 0}
    thing that made it hard to read in the first place. */
 .tn-form .fld{margin-bottom:22px}
 .tn-form .fld-note{margin-bottom:0}
+/* The report drafted from photos. A field still holding what the draft
+   wrote is dashed, the same mark an unkept inspection draft wears: it is an
+   offer the tenant has not made theirs yet, and it must not read as a value
+   they typed. The status line sits under the photos it is about. */
+.tn-form .is-draft{border-style:dashed;border-color:color-mix(in srgb,var(--brand) 55%,var(--line));
+  background:color-mix(in srgb,var(--brand) 4%,var(--card))}
+.rd-line{display:block;margin:-10px 0 20px;padding:10px 12px;border-radius:10px;font-size:13.5px;
+  line-height:1.45;background:var(--paper);color:var(--ink-soft)}
+.rd-line svg{display:inline-block;vertical-align:-2px;margin-right:6px}
+.rd-line.is-done{background:color-mix(in srgb,var(--brand) 9%,var(--card));color:var(--ink)}
+.rd-line.is-urgent{background:color-mix(in srgb,var(--amber) 14%,var(--card));color:var(--ink);margin-top:-12px}
 /* Eighty things is a lot to put in front of somebody, so it is never all of
    them at once: six areas, or whatever a typed word matches. */
 .tn-search{width:100%;margin-top:8px}

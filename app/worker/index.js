@@ -70,6 +70,8 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
+import { MAX_REPORT_DRAFT_PHOTOS, REPORT_DRAFT_MODEL, reportDraftChoices, reportDraftContext,
+  reportDraftSchema, reportDraftSystem, reportDraftThinking, readReportDraft } from "../shared/reportdraft.js";
 import { SUMMARY_MODEL, SUMMARY_SCHEMA, countComments, readSummary,
   summaryShape, summarySource, summarySystem, summaryThinking, summaryUser,
   whyNotSummary } from "../shared/inspectsummary.js";
@@ -747,6 +749,9 @@ const TENANT_ALLOWED = [
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
   [/^\/api\/me\/avatar$/, ["PATCH"]],
   [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
+  // Their report, drafted from the photos in their hand before it is sent.
+  // Nothing is stored; the route reads the photos and answers the form.
+  [/^\/api\/report-draft$/, ["GET", "POST"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -10125,11 +10130,23 @@ app.post("/api/visits/:id/outcome", async (c) => {
   if (auth.role !== "tenant") return c.json({ error: "forbidden" }, 403);
   const b = await c.req.json().catch(() => ({}));
   if (typeof b.happened !== "boolean") return c.json({ error: "bad_outcome" }, 400);
-  const v = await c.env.DB.prepare(
-    `SELECT v.*, j.requested_by, j.title FROM visits v JOIN jobs j ON j.id = v.job_id
-      WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
+  // The tenant this visit is about is the requester OR the tenant a manager
+  // named on the job (062, and the Create job picker): accessTenant reads both,
+  // the same predicate the respond route uses. Reading requested_by alone
+  // refused every tenant named on a job they did not raise, at the one
+  // question only they can answer.
+  const v = await (async () => {
+    for (const cols of [", j.access_user_id", ""]) {
+      try {
+        return await c.env.DB.prepare(
+          `SELECT v.*, j.requested_by, j.title${cols} FROM visits v JOIN jobs j ON j.id = v.job_id
+            WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
+      } catch (err) { if (!missingSchema(err)) throw err; }
+    }
+    return null;
+  })();
   if (!v) return c.json({ error: "not_found" }, 404);
-  if (v.requested_by !== auth.userId) return c.json({ error: "forbidden" }, 403);
+  if (accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
   // Only a visit that was actually agreed, and only after its day. The client
   // works the window out to the minute in the reader's own timezone; the
   // check here is the coarser one on purpose, because the server has no idea
@@ -16762,6 +16779,93 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
     `Drafted notes for ${drafts.length} photo${drafts.length === 1 ? "" : "s"} in ${room.name}`);
   return c.json({ ok: true, drafted: drafts.length,
     rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+});
+
+// ---------------------------------------------------------------------------
+// A TENANT'S REPORT, DRAFTED FROM THEIR PHOTOS
+// ---------------------------------------------------------------------------
+//
+// Every rule about the request is in `shared/reportdraft.js`. Two things are
+// decided here and are worth saying beside the code.
+//
+// NOTHING IS STORED. The answer goes back into the form the tenant is filling
+// in, and nothing exists to attach it to yet -- the report is not sent until
+// they press Send, by which time the words are theirs. So there is no draft
+// column, no migration, and no way for a model's sentence to reach the manager
+// without the tenant having seen it on the form first.
+//
+// THE PHOTOS ARE THE ONES IN THEIR HAND, not ones on a report. That is what
+// makes it automatic -- the form reads them before anything is uploaded -- and
+// it means the route trusts nothing about them but their size and count: what
+// one press can cost is bounded by MAX_DRAFT_BYTES times six, whatever is sent.
+
+// Whether to offer it at all. The form says what leaves before anything does,
+// and it can only say that when it knows there is a key to send it with.
+app.get("/api/report-draft", requireRole("tenant"), (c) =>
+  c.json({ configured: aiConfigured(c.env) }));
+
+app.post("/api/report-draft", requireRole("tenant"), async (c) => {
+  const auth = c.get("auth");
+  if (!aiConfigured(c.env)) return c.json({ error: "ai_not_configured" }, 503);
+
+  // PER PERSON AND PER ACCOUNT. Each read spends real money, and one tenant
+  // adding and removing photos on a loop must not use up a building's worth.
+  // The form reads once per change to the set, so twenty an hour is far more
+  // than a report takes.
+  const mine = await rateLimit(c.env, "report-draft", auth.userId, { limit: 20, windowMinutes: 60 });
+  if (!mine.ok) return c.json({ error: "rate_limited" }, 429);
+  const theirs = await rateLimit(c.env, "report-draft-acct", auth.accountId, { limit: 200, windowMinutes: 60 });
+  if (!theirs.ok) return c.json({ error: "rate_limited" }, 429);
+
+  const b = await c.req.json().catch(() => ({}));
+  const photos = [];
+  for (const p of Array.isArray(b.photos) ? b.photos : []) {
+    const data = typeof p === "string" ? p : String(p?.data || "");
+    if (!data) continue;
+    // Base64 is four characters per three bytes; this is the ceiling that
+    // stops a hand-made request costing more than a real one.
+    if (data.length * 3 / 4 > MAX_DRAFT_BYTES) return c.json({ error: "too_big" }, 413);
+    photos.push(data);
+    if (photos.length >= MAX_REPORT_DRAFT_PHOTOS) break;
+  }
+  if (!photos.length) return c.json({ error: "no_photos" }, 400);
+
+  const choices = reportDraftChoices(b.where === "office" ? "office" : "home");
+  const content = [];
+  photos.forEach((data, i) => {
+    content.push({ type: "text", text: `Photo ${i + 1}:` });
+    // JPEG always: the browser re-encodes when it downscales, and the
+    // original may be HEIC, which this API does not take.
+    content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data } });
+  });
+  content.push({ type: "text", text: reportDraftContext({
+    count: photos.length,
+    problem: String(b.problem || "").slice(0, 200),
+    words: String(b.words || ""),
+  }) });
+
+  let draft;
+  try {
+    const msg = await claudeCall(c.env, {
+      model: REPORT_DRAFT_MODEL,
+      max_tokens: 500,
+      system: reportDraftSystem(),
+      messages: [{ role: "user", content }],
+      // Thinking off, and the spelling comes off the model -- see
+      // `DRAFT_THINKING`. Null means the field is left off entirely.
+      ...(reportDraftThinking() ? { thinking: reportDraftThinking() } : {}),
+      output_config: { format: { type: "json_schema", schema: reportDraftSchema(choices) } },
+    });
+    draft = readReportDraft(replyJson(msg), choices);
+  } catch (err) {
+    // Nothing was written, so the form is exactly as it was and the tenant
+    // picks for themselves. Said rather than swallowed: they are watching the
+    // line that says their photos are being read.
+    console.warn("[report-draft] not drafted:", err?.code || "", err?.message || err);
+    return c.json({ error: err?.message === "ai_not_configured" ? "ai_not_configured" : "ai_unavailable" },
+      err?.message === "ai_not_configured" ? 503 : 502);
+  }
+  return c.json({ ok: true, ...draft });
 });
 
 // ---------------------------------------------------------------------------
