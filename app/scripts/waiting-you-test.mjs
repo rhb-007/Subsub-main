@@ -97,6 +97,9 @@ const JOBS = () => [
   // A REQUEST that names no trade: approving it as it stood made a job nobody
   // could ever be sent to, so the trade is picked where it is approved.
   job("j_req", "Lounge chair cushion split", { trades: [], assignments: {}, approvedAt: null, date: key(4) }),
+  // A visit agreed for TODAY at midnight: past due by the clock though the
+  // calendar day has not turned, which a day-only test cannot see.
+  job("j_early", "Reset tripped breaker", { date: key(0) }),
   // Genuinely ready: its agreed day has passed.
   job("j_ready", "Replace closet door", { date: key(-3) }),
 ];
@@ -112,6 +115,8 @@ const VISITS = () => [
   v("v_old1", "j_old", { status: "declined", tenantNote: "old", createdAt: "2026-10-05T00:00:00.000Z", turn: null }),
   v("v_old2", "j_old", { status: "confirmed", contractorAt: T, managerAt: T, respondedAt: T, date: key(5), turn: null }),
   v("v_crew", "j_crew", { proposedBy: "u_mgr", managerAt: T, turn: "contractor", waitingOn: ["contractor", "tenant"] }),
+  v("v_early", "j_early", { status: "confirmed", date: key(0), startTime: "00:00", endTime: "00:01",
+    contractorAt: T, managerAt: T, respondedAt: T, turn: null }),
   v("v_ready", "j_ready", { status: "confirmed", date: key(-3), contractorAt: T, managerAt: T, respondedAt: T, turn: null }),
 ];
 
@@ -157,6 +162,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       row(JOBS().find((j) => j.id === "j_crew"), VIS.find((x) => x.id === "v_crew")),
       row(JOBS().find((j) => j.id === "j_time"), { ...VIS.find((x) => x.id === "v_time") }),
       row(JOBS().find((j) => j.id === "j_gone"), { ...VIS.find((x) => x.id === "v_gone"), turn: "contractor", contractorAt: null }),
+      row(JOBS().find((j) => j.id === "j_early"), VIS.find((x) => x.id === "v_early")),
     ] }];
   }
   if (path === "/api/payouts/status") return [200, { status: "none", ready: false, requirements: [], configured: false }];
@@ -235,6 +241,40 @@ try {
   t.ck("it lists the job whose agreed day has passed", (ready || []).includes("Replace closet door"), JSON.stringify(ready));
   t.ck("not one with no trades", !(ready || []).includes("Torn upholstery on lounge chair"), JSON.stringify(ready));
   t.ck("not one whose time is still being agreed", !(ready || []).includes("Bedrooom window frame seems to be bent"), JSON.stringify(ready));
+
+
+  console.log("\n-- what's scheduled follows the newest window --");
+  const sched = await page.evaluate(() => {
+    const h = document.querySelector(".sched-hero");
+    const late = h?.querySelector(".sh-late");
+    return { has: !!h, lede: late?.querySelector(".shl-lede")?.innerText || "",
+      rows: [...(late?.querySelectorAll(".shl-row") || [])].map((r) => ({
+        title: r.querySelector(".shl-title")?.innerText || "",
+        state: r.querySelector(".shl-state")?.innerText || "" })),
+      more: late?.querySelector(".shl-more")?.innerText || "",
+      next: h?.querySelector(".sh-next .shn-title")?.innerText || "",
+      nextLede: h?.querySelector(".sh-next .shn-lede")?.innerText || "" };
+  });
+  const lateTitles = sched.rows.map((r) => r.title);
+  const stateOf = (t) => sched.rows.find((r) => r.title === t)?.state || "";
+  t.ck("the panel is on the page", sched.has, JSON.stringify(sched));
+  // Five: the closet door, the chair, the tap, the shower head and the
+  // breaker. Six would mean the rescheduled window frame was still counted
+  // on its old date; four would mean this morning's visit was not.
+  t.ck("past-due jobs are called past due, and counted by the newest window",
+    /^5 jobs are past due/i.test(sched.lede), sched.lede);
+  t.ck("newest first, so what just went by is on screen", lateTitles[0] === "Reset tripped breaker",
+    JSON.stringify(lateTitles));
+  t.ck("a job rescheduled to a later day is NOT past due, whatever its own date says",
+    !lateTitles.includes("Bedrooom window frame seems to be bent"), JSON.stringify(sched.rows));
+  t.ck("and it is the next thing booked, marked as not confirmed",
+    sched.next === "Bedrooom window frame seems to be bent" && /not confirmed/i.test(sched.nextLede),
+    JSON.stringify({ next: sched.next, lede: sched.nextLede }));
+  t.ck("a visit agreed for earlier today is past due by the clock",
+    lateTitles.includes("Reset tripped breaker") && /mark done or reschedule/i.test(stateOf("Reset tripped breaker")),
+    JSON.stringify(sched.rows));
+  t.ck("a proposed time that went by says it was never confirmed",
+    /never confirmed/i.test(stateOf("Shower head leaks")), JSON.stringify(sched.rows));
 
   console.log("\n-- approving from the row --");
   const pressed = await page.evaluate(() => {
@@ -351,13 +391,19 @@ try {
     const titles = (s) => (s ? [...s.querySelectorAll(".jl-title, .jr-title, h4")].map((x) => x.innerText) : []);
     const up = [...document.querySelectorAll(".dash-sec")].find((x) => /Current/i.test(x.querySelector("h3")?.innerText || ""));
     const goneLine = [...document.querySelectorAll(".jr-card")].find((r) => /Shower head/.test(r.innerText))?.innerText || null;
-    return { has: !!ask, head: ask?.querySelector("h3")?.innerText || "", inAsk: titles(ask), inUp: titles(up), goneLine };
+    const earlyLine = [...document.querySelectorAll(".jr-card")].find((r) => /Reset tripped/.test(r.innerText))?.innerText || null;
+    const sl = document.querySelector(".my-sched .sh-late");
+    const schedLate = sl ? [...sl.querySelectorAll(".mys-title")].map((x) => x.innerText) : [];
+    return { has: !!ask, head: ask?.querySelector("h3")?.innerText || "", inAsk: titles(ask), inUp: titles(up), goneLine, earlyLine, schedLate };
   });
   t.ck("a time put to the crew is its own section", con.has, JSON.stringify(con));
   t.ck("it holds the window that is theirs", con.inAsk.some((x) => /Balcony door/i.test(x)), JSON.stringify(con));
   t.ck("and not one that is somebody else's turn", !con.inAsk.some((x) => /Bedrooom/i.test(x)), JSON.stringify(con));
   t.ck("a time that has gone by is not asked of the crew", !con.inAsk.some((x) => /Shower head/i.test(x)), JSON.stringify(con));
   t.ck("its line says the time passed", /Time passed/.test(con.goneLine || ""), con.goneLine);
+  t.ck("a visit agreed for earlier today reads Past due on the crew's line", /Past due/.test(con.earlyLine || ""), con.earlyLine);
+  t.ck("and the crew's own schedule files it under past due, by the clock",
+    con.schedLate.includes("Reset tripped breaker"), JSON.stringify(con.schedLate));
   t.ck("and it is not repeated under Current & upcoming", !con.inUp.some((x) => /Balcony door/i.test(x)), JSON.stringify(con));
   t.ck("nothing crashed", cs.crashes.length === 0, cs.crashes.join(" | "));
   await cs.ctx.close();

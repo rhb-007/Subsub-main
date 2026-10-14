@@ -144,7 +144,7 @@ try {
       rows: [...l.querySelectorAll(".shl-title")].map((x) => x.textContent.trim()) } : null;
   });
   ck("the ones behind get their own line", !!late, String(late));
-  ck("counted honestly", /2 jobs are past their date/i.test(late.text), late.text.slice(0, 60));
+  ck("counted honestly", /2 jobs are past due/i.test(late.text), late.text.slice(0, 60));
   ck("and named", late.rows.some((t) => t.includes("Late one")) && late.rows.some((t) => t.includes("Late two")),
     late.rows.join(" | "));
   const heroText = await page.evaluate(() => document.querySelector(".sched-hero").innerText);

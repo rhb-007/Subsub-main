@@ -246,7 +246,7 @@ try {
     // three are genuinely late -- the live one, the lapsed hold, and the
     // subcontractor's job the party-word branch needs.
     t.ck("the overdue count counts the live ones only",
-      /3 jobs are past their date/.test(sh.late), sh.late);
+      /3 jobs are past due/.test(sh.late), sh.late);
     t.ck("and names them", sh.rows.some((r) => /leaking sink/i.test(r))
       && sh.rows.some((r) => /extractor/i.test(r)), JSON.stringify(sh.rows));
     // THE DISCRIMINATING PAIR: the held one is out, the lapsed one is in.

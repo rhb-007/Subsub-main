@@ -7802,6 +7802,35 @@ refactor.
   `test:approvetrade` (8) and `test:waitingyou` (48). Three UI mutations fire:
   the row approving directly, Approve not gated, and the trade not sent.
 
+- **WHAT'S SCHEDULED READS THE NEWEST WINDOW, AND PAST DUE IS BY THE
+  CLOCK.** Reported with the manager's dashboard on screen: two jobs listed as
+  past their date that had both been rescheduled, and the request *"all
+  dashboards need to be checked always if past due or current"*.
+
+  **The panel read `jobs.date`, the target somebody typed when the job was
+  raised.** A new time lives in `visits`, so a job moved to Saturday went on
+  being filed under last week. `ScheduleHero` now takes the newest live window
+  (proposed or confirmed) per job and falls back to the job's date only when
+  there is none, which is the rule the crew's card and the tenant's screen
+  already follow. The *Work scheduled* tile counts the same way.
+
+  **Past due is the window's end, not the calendar day.** A 9 AM visit is past
+  due at 4 PM the same day, and a job with no time on it is past due once its
+  day is over. It is the same `visitPassed` test the Waiting on you panel uses
+  for a lapsed window. The contractor's own schedule and their job lines use it
+  too, and a confirmed or target date that has gone by reads **Past due** on
+  the crew's line.
+
+  **Each past-due row says what went by**, because each needs a different
+  answer: *Visit passed, mark done or reschedule*, *Time passed, never
+  confirmed*, or *Date passed, no visit set*. They are listed **newest first**,
+  so what just went by is on screen and the oldest sit behind *more*. The
+  next-up card says *not confirmed yet* over a proposed time.
+
+  `test:waitingyou` drives it on both sides with a rescheduled job and a visit
+  that ended earlier today. Three mutations fire: reading the job's date
+  (4 assertions), a day-only test (3) and the crew's flag removed (1).
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

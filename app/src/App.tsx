@@ -24779,8 +24779,27 @@ function PageHead({ title, sub, children }) {
 // the one thing on a schedule that needs saying out loud, so it gets its
 // own line here rather than being quietly sorted to the front of a list
 // that claims everything in it is still to come.
-function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
+// Why a past-due row is past due, in the words of what to do about it.
+function lateWhy(when) {
+  if (when.kind === "confirmed") return "Visit passed \u2014 mark done or reschedule";
+  if (when.kind === "proposed") return "Time passed, never confirmed";
+  return "Date passed, no visit set";
+}
+function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latestVisit = {} }) {
   const todayK = dayKey();
+  // WHEN A JOB IS, NOT WHEN IT WAS RAISED FOR. Reported with two jobs listed
+  // as past their date that had both been rescheduled: the panel read
+  // `jobs.date`, the target somebody typed, and a new time lives in
+  // `visits`. So the newest live window outranks the job's own date, the rule
+  // the contractor's card and the tenant's screen already follow, and a
+  // declined or superseded window is no appointment at all.
+  const whenOf = (j) => {
+    const v = latestVisit[j.id];
+    if (v && (v.status === "proposed" || v.status === "confirmed") && v.date) {
+      return { kind: v.status, date: v.date, startTime: v.startTime || null, endTime: v.endTime || null };
+    }
+    return { kind: "target", date: j.date || null, startTime: j.time || null, endTime: null };
+  };
   // 066. LIVE, not merely "not closed". A job on hold is deliberately NOT
   // closed -- it keeps its phase, it can be resumed, and the list must not
   // file it under completed -- so `isClosed` answers no to it and every
@@ -24789,10 +24808,18 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   // tally. "1 job is past its date" about work somebody deliberately put off
   // is the red number that never clears, which is how people learn to stop
   // reading the panel.
-  const dated = jobs.filter((j) => jobIsLive(j, todayK) && j.date)
+  const dated = jobs.filter((j) => jobIsLive(j, todayK))
+    .map((j) => ({ ...j, when: whenOf(j) }))
+    .filter((j) => j.when.date)
+    .map((j) => ({ ...j, date: j.when.date, time: j.when.startTime }))
     .sort((a, b) => a.date.localeCompare(b.date) || String(a.time || "").localeCompare(String(b.time || "")));
-  const late = dated.filter((j) => j.date < todayK);
-  const ahead = dated.filter((j) => j.date >= todayK);
+  // PAST DUE BY THE CLOCK, not by the calendar day: a 9 AM visit is past due
+  // at 4 PM the same day, and one with no time on it is past due once its day
+  // is over. Same test the Waiting on you panel uses for a lapsed window.
+  // Newest first: what just went by is what somebody can still act on today
+  // -- the crew may still be on site -- and the oldest are behind "more".
+  const late = dated.filter((j) => visitPassed(j.when)).reverse();
+  const ahead = dated.filter((j) => !visitPassed(j.when));
   const next = ahead[0] || null;
   // AND EVERYTHING AFTER THE NEXT ONE, because the panel is called "what's
   // scheduled" and was answering with exactly one job.
@@ -24812,7 +24839,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
   // calendar, which is what the count links to.
   const REST_SHOWN = 4;
   const rest = ahead.slice(1);
-  const undated = jobs.filter((j) => jobIsLive(j, todayK) && !j.date).length;
+  const undated = jobs.filter((j) => jobIsLive(j, todayK) && !whenOf(j).date).length;
   // Two weeks: as far ahead as anybody plans from a dashboard, and it fits
   // across a phone by scrolling rather than by shrinking to nothing.
   const strip = Array.from({ length: 14 }, (_, i) => {
@@ -24840,18 +24867,22 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
         <div className="sh-late">
           <span className="shl-lede">
             <AlertTriangle size={14} />
-            {late.length === 1 ? "1 job is past its date" : `${late.length} jobs are past their date`}
+            {late.length === 1 ? "1 job is past due" : `${late.length} jobs are past due`}
           </span>
           <div className="shl-rows">
             {late.slice(0, 3).map((j) => (
               <button key={j.id} className="shl-row" onClick={() => onOpenJob(j.id)}>
-                <span className="shl-when">{relDay(j.date, todayK)}</span>
+                <span className="shl-when">{rowDay(j.date, todayK)}{j.when.startTime ? ` \u00b7 ${niceTime(j.when.startTime)}` : ""}</span>
                 <span className="shl-title">{j.title}</span>
-                <span className="shl-fill">{fill(j)} trades</span>
+                {/* What went by, because each needs a different answer: a
+                    booked visit is marked done or moved, a time nobody
+                    confirmed needs a new one, and a bare target needs a time
+                    at all. */}
+                <span className="shl-state">{lateWhy(j.when)}</span>
               </button>
             ))}
             {late.length > 3 && (
-              <button className="shl-more" onClick={() => onGoCalendar(late[0].date)}>
+              <button className="shl-more" onClick={() => onGoCalendar(late[late.length - 1].date)}>
                 and {late.length - 3} more →
               </button>
             )}
@@ -24867,7 +24898,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs }) {
             <span className="shn-mon">{dayFromKey(next.date).toLocaleDateString(undefined, { month: "short" })}</span>
           </span>
           <span className="shn-main">
-            <span className="shn-lede">{relDay(next.date, todayK)}{next.time ? ` · ${niceTime(next.time)}` : ""}</span>
+            <span className="shn-lede">{relDay(next.date, todayK)}{next.time ? ` · ${niceTime(next.time)}` : ""}{next.when.kind === "proposed" ? " · not confirmed yet" : ""}</span>
             <span className="shn-title">{next.title}</span>
             <span className="shn-meta">
               {where(next) || "No address"} · {fill(next)} trades assigned
@@ -24971,12 +25002,29 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   const open = slots.filter((s) => !s.a);
   const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
   const declined = slots.filter((s) => s.a && s.a.status === "declined");
+  // THE NEWEST VISIT ON EACH JOB, live or declined. A job collects superseded
+  // windows behind the live one, and a declined window stops mattering the
+  // moment somebody proposes the next -- so "is anything waiting on a time"
+  // is a question about the newest row and no other.
+  const latestVisit = useMemo(() => {
+    const m = {};
+    [...visits].filter((v) => v.status !== "superseded")
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .forEach((v) => { if (!m[v.jobId]) m[v.jobId] = v; });
+    return m;
+  }, [visits]);
   // Only what is still to come. This counted every dated open job, past
   // ones included, under a tile reading "Work scheduled" -- so a building
   // owner was told three things were coming when two of them were last
-  // week's. The panel above splits the two; so does this.
-  const upcoming = jobs.filter((j) => jobIsLive(j, dayKey()) && j.date && j.date >= dayKey())
-    .sort((a, b) => a.date.localeCompare(b.date));
+  // week's. The panel above splits the two; so does this, by the newest
+  // live window rather than the job's own date.
+  const upcoming = jobs.filter((j) => {
+    if (!jobIsLive(j, dayKey())) return false;
+    const v = latestVisit[j.id];
+    const live = v && (v.status === "proposed" || v.status === "confirmed") && v.date;
+    const when = live ? v : { date: j.date, startTime: j.time };
+    return !!when.date && !visitPassed(when);
+  }).sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
   // Everybody who has been asked something and has not answered.
   //
   // Four contractors were invited and the dashboard said nothing about any
@@ -25026,17 +25074,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     && s.job.status === "completed");
   const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
     .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
-  // THE NEWEST VISIT ON EACH JOB, live or declined. A job collects superseded
-  // windows behind the live one, and a declined window stops mattering the
-  // moment somebody proposes the next -- so "is anything waiting on a time"
-  // is a question about the newest row and no other.
-  const latestVisit = useMemo(() => {
-    const m = {};
-    [...visits].filter((v) => v.status !== "superseded")
-      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-      .forEach((v) => { if (!m[v.jobId]) m[v.jobId] = v; });
-    return m;
-  }, [visits]);
   // READY TO MARK COMPLETE MEANS THE WORK COULD HAVE HAPPENED. It read "every
   // trade accepted" and nothing else, so a job with NO trades passed vacuously
   // ("All 0 trade accepted") and a job whose time was still being agreed sat
@@ -25316,7 +25353,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
           instead of sitting in half of it beside a gap. */}
       <div className="dash-top">
         <ScheduleHero jobs={jobs} isOwner={isOwner} onGoJobs={onGoJobs}
-          onOpenJob={onOpenJob} onGoCalendar={onGoCalendar} />
+          onOpenJob={onOpenJob} onGoCalendar={onGoCalendar} latestVisit={latestVisit} />
 
         {/* Beside it, not under the tiles. Second in the row so it is the
             thing read next to the schedule rather than after the checklist,
@@ -29849,8 +29886,10 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
     .filter((x) => !!x.when.date)
     .sort((a, b) => a.when.date.localeCompare(b.when.date)
       || String(a.when.startTime || "").localeCompare(String(b.when.startTime || "")));
-  const late = dated.filter((x) => x.when.date < todayK);
-  const ahead = dated.filter((x) => x.when.date >= todayK);
+  // Past by the clock, newest first -- the hiring side's panel's rule, so a
+  // visit that ended this morning is past due on both sides at once.
+  const late = dated.filter((x) => visitPassed(x.when)).reverse();
+  const ahead = dated.filter((x) => !visitPassed(x.when));
   const next = ahead[0] || null;
   const REST = 4;
   const rest = ahead.slice(1);
@@ -32099,6 +32138,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
     const asked = (showActions || away) && awaitingReply(a);
     const flag = mustAnswer ? { tone: "warn", text: "Confirm the time" }
       : lapsed && !away && onProposeVisit ? { tone: "warn", text: "Time passed" }
+      : !past && when.date && when.kind !== "proposed" && visitPassed(when) ? { tone: "bad", text: "Past due" }
       : asked && expired ? { tone: "bad", text: "Expired" }
       : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left` }
       : needsTime && onProposeVisit ? { tone: "warn", text: "Set a time" }
@@ -40904,6 +40944,15 @@ strong.insp-name{background:none;border:0;padding:0}
 .shl-title{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--ink);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .shl-fill{flex:none;font-size:11.5px;color:var(--ink-soft);font-weight:600}
+/* Past due, said in red, with what went by -- a booked visit, a time nobody
+   confirmed, or a bare target -- because each needs a different answer. */
+.shl-state{flex:none;font-size:11px;font-weight:700;color:#a3311f;background:#fbe6e1;
+  border:1px solid #f0c2b8;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.shl-when{min-width:96px}
+@media (max-width:560px){
+  .shl-row{flex-wrap:wrap;gap:4px 10px}
+  .shl-title{flex:1 1 60%}
+}
 .shl-more{background:none;border:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--amber-ink);
   padding:5px 4px;text-align:left}
 
