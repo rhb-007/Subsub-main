@@ -158,6 +158,7 @@
     "test:avatarcrop": "node --no-warnings scripts/avatar-crop-ui-test.mjs",
     "test:geopick": "node scripts/geopick-test.mjs",
     "test:approveref": "node --no-warnings scripts/approve-refused-test.mjs",
+    "test:waitingyou": "node --no-warnings scripts/waiting-you-test.mjs",
     "test:pagehead": "node scripts/page-head-test.mjs",
     "test:visitafter": "node scripts/visit-after-test.mjs",
     "test:visitnobody": "node scripts/visit-nobody-test.mjs",

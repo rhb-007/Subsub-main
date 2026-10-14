@@ -6280,6 +6280,8 @@ export default function SubSub() {
           onAddSub={() => tryAddContractor()}
           onGoJobs={() => setTab("jobs")} onGoContractors={() => setTab("network")}
           onGoCalendar={goJobCalendar} onOpenJob={openJob}
+          onAnswerVisit={maySetAccess(role) ? answerVisit : null}
+          onAnswerSpan={maySetAccess(role) ? answerSpan : null}
           onNewJob={() => tryAddJob()}
           properties={can("properties") ? accountProperties : null}
           onGoProperties={() => setTab("properties")} onAddProperty={tryAddProperty}
@@ -15821,9 +15823,13 @@ function useShots() {
 // site data and a few other cases make localStorage throw on read as well as
 // on write, so both are guarded and the section simply opens as it would
 // have on a first visit.
-function TenantSection({ id, title, count, defaultOpen = true, children }) {
+// `tone="ask"` is a section that is waiting on the reader. It cannot be
+// folded away: a question somebody closed once and forgot is the stall it
+// exists to prevent.
+function TenantSection({ id, title, count, defaultOpen = true, tone = null, children }) {
   const key = `subsub.tn.open.${id}`;
-  const [open, setOpen] = useState(() => {
+  const asks = tone === "ask";
+  const [openState, setOpen] = useState(() => {
     try {
       const saved = localStorage.getItem(key);
       return saved === null ? defaultOpen : saved === "1";
@@ -15835,13 +15841,22 @@ function TenantSection({ id, title, count, defaultOpen = true, children }) {
     return next;
   });
   const bodyId = `tn-sec-${id}`;
+  const open = asks || openState;
   return (
-    <section className="tn-sec">
-      <button className="tn-sec-head" onClick={toggle} aria-expanded={open} aria-controls={bodyId}>
-        <ChevronRight size={15} className={open ? "open" : ""} />
-        <span className="tn-sec-title">{title}</span>
-        {count > 0 && <span className="sec-count">{count}</span>}
-      </button>
+    <section className={`tn-sec ${asks ? "tn-sec-ask" : ""}`}>
+      {asks ? (
+        <h3 className="tn-sec-head tn-sec-askhead">
+          <Bell size={15} />
+          <span className="tn-sec-title">{title}</span>
+          {count > 0 && <span className="sec-count amber">{count}</span>}
+        </h3>
+      ) : (
+        <button className="tn-sec-head" onClick={toggle} aria-expanded={open} aria-controls={bodyId}>
+          <ChevronRight size={15} className={open ? "open" : ""} />
+          <span className="tn-sec-title">{title}</span>
+          {count > 0 && <span className="sec-count">{count}</span>}
+        </button>
+      )}
       {/* Unmounted rather than hidden: a closed section should not be
           fetching the photos of forty old reports. */}
       {open && <div id={bodyId}>{children}</div>}
@@ -16631,7 +16646,23 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         const overdue = agreed.filter((j) => visitPassed(visitOf(j.id))).sort(byWhen);
         const scheduled = agreed.filter((j) => !visitPassed(visitOf(j.id))).sort(byWhen);
         const bookedIds = new Set(agreed.map((j) => j.id));
-        const current = live.filter((j) => !bookedIds.has(j.id));
+        // WAITING ON YOU: a time put to them that they have not answered. It
+        // sat in the ordinary list with a chip reading "Confirm a time", the
+        // same size as every report that needs nothing from them -- and a
+        // window nobody answers is a repair that does not move. First, and
+        // the answer is on the row.
+        //
+        // Only once it is THEIR turn. They may answer earlier, and the row
+        // still lets them, but 064 never PROMPTS a tenant for a window the
+        // crew has not committed to -- that is how somebody books a morning
+        // off for a time that evaporates.
+        const askingMe = live.filter((j) => {
+          const v = visitOf(j.id);
+          if (bookedIds.has(j.id) || tenantStage(j, v).key !== "confirm") return false;
+          return v.turn !== undefined && Array.isArray(v.parties) ? v.turn === "tenant" : true;
+        });
+        const askingIds = new Set(askingMe.map((j) => j.id));
+        const current = live.filter((j) => !bookedIds.has(j.id) && !askingIds.has(j.id));
         const past = mine.filter(isPast);
         const row = (j) => {
           const v = visitOf(j.id);
@@ -16666,6 +16697,12 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
               </div>
             ) : (
               <>
+                {askingMe.length > 0 && (
+                  <TenantSection id="asking" title="Waiting on you — can you be in?" count={askingMe.length}
+                    tone="ask">
+                    <div className="tn-list">{askingMe.map(row)}</div>
+                  </TenantSection>
+                )}
                 {/* Soonest first, because the next one is the one being
                     asked about. */}
                 {overdue.length > 0 && (
@@ -16679,7 +16716,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
                   </TenantSection>
                 )}
                 <TenantSection id="open"
-                  title={agreed.length ? "Everything else you've reported" : "What you've reported"}
+                  title={agreed.length || askingMe.length ? "Everything else you've reported" : "What you've reported"}
                   count={current.length}>
                   {current.length === 0 ? (
                     <div className="dash-empty">
@@ -24310,6 +24347,145 @@ function JobsTimeline({ jobs, subs = [], onOpenJob }) {
 // a caller elsewhere still gets every row behind one press.
 const DashPage = React.createContext(null);
 
+// WAITING ON YOU: EVERY PLACE A WORKFLOW HAS STOPPED UNTIL THIS ACCOUNT ANSWERS.
+//
+// Reported with three screenshots of one job. The tenant's screen read "You
+// said Oct 14 works -- waiting on Sound Property Management to confirm it";
+// the handyman had put that time forward; and the manager's dashboard filed
+// the job under "Ready to mark complete" and said nothing about a time at all.
+// The answer existed -- "Approve this time", inside the job card -- and the
+// only way to find out it was wanted was to open every job in turn. *"We can't
+// have workflows stall like this."*
+//
+// So this is one list, worked out from the same facts each screen draws its
+// own buttons from, and every row says what happened and offers the answer
+// beside it. Four kinds, in the order they hold somebody else up:
+//
+//   time      a window the chain has handed to the hiring side -- the crew
+//             countered, and (very often) the tenant has already said yes.
+//             The server's `turn` decides, because whether the tenant is a
+//             party is a fact only it holds; where a row carries no turn, the
+//             same rule VisitBlock applies.
+//   declined  the newest window was turned down. Nothing moves until a new
+//             one goes out, and nothing else on the page said so -- the old
+//             section read every declined row, including ones a later
+//             proposal had already replaced.
+//   span      a crew suggested a different length for their trade; their
+//             figures sit beside ours until somebody picks one.
+//   notrade   an approved job with no trade on it, which can never be
+//             assigned. The commonest way an approved tenant request stalls.
+//
+// Not here, deliberately: work requests, expired and declined offers and
+// documents to review each already have a section on this page whose row
+// carries its own answer. One list for the things that had none.
+function yourTurnItems(jobs, latestVisit, today) {
+  const out = [];
+  for (const j of jobs || []) {
+    if (j.readOnly || !jobIsLive(j, today)) continue;
+    if (j.requestedBy && !j.approvedAt) continue;   // a request: its own section
+    const v = latestVisit[j.id];
+    if (v && v.status === "proposed" && managerTurn(v, j)) out.push({ kind: "time", job: j, v });
+    if (v && v.status === "declined") out.push({ kind: "declined", job: j, v });
+    for (const t of j.trades || []) {
+      const sp = j.spans?.[t];
+      if (sp?.proposal) out.push({ kind: "span", job: j, trade: t, sp });
+    }
+    if (!(j.trades || []).length) out.push({ kind: "notrade", job: j });
+  }
+  const rank = { time: 0, declined: 1, span: 2, notrade: 3 };
+  return out.sort((a, b) => rank[a.kind] - rank[b.kind]);
+}
+
+// Is this window the hiring side's to answer now? The server's answer when the
+// row carries one; otherwise the rule VisitBlock draws its own panel from, so
+// the dashboard and the job card cannot disagree about one window.
+// What an answer from this panel was refused with, in the hiring side's words.
+function yourTurnErrText(e) {
+  const code = e?.body?.error || "";
+  if (code === "not_your_turn") return "Somebody else has to answer this one first. Reload to see where it stands.";
+  if (code === "not_open") return "That has already been answered or changed. Reload to see where it stands.";
+  if (code === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration}.sql.`;
+  return tenantVisitErrText(e);
+}
+
+function managerTurn(v, job) {
+  if (Array.isArray(v.parties)) return v.turn === "manager";
+  const parties = visitParties({ ...job, access: job.accessEffective },
+    { hasContractor: someoneAccepted(job) });
+  return visitMayAnswer(v, parties, "manager");
+}
+
+function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
+  onAnswerVisit, onAnswerSpan, onOpenJob, onPeek }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const { kind, job, v } = item;
+  const where = props.find((p) => p.id === job.propertyId);
+  const crew = jobAssignments(job).filter((a) => a.status === "accepted" || a.auto)
+    .map((a) => a.company).filter(Boolean);
+  const crewName = crew[0] || `The ${hiresWord}`;
+  const tenant = users.find((u) => u.id === accessTenant(job));
+  const act = async (key, fn) => {
+    setBusy(key); setErr("");
+    try { await fn(); }
+    catch (e) { console.error("[your-turn]", e); setErr(yourTurnErrText(e)); }
+    finally { setBusy(""); }
+  };
+  let lede, when = null, sub = null, acts = [];
+  if (kind === "time") {
+    lede = `${crewName} proposed a new time`;
+    when = visitWhen(v);
+    sub = visitPartySaid(v, "tenant")
+      ? `${tenant ? `${tenant.name} (the tenant)` : "The tenant"} already said it works. Approving books it.`
+      : "Approving sends it on to whoever still has to agree.";
+    acts = [
+      onAnswerVisit && { kind: "yes", label: busy === "yes" ? "Approving…" : "Approve this time",
+        icon: <Check size={16} />, disabled: !!busy,
+        onClick: () => act("yes", () => onAnswerVisit(v.id, "confirmed")) },
+      { kind: "alt", label: "Propose another time", icon: <Calendar size={16} />,
+        disabled: !!busy, onClick: () => onOpenJob?.(job.id) },
+    ].filter(Boolean);
+  } else if (kind === "declined") {
+    const byCrew = !!(v.contractorNote || (v.contractorAt && !v.respondedAt));
+    const who = byCrew ? crewName : (tenant ? `${tenant.name} (the tenant)` : "The tenant");
+    const note = byCrew ? v.contractorNote : v.tenantNote;
+    lede = `${who} can't make it`;
+    when = visitWhen(v);
+    sub = note ? `“${note}”` : "Nothing is booked until a new time goes out.";
+    acts = [{ kind: "yes", label: "Propose another time", icon: <Calendar size={16} />,
+      onClick: () => onOpenJob?.(job.id) }];
+  } else if (kind === "span") {
+    const M = catMeta(item.trade);
+    const p = item.sp.proposal;
+    const company = job.assignments?.[item.trade]?.company || crewName;
+    lede = `${company} says ${M.label} takes ${p.days} working day${p.days === 1 ? "" : "s"}`;
+    sub = `You had ${item.sp.days}. Their finish would be ${niceDay(p.end)}.${p.note ? ` “${p.note}”` : ""}`;
+    acts = onAnswerSpan ? [
+      { kind: "yes", label: busy === "use" ? "Saving…" : "Use theirs", icon: <Check size={16} />,
+        disabled: !!busy, onClick: () => act("use", () => onAnswerSpan(job.id, item.trade, true)) },
+      { kind: "quiet", label: busy === "keep" ? "Saving…" : "Keep ours", disabled: !!busy,
+        onClick: () => act("keep", () => onAnswerSpan(job.id, item.trade, false)) },
+    ] : [];
+  } else {
+    lede = "Approved, with no trade on it";
+    sub = `Nobody can be assigned until it says what kind of work it is.`;
+    acts = [{ kind: "yes", label: "Add a trade", icon: <Plus size={16} />,
+      onClick: () => onOpenJob?.(job.id) }];
+  }
+  return (
+    <div className={`dash-row yt-row yt-${kind}`} data-yt={kind}>
+      <button className="dash-row-main dash-row-open" onClick={onPeek}>
+        <span className="yt-lede">{lede}</span>
+        {when && <span className="yt-when">{when}</span>}
+        <span className="dr-title">{job.title}</span>
+        <span className="dr-meta">{[where?.name, sub].filter(Boolean).join(" · ")}</span>
+      </button>
+      {acts.length > 0 && <div className="yt-acts"><VisitActs acts={acts} /></div>}
+      {err && <p className="fld-note err dash-row-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 function DashRows({ id, peek = 2, children }) {
   const rows = React.Children.toArray(children).filter(Boolean);
   const pager = React.useContext(DashPage);
@@ -24691,7 +24867,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   connectsIn = [], onRespondConnect, onReloadConnects,
   hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
   onManagePack = null, onAddPackField = null, onReloadCompany = null, weather = null,
-  inspections = [], onOpenInspection = null }) {
+  inspections = [], onOpenInspection = null, onAnswerVisit = null, onAnswerSpan = null }) {
   // Which job row is open in the details modal. Held by id rather than as the
   // job object, for the reason `openReq` is: an assign or a reload replaces
   // the row, and a captured copy would draw the old one under the modal.
@@ -24709,10 +24885,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // Which request is open, held by id: the list re-renders on every approve,
   // and a captured object would go stale under the modal.
   const [openReq, setOpenReq] = useState(null);
-  // A tenant said the proposed time doesn't work: somebody has to propose
-  // another, and nothing else on this screen would say so.
-  const timeDeclined = visits.filter((v) => v.status === "declined")
-    .map((v) => ({ v, job: jobs.find((j) => j.id === v.jobId) })).filter((x) => x.job && !isClosed(x.job));
   const managesProperties = Array.isArray(properties);
   // Only approved work has trade slots. An unapproved request has its own
   // section above and must not also be counted as needing a contractor.
@@ -24775,8 +24947,35 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
     && s.job.status === "completed");
   const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
     .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
-  const readyToComplete = jobs.filter((j) => jobIsLive(j, dayKey())
-    && j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto)));
+  // THE NEWEST VISIT ON EACH JOB, live or declined. A job collects superseded
+  // windows behind the live one, and a declined window stops mattering the
+  // moment somebody proposes the next -- so "is anything waiting on a time"
+  // is a question about the newest row and no other.
+  const latestVisit = useMemo(() => {
+    const m = {};
+    [...visits].filter((v) => v.status !== "superseded")
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .forEach((v) => { if (!m[v.jobId]) m[v.jobId] = v; });
+    return m;
+  }, [visits]);
+  // READY TO MARK COMPLETE MEANS THE WORK COULD HAVE HAPPENED. It read "every
+  // trade accepted" and nothing else, so a job with NO trades passed vacuously
+  // ("All 0 trade accepted") and a job whose time was still being agreed sat
+  // here saying "complete it", which is the opposite of what it needed -- the
+  // manager's answer to a time the crew had put forward. Reported as exactly
+  // that: the tenant's screen said it was waiting on the manager, and the
+  // manager's dashboard said the job was waiting to be completed.
+  const readyToComplete = jobs.filter((j) => {
+    if (!jobIsLive(j, dayKey()) || j.readOnly || !(j.trades || []).length) return false;
+    if (!j.trades.every((t) => j.assignments[t] && (j.assignments[t].status === "accepted" || j.assignments[t].auto))) return false;
+    const v = latestVisit[j.id];
+    if (v && (v.status === "proposed" || v.status === "declined")) return false;
+    const day = v && v.status === "confirmed" ? v.date : j.date;
+    return !day || day <= dayKey();
+  });
+  // WAITING ON YOU: every place a workflow has stopped until this account
+  // answers, named with the answer offered beside it. See yourTurnItems.
+  const yourTurn = role === "owner" ? [] : yourTurnItems(jobs, latestVisit, dayKey());
 
   const first = me.name.split(" ")[0];
   const isOwner = role === "owner";
@@ -24920,7 +25119,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                 ? `Nothing scheduled at your ${props.length === 1 ? "building" : "buildings"} yet.`
                 : `${jobs.length} job${jobs.length === 1 ? "" : "s"} at your ${props.length === 1 ? "building" : `${props.length} buildings`}${awaitingApproval.length ? ` · ${awaitingApproval.length} request${awaitingApproval.length === 1 ? "" : "s"} waiting on approval` : ""}`)
             : jobs.length === 0 ? "No jobs yet — create one to get started." :
-              `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${open.length} trade slot${open.length === 1 ? "" : "s"} still unassigned`}</p>
+              `${jobs.length} job${jobs.length === 1 ? "" : "s"} · ${open.length} trade slot${open.length === 1 ? "" : "s"} still unassigned${yourTurn.length ? ` · ${yourTurn.length} waiting on you` : ""}`}</p>
         </div>
         <div className="dash-cta">
           <button className="btn-solid" onClick={onNewJob}>
@@ -25002,6 +25201,24 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               : ""}
             Urgent reports go straight to your emergency contractor when you have named one, in Account settings.
           </p>
+        </section>
+      )}
+
+      {/* WAITING ON YOU, above everything but a life-safety report: these are
+          workflows that have stopped until this account answers, and each row
+          carries the answer. See yourTurnItems. */}
+      {yourTurn.length > 0 && (
+        <section className="dash-sec sec-yt" aria-label="Waiting on you">
+          <h3><Bell size={15} /> Waiting on you
+            <span className="sec-count amber">{yourTurn.length}</span></h3>
+          <DashRows id="yourturn">
+            {yourTurn.map((it) => (
+              <YourTurnRow key={`${it.kind}-${it.job.id}-${it.trade || it.v?.id || ""}`}
+                item={it} users={users} props={props} hiresWord={words.one}
+                onAnswerVisit={onAnswerVisit} onAnswerSpan={onAnswerSpan} onOpenJob={onOpenJob}
+                onPeek={() => setPeek({ jobId: it.job.id, trade: it.trade || null, kind: "yt" })} />
+            ))}
+          </DashRows>
         </section>
       )}
 
@@ -25107,28 +25324,6 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
       </div>
       )}
 
-      {!isOwner && timeDeclined.length > 0 && (
-        <section className="dash-sec">
-          <h3><Calendar size={15} /> Tenant can't make the proposed time
-            <span className="sec-count amber">{timeDeclined.length}</span></h3>
-          <DashRows id="timedeclined">
-          {timeDeclined.map(({ v, job }) => {
-            const who = users.find((u) => u.id === job.requestedBy);
-            return (
-              <div key={v.id} className="dash-row">
-                <button className="dash-row-main dash-row-open" onClick={() => setPeek({ jobId: job.id, trade: null, kind: "time" })}>
-                  <span className="dr-title">{job.title}</span>
-                  <span className="dr-meta">
-                    {who ? who.name : "The tenant"} can't make {visitWhen(v)}{v.tenantNote ? ` — “${v.tenantNote}”` : ""}
-                  </span>
-                </button>
-                <button className="btn-solid sm" onClick={onGoJobs}><Calendar size={13} /> Propose another</button>
-              </div>
-            );
-          })}
-          </DashRows>
-        </section>
-      )}
 
       {/* Somebody is waiting on US. This had nowhere to live: since 031 an
           account is a company too, so an admin can be asked to connect -- but
@@ -29773,14 +29968,25 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
     && matchesQuery(wq, q.job.title, q.job.address, q.job.area, catMeta(q.trade).label, q.accountName);
   const showing = (id) => !wShow || wShow === id;
   const fPending = showing("reply") ? pending.filter(keepM) : [];
-  const fUpcoming = showing("upcoming") ? upcoming.filter(keepM) : [];
+  // WAITING ON YOU: a time put to this crew that is theirs to answer. It sat
+  // in Current & upcoming as one line among the rest, flagged "Confirm the
+  // time" in small type -- and the whole chain stops until it is answered, the
+  // tenant included. Same test the card draws its own panel from. Not
+  // filtered by the bar: a narrowed list must not hide a question.
+  const timeAsks = !onAnswerVisit ? [] : upcoming.filter((m) => {
+    const w = workWhen(m.job);
+    return !!w.visitId && w.kind === "proposed" && (w.turn ? w.turn === "contractor" : !w.mine);
+  });
+  const askKeys = new Set(timeAsks.map((m) => `${m.job.id}-${m.trade}`));
+  const fUpcoming = showing("upcoming")
+    ? upcoming.filter(keepM).filter((m) => !askKeys.has(`${m.job.id}-${m.trade}`)) : [];
   const fPast = showing("completed") ? past.filter(keepM) : [];
   const fDeclined = showing("declined") ? declined.filter(keepM) : [];
   const fOpenQuotes = showing("quotes") ? openQuotes.filter(keepQ) : [];
   const fSentQuotes = showing("quotes") ? sentQuotes.filter(keepQ) : [];
   const workClients = [...new Set([...all.map(clientOf), ...quotes.map((q) => q.accountName)].filter(Boolean))].sort();
   const workTotal = pending.length + upcoming.length + past.length + declined.length + openQuotes.length + sentQuotes.length;
-  const workShown = fPending.length + fUpcoming.length + fPast.length + fDeclined.length + fOpenQuotes.length + fSentQuotes.length;
+  const workShown = timeAsks.length + fPending.length + fUpcoming.length + fPast.length + fDeclined.length + fOpenQuotes.length + fSentQuotes.length;
   const narrowed = !!(wq.trim() || wClient || wShow);
 
   // MY JOBS IS TWO VIEWS OF ONE BOOK: the list of work, and the calendar that
@@ -29957,6 +30163,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 { id: "client", label: "Clients", icon: Building2, value: wClient, onChange: setWClient,
                   options: workClients.map((c) => [c, c]) },
               ]} />
+          )}
+
+          {timeAsks.length > 0 && (
+            <section className="dash-sec sec-yt" aria-label="Waiting on you">
+              <h3><Bell size={15} /> Waiting on you — confirm the time
+                <span className="sec-count amber">{timeAsks.length}</span></h3>
+              {timeAsks.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} />)}
+            </section>
           )}
 
           {/* Asked to price something, which is not the same as being offered
@@ -41481,6 +41695,23 @@ strong.insp-name{background:none;border:0;padding:0}
 .dash-row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--line);
   border-radius:11px;padding:12px 14px;margin-bottom:8px}
 .dash-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+/* Waiting on you. Amber edge on the section, because amber already means
+   somebody is waiting on this account; each row leads with what happened and
+   puts the window on a line of its own, then the answer at full size. The
+   row wraps so the answer sits under the words on a phone. */
+.sec-yt{border:1px solid #f0d9a8;border-left:4px solid var(--amber);background:#fffaf0;
+  border-radius:13px;padding:14px 14px 6px}
+.sec-yt h3{margin-top:0}
+.yt-row{flex-wrap:wrap;align-items:flex-start}
+.yt-row .dash-row-main{flex:1 1 260px}
+.yt-lede{font-weight:700;font-size:14px;color:var(--amber-ink)}
+.yt-when{font-size:16px;font-weight:700;color:var(--ink)}
+.yt-acts{flex:1 1 320px;max-width:440px}
+.yt-acts .vacts{margin-top:0}
+.tn-sec-ask{border:1px solid #f0d9a8;border-left:4px solid var(--amber);background:#fffaf0;
+  border-radius:13px;padding:10px 12px 4px}
+.tn-sec-ask .tn-sec-askhead{margin:0 0 8px;cursor:default}
+@media (max-width:620px){.yt-acts{max-width:none;flex-basis:100%}}
 /* max-width is what makes the ellipsis beside it happen at all, and it was
    missing. The .dash-row-open rule below is align-items:flex-start, so every
    child of that column flex container is sized to ITS OWN TEXT, not the row --

@@ -12213,6 +12213,61 @@ refactor.
   on Tenant HQ (two assertions), and printing a status and an amount in the
   rent slots (one).
 
+- **EVERY DASHBOARD SAYS WHAT IS WAITING ON ITS READER, WITH THE ANSWER ON THE
+  ROW.** Reported with three screenshots of one job. The tenant's screen read
+  *"You said Oct 14 works -- waiting on Sound Property Management to confirm
+  it"*; the handyman had put that time forward; and the manager's dashboard
+  filed the job under **Ready to mark complete**, beside another reading *"All 0
+  trade accepted"*. The answer (*Approve this time*) was inside the job card,
+  and the only way to learn it was wanted was to open every job. *"We can't
+  have workflows stall like this."*
+
+  **The manager gets a Waiting on you panel above the schedule**
+  (`yourTurnItems`), amber-edged, two rows and More like every dashboard list.
+  Four kinds, each with its answer on the row:
+  - a window that is the hiring side's turn (Approve this time / Propose
+    another time). The server's `turn` decides, because whether the tenant is
+    a party is a fact only it holds; a row without one falls back to the rule
+    VisitBlock uses. It says when the tenant has already said yes, because then
+    approving books it.
+  - a newest window that was turned down, with whose no and their reason.
+  - a crew's suggested length (Use theirs / Keep ours).
+  - an approved job with no trade, which can never be assigned.
+
+  **Read off the NEWEST visit per job.** The old *Tenant can't make the
+  proposed time* section read every declined row, so one a later proposal had
+  already replaced stayed on the dashboard. That section is gone; its rows are
+  in the panel.
+
+  Not in it, deliberately: work requests, expired and declined offers and
+  documents to review. Each already has a section whose row carries its own
+  answer, and one list for the things that had none is the fix. Two lists for
+  one item is how the two come to disagree.
+
+  **Ready to mark complete means the work could have happened.** It read
+  "every trade accepted" and nothing else, so a job with no trades passed
+  vacuously and a job whose time was still being agreed said *complete it*. It
+  now needs at least one trade, no window proposed or declined, and the agreed
+  day (or the job's date) today or past.
+
+  **The tenant gets *Waiting on you -- can you be in?* first on Tenant HQ**,
+  and it cannot be folded, because a question somebody closed once and forgot
+  is the stall. **Only once it is their turn**: they may still answer early
+  from the row, but 064 never prompts a tenant for a window the crew has not
+  committed to. The suite seeds a saved "closed" for that section, since only
+  that can tell "cannot be folded" from "happens to be open".
+
+  **The contractor gets *Waiting on you -- confirm the time* above job
+  requests**, on the same test the card draws its own panel from, and the row
+  is taken out of Current & upcoming so it is not on the page twice. The
+  filter bar does not narrow it, because a narrowed list must not hide a
+  question.
+
+  `test:waitingyou` drives all three dashboards. Eight mutations fire, each on
+  its own assertion. **Still open:** hours submitted for approval, extra-hours
+  requests and milestones to verify are not on the job rows the dashboard
+  holds, so they are not in the panel yet; they are answered on the work order.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
