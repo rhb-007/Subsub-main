@@ -35,7 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -2337,6 +2337,9 @@ export default function SubSub() {
   // tab is already the tenant's, so changing it does nothing; this says
   // "close the form" without the app having to own the form.
   const [homeKey, setHomeKey] = useState(0);
+  // "Pay rent" in the nav. Rent is not live yet, so this opens the screen
+  // that says so; a counter for the reason reportKey is one.
+  const [rentKey, setRentKey] = useState(0);
   const [userMenu, setUserMenu] = useState(false);
   // The connect code, held at the top of the app rather than inside the
   // menu that shows it.
@@ -3833,6 +3836,18 @@ export default function SubSub() {
       .catch(() => { /* decoration */ });
     return () => { live = false; };
   }, [loggedIn, currentAccountId]);
+  // Who runs a tenant's building. Fetched once here rather than by each place
+  // that draws it -- the drawer and the profile menu both carry the card, and
+  // two mounts would be two requests for one record.
+  const [tenantMgr, setTenantMgr] = useState(null);
+  useEffect(() => {
+    if (!loggedIn || !currentAccountId || role !== "tenant") { setTenantMgr(null); return; }
+    let live = true;
+    api.myManager()
+      .then((r) => { if (live) setTenantMgr(r || {}); })
+      .catch(() => { if (live) setTenantMgr({}); });
+    return () => { live = false; };
+  }, [loggedIn, currentAccountId, role]);
   useEffect(() => {
     if (!loggedIn || !currentAccountId || !isHireable(account)) { setMyCompany(null); return; }
     let live = true;
@@ -5918,6 +5933,7 @@ export default function SubSub() {
                       </>
                     )}
                     {canQuickSend && <QuickSend />}
+                    {can("tenant") && <div className="um-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> My account
                     </button>
@@ -6037,6 +6053,10 @@ export default function SubSub() {
               </button>
               <button onClick={() => { setTab("tenant"); setReportKey((k) => k + 1); }}>
                 Report a problem
+              </button>
+              {/* Not live yet, and the entry says so before it is pressed. */}
+              <button className="nav-rent" onClick={() => { setTab("tenant"); setRentKey((k) => k + 1); }}>
+                Pay rent <span className="nav-soon">Soon</span>
               </button>
             </>
           )}
@@ -6180,6 +6200,7 @@ export default function SubSub() {
             </button>
           ))}
           <div className="drawer-actions">
+            {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> My account</button>
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
                 it. "Switch to Cascade Management" on its own reads as taking
@@ -7617,7 +7638,7 @@ export default function SubSub() {
 
       {can("tenant") && tab !== "account" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
-          unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey}
+          unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey} rentKey={rentKey}
           visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
           onProposeVisit={proposeVisit}
           onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
@@ -16121,62 +16142,102 @@ function TenantDetails({ brandName, only = null }) {
 // who looks after this building, and one tap to call, text or email them.
 // Where nobody is set up to answer it says so and points back at Report a
 // problem, which always reaches them -- an empty card would read as a broken
-// one. A tenant's OWN details live in My account, and the foot of the card
-// says so, because that is where they went.
+// one.
 const initialsOf = (name) => String(name || "?").split(/\s+/).filter(Boolean)
   .map((w) => w[0]).join("").slice(0, 2).toUpperCase() || "?";
 const telHref = (p) => `tel:${String(p || "").replace(/[^\d+]/g, "")}`;
-function TenantManager({ brand, onOpenAccount }) {
-  const [m, setM] = useState(null);
-  useEffect(() => {
-    let live = true;
-    api.myManager().then((r) => { if (live) setM(r || {}); })
-      .catch(() => { if (live) setM({}); });
-    return () => { live = false; };
-  }, []);
+// IT LIVES IN THE PROFILE MENU, not on Tenant HQ. Asked for as *"add the
+// property manager contact card on the drop down of the profile / my
+// account"*, to clean the dashboard up: who to ring is something somebody
+// looks up, not something they need to scroll past every visit. Drawn in two
+// places -- the drawer on a phone or tablet, the profile menu on a wide
+// screen -- from ONE fetch held by the app, so the two cannot disagree.
+// Links only, no buttons: every button in the drawer closes it, and a call
+// should not.
+function TenantManager({ brand, m }) {
   if (!m) return null;
   const company = m.company || brand.name;
   const people = Array.isArray(m.managers) ? m.managers : [];
   return (
-    <section className="tn-card tn-mgr" aria-label="Your property manager">
-      <div className="tn-card-head">
-        <h3><Building2 size={15} /> Your property manager</h3>
-      </div>
-      {people.length ? (
-        <div className="tn-mgr-people">
-          {people.map((p) => (
-            <div className="tn-mgr-person" key={`${p.name}-${p.email}`}>
-              <span className="tn-mgr-av" aria-hidden="true">{initialsOf(p.name)}</span>
-              <span className="tn-mgr-who">
-                <b>{p.name || company}</b>
-                <span>{p.role === "pm" ? "Property manager" : `Manager at ${company}`}</span>
-                {(p.phone || p.email) && <span>{[p.phone, p.email].filter(Boolean).join(" · ")}</span>}
-              </span>
-              <span className="tn-mgr-acts">
-                {p.phone && <a className="tn-mgr-act" href={telHref(p.phone)}><Phone size={15} /> Call</a>}
-                {p.phone && <a className="tn-mgr-act" href={`sms:${String(p.phone).replace(/[^\d+]/g, "")}`}>
-                  <MessageSquareText size={15} /> Text</a>}
-                {p.email && <a className="tn-mgr-act" href={`mailto:${p.email}`}><Mail size={15} /> Email</a>}
-              </span>
-            </div>
-          ))}
+    <section className="tn-mgr tn-mgr-mini" aria-label="Your property manager">
+      <p className="tn-mgr-head"><Building2 size={13} /> Your property manager</p>
+      {people.length ? people.map((p) => (
+        <div className="tn-mgr-person" key={`${p.name}-${p.email}`}>
+          <div className="tn-mgr-top">
+            <span className="tn-mgr-av" aria-hidden="true">{initialsOf(p.name)}</span>
+            <span className="tn-mgr-who">
+              <b>{p.name || company}</b>
+              <span>{p.role === "pm" ? `Property manager at ${company}` : `Manager at ${company}`}</span>
+              {p.phone && <span className="tn-mgr-line">{p.phone}</span>}
+              {p.email && <span className="tn-mgr-line">{p.email}</span>}
+            </span>
+          </div>
+          {(p.phone || p.email) && (
+            <span className="tn-mgr-acts">
+              {p.phone && <a className="tn-mgr-act" href={telHref(p.phone)}><Phone size={14} /> Call</a>}
+              {p.phone && <a className="tn-mgr-act" href={`sms:${String(p.phone).replace(/[^\d+]/g, "")}`}>
+                <MessageSquareText size={14} /> Text</a>}
+              {p.email && <a className="tn-mgr-act" href={`mailto:${p.email}`}><Mail size={14} /> Email</a>}
+            </span>
+          )}
         </div>
-      ) : (
-        <p className="tn-card-empty">Report a problem above and it goes straight to {company}.</p>
+      )) : (
+        <p className="tn-card-empty">Use Report a problem and it goes straight to {company}.</p>
       )}
-      <div className="tn-mgr-foot">
-        <p className="tn-card-note">Fire, gas or someone hurt? <strong>Call 911</strong> first.</p>
-        {onOpenAccount && (
-          <button type="button" className="tn-mgr-link" onClick={() => onOpenAccount("reach")}>
-            How {company} reaches you <ChevronRight size={12} />
-          </button>
-        )}
-      </div>
+      <p className="tn-card-note">Fire, gas or someone hurt? <strong>Call 911</strong> first.</p>
     </section>
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, visits = [], onRespondVisit, onVisitOutcome, onProposeVisit, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
+// RENT, COMING SOON. Asked for as a prominent button on Tenant HQ and in the
+// nav, with the status -- current or overdue -- and the amount due, "but make
+// this payment coming soon". There is no rent ledger in SubSub yet, so the
+// card shows WHERE those answers will sit and prints none of them: a made-up
+// "$0 due" or "Current" is read and believed, which is the one thing a rent
+// screen must never be. The button opens a window saying what is coming and
+// how to pay until then, rather than doing nothing.
+const RENT_SLOTS = [["Status", "Current or overdue"], ["Amount due", "What you owe this month"], ["Due date", "When it's due"]];
+function TenantRent({ brandName, onOpen }) {
+  return (
+    <section className="tn-rent" aria-label="Rent — coming soon">
+      <div className="tn-rent-head">
+        <span className="tn-rent-title"><Wallet size={17} /> Rent <span className="tn-soon">Coming soon</span></span>
+        <button type="button" className="tn-rent-pay" onClick={onOpen}>
+          <Wallet size={16} /> Pay rent
+        </button>
+      </div>
+      <div className="tn-rent-slots">
+        {RENT_SLOTS.map(([k, hint]) => (
+          <div className="tn-rent-slot" key={k}>
+            <span className="tn-rent-k">{k}</span>
+            <span className="tn-rent-v" aria-label={`${k}: not available yet`}>—</span>
+            <span className="tn-rent-hint">{hint}</span>
+          </div>
+        ))}
+      </div>
+      <p className="tn-rent-note">Paying {brandName} here is coming soon. Until then, pay the way you do today.</p>
+    </section>
+  );
+}
+function TenantRentSoon({ brandName, onClose }) {
+  return (
+    <Modal onClose={onClose}>
+      <div className="tn-rent-modal">
+        <h3><Wallet size={18} /> Pay rent <span className="tn-soon">Coming soon</span></h3>
+        <p>Soon you'll pay {brandName} right here, and see at a glance:</p>
+        <ul>
+          <li>whether you're current or overdue</li>
+          <li>how much is due, and when</li>
+          <li>every payment you've made</li>
+        </ul>
+        <p className="tn-rent-note">Nothing can be paid here yet. Until it can, pay {brandName} the way you do today.</p>
+        <div className="form-actions"><button className="btn-solid" onClick={onClose}>Got it</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, rentKey = 0, visits = [], onRespondVisit, onVisitOutcome, onProposeVisit, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
   // 072. The notices posted to their building. A failure is silence: the
   // reports below are what this screen is for, and a table the account has
   // not created yet must not cost them.
@@ -16237,6 +16298,12 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
     if (!homeKey) return;
     setForm(null); setSent(false);
   }, [homeKey]);
+  // "Pay rent" in the nav opens the same coming-soon window the card does.
+  const [rentOpen, setRentOpen] = useState(false);
+  useEffect(() => {
+    if (!rentKey) return;
+    setForm(null); setRentOpen(true);
+  }, [rentKey]);
   // A declined work order is not a booking: the contractor said no, so the
   // report is back to needing one and is the tenant's to take back again.
   const assignedOn = (j) => Object.values(j.assignments || {})
@@ -16525,6 +16592,9 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
 
       <TenantNotices notices={liveNotices} />
 
+      <TenantRent brandName={brand.name} onOpen={() => setRentOpen(true)} />
+      {rentOpen && <TenantRentSoon brandName={brand.name} onClose={() => setRentOpen(false)} />}
+
       {/* The two ways to tell the building something is wrong: the one that
           works now, made the biggest thing on the page, and the one coming. */}
       <div className="tn-actions">
@@ -16631,7 +16701,6 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         );
       })()}
 
-      <TenantManager brand={brand} onOpenAccount={onOpenAccount} />
 
       {(() => {
         const open = mine.find((j) => j.id === openId);
@@ -39765,6 +39834,42 @@ p.fld-note{margin:6px 0 0}
 .tn-mgr-link{background:none;border:0;padding:0;color:var(--brand);font:inherit;font-size:12.5px;
   font-weight:700;cursor:pointer}
 @media (max-width:560px){.tn-mgr-acts{width:100%}.tn-mgr-act{flex:1 1 0;justify-content:center}}
+/* The manager card in the profile drawer and menu: stacked, because it is
+   about 300px wide there, and its actions are links so a call does not close
+   the drawer. */
+.tn-mgr-mini{margin:0;display:flex;flex-direction:column;gap:10px;padding:14px 16px;min-width:0}
+.tn-mgr-head{margin:0;display:flex;align-items:center;gap:6px;font-size:11px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.06em;color:var(--ink-soft)}
+.tn-mgr-mini .tn-mgr-person{flex-direction:column;align-items:stretch;gap:10px}
+.tn-mgr-top{display:flex;align-items:flex-start;gap:11px;min-width:0}
+.tn-mgr-mini .tn-mgr-who{flex:1 1 auto}
+.tn-mgr-mini .tn-mgr-line{font-size:12px}
+.tn-mgr-mini .tn-mgr-acts{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:6px;width:auto}
+.tn-mgr-mini .tn-mgr-act{justify-content:center;padding:0 8px;font-size:13px}
+.drawer-mgr{border-bottom:1px solid var(--line);background:var(--paper)}
+.um-mgr{width:290px;max-width:100%;margin:4px 0 6px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.nav-soon{margin-left:2px;font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;
+  border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink-soft);background:var(--paper)}
+/* Rent, coming soon: where the status, the amount and the date will sit,
+   with none of them printed, and one prominent button. */
+.tn-rent{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 18px;margin-bottom:14px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.tn-rent-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.tn-rent-title{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:16px;font-weight:800;letter-spacing:-.01em}
+.tn-rent-title svg{color:var(--brand)}
+.tn-rent-pay{display:inline-flex;align-items:center;gap:8px;min-height:46px;padding:0 22px;border-radius:11px;border:0;
+  background:var(--brand);color:#fff;font:700 15px Inter,sans-serif;cursor:pointer}
+.tn-rent-pay:hover{background:var(--brand-dk)}
+.tn-rent-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.tn-rent-slot{background:var(--paper);border:1px dashed var(--line);border-radius:10px;padding:10px 12px;
+  display:flex;flex-direction:column;gap:2px;min-width:0}
+.tn-rent-k{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft)}
+.tn-rent-v{font-size:20px;font-weight:800;line-height:1.2;color:var(--ink-soft)}
+.tn-rent-hint{font-size:12px;color:var(--ink-soft)}
+.tn-rent-note{margin:0;font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
+.tn-rent-modal h3{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px}
+.tn-rent-modal ul{margin:6px 0 12px;padding-left:20px;line-height:1.6}
+@media (max-width:560px){.tn-rent-slots{grid-template-columns:1fr}.tn-rent-pay{width:100%;justify-content:center}}
 .tn-card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 16px;
   box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px;min-width:0}
 .tn-card-head{display:flex;align-items:center;justify-content:space-between;gap:8px}

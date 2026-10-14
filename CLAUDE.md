@@ -12182,6 +12182,37 @@ refactor.
   the only path that produces that screen. Two more UI mutations fire (the
   force ignored, the button removed); the suites are now 31 and 31.
 
+- **THE MANAGER CARD MOVED TO THE PROFILE MENU, AND RENT IS ON TENANT HQ AS
+  "COMING SOON" WITH NO FIGURES.** Asked for as *"add the property manager
+  contact card on the drop down of the profile / my account"* and *"the ability
+  to pay for tenants in the future -- add this prominent button on the dashboard
+  as well as status overdue, current, rent due amount ... and in the main nav --
+  but make this payment coming soon"*.
+
+  **The card left Tenant HQ.** Who to ring is looked up, not scanned past on
+  every visit. It now sits at the top of the drawer's account block, right
+  above My account (phone and tablet), and at the top of the profile menu (wide
+  screen). **One fetch held by the app** (`tenantMgr`) feeds both, so the two
+  copies cannot disagree. Its actions are links, never buttons, because every
+  button in the drawer closes it. The *How X reaches you* link went with it:
+  My account is directly below the card. A project manager's title now names
+  the company (*Property manager at X*), because in a menu nothing beside the
+  card does.
+
+  **Rent prints where the answers will sit and none of the answers.** No rent
+  ledger exists, so the card shows Status, Amount due and Due date as dashed
+  slots reading **—**, with a *Coming soon* pill and a prominent **Pay rent**
+  button that opens a window saying what is coming and that nothing can be paid
+  yet. A made-up *Current* or *$0 due* is read and believed, which is the one
+  thing a rent screen must never be. The nav carries **Pay rent** with a *Soon*
+  pill, opening the same window (`rentKey`). The day rent is live, the slots
+  read the ledger and the button pays.
+
+  `test:tenanthomeui` (83) reads the card where it now lives (menu, drawer) and
+  asserts it is gone from Tenant HQ. Two mutations fire: putting the card back
+  on Tenant HQ (two assertions), and printing a status and an amount in the
+  rent slots (one).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

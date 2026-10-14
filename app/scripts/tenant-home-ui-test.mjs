@@ -54,8 +54,9 @@ const USERS = [
 ];
 let NOTICES = [];
 let CONTACT = {};
-let MANAGER = { company: "Sound Property Management", kind: "property_manager",
+const MANAGER0 = { company: "Sound Property Management", kind: "property_manager",
   managers: [{ name: "Riley Park", role: "pm", email: "riley@soundpm.test", phone: "(206) 555-0142" }] };
+let MANAGER = MANAGER0;
 let WEATHER = {};
 const sent = [];
 
@@ -130,9 +131,23 @@ const read = (page) => page.evaluate(() => {
     ctaRect: r(q(".tn-actions .tn-cta")), aiRect: r(q(".tn-ai")),
     ai: q(".tn-ai")?.innerText || null,
     contact: q(".tn-contact")?.innerText || null,
-    mgr: q(".tn-mgr")?.innerText || null,
-    mgrMark: !!document.querySelector(".tn-mgr img, .tn-mgr .brand-initials, .tn-mgr-co"),
-    mgrHrefs: [...document.querySelectorAll(".tn-mgr a")].map((a) => a.getAttribute("href")),
+    // The manager card left Tenant HQ for the profile menu (wide) and the
+    // drawer (phone), so each copy is read where it lives.
+    mgrOnHq: !!q(".tn-main .tn-mgr"),
+    menuMgr: q(".um-mgr .tn-mgr")?.innerText || null,
+    menuMgrRect: r(q(".um-mgr .tn-mgr")),
+    mgrMark: !!document.querySelector(".um-mgr img, .um-mgr .brand-initials, .um-mgr .tn-mgr-co"),
+    mgrHrefs: [...document.querySelectorAll(".um-mgr .tn-mgr a")].map((a) => a.getAttribute("href")),
+    drawerMgr: q(".drawer-mgr .tn-mgr")?.textContent || null,
+    drawerMgrRect: r(q(".drawer-mgr .tn-mgr")),
+    drawerHrefs: [...document.querySelectorAll(".drawer-mgr .tn-mgr a")].map((a) => a.getAttribute("href")),
+    rent: q(".tn-main .tn-rent")?.innerText || null,
+    rentRect: r(q(".tn-main .tn-rent")), rentPayRect: r(q(".tn-rent-pay")),
+    rentVals: [...document.querySelectorAll(".tn-rent-v")].map((e) => e.innerText.trim()),
+    rentSlots: [...document.querySelectorAll(".tn-rent-slot")].map((e) => r(e)),
+    rentModal: q(".tn-rent-modal")?.innerText || null,
+    navRent: [...document.querySelectorAll(".tabs > button")].map((b) => (b.innerText || "").replace(/\s+/g, " ").trim())
+      .filter((x) => /Pay rent/.test(x)),
     tabs: [...document.querySelectorAll(".seg-tabs button")].map((b) => b.innerText.trim()),
     tabOn: q(".seg-tabs button.on")?.innerText.trim() || null,
     emergency: q(".tn-emergency")?.innerText || null,
@@ -229,23 +244,66 @@ try {
     // runs the building and how to reach them.
     t.ck("the contact cards are no longer on Tenant HQ", s.contact === null && s.emergency === null,
       JSON.stringify({ c: s.contact, e: s.emergency }));
-    t.ck("the property manager card is there, naming the company",
-      /Your property manager/i.test(s.mgr || "") && /Sound Property Management/.test(s.mgr || ""), String(s.mgr));
+    // THE MANAGER CARD MOVED TO THE PROFILE MENU, to clean Tenant HQ up.
+    t.ck("the property manager card is no longer on Tenant HQ", s.mgrOnHq === false, String(s.mgrOnHq));
+
+    if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/tenant-hq.png`, fullPage: true });
+    console.log("\n-- rent, coming soon --");
+    t.ck("Tenant HQ carries a rent card that says it is coming",
+      /Rent/.test(s.rent || "") && /Coming soon/i.test(s.rent || "") && /Pay rent/.test(s.rent || ""), String(s.rent));
+    t.ck("with places for the status, the amount due and the due date",
+      /Status/i.test(s.rent || "") && /Amount due/i.test(s.rent || "") && /Due date/i.test(s.rent || ""), String(s.rent));
+    // The property that matters about a placeholder for money: no figure and no
+    // verdict anybody could believe.
+    t.ck("and prints no amount and no status", s.rentVals.length === 3 && s.rentVals.every((v) => v === "—")
+      && !/\$\s?\d/.test(s.rent || ""), JSON.stringify(s.rentVals));
+    t.ck("the Pay rent button is a real, thumb-sized target", s.rentPayRect?.height >= 44, JSON.stringify(s.rentPayRect));
+    t.ck("and the card sits above Report a problem", s.rentRect && s.ctaRect && s.rentRect.bottom <= s.ctaRect.top,
+      JSON.stringify({ r: s.rentRect, c: s.ctaRect }));
+    await page.evaluate(() => document.querySelector(".tn-rent-pay")?.click());
+    await wait(300);
+    let rs = await read(page);
+    t.ck("pressing it says what is coming, and that nothing can be paid yet",
+      /Coming soon/i.test(rs.rentModal || "") && /Nothing can be paid here yet/.test(rs.rentModal || ""), String(rs.rentModal));
+    await clickText(page, ".tn-rent-modal button", /Got it/);
+    await wait(250);
+    rs = await read(page);
+    t.ck("and closes", rs.rentModal === null, String(rs.rentModal));
+    t.ck("the nav carries Pay rent, marked Soon", s.navRent.length === 1 && /soon/i.test(s.navRent[0]), JSON.stringify(s.navRent));
+    await clickText(page, ".tabs > button", /Pay rent/);
+    await wait(300);
+    rs = await read(page);
+    t.ck("and opens the same window", /Nothing can be paid here yet/.test(rs.rentModal || ""), String(rs.rentModal));
+    await clickText(page, ".tn-rent-modal button", /Got it/);
+    await wait(250);
+
+    console.log("\n-- the manager card, in the profile menu --");
+    await page.evaluate(() => document.querySelector(".user-btn")?.click());
+    await wait(350);
+    const um = await read(page);
+    if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/tenant-menu.png` });
+    t.ck("the profile menu carries the property manager card, naming the company",
+      /Your property manager/i.test(um.menuMgr || "") && /Sound Property Management/.test(um.menuMgr || "")
+      && um.menuMgrRect?.height > 0, String(um.menuMgr));
     // The company is already in the header and in each person's title, so the
     // card carries no logo and no company line of its own.
-    t.ck("and no second logo or company line on it", s.mgrMark === false, String(s.mgrMark));
+    t.ck("and no second logo or company line on it", um.mgrMark === false, String(um.mgrMark));
     t.ck("and the person who looks after the building, with their title",
-      /Riley Park/.test(s.mgr || "") && /Property manager/.test(s.mgr || ""), String(s.mgr));
+      /Riley Park/.test(um.menuMgr || "") && /Property manager/.test(um.menuMgr || ""), String(um.menuMgr));
     t.ck("one tap to call, text or email them",
-      JSON.stringify(s.mgrHrefs) === JSON.stringify(["tel:2065550142", "sms:2065550142", "mailto:riley@soundpm.test"]),
-      JSON.stringify(s.mgrHrefs));
-    t.ck("and 911 first", /Call 911/.test(s.mgr || ""), String(s.mgr));
+      JSON.stringify(um.mgrHrefs) === JSON.stringify(["tel:2065550142", "sms:2065550142", "mailto:riley@soundpm.test"]),
+      JSON.stringify(um.mgrHrefs));
+    t.ck("and 911 first", /Call 911/.test(um.menuMgr || ""), String(um.menuMgr));
+    t.ck("the card fits inside the menu", um.menuMgrRect && um.menuMgrRect.left >= 0
+      && um.menuMgrRect.left + um.menuMgrRect.width <= 1100, JSON.stringify(um.menuMgrRect));
 
-    // AND THE WAY TO THEIR OWN DETAILS, because that is where they went.
-    await clickText(page, ".tn-mgr-link", /reaches you/);
+    // AND THE WAY TO THEIR OWN DETAILS: My account, right under it.
+    await page.evaluate(() => document.querySelector(".um-account")?.click());
     await wait(700);
+    await clickText(page, ".seg-tabs button", /^How we reach you$/);
+    await wait(400);
     let acc = await read(page);
-    t.ck("the link opens My account on the right tab",
+    t.ck("My account opens, with How we reach you as a tab",
       JSON.stringify(acc.tabs) === JSON.stringify(["Profile", "How we reach you", "Emergency contact"])
       && acc.tabOn === "How we reach you", JSON.stringify({ tabs: acc.tabs, on: acc.tabOn }));
     t.ck("preferred contact asks, naming the number on file",
@@ -312,7 +370,7 @@ try {
     t.ck("and the report button is still there", /Report a problem/.test(s.cta || ""));
     // Nobody set up to answer is said, never an empty card.
     t.ck("with nobody to name, the manager card points at Report a problem",
-      /Report a problem above/.test(s.mgr || "") && s.mgrHrefs.length === 0, String(s.mgr));
+      /Use Report a problem/.test(s.drawerMgr || "") && s.drawerHrefs.length === 0, String(s.drawerMgr));
     await ctx.close();
   }
 
@@ -324,6 +382,7 @@ try {
       title: "Packages have been taken from the lobby twice this week, please collect deliveries promptly",
       body: "Use the parcel lockers by the mail room.", important: true, endsOn: null,
       createdAt: `${dayKey()} 09:00:00` }];
+    MANAGER = MANAGER0;
     const { ctx, page } = await asTenant({ width: 390, height: 1400 });
     const s = await read(page);
     t.ck("nothing runs off the side", s.width <= 390, String(s.width));
@@ -332,6 +391,27 @@ try {
     if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/tenant-phone.png`, fullPage: true });
     t.ck("the two report cards stack", s.ctaRect && s.aiRect && s.aiRect.top > s.ctaRect.bottom - 1,
       JSON.stringify({ c: s.ctaRect, a: s.aiRect }));
+    t.ck("the rent slots stack too", s.rentSlots.length === 3 && s.rentSlots[1].top >= s.rentSlots[0].top + s.rentSlots[0].height - 1,
+      JSON.stringify(s.rentSlots));
+    t.ck("and Pay rent runs the width of the card", s.rentPayRect && s.rentRect && s.rentPayRect.width >= s.rentRect.width - 60,
+      JSON.stringify({ p: s.rentPayRect, r: s.rentRect }));
+    t.ck("no manager card on Tenant HQ here either", s.mgrOnHq === false);
+    await page.evaluate(() => document.querySelector(".nav-burger")?.click());
+    await wait(450);
+    const d = await read(page);
+    t.ck("the drawer carries the manager card, above My account",
+      /Your property manager/i.test(d.drawerMgr || "") && d.drawerMgrRect?.height > 0
+      && d.drawerMgrRect.left >= 0 && d.drawerMgrRect.left + d.drawerMgrRect.width <= 391, JSON.stringify(d.drawerMgrRect));
+    t.ck("with one tap to call, text or email", d.drawerHrefs.length === 3, JSON.stringify(d.drawerHrefs));
+    const order = await page.evaluate(() => {
+      const card = document.querySelector(".drawer-mgr")?.getBoundingClientRect();
+      const acct = [...document.querySelectorAll(".drawer-actions button")].find((b) => /My account/.test(b.innerText))?.getBoundingClientRect();
+      return card && acct ? card.bottom <= acct.top + 1 : null;
+    });
+    t.ck("the card sits right above My account", order === true, String(order));
+    t.ck("and the drawer offers Pay rent, marked Soon", d.navRent.length === 1 && /soon/i.test(d.navRent[0]), JSON.stringify(d.navRent));
+    t.ck("nothing in the drawer runs off the side", d.width <= 390, String(d.width));
+    if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/tenant-drawer.png` });
     await ctx.close();
   }
 
