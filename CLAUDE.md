@@ -12356,6 +12356,46 @@ refactor.
   ahead now. `test:inspectionjob` still has 2 failures from before this
   change: they pin the older rule that a tenant may not answer before the crew.
 
+- **TENANTS IS A SCREEN OF ITS OWN, AND EACH ROW SAYS WHAT IS WAITING ON THAT
+  TENANT.** Asked as *"a global tenant UI that shows all tenants across all
+  properties … currently all tenants are completely blind to the admin"*, then
+  answered: *"built out the tenants UI / access; tenants and users should be on
+  their own."*
+
+  The list already existed, but as Account → Tenants, an admin-only tab inside
+  a settings screen. A **project manager**, who runs the buildings day to day,
+  could not see who lives in them, even though every `/api/tenants` route has
+  always been `requireRole("admin","pm")`. That makes the screen stricter than
+  its route, which this file calls the same lie as looser.
+
+  So `tenants` is a capability of admin and pm, gated on `hasProperties` the
+  way Properties and Inspections are: a general contractor keeps no buildings
+  and gets no entry. It is a top-level menu item **beside Users and not inside
+  it**, because a tenant lives in a building and is not a member of the team.
+  The Account tab is **removed**, not kept as a second way in, because two
+  screens for one list is how they come to disagree.
+
+  **The row carries one flag, read off the jobs and visits the screen already
+  holds** (`tenantWork`). Nothing new is fetched. The flags, in priority order:
+  - *Asked to confirm a time*, when the chain has reached them (the server's
+    `turn`, falling back to `waitingOn`, never a window that has passed);
+  - *Request to approve*, for their unapproved requests;
+  - otherwise a plain count of open repairs.
+
+  A row with nothing open carries nothing, because a flag on every row is a
+  flag nobody reads. **Read-only rows never count**: a report under a previous
+  manager or at a building somebody else runs cannot be acted on from here.
+
+  **The window leads with a summary**: building and unit, how they want to be
+  reached, the emergency contact, and each open request or visit with its time
+  and what it waits on. Each request row is the way into its job. The summary
+  draws while the invite details load and when they fail, because it reads
+  nothing the invite fetch returns.
+
+  `test:tenantsui` drives admin, pm and a general contractor in one suite.
+  Four mutations fire, each on its own assertions: the kind gate dropped,
+  read-only jobs counted, the turn ignored, and the job row not wired.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

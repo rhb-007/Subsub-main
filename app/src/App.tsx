@@ -642,7 +642,7 @@ function hydrateError(broke) {
 }
 
 const ROLES = {
-  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "calendar", "jobs", "uniforms", "account"] },
+  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account"] },
   // The default label. "Property manager" rather than "project manager",
   // because three of the four account kinds are property businesses and
   // project-manager was general-contractor language left on the role
@@ -661,7 +661,11 @@ const ROLES = {
   // keeps it -- the buildings they are narrowed to are the buildings they
   // inspect, which is the whole job -- so this is a role capability and not
   // `canManage`.
-  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "calendar", "jobs", "uniforms", "account"] },
+  // "tenants" is the same pair: the people who live in the buildings, so
+  // only an account with buildings has any, and every tenant route is
+  // admin/pm. A scoped manager sees the tenants of their own buildings,
+  // because the server narrows the list.
+  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account"] },
   // A building owner is a guest in somebody else's account, scoped to the
   // buildings they were granted. No contractor directory -- they see who is
   // coming to their own jobs, not who the account works with -- and no
@@ -2580,7 +2584,7 @@ export default function SubSub() {
   // list, so Properties is not theirs to see whatever their role is.
   const can = (view) => {
     if (!ROLES[role].can.includes(view)) return false;
-    if (view === "properties" || view === "inspections") return hasProperties(account);
+    if (view === "properties" || view === "inspections" || view === "tenants") return hasProperties(account);
     return true;
   };
   const canRate = role === "admin" || role === "pm";
@@ -6129,6 +6133,15 @@ export default function SubSub() {
               )}
             </button>
           )}
+          {/* TENANTS, in the main menu. It was the fourth tab inside account
+              settings, admin-only, which is not where anybody looks for the
+              people who live in their buildings -- and a project manager,
+              whom every tenant route already allows, had no way in at all. */}
+          {can("tenants") && (
+            <button className={tab === "tenants" ? "on" : ""} onClick={() => setTab("tenants")}>
+              Tenants
+            </button>
+          )}
           {can("uniforms") && (
             <button className={tab === "uniforms" ? "on" : ""} onClick={() => setTab("uniforms")}>
               Uniforms{uniformOrders.filter((o) => o.status === "pending").length > 0 &&
@@ -7639,6 +7652,15 @@ export default function SubSub() {
               : a));
             return fresh.hostnameStatus;
           }} />
+      )}
+
+      {tab === "tenants" && can("tenants") && (
+        <main className="ss-main">
+          <PageHead title="Tenants"
+            sub="Everybody who lives in your buildings, whether they have signed in, and what is waiting on them." />
+          <TenantsPane properties={accountProperties} accountKind={kindOf(account)}
+            jobs={jobs} visits={visits} onOpenJob={openJob} />
+        </main>
       )}
 
       {tab === "uniforms" && can("uniforms") && (
@@ -12962,7 +12984,30 @@ function mapTenantRows(rows, properties, fallbackPropertyId) {
   return { header, rows: out, matched: Object.keys(index) };
 }
 
-function TenantsPane({ properties, accountKind }) {
+// WHAT IS GOING ON WITH ONE TENANT, read off the jobs and visits the account
+// already holds: their requests and the jobs they are named on to let a crew
+// in. Nothing new is fetched -- the list and the window read the same answer.
+function tenantWork(userId, jobs, latestVisit, today) {
+  const mine = (jobs || []).filter((j) => !j.readOnly
+    && (j.requestedBy === userId || j.accessUserId === userId));
+  const open = mine.filter((j) => jobIsLive(j, today) && !j.declinedAt && !j.withdrawnAt);
+  const rows = open.map((j) => {
+    const v = latestVisit[j.id];
+    const live = v && (v.status === "proposed" || v.status === "confirmed");
+    const askedOfThem = live && v.status === "proposed" && !visitPassed(v)
+      && (v.turn ? v.turn === "tenant" : Array.isArray(v.waitingOn) && v.waitingOn.includes("tenant"));
+    const stage = j.requestedBy === userId && !j.approvedAt ? "Waiting on your approval"
+      : askedOfThem ? "Asked to confirm a time"
+      : live && v.status === "confirmed" && !visitPassed(v) ? "Visit booked"
+      : live && v.status === "proposed" && !visitPassed(v) ? "Time proposed"
+      : "Open";
+    return { job: j, v: live ? v : null, askedOfThem, stage };
+  });
+  return { rows, waiting: rows.filter((r) => r.askedOfThem).length,
+    approvals: rows.filter((r) => r.stage === "Waiting on your approval").length };
+}
+
+function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJob = null }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   const [adding, setAdding] = useState(false);
@@ -12975,6 +13020,14 @@ function TenantsPane({ properties, accountKind }) {
   const [note, setNote] = useState("");
   const office = tenantWhere(accountKind) === "office";
   const unitWord = office ? "Suite" : "Unit";
+  const latestVisit = useMemo(() => {
+    const m = {};
+    [...visits].filter((v) => v.status !== "superseded")
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
+      .forEach((v) => { if (!m[v.jobId]) m[v.jobId] = v; });
+    return m;
+  }, [visits]);
+  const workOf = (t) => tenantWork(t.userId, jobs, latestVisit, dayKey());
 
   const load = async () => {
     try { setRows(await api.listTenants()); setErr(""); }
@@ -13083,6 +13136,8 @@ function TenantsPane({ properties, accountKind }) {
       {opened && (
         <Modal onClose={closeEditor} wide>
           <TenantEditor tenant={opened} properties={properties} unitWord={unitWord}
+            summary={<TenantSummary tenant={opened} work={workOf(opened)} unitWord={unitWord}
+              onOpenJob={onOpenJob ? (id) => { setOpened(null); onOpenJob(id); } : null} />}
             onClose={closeEditor} onSaved={load}
             onRemoved={(t) => { setOpened(null); setRemoving(t); }} />
         </Modal>
@@ -13199,6 +13254,15 @@ function TenantsPane({ properties, accountKind }) {
                   <span className={`tn-chip ${t.status === "active" ? "ok" : "wait"}`}>
                     {t.status === "active" ? "Signed in" : t.lastSentAt ? "Invite sent" : "Not sent yet"}
                   </span>
+                  {(() => {
+                    // What is waiting, on the row, so a list of three hundred
+                    // says which ones need anything without opening them.
+                    const w = workOf(t);
+                    return w.waiting ? <span className="tn-chip warn tn-flag">Asked to confirm a time</span>
+                      : w.approvals ? <span className="tn-chip warn tn-flag">{w.approvals === 1 ? "Request to approve" : `${w.approvals} requests to approve`}</span>
+                      : w.rows.length ? <span className="tn-chip plain tn-flag">{w.rows.length} open {w.rows.length === 1 ? "repair" : "repairs"}</span>
+                      : null;
+                  })()}
                 </div>
                 <p className="user-row-sub">
                   {[t.propertyName, t.unit ? `${unitWord} ${t.unit}` : null,
@@ -13290,7 +13354,42 @@ function tenantAddError(e) {
 // the record is editable here, and the message with it: a managing agent
 // chasing somebody for the third time has something of their own to say by
 // then, and the default wording is not it.
-function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemoved }) {
+// The top of a tenant's window: how they want to be reached, who to call in
+// an emergency, and what is open for them, each row the way into its job.
+function TenantSummary({ tenant, work, unitWord, onOpenJob }) {
+  const how = contactLine(tenant.contact);
+  const sos = emergencyLine(tenant.contact);
+  return (
+    <div className="tn-summary">
+      <p className="tn-sum-where">
+        <Building2 size={13} /> {[tenant.propertyName, tenant.unit ? `${unitWord} ${tenant.unit}` : null].filter(Boolean).join(" \u00b7 ") || "No building"}
+      </p>
+      {(how || sos) && (
+        <p className="tn-sum-contact">
+          {how && <span>{how}</span>}
+          {sos && <span><HeartPulse size={12} /> Emergency: {sos}</span>}
+        </p>
+      )}
+      <div className="form-sec">Requests and visits</div>
+      {work.rows.length === 0 ? (
+        <p className="fine">Nothing open for them right now.</p>
+      ) : (
+        <div className="tn-sum-jobs">
+          {work.rows.map((r) => (
+            <button key={r.job.id} type="button" className="tn-sum-job"
+              disabled={!onOpenJob} onClick={() => onOpenJob?.(r.job.id)}>
+              <span className="tsj-title">{r.job.title}</span>
+              <span className="tsj-when">{r.v ? visitWhen(r.v) : r.job.date ? niceDay(r.job.date) : "No date yet"}</span>
+              <span className={`tn-chip ${r.askedOfThem || r.stage === "Waiting on your approval" ? "warn" : "plain"}`}>{r.stage}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemoved, summary = null }) {
   const [inv, setInv] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const [f, setF] = useState(null);
@@ -13324,10 +13423,13 @@ function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemove
   if (loadErr) return (
     <div className="form"><h2>{tenant.name}</h2>
       <p className="billing-err" role="alert">{loadErr}</p>
+      {summary}
       <div className="form-actions"><button className="btn-ghost" onClick={onClose}>Close</button></div>
     </div>
   );
-  if (!inv || !f) return <div className="form"><h2>{tenant.name}</h2><p className="fine">Loading…</p></div>;
+  // The summary is read off what the screen already holds, so it does not
+  // wait on the invite details or go with them when they fail.
+  if (!inv || !f) return <div className="form"><h2>{tenant.name}</h2><p className="fine">Loading…</p>{summary}</div>;
 
   const set = (k, v) => { setF((x) => ({ ...x, [k]: v })); setErr(""); setNote(""); };
   const digits = phoneDigits(f.phone).length;
@@ -13415,6 +13517,7 @@ function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemove
              Correct anything that is wrong and send it again, or call it off.</>
           : <>No invite outstanding. Their link was used up or called off — send a fresh one when you're ready.</>}
       </p>
+      {summary}
 
       <label className="fld">Building
         <select value={f.propertyId} onChange={(e) => set("propertyId", e.target.value)}>
@@ -22197,7 +22300,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["passport", "Passport"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
     // Only where there are buildings for tenants to be in.
-    .concat(canManage && kindHasProperties(accountKind) ? [["tenants", "Tenants"]] : [])
+    // Tenants left this list for the main menu: one screen for one list.
     .concat(canManage ? [["billing", "Subscription"]] : [])
     // 075. The hiring side's referral code. Beside the subscription, because
     // what it earns is a month of that subscription.
@@ -23014,9 +23117,6 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         </>
       )}
 
-      {pane === "tenants" && canManage && (
-        <TenantsPane properties={properties} accountKind={accountKind} />
-      )}
 
       {pane === "refer" && canManage && isGcKind(accountKind) && <ReferScreen fromName={me?.name} />}
 
@@ -26164,7 +26264,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
       ) : (
         <label className="fld">Homeowner / client<input value={f.client} onChange={(e) => set("client", e.target.value)} placeholder="Client name" />
           {tenantShown && (
-            <span className="cov-hint job-no-tenant">No tenants on this property. If somebody rents it, add them in Account → Tenants and they can confirm visit times.</span>
+            <span className="cov-hint job-no-tenant">No tenants on this property. If somebody rents it, add them under Tenants in the menu and they can confirm visit times.</span>
           )}
         </label>
       )}
@@ -40494,6 +40594,24 @@ p.fld-note{margin:6px 0 0}
    chip rather than as loose text, because the bare class sets no background
    at all -- which is what the old "Job raised" was, and it read as a link. */
 .tn-chip.plain{background:var(--paper);color:var(--ink-soft)}
+/* Something is waiting on this tenant or on this account about them. Amber
+   tint like wait, with an edge, so a flag on a row reads apart from the
+   invite status chip beside it. */
+.tn-chip.warn{background:#fbf0dd;color:#7a4e0c;border:1px solid #e3c48a}
+/* The tenants list: a row carries its status and what is waiting, and on a
+   phone both chips wrap under the name rather than squeezing it. */
+.user-list .user-row-head:has(.tn-flag){flex-wrap:wrap;row-gap:5px}
+.tn-summary{margin:4px 0 14px}
+.tn-sum-where{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:13.5px;font-weight:700}
+.tn-sum-contact{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0 0 4px;font-size:13px;color:var(--ink-soft)}
+.tn-sum-contact span{display:inline-flex;align-items:center;gap:5px}
+.tn-sum-jobs{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+.tn-sum-job{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:3px 10px;width:100%;text-align:left;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);cursor:pointer;font:inherit;color:inherit}
+.tn-sum-job:hover:not(:disabled){border-color:var(--ink-soft)}
+.tn-sum-job:disabled{cursor:default}
+.tn-sum-job .tn-chip{grid-row:1 / span 2;grid-column:2;justify-self:end;white-space:normal;text-align:right}
+.tsj-title{font-weight:700;font-size:14px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tsj-when{font-size:12.5px;color:var(--ink-soft)}
 /* Get out and call 911. Deliberately the loudest thing this product can
    draw: it has to survive being read by somebody who is frightened, on a
    phone, in the dark. Its own colours rather than the theme's, because a
