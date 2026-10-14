@@ -36,6 +36,9 @@ import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { suggestedAccessForInspection, contractorInspectionShape } from "../shared/inspection.js";
 import { accessTenant, canAskTenant, accessFor } from "../shared/access.js";
+// A day still ahead: the route refuses to confirm a window that has gone by,
+// so a fixed date here starts failing once the calendar passes it.
+const AHEAD = (() => { const d = new Date(); d.setUTCDate(d.getUTCDate() + 20); return d.toISOString().slice(0, 10); })();
 
 const app = join(dirname(fileURLToPath(import.meta.url)), "..");
 let pass = 0, fail = 0;
@@ -137,7 +140,7 @@ const raise = (env, inspId, who = "u_mgr", extra = {}) =>
 const visitOf = (db, jobId) => db.prepare(
   `SELECT * FROM visits WHERE job_id = ? AND status != 'superseded' ORDER BY created_at DESC`).get(jobId);
 const propose = (env, jobId, who = "u_mgr") => call(env, `/api/jobs/${jobId}/visits`,
-  { date: "2026-10-12", startTime: "09:00", endTime: "11:00" }, who);
+  { date: AHEAD, startTime: "09:00", endTime: "11:00" }, who);
 // The work order the raised job needs before a contractor can read anything.
 const issue = (db, jobId, wo = "WO-1", company = "cmp_pac", en = "en_pac", status = "accepted") =>
   db.prepare(`INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,value_cents)

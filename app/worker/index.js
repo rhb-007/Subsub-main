@@ -91,7 +91,7 @@ import { visitParties, waitingOn as visitWaitingOn,
 // How long a proposed window is, and whether a date change has anybody to be
 // put to. Both live beside `workWhen` because the browser's propose form uses
 // the first and two copies of that arithmetic is two records of one fact.
-import { windowEnd, othersMustAgree, workWhen } from "../shared/schedule.js";
+import { windowEnd, othersMustAgree, workWhen, windowSurelyPast } from "../shared/schedule.js";
 import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
   rankCandidates, slotFor, whyNotAuto, AUTO_SKIP } from "../shared/autopick.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
@@ -10007,6 +10007,14 @@ app.post("/api/visits/:id/respond", async (c) => {
   // The hiring side answers for its own account, which the row lookup above
   // already scoped -- so there is nothing further to check for them.
   if (v.status !== "proposed") return c.json({ error: "not_open", status: v.status }, 409);
+  // A TIME THAT HAS GONE BY CANNOT BE AGREED TO. Confirming one would book an
+  // appointment that has already not happened. Declining stays open: saying a
+  // past time did not work is still true. Only what is past in every
+  // timezone is refused here -- see windowSurelyPast -- and the screens draw
+  // the precise answer from the reader's own clock.
+  if (status === "confirmed" && windowSurelyPast(v.date, new Date().toISOString().slice(0, 10))) {
+    return c.json({ error: "window_passed", date: v.date }, 409);
+  }
   const note = String(b.note || "").trim().slice(0, 500) || null;
 
   const vJob = { id: v.job_id, account_id: auth.accountId,

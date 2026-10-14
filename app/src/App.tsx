@@ -14130,6 +14130,11 @@ function tenantStage(job, visit) {
   // confirmed reads as scheduled; one waiting on them asks them.
   // Said yes early and still waiting on somebody else: not a question any
   // more, so the chip stops asking it.
+  // A proposed time that went by unconfirmed. Not a question for them any
+  // more and not their move to fix: the office proposes a new one.
+  if (visit?.status === "proposed" && visitPassed(visit)) {
+    return { key: "lapsed", label: "That time passed — a new one is coming", tone: "wait" };
+  }
   if (visit?.status === "proposed" && (visit.respondedAt || visit.responded_at)) {
     return { key: "agreed", label: "Waiting on confirmation", tone: "wait" };
   }
@@ -14742,7 +14747,7 @@ function TenantReportModal({
                 -- the reported dead end, at the one moment somebody was looking
                 at the report the time is for. The same panel as the row, so
                 the two cannot ask different questions. */}
-            {(stage.key === "confirm" || stage.key === "agreed") && visit && (
+            {(stage.key === "confirm" || stage.key === "agreed" || stage.key === "lapsed") && visit && (
               <TenantVisitAsk visit={visit} brandName={brandName}
                 onRespond={onRespondVisit} onPropose={onProposeVisit} />
             )}
@@ -14854,7 +14859,7 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
             The chain still decides whom we ASK and in what order; it no longer
             stops the person who has to be in from answering. See
             `mayConfirm` in shared/visitparty.js. */}
-        {(stage.key === "confirm" || stage.key === "agreed") && visit && (
+        {(stage.key === "confirm" || stage.key === "agreed" || stage.key === "lapsed") && visit && (
           <TenantVisitAsk visit={visit} brandName={brandName}
             onRespond={onRespondVisit} onPropose={onProposeVisit} />
         )}
@@ -14898,6 +14903,8 @@ function TenantVisitAsk({ visit, brandName, onRespond, onPropose }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const said = !!(visit.respondedAt || visit.responded_at);
+  // Gone by unconfirmed: nothing to say yes or no to any more.
+  const gone = visit.status === "proposed" && visitPassed(visit);
   // Who else still has to agree, in the tenant's words rather than the
   // product's: the managing agent by name, the crew as "the contractor".
   const others = (visit.parties || [])
@@ -14916,11 +14923,13 @@ function TenantVisitAsk({ visit, brandName, onRespond, onPropose }) {
         {/* Not "{brandName} proposes": the crew puts times forward too, and
             the reported one was theirs. Who proposed it does not change the
             question, so the line does not guess at it. */}
-        {said ? <>You said <b>{visitWhen(visit)}</b> works</> : <>Proposed time: <b>{visitWhen(visit)}</b></>}
+        {gone ? <>Proposed time: <s>{visitWhen(visit)}</s></>
+          : said ? <>You said <b>{visitWhen(visit)}</b> works</> : <>Proposed time: <b>{visitWhen(visit)}</b></>}
       </div>
       {visit.note && <p className="tn-visit-note">“{visit.note}”</p>}
       <p className="tn-visit-q">
-        {said
+        {gone ? `That time passed before it was confirmed, so nothing is booked. ${brandName} will propose a new one, or you can suggest one.`
+          : said
           ? (othersText ? `Waiting on ${othersText} to confirm it. We'll let you know when it's booked.` : "That's booked.")
           : othersText
             ? `${othersText[0].toUpperCase()}${othersText.slice(1)} still ${others.length === 2 ? "have" : "has"} to confirm it, but you can answer now. Someone will need to be in — does that work for you?`
@@ -14941,7 +14950,7 @@ function TenantVisitAsk({ visit, brandName, onRespond, onPropose }) {
               onClick: () => answer("declined") },
           ]} />
         </>
-      ) : said ? (
+      ) : said || gone ? (
         onPropose ? <VisitActs acts={[
           { kind: "alt", label: "Propose another time", icon: <Calendar size={16} />,
             onClick: () => setMode("other") },
@@ -14970,6 +14979,7 @@ function tenantVisitErrText(e) {
   if (code === "impersonation_expired") return proposeErrText(e);
   if (code === "not_open") return "That time has already been changed or settled. Reload to see the latest.";
   if (code === "not_your_turn") return "This time isn't ready for your answer yet. Reload to see where it stands.";
+  if (code === "window_passed") return "That time has already gone by. Propose a new one instead.";
   if (code === "forbidden" || code === "not_found") return "This report isn't yours to answer any more. Reload to see where it stands.";
   if (!e?.status) return "Couldn't reach SubSub. Check your connection and try again.";
   return `That didn't go through (${code || `error ${e.status}`}). Try again, and if it keeps happening tell us that code.`;
@@ -15353,7 +15363,8 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   // IS IT OUR TURN TO ANSWER? Read once, because two things depend on it: the
   // panel that offers the answer, and the standalone propose button that must
   // not sit under it offering the same thing again.
-  const myTurn = visit?.status === "proposed"
+  const lapsed = visit?.status === "proposed" && visitPassed(visit);
+  const myTurn = visit?.status === "proposed" && !lapsed
     && visitMayAnswer(visit, parties, "manager") && !!onAnswerVisit;
   return (
     <div className="visit-block">
@@ -15461,7 +15472,14 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           ]} />
         </div>
       )}
-      {visit?.status === "proposed" && !visitMayAnswer(visit, parties, "manager") && (
+      {/* GONE BY BEFORE ANYBODY BOOKED IT. Not "waiting on" anybody: the
+          morning it named is over, so the only useful thing is a new time,
+          which the button below this offers. */}
+      {lapsed && (
+        <p className="visit-state bad"><AlertTriangle size={14} /> Proposed <b>{visitWhen(visit)}</b> has
+          passed and was never confirmed. Propose a new time.</p>
+      )}
+      {visit?.status === "proposed" && !lapsed && !visitMayAnswer(visit, parties, "manager") && (
         <p className="visit-state wait"><Clock size={14} /> Proposed <b>{visitWhen(visit)}</b> — waiting on {owedText} to confirm.
           {/* And who has ALREADY said yes, because "waiting on the
               contractor" over a tenant who confirmed last week reads as
@@ -24384,7 +24402,11 @@ function yourTurnItems(jobs, latestVisit, today) {
     if (j.readOnly || !jobIsLive(j, today)) continue;
     if (j.requestedBy && !j.approvedAt) continue;   // a request: its own section
     const v = latestVisit[j.id];
-    if (v && v.status === "proposed" && managerTurn(v, j)) out.push({ kind: "time", job: j, v });
+    // A PROPOSED TIME THAT HAS GONE BY is not waiting on anybody any more,
+    // whoever's turn it was: nothing was booked and the morning is gone. So
+    // it is never offered for approval -- it asks for a new time instead.
+    if (v && v.status === "proposed" && visitPassed(v)) out.push({ kind: "lapsed", job: j, v });
+    else if (v && v.status === "proposed" && managerTurn(v, j)) out.push({ kind: "time", job: j, v });
     if (v && v.status === "declined") out.push({ kind: "declined", job: j, v });
     for (const t of j.trades || []) {
       const sp = j.spans?.[t];
@@ -24392,7 +24414,7 @@ function yourTurnItems(jobs, latestVisit, today) {
     }
     if (!(j.trades || []).length) out.push({ kind: "notrade", job: j });
   }
-  const rank = { time: 0, declined: 1, span: 2, notrade: 3 };
+  const rank = { lapsed: 0, time: 0, declined: 1, span: 2, notrade: 3 };
   return out.sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
@@ -24404,6 +24426,7 @@ function yourTurnErrText(e) {
   const code = e?.body?.error || "";
   if (code === "not_your_turn") return "Somebody else has to answer this one first. Reload to see where it stands.";
   if (code === "not_open") return "That has already been answered or changed. Reload to see where it stands.";
+  if (code === "window_passed") return "That time has already gone by, so it can't be approved. Propose a new one.";
   if (code === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration}.sql.`;
   return tenantVisitErrText(e);
 }
@@ -24445,6 +24468,12 @@ function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
       { kind: "alt", label: "Propose another time", icon: <Calendar size={16} />,
         disabled: !!busy, onClick: () => onOpenJob?.(job.id) },
     ].filter(Boolean);
+  } else if (kind === "lapsed") {
+    lede = "The proposed time has passed";
+    when = visitWhen(v);
+    sub = `Nobody booked it before it went by. Propose a new time and it goes back to ${crew[0] || `the ${hiresWord}`} first.`;
+    acts = [{ kind: "yes", label: "Propose a new time", icon: <Calendar size={16} />,
+      onClick: () => onOpenJob?.(job.id) }];
   } else if (kind === "declined") {
     const byCrew = !!(v.contractorNote || (v.contractorAt && !v.respondedAt));
     const who = byCrew ? crewName : (tenant ? `${tenant.name} (the tenant)` : "The tenant");
@@ -24476,7 +24505,7 @@ function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
     <div className={`dash-row yt-row yt-${kind}`} data-yt={kind}>
       <button className="dash-row-main dash-row-open" onClick={onPeek}>
         <span className="yt-lede">{lede}</span>
-        {when && <span className="yt-when">{when}</span>}
+        {when && <span className={`yt-when ${kind === "lapsed" ? "yt-gone" : ""}`}>{when}</span>}
         <span className="dr-title">{job.title}</span>
         <span className="dr-meta">{[where?.name, sub].filter(Boolean).join(" · ")}</span>
       </button>
@@ -29975,7 +30004,8 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   // filtered by the bar: a narrowed list must not hide a question.
   const timeAsks = !onAnswerVisit ? [] : upcoming.filter((m) => {
     const w = workWhen(m.job);
-    return !!w.visitId && w.kind === "proposed" && (w.turn ? w.turn === "contractor" : !w.mine);
+    return !!w.visitId && w.kind === "proposed" && !visitPassed(w)
+      && (w.turn ? w.turn === "contractor" : !w.mine);
   });
   const askKeys = new Set(timeAsks.map((m) => `${m.job.id}-${m.trade}`));
   const fUpcoming = showing("upcoming")
@@ -31845,7 +31875,7 @@ function VisitActs({ acts }) {
   );
 }
 
-function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, clientName }) {
+function VisitAnswer({ when, job, canAnswer, lapsed = false, onAnswer, onPropose, onOpenClient, clientName }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [saying, setSaying] = useState(false);
@@ -31858,6 +31888,7 @@ function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, 
       setErr(e?.body?.error === "not_your_turn"
         ? "Somebody else has to answer this one first. It will come back to you."
         : e?.body?.error === "not_open" ? "That time has already been answered. Reload to see where it stands."
+        : e?.body?.error === "window_passed" ? "That time has already gone by. Propose a different one."
         : e?.body?.error === "migration_needed" ? `The database isn't migrated yet — run ${e.body.migration}.sql.`
         : "That didn't go through. Try again in a moment.");
       setBusy("");
@@ -31869,6 +31900,18 @@ function VisitAnswer({ when, job, canAnswer, onAnswer, onPropose, onOpenClient, 
   // writes the window back onto the job, so the two only disagree while an
   // answer is outstanding -- which is exactly when this is drawn.
   const moved = !!(job?.date && when.date && job.date !== when.date);
+  if (lapsed) {
+    return (
+      <div className="vans vans-gone">
+        <p className="vans-head"><Clock size={16} /> <b>The proposed time has passed</b></p>
+        <p className="vans-when"><s>{visitWhen(when)}</s></p>
+        <p className="vans-q">Nobody booked it before it went by. Propose a time you can make.</p>
+        <VisitActs acts={[
+          { kind: "yes", label: "Propose a different time", icon: <Calendar size={16} />, onClick: onPropose },
+        ]} />
+      </div>
+    );
+  }
   return (
     <div className="vans">
       <p className="vans-head">
@@ -31983,7 +32026,10 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // A row at another client still draws it: they cannot answer from here, but
   // being told the time changed is the whole point and the panel offers the
   // one tap that gets them to where they can.
-  const mustAnswer = !past && when.visitId && when.kind === "proposed" && onAnswerVisit
+  // GONE BY UNCONFIRMED: not a question any more, so no Confirm -- the
+  // panel says it passed and offers a new time instead.
+  const lapsed = !past && when.visitId && when.kind === "proposed" && visitPassed(when);
+  const mustAnswer = !past && !lapsed && when.visitId && when.kind === "proposed" && onAnswerVisit
     && (when.turn ? when.turn === "contractor" : !when.mine);
   // NO WINDOW ON A JOB THAT IS THEIRS. A target date is the job's, not an
   // appointment, so it counts as untimed too -- nobody has said they will be
@@ -31998,6 +32044,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   if (!open) {
     const asked = (showActions || away) && awaitingReply(a);
     const flag = mustAnswer ? { tone: "warn", text: "Confirm the time" }
+      : lapsed && !away && onProposeVisit ? { tone: "warn", text: "Time passed" }
       : asked && expired ? { tone: "bad", text: "Expired" }
       : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left` }
       : needsTime && onProposeVisit ? { tone: "warn", text: "Set a time" }
@@ -32069,8 +32116,8 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {/* THE ANSWER FIRST, because it is the only thing on this card anybody
           has to DO. Everything under it -- the scope, the crew, the materials,
           the work order -- is reference. */}
-      {mustAnswer && (
-        <VisitAnswer when={when} job={job} canAnswer={!away}
+      {(mustAnswer || (lapsed && onProposeVisit && !away)) && (
+        <VisitAnswer when={when} job={job} canAnswer={!away} lapsed={lapsed}
           clientName={elsewhere?.name}
           onOpenClient={() => onGoClient?.(elsewhere?.accountId)}
           onAnswer={onAnswerVisit}
@@ -41706,6 +41753,8 @@ strong.insp-name{background:none;border:0;padding:0}
 .yt-row .dash-row-main{flex:1 1 260px}
 .yt-lede{font-weight:700;font-size:14px;color:var(--amber-ink)}
 .yt-when{font-size:16px;font-weight:700;color:var(--ink)}
+.yt-when.yt-gone{text-decoration:line-through;color:var(--ink-soft);font-weight:600}
+.yt-lapsed .yt-lede{color:var(--red)}
 .yt-acts{flex:1 1 320px;max-width:440px}
 .yt-acts .vacts{margin-top:0}
 .tn-sec-ask{border:1px solid #f0d9a8;border-left:4px solid var(--amber);background:#fffaf0;

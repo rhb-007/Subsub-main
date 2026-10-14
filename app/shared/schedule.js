@@ -147,3 +147,24 @@ export function windowEnd(start, wasStart, wasEnd) {
 // and saying so is the honest answer, which is what it has always done.
 export const othersMustAgree = (parties) =>
   (parties || []).some((p) => p !== "manager");
+
+// A PROPOSED TIME THAT HAS ALREADY GONE BY IS NOT A QUESTION ANY MORE.
+//
+// Reported with the hiring side's Waiting on you panel at 3:54 PM offering
+// *Approve this time* on a 9-10 AM window the same morning: *"not really
+// waiting any longer, need to propose a new time now since it's past"*.
+// Approving it would book an appointment that has already not happened.
+//
+// The SERVER cannot read the clock the way a screen does: windows are wall
+// times with no timezone, and the Worker runs in UTC. So the route refuses
+// only what is past in EVERY timezone the product is sold in -- a date before
+// yesterday in UTC -- and the screens, which know the reader's own clock, say
+// so from the end of the window onward. The route is the floor and the screen
+// is the precise answer; neither offers a yes the other would call stale by
+// more than a day.
+export function windowSurelyPast(date, utcTodayKey) {
+  if (!date || !utcTodayKey) return false;
+  const d = new Date(`${utcTodayKey}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return String(date) < d.toISOString().slice(0, 10);
+}

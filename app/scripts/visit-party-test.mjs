@@ -40,6 +40,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
+import { windowSurelyPast } from "../shared/schedule.js";
 import { visitParties, waitingOn, visitSettled, waitingText, partyText, joinAnd,
   VISIT_PARTIES, PARTY_ORDER, nextToAnswer, mayAnswer } from "../shared/visitparty.js";
 
@@ -103,6 +104,10 @@ const seed = (base = SCHEMA) => {
   return { db, env: { DB: makeD1(db) } };
 };
 
+// A DAY STILL AHEAD, worked out rather than written down. The route refuses to
+// confirm a window that has gone by, so a fixed date in this file would start
+// failing the day the calendar passes it -- which is what happened.
+const DAY = (() => { const d = new Date(); d.setUTCDate(d.getUTCDate() + 20); return d.toISOString().slice(0, 10); })();
 const call = (env, path, body, who = "u_mgr", method = "POST") => worker.fetch(
   new Request(`https://api.subsub.work${path}`, {
     method, body: JSON.stringify(body),
@@ -113,7 +118,7 @@ const visitOf = (db, jobId) => db.prepare(
   `SELECT * FROM visits WHERE job_id = ? AND status != 'superseded' ORDER BY created_at DESC`).get(jobId);
 const jobOf = (db, id) => db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(id);
 const propose = (env, jobId, who = "u_mgr") => call(env, `/api/jobs/${jobId}/visits`,
-  { date: "2026-10-09", startTime: "09:00", endTime: "11:00" }, who);
+  { date: DAY, startTime: "09:00", endTime: "11:00" }, who);
 const respond = (env, visitId, body, who) => call(env, `/api/visits/${visitId}/respond`, body, who);
 
 try {
@@ -228,7 +233,7 @@ try {
     const [s2, b2] = await json(await respond(env, b.id, { status: "confirmed" }, "u_sub"));
     ck("the contractor may answer it", s2 === 200, `${s2} ${JSON.stringify(b2)}`);
     ck("and that books it", b2.status === "confirmed", String(b2.status));
-    ck("with the date on the job", jobOf(db, "job_subonly").date === "2026-10-09",
+    ck("with the date on the job", jobOf(db, "job_subonly").date === DAY,
       String(jobOf(db, "job_subonly").date));
     // IN THEIR OWN COLUMN, and the tenant's left empty. 019 stamped
     // `responded_at` on a visit nobody had to confirm, so the row read as
@@ -247,7 +252,7 @@ try {
     await propose(env, "job_nobody");
     ck("a job with no party is booked the moment a time is set",
       visitOf(db, "job_nobody").status === "confirmed", visitOf(db, "job_nobody").status);
-    ck("and the date lands", jobOf(db, "job_nobody").date === "2026-10-09",
+    ck("and the date lands", jobOf(db, "job_nobody").date === DAY,
       String(jobOf(db, "job_nobody").date));
   }
   {
@@ -288,7 +293,7 @@ try {
 
     const [, t] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
     ck("the tenant is what settles it", t.status === "confirmed", String(t.status));
-    ck("and only then does the date land", jobOf(db, "job_both").date === "2026-10-09",
+    ck("and only then does the date land", jobOf(db, "job_both").date === DAY,
       String(jobOf(db, "job_both").date));
     const row = visitOf(db, "job_both");
     ck("with all three answers kept apart",
@@ -338,7 +343,7 @@ try {
     const [, c] = await json(await respond(env, b.id, { status: "confirmed" }, "u_sub"));
     ck("the crew's yes then books it, without asking the tenant again",
       c.status === "confirmed", String(c.status));
-    ck("and the date lands", jobOf(db, "job_both").date === "2026-10-09",
+    ck("and the date lands", jobOf(db, "job_both").date === DAY,
       String(jobOf(db, "job_both").date));
   }
   {
@@ -377,7 +382,7 @@ try {
     const [cs, cy] = await json(await respond(env, tp.id, { status: "confirmed" }, "u_sub"));
     ck("so the crew's yes books it", cs === 200 && cy.status === "confirmed", `${cs} ${JSON.stringify(cy)}`);
     ck("with no turn left over", cy.turn === null, String(cy.turn));
-    ck("and the date lands on the job", jobOf(db, "job_both").date === "2026-10-09",
+    ck("and the date lands on the job", jobOf(db, "job_both").date === DAY,
       String(jobOf(db, "job_both").date));
     // Only their own report, and only where they have to be in.
     const [fs, f] = await json(await propose(env, "job_nobody", "u_ten"));
@@ -482,7 +487,7 @@ try {
     const [s2, t] = await json(await respond(env, b.id, { status: "confirmed" }, "u_ten"));
     ck("and the tenant's yes still books it", s2 === 200 && t.status === "confirmed",
       `${s2} ${t.status}`);
-    ck("with the date on the job", jobOf(db, "job_both").date === "2026-10-09",
+    ck("with the date on the job", jobOf(db, "job_both").date === DAY,
       String(jobOf(db, "job_both").date));
     // A JOB WITH NO TENANT IS BOOKED OUTRIGHT THERE, which is 019's own
     // behaviour and the whole point of the fallback: losing the contractor's
@@ -747,6 +752,26 @@ try {
     ck("the card reads the effective access answer", /const myAccess = useMemo/.test(App));
     ck("including on the other clients' rows",
       /access: w\.access \|\| null/.test(App));
+  }
+  console.log("\n-- a proposed time that has gone by --");
+  {
+    // Reported at 3:54 PM over a 9-10 AM window that morning: the panel
+    // offered Approve on a time that had already not happened. Confirming one
+    // books an appointment in the past, so the route refuses it; declining
+    // stays open, because "that did not work" is still true.
+    const { db, env } = seed();
+    const [, b] = await json(await propose(env, "job_subonly"));
+    db.prepare(`UPDATE visits SET date = '2026-01-05' WHERE id = ?`).run(b.id);
+    const [cs, cb] = await json(await respond(env, b.id, { status: "confirmed" }, "u_sub"));
+    ck("confirming a time that has gone by is refused", cs === 409 && cb.error === "window_passed",
+      `${cs} ${JSON.stringify(cb)}`);
+    ck("and nothing was booked", visitOf(db, "job_subonly")?.status === "proposed"
+      && !jobOf(db, "job_subonly").date, JSON.stringify(visitOf(db, "job_subonly")));
+    const [ds] = await json(await respond(env, b.id, { status: "declined" }, "u_sub"));
+    ck("declining it is still allowed", ds === 200, String(ds));
+    ck("the rule refuses only what is past everywhere",
+      windowSurelyPast("2026-10-12", "2026-10-14") && !windowSurelyPast("2026-10-13", "2026-10-14")
+        && !windowSurelyPast("2026-10-14", "2026-10-14") && !windowSurelyPast(null, "2026-10-14"));
   }
 } catch (err) {
   fail++; console.log("FAIL  threw:", err?.stack || err);

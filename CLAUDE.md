@@ -12268,6 +12268,34 @@ refactor.
   requests and milestones to verify are not on the job rows the dashboard
   holds, so they are not in the panel yet; they are answered on the work order.
 
+
+- **A PROPOSED TIME THAT HAS GONE BY IS NOT A QUESTION ANY MORE.** Reported at
+  3:54 PM with the manager's Waiting on you panel offering *Approve this time*
+  on a 9-10 AM window that same morning: *"not really waiting any longer, need
+  to propose a new time now since it's past."* Approving it would have booked
+  an appointment that had already not happened.
+
+  **On every screen, a proposed window past its end (`visitPassed`, the
+  reader's own clock) stops asking.** The manager's panel turns it into *The
+  proposed time has passed*, with the window struck through and **Propose a
+  new time** as the only button. This happens whoever's turn it was, because
+  nothing is booked and the morning is gone. The job card says it passed and
+  was never confirmed. The tenant's chip reads *That time passed — a new one is
+  coming*, and the row offers only *Propose another time*. The crew's line says
+  *Time passed*, and the card offers a different time with no Confirm. Neither
+  the tenant's nor the crew's *Waiting on you* section lists it.
+
+  **The server refuses to confirm one too (`window_passed`), and only what is
+  past everywhere.** Windows are wall-clock times with no timezone, and the
+  Worker runs in UTC, so `windowSurelyPast` refuses a date before yesterday in
+  UTC. That is past in every US timezone. The screens give the exact answer
+  from the reader's clock, and the route is the floor. Declining stays open.
+
+  **Two server suites had fixed visit dates that the calendar has now
+  passed**, so the new rule refused them. They use a date computed twenty days
+  ahead now. `test:inspectionjob` still has 2 failures from before this
+  change: they pin the older rule that a tenant may not answer before the crew.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

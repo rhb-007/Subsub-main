@@ -78,6 +78,9 @@ const JOBS = () => [
   // the chain has reached the hiring side. Every trade is accepted, which is
   // exactly why it used to read as ready to complete.
   job("j_time", "Bedrooom window frame seems to be bent"),
+  // A proposed time that has already GONE BY, reported at 3:54 PM over a 9-10
+  // AM window that morning: not a question any more, so never an Approve.
+  job("j_gone", "Shower head leaks"),
   // "All 0 trade accepted": approved, with no trade on it.
   job("j_zero", "Torn upholstery on lounge chair", { trades: [], assignments: {} }),
   // The newest window was turned down by the tenant.
@@ -101,6 +104,7 @@ const v = (id, jobId, extra) => ({ id, jobId, status: "proposed", date: key(3), 
   parties: ["contractor", "manager", "tenant"], ...extra });
 const VISITS = () => [
   v("v_time", "j_time", { contractorAt: T, respondedAt: T, turn: "manager", waitingOn: ["manager"] }),
+  v("v_gone", "j_gone", { date: key(-1), contractorAt: T, turn: "manager", waitingOn: ["manager", "tenant"] }),
   v("v_decl", "j_decl", { status: "declined", tenantNote: "I'm at work until 6", turn: null }),
   v("v_old1", "j_old", { status: "declined", tenantNote: "old", createdAt: "2026-10-05T00:00:00.000Z", turn: null }),
   v("v_old2", "j_old", { status: "confirmed", contractorAt: T, managerAt: T, respondedAt: T, date: key(5), turn: null }),
@@ -144,6 +148,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     return [200, { work: [
       row(JOBS().find((j) => j.id === "j_crew"), VIS.find((x) => x.id === "v_crew")),
       row(JOBS().find((j) => j.id === "j_time"), { ...VIS.find((x) => x.id === "v_time") }),
+      row(JOBS().find((j) => j.id === "j_gone"), { ...VIS.find((x) => x.id === "v_gone"), turn: "contractor", contractorAt: null }),
     ] }];
   }
   if (path === "/api/payouts/status") return [200, { status: "none", ready: false, requirements: [], configured: false }];
@@ -179,7 +184,7 @@ try {
   await wait(2600);
   let p = await panel(page);
   t.ck("a Waiting on you panel is on the dashboard", !!p, String(p));
-  t.ck("it counts the four things waiting", p?.count === "4", p?.count);
+  t.ck("it counts the five things waiting", p?.count === "5", p?.count);
   t.ck("it sits above the schedule row", p && p.schedTop !== null && p.top < p.schedTop,
     JSON.stringify({ top: p?.top, sched: p?.schedTop }));
   // Open the whole list so every row can be read.
@@ -193,6 +198,12 @@ try {
   t.ck("the window is on a line of its own", /9 AM/.test(time?.when || ""), time?.when);
   t.ck("and that the tenant already said yes", /John Smith \(the tenant\) already said it works/.test(time?.meta || ""), time?.meta);
   t.ck("Approve is on the row", (time?.acts || []).includes("Approve this time"), JSON.stringify(time?.acts));
+  const gone = p?.rows.find((r) => r.kind === "lapsed");
+  t.ck("a proposed time that has gone by is on it as passed", gone?.title === "Shower head leaks"
+    && /has passed/.test(gone?.lede || ""), JSON.stringify(gone));
+  t.ck("and it is NOT offered for approval", !!gone && !(gone.acts || []).includes("Approve this time"), JSON.stringify(gone?.acts));
+  t.ck("it leads with proposing a new time", (gone?.acts || [])[0] === "Propose a new time", JSON.stringify(gone?.acts));
+  t.ck("and says nothing was booked", /Nobody booked it/.test(gone?.meta || ""), gone?.meta);
   const decl = p?.rows.find((r) => r.kind === "declined");
   t.ck("a turned-down window is on it, with the reason", decl?.title === "Kitchen tap drips"
     && /I'm at work until 6/.test(decl?.meta || "") && /can't make it/.test(decl?.lede || ""), JSON.stringify(decl));
@@ -234,7 +245,8 @@ try {
 
   console.log("\n-- the tenant --");
   VIS = VISITS().map((x) => (x.id === "v_time"
-    ? { ...x, respondedAt: null, contractorAt: T, turn: "tenant", waitingOn: ["manager", "tenant"] } : x));
+    ? { ...x, respondedAt: null, contractorAt: T, turn: "tenant", waitingOn: ["manager", "tenant"] }
+    : x.id === "v_gone" ? { ...x, managerAt: T, turn: "tenant", waitingOn: ["tenant"] } : x));
   SEAT = { userId: "u_ten", accountId: "acc_pm", role: "tenant" };
   // A section folded closed on some earlier visit: the question must still be
   // on screen, which only a saved "closed" can tell apart from the default.
@@ -250,13 +262,17 @@ try {
       items: ask ? ask.querySelectorAll(".tn-list > *").length : 0,
       text: ask?.innerText || "",
       yes: !!ask && [...ask.querySelectorAll("button")].some((b) => /Yes, that works/.test(b.innerText)),
-      toggles: ask ? ask.querySelectorAll("button.tn-sec-head").length : -1 };
+      toggles: ask ? ask.querySelectorAll("button.tn-sec-head").length : -1,
+      goneRow: [...document.querySelectorAll(".tn-row")].find((r) => /Shower head/.test(r.innerText))?.innerText || null };
   });
   t.ck("a time put to the tenant is its own section, first", ten.first, JSON.stringify(ten));
   t.ck("headed as waiting on them", /Waiting on you/i.test(ten.head), ten.head);
   t.ck("it holds that report and only that one -- not a window still the crew's turn",
     ten.items === 1 && /Bedrooom/.test(ten.text), JSON.stringify(ten));
   t.ck("and the answer is on it", ten.yes, JSON.stringify(ten));
+  t.ck("a time that has gone by is not asked of them", !/Shower head/.test(ten.text), JSON.stringify(ten));
+  t.ck("its row says it passed, and offers no yes", !!ten.goneRow && /time passed/i.test(ten.goneRow)
+    && !/Yes, that works/.test(ten.goneRow), JSON.stringify(ten.goneRow));
   t.ck("and it cannot be folded away", ten.toggles === 0, JSON.stringify(ten));
   await tn.ctx.close();
 
@@ -270,11 +286,14 @@ try {
     const ask = document.querySelector(".dash-sec.sec-yt");
     const titles = (s) => (s ? [...s.querySelectorAll(".jl-title, .jr-title, h4")].map((x) => x.innerText) : []);
     const up = [...document.querySelectorAll(".dash-sec")].find((x) => /Current/i.test(x.querySelector("h3")?.innerText || ""));
-    return { has: !!ask, head: ask?.querySelector("h3")?.innerText || "", inAsk: titles(ask), inUp: titles(up) };
+    const goneLine = [...document.querySelectorAll(".jr-card")].find((r) => /Shower head/.test(r.innerText))?.innerText || null;
+    return { has: !!ask, head: ask?.querySelector("h3")?.innerText || "", inAsk: titles(ask), inUp: titles(up), goneLine };
   });
   t.ck("a time put to the crew is its own section", con.has, JSON.stringify(con));
   t.ck("it holds the window that is theirs", con.inAsk.some((x) => /Balcony door/i.test(x)), JSON.stringify(con));
   t.ck("and not one that is somebody else's turn", !con.inAsk.some((x) => /Bedrooom/i.test(x)), JSON.stringify(con));
+  t.ck("a time that has gone by is not asked of the crew", !con.inAsk.some((x) => /Shower head/i.test(x)), JSON.stringify(con));
+  t.ck("its line says the time passed", /Time passed/.test(con.goneLine || ""), con.goneLine);
   t.ck("and it is not repeated under Current & upcoming", !con.inUp.some((x) => /Balcony door/i.test(x)), JSON.stringify(con));
   t.ck("nothing crashed", cs.crashes.length === 0, cs.crashes.join(" | "));
   await cs.ctx.close();
