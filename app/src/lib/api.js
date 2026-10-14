@@ -308,7 +308,7 @@ export const api = {
   answerJobSpan: (jobId, trade, accept) => request(`/jobs/${jobId}/spans/${encodeURIComponent(trade)}/answer`,
     { method: "POST", body: JSON.stringify({ accept: !!accept }) }),
   // Turns a building owner's or tenant's request into a job that can be assigned.
-  approveJob: (jobId) => request(`/jobs/${jobId}/approve`, { method: "POST" }),
+  approveJob: (jobId, trades) => request(`/jobs/${jobId}/approve`, { method: "POST", body: JSON.stringify(trades?.length ? { trades } : {}) }),
   // Saying no to a request, with the reason the person who asked will see.
   declineJob: (jobId, note) => request(`/jobs/${jobId}/decline`, { method: "POST", body: JSON.stringify({ note }) }),
   // A tenant's own report: taken back, or corrected within ten minutes.

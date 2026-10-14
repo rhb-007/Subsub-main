@@ -94,6 +94,9 @@ const JOBS = () => [
   job("j_span", "Repaint unit 12", { date: key(6), trades: ["painting"], assignments: acc("painting"),
     spans: { painting: { start: key(6), days: 2, weekends: false, first: key(6), end: key(7),
       proposal: { start: key(6), days: 4, end: key(9), note: "Two coats and the trim", by: "Juan Soto" } } } }),
+  // A REQUEST that names no trade: approving it as it stood made a job nobody
+  // could ever be sent to, so the trade is picked where it is approved.
+  job("j_req", "Lounge chair cushion split", { trades: [], assignments: {}, approvedAt: null, date: key(4) }),
   // Genuinely ready: its agreed day has passed.
   job("j_ready", "Replace closet door", { date: key(-3) }),
 ];
@@ -113,6 +116,7 @@ const VISITS = () => [
 ];
 
 const answered = [];
+const approvals = [];
 let VIS = VISITS();
 const PROP = { id: "prop_1", accountId: "acc_pm", name: "Press Apartments", address: "1620 Belmont Ave",
   city: "Seattle", state: "WA", zip: "98122", units: 60, notes: "", ownedByAnother: false, ownerDeclared: false };
@@ -133,6 +137,10 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     const next = { ...row, status: "confirmed", managerAt: T, turn: null, waitingOn: [] };
     VIS = VIS.map((x) => (x.id === id ? next : x));
     return [200, next];
+  }
+  if (/^\/api\/jobs\/[^/]+\/approve$/.test(path) && method === "POST") {
+    approvals.push({ id: path.split("/")[3], body });
+    return [200, { ok: true, trades: body?.trades || [] }];
   }
   if (path === "/api/my-work") {
     // The crew's own list: one window that is theirs to answer, one that is not.
@@ -240,6 +248,62 @@ try {
     answered.length === 1 && answered[0].id === "v_time" && answered[0].body?.status === "confirmed", JSON.stringify(answered));
   p = await panel(page);
   t.ck("and the row has left the panel", !(p?.rows || []).some((r) => r.kind === "time"), JSON.stringify(p?.rows?.map((r) => r.kind)));
+
+  console.log("\n-- a request with no trade --");
+  const reqRow = await page.evaluate(() => {
+    const s = [...document.querySelectorAll(".dash-sec")].find((x) => /Work requests/i.test(x.querySelector("h3")?.innerText || ""));
+    const r = s && [...s.querySelectorAll(".dash-row")].find((x) => /Lounge chair/.test(x.innerText));
+    const b = r && r.querySelector(".dash-row-btn");
+    return { has: !!r, btn: b?.innerText.trim() || null };
+  });
+  t.ck("the request is on the dashboard", reqRow.has, JSON.stringify(reqRow));
+  t.ck("its button says to pick a trade, not Approve", /Pick a trade/.test(reqRow.btn || "")
+    && !/^Approve$/.test(reqRow.btn || ""), JSON.stringify(reqRow));
+  await page.evaluate(() => {
+    const s = [...document.querySelectorAll(".dash-sec")].find((x) => /Work requests/i.test(x.querySelector("h3")?.innerText || ""));
+    const r = s && [...s.querySelectorAll(".dash-row")].find((x) => /Lounge chair/.test(x.innerText));
+    r?.querySelector(".dash-row-btn")?.click();
+  });
+  await wait(500);
+  const detail = () => page.evaluate(() => {
+    const m = document.querySelector(".modal");
+    const sec = m?.querySelector("[data-req-trade]");
+    const approve = m && [...m.querySelectorAll(".form-actions .btn-solid")].find((b) => /Approv/.test(b.innerText));
+    return { open: !!m, trade: !!sec, chips: sec ? [...sec.querySelectorAll(".chip")].map((c) => c.innerText.trim()) : [],
+      approveDisabled: approve ? approve.disabled : null, warn: sec?.querySelector(".warn")?.innerText || "" };
+  });
+  let d = await detail();
+  t.ck("pressing it opens the request with a trade picker", d.open && d.trade, JSON.stringify(d));
+  t.ck("Approve waits until a trade is picked", d.approveDisabled === true, JSON.stringify(d));
+  t.ck("a trade somebody on the roster covers is listed first", /^(Windows \/ Doors|Painting)\s*1$/.test(d.chips[0] || ""), JSON.stringify(d.chips.slice(0, 3)));
+  await page.evaluate(() => {
+    const c = [...document.querySelectorAll(".modal [data-req-trade] .chip")].find((x) => /^Plumbing/.test(x.innerText.trim()));
+    c?.click();
+  });
+  await wait(250);
+  d = await detail();
+  t.ck("a trade nobody covers says so, and still lets it through", /Nobody on your roster does Plumbing/.test(d.warn)
+    && d.approveDisabled === false, JSON.stringify(d));
+  await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".modal .form-actions .btn-solid")].find((x) => /Approve/.test(x.innerText));
+    b?.click();
+  });
+  await wait(800);
+  t.ck("approving sends the trade with it", approvals.length === 1 && approvals[0].id === "j_req"
+    && JSON.stringify(approvals[0].body?.trades) === JSON.stringify(["plumbing"]), JSON.stringify(approvals));
+
+  console.log("\n-- not work we handle --");
+  await page.evaluate(() => document.querySelector(".dash-sec.sec-yt .dash-more")?.click());
+  await wait(400);
+  const ended = await page.evaluate(() => {
+    const r = document.querySelector(".dash-sec.sec-yt .yt-row[data-yt='notrade']");
+    const b = r && [...r.querySelectorAll(".vact")].find((x) => /Not work we handle/.test(x.innerText));
+    if (b) b.click(); return !!b;
+  });
+  t.ck("a job with no trade offers a way to close it", ended);
+  await wait(700);
+  const endModal = await page.evaluate(() => !!document.querySelector(".modal .endj-picks"));
+  t.ck("and that opens the cancel / defer window", endModal);
   t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
 

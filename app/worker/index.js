@@ -9544,25 +9544,37 @@ async function notifyTenant(c, jobId, stage, detail = null) {
 app.post("/api/jobs/:id/approve", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const id = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
   const job = await c.env.DB.prepare(
-    `SELECT id, title, requested_by, approved_at, withdrawn_at FROM jobs WHERE id = ? AND account_id = ?`
+    `SELECT id, title, requested_by, approved_at, withdrawn_at, trades FROM jobs WHERE id = ? AND account_id = ?`
   ).bind(id, accountId).first();
   if (!job || !maySeeJob(c.get("auth"), id)) return c.json({ error: "job_not_found" }, 404);
   if (!job.requested_by) return c.json({ error: "not_a_request" }, 400);
   if (job.withdrawn_at) return c.json({ error: "withdrawn" }, 409);
   if (job.approved_at) return c.json({ ok: true, alreadyApproved: true });
 
+  // A JOB WITH NO TRADE CAN NEVER BE ASSIGNED, so approving one makes a job
+  // that sits at 0/0 for ever. Reported on a tenant's "Something else" report
+  // -- torn upholstery -- approved with nothing to send anybody to. Approving
+  // is where the kind of work is decided: the request names it, or the
+  // approval does, or it is declined. Trades named here are ADDED to any the
+  // request carried, and only ids SubSub knows.
+  const have = (parseJson(job.trades, []) || []).filter((t) => TRADE_IDS.has(t));
+  const add = (Array.isArray(b.trades) ? b.trades : []).filter((t) => TRADE_IDS.has(t));
+  const trades = [...new Set([...have, ...add])];
+  if (!trades.length) return c.json({ error: "trade_required" }, 409);
+
   // Clearing the decline as well: approving one that was turned down is
   // changing your mind about it, and it must not read as both.
   await c.env.DB.prepare(
-    `UPDATE jobs SET approved_at = datetime('now'), declined_at = NULL, declined_note = NULL
+    `UPDATE jobs SET approved_at = datetime('now'), declined_at = NULL, declined_note = NULL, trades = ?
       WHERE id = ? AND account_id = ?`
-  ).bind(id, accountId).run();
+  ).bind(JSON.stringify(trades), id, accountId).run();
   await touchJob(c.env, id);
   await logEvent(c.env, accountId, userId, "job.approved", id, { title: job.title });
   await logActivity(c.env, accountId, userId, "job_approved", `Approved requested work: ${job.title}`);
   await notifyTenant(c, id, "approved");
-  return c.json({ ok: true });
+  return c.json({ ok: true, trades });
 });
 
 // Saying no. A request that cannot be said no to sits on the dashboard

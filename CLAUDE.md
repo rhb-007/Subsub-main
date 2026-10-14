@@ -7771,7 +7771,38 @@ refactor.
   writing down is about assertions that cannot fail. This is its opposite — an
   assertion that fired every time, correctly, into silence.
 
-  So the rule is in `## Working here`: **run `npm run lint` before any commit
+  So the rule is in `- **A JOB WITH NO TRADE CAN NEVER BE ASSIGNED, SO IT IS NOT APPROVED WITHOUT
+  ONE.** Reported with a tenant's report about torn upholstery: approved, filed
+  as *Something else*, and sitting at **0/0 trades** with a visit form asking
+  for a time and a footer reading *All trades assigned — mark complete*. Every
+  one of those reads a job with no trade as finished rather than as stuck.
+  Nobody can be offered a slot that does not exist, so it was a closed loop
+  from the moment Approve was pressed.
+
+  **`POST /api/jobs/:id/approve` refuses `trade_required` when neither the
+  job nor the body names a trade**, and takes `trades` in the body, filtered to
+  `TRADE_IDS` and added to what is already there. An already-approved job still
+  answers `alreadyApproved` first, so a second press is not refused.
+
+  **The trade is picked where the request is approved.** A request with no
+  trade reads *Pick a trade* on its dashboard row and opens the request, where
+  *What kind of work is this?* lists every trade with how many people on the
+  roster do it, covered ones first. Approve stays disabled, with the reason
+  beside it, until one is picked. A trade nobody covers is allowed, with a line
+  saying so and naming overflow or decline as the ways on. Refusing it would
+  mean the account could not approve work it intends to send out.
+
+  **A job already in that state is told apart and given a way out.** The card
+  says *No trade yet* instead of 0/0. The visit block is replaced by a line
+  saying there is nobody to send yet. The footer says to add a trade or cancel.
+  The *Waiting on you* row adds **Not work we handle**, which opens the cancel
+  and defer window, because that is the honest answer for work the account
+  does not hire for.
+
+  `test:approvetrade` (8) and `test:waitingyou` (48). Three UI mutations fire:
+  the row approving directly, Approve not gated, and the trade not sent.
+
+## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
   not happen. And when work is pushed, **check the run went green** rather than

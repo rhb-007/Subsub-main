@@ -38,6 +38,13 @@ const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-resched-test");
 const WEB = 5335, API = 9033;
 const t = tally();
+// Days still ahead for the proposed windows, worked out rather than written
+// down: a proposed time that has gone by is drawn as passed and offers no
+// answer, so a fixed date here stops testing the answer panel once the
+// calendar passes it.
+const ahead = (n) => { const d = new Date(); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+const V1_DAY = ahead(10), V2_DAY = ahead(16);
+const V2_SHOWN = new Date(`${V2_DAY}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
 const PM = {
   id: "acc_pm", name: "Sound Property Management", subdomain: "soundpm",
@@ -118,14 +125,14 @@ const JOBS = () => [
 // A live window on the reported job, so the propose form is a REPLACEMENT
 // rather than a first booking -- which is the actual ask.
 const VISITS = () => [{
-  id: "v1", jobId: "mine", status: "proposed", date: "2026-10-01",
+  id: "v1", jobId: "mine", status: "proposed", date: V1_DAY,
   startTime: "09:00", endTime: "11:00", note: "", tenantNote: null,
   respondedAt: null, contractorAt: null, contractorNote: null,
   proposedBy: "u_mgr", createdAt: "2026-09-25",
 }, {
   // Proposed BY the crew and stamped as theirs, with the hiring side's leg
   // empty -- so `nextToAnswer` reaches the manager and the panel draws.
-  id: "v2", jobId: "ours", status: "proposed", date: "2026-10-07",
+  id: "v2", jobId: "ours", status: "proposed", date: V2_DAY,
   startTime: "09:00", endTime: "11:00", note: "", tenantNote: null,
   respondedAt: null, contractorAt: "2026-10-03T12:00:00.000Z", contractorNote: null,
   managerAt: null, turn: "manager", waitingOn: ["manager"],
@@ -382,7 +389,7 @@ try {
   // sentence with the date bolded in the middle of it.
   t.ck("it says what happened", /proposed a new time/i.test(ours.lede || ""), ours.lede);
   t.ck("the date is a line of its own",
-    /Oct 7, 2026/.test(ours.when || "") && /9 AM/.test(ours.when || ""), ours.when);
+    (ours.when || "").includes(V2_SHOWN) && /9 AM/.test(ours.when || ""), ours.when);
   t.ck("and the note says what approving does",
     /approve it/i.test(ours.note || ""), ours.note);
   // AMERICAN ENGLISH. "Agree it" and "has put forward" are not.

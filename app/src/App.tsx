@@ -1816,7 +1816,7 @@ function visitWhen(v) {
 // until Tuesday is over.
 function visitPassed(v, now = new Date()) {
   if (!v?.date) return false;
-  const end = v.endTime || v.startTime;
+  const end = String(v.endTime || v.startTime || "").slice(0, 5);
   const at = end ? new Date(`${v.date}T${end}:00`) : new Date(`${v.date}T23:59:59`);
   if (isNaN(at)) return false;
   return at.getTime() < now.getTime();
@@ -3193,11 +3193,12 @@ export default function SubSub() {
   // dashboard, the server kept it waiting, and it came back on the next
   // reload reading as an approve that had not stuck. Same rule as
   // completeJob and declineJob beside it. The caller shows the reason.
-  const approveJob = async (id) => {
+  const approveJob = async (id, trades) => {
     const jb = allJobs.find((j) => j.id === id);
-    await api.approveJob(id);
+    const r = await api.approveJob(id, trades);
     setJobs((js) => js.map((j) => (j.id === id
-      ? { ...j, approvedAt: new Date().toISOString() } : j)));
+      ? { ...j, approvedAt: new Date().toISOString(),
+          ...(Array.isArray(r?.trades) ? { trades: r.trades } : {}) } : j)));
     if (jb) logEvent("job_approved", `Approved requested work: ${jb.title}`);
   };
 
@@ -6282,6 +6283,7 @@ export default function SubSub() {
           onGoCalendar={goJobCalendar} onOpenJob={openJob}
           onAnswerVisit={maySetAccess(role) ? answerVisit : null}
           onAnswerSpan={maySetAccess(role) ? answerSpan : null}
+          onEndJob={maySetAccess(role) ? setEndingJob : null}
           onNewJob={() => tryAddJob()}
           properties={can("properties") ? accountProperties : null}
           onGoProperties={() => setTab("properties")} onAddProperty={tryAddProperty}
@@ -6982,7 +6984,9 @@ export default function SubSub() {
                           )}
                           <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
                           {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
-                          <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length}</span>
+                          {j.trades.length
+                            ? <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length}</span>
+                            : <span className="fill-badge none">No trade</span>}
                         </span>
                       </button>
                     </div>
@@ -7119,7 +7123,9 @@ export default function SubSub() {
                           {j.materialSource && <span><Layers size={12} /> {j.materialSource}</span>}
                         </div>
                       </div>
-                      <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length} trades</span>
+                      {j.trades.length
+                        ? <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length} trades</span>
+                        : <span className="fill-badge none">No trade yet</span>}
                     </div>
                     {j.scope && <p className="job-scope">{j.scope}</p>}
                     {(j.measurementDocs || []).length > 0 && (
@@ -7444,7 +7450,11 @@ export default function SubSub() {
                         `approvedAt` stays, because an unapproved REQUEST is
                         not a job yet and scheduling one would book work
                         nobody has agreed to do. */}
-                    {j.approvedAt && !isClosed(j) && (
+                    {j.approvedAt && !isClosed(j) && !j.trades.length && (
+                      <p className="visit-state bad visit-notrade"><AlertTriangle size={14} /> Add a trade before
+                        setting a time — there is nobody to send yet.</p>
+                    )}
+                    {j.approvedAt && !isClosed(j) && j.trades.length > 0 && (
                       <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
                         /* 068. WHAT THIS ACCOUNT CALLS WHOEVER HOLDS THE WORK
                            on this job, which is not a constant. Reported as
@@ -7490,7 +7500,8 @@ export default function SubSub() {
                         {!done ? (
                           <>
                             <span className="jf-note">
-                              {allAssigned ? "All trades assigned — mark complete when the work is finished to rate crews."
+                              {!j.trades.length ? "No trade on this job, so nobody can be sent. Add one with Edit, or cancel it if it isn't work you hire for."
+                                : allAssigned ? "All trades assigned — mark complete when the work is finished to rate crews."
                                 : `${j.trades.length - filled} trade${j.trades.length - filled > 1 ? "s" : ""} still unassigned.`}
                             </span>
                             {/* Asked, not fired. This closed the job straight
@@ -23616,6 +23627,7 @@ function approveErrText(e) {
   if (code === "job_not_found") return "This request isn't on this account any more. Reload to see where it went.";
   if (code === "withdrawn") return "They took this request back, so there is nothing to approve.";
   if (code === "not_a_request") return "This is already a job, not a request.";
+  if (code === "trade_required") return "Pick what kind of work this is first. Nobody can be assigned to a job without one.";
   if (code === "forbidden") return "Your seat can't approve requests. Ask an admin or a project manager.";
   return `That didn't go through${code ? ` (${code})` : ""}. Try again in a moment.`;
 }
@@ -23623,6 +23635,15 @@ function approveErrText(e) {
 function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], subs = [], onApprove, onDecline, onClose, readOnly = false }) {
   const d = job.reportDetail || null;
   const [busy, setBusy] = useState(false);
+  // WHAT KIND OF WORK IT IS, decided here when the report did not say. A job
+  // with no trade can never be assigned, so approving one made a job that sat
+  // at 0/0 for ever -- reported on torn upholstery filed as "Something else".
+  const needsTrade = !(job.trades || []).length;
+  const [pick, setPick] = useState([]);
+  const covers = (t) => subs.filter((x) => (x.categories || []).includes(t)).length;
+  const tradeOrder = needsTrade
+    ? [...CATEGORIES].sort((a, b) => (covers(b.id) > 0) - (covers(a.id) > 0)) : [];
+  const uncovered = pick.filter((t) => !covers(t));
   const [err, setErr] = useState("");
   const [declining, setDeclining] = useState(false);
   // The index of the open photo, and what each thumbnail loaded. Same shape
@@ -23634,7 +23655,7 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
 
   const approve = async () => {
     setBusy(true); setErr("");
-    try { await onApprove(job.id); onClose(); }
+    try { await onApprove(job.id, needsTrade ? pick : undefined); onClose(); }
     catch (e) {
       console.error("[request] approve failed:", e);
       setErr(approveErrText(e));
@@ -23760,13 +23781,40 @@ function RequestDetail({ job, who, where, unitWord = "Unit", assignedTo = [], su
             onDecline={async (note) => { await onDecline(job.id, note); onClose(); }} />
         ) : (
           <>
+            {needsTrade && (
+              <div className="req-trade" data-req-trade>
+                <h4>What kind of work is this?</h4>
+                <p className="fine">They didn't say, and a job needs a trade before anybody can be
+                  sent. The number is how many on your roster do it.</p>
+                <div className="chips">
+                  {tradeOrder.map((cat) => {
+                    const on = pick.includes(cat.id);
+                    const n = covers(cat.id);
+                    return (
+                      <button key={cat.id} type="button" className={`chip ${on ? "on" : ""} ${n ? "" : "chip-none"}`}
+                        aria-pressed={on}
+                        onClick={() => setPick((p) => (on ? p.filter((x) => x !== cat.id) : [...p, cat.id]))}>
+                        {cat.label} <span className="chip-n">{n}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {uncovered.length > 0 && (
+                  <p className="fld-note warn" role="status">
+                    Nobody on your roster does {uncovered.map((t) => catMeta(t).label).join(" or ")}.
+                    You can still approve it and post it to overflow, or decline it if it isn't work
+                    you hire for — they're told why.</p>
+                )}
+              </div>
+            )}
             {err && <p className="billing-err" role="alert">{err}</p>}
             <div className="form-actions">
               <button className="btn-ghost" onClick={onClose} disabled={busy}>Close</button>
               <button className="btn-ghost danger" onClick={() => setDeclining(true)} disabled={busy}>
                 <X size={14} /> Decline
               </button>
-              <button className="btn-solid" onClick={approve} disabled={busy}>
+              {needsTrade && !pick.length && <span className="fld-note">Pick a trade to approve</span>}
+              <button className="btn-solid" onClick={approve} disabled={busy || (needsTrade && !pick.length)}>
                 <Check size={15} /> {busy ? "Approving…" : "Approve"}
               </button>
             </div>
@@ -24439,7 +24487,7 @@ function managerTurn(v, job) {
 }
 
 function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
-  onAnswerVisit, onAnswerSpan, onOpenJob, onPeek }) {
+  onAnswerVisit, onAnswerSpan, onOpenJob, onEndJob = null, onPeek }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const { kind, job, v } = item;
@@ -24497,9 +24545,11 @@ function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
     ] : [];
   } else {
     lede = "Approved, with no trade on it";
-    sub = `Nobody can be assigned until it says what kind of work it is.`;
+    sub = "Nobody can be sent until it says what kind of work it is. If it isn't work anybody you hire does, close it.";
     acts = [{ kind: "yes", label: "Add a trade", icon: <Plus size={16} />,
-      onClick: () => onOpenJob?.(job.id) }];
+      onClick: () => onOpenJob?.(job.id) },
+      onEndJob && { kind: "quiet", label: "Not work we handle", icon: <Ban size={15} />,
+        onClick: () => onEndJob(job) }].filter(Boolean);
   }
   return (
     <div className={`dash-row yt-row yt-${kind}`} data-yt={kind}>
@@ -24896,7 +24946,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   connectsIn = [], onRespondConnect, onReloadConnects,
   hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
   onManagePack = null, onAddPackField = null, onReloadCompany = null, weather = null,
-  inspections = [], onOpenInspection = null, onAnswerVisit = null, onAnswerSpan = null }) {
+  inspections = [], onOpenInspection = null, onAnswerVisit = null, onAnswerSpan = null, onEndJob = null }) {
   // Which job row is open in the details modal. Held by id rather than as the
   // job object, for the reason `openReq` is: an assign or a reload replaces
   // the row, and a captured copy would draw the old one under the modal.
@@ -25106,8 +25156,12 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
                 <div className="dash-row-btns">
                   <button className="btn-ghost sm" onClick={() => setDeclining(j.id)}>
                     <X size={13} /> Decline</button>
-                  <button className="btn-solid dash-row-btn" disabled={approving === j.id} onClick={() => approveRow(j.id)}>
-                    <Check size={14} /> {approving === j.id ? "Approving…" : "Approve"}</button>
+                  {/* A request that names no trade is approved where the trade
+                      is picked, or it makes a job nobody can be sent to. */}
+                  <button className="btn-solid dash-row-btn" disabled={approving === j.id}
+                    onClick={() => ((j.trades || []).length ? approveRow(j.id) : setOpenReq(j.id))}>
+                    <Check size={14} /> {approving === j.id ? "Approving…"
+                      : (j.trades || []).length ? "Approve" : "Pick a trade"}</button>
                 </div>
               )}
               {approveErr[j.id] && <p className="fld-note err dash-row-err" role="alert">{approveErr[j.id]}</p>}
@@ -25244,7 +25298,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             {yourTurn.map((it) => (
               <YourTurnRow key={`${it.kind}-${it.job.id}-${it.trade || it.v?.id || ""}`}
                 item={it} users={users} props={props} hiresWord={words.one}
-                onAnswerVisit={onAnswerVisit} onAnswerSpan={onAnswerSpan} onOpenJob={onOpenJob}
+                onAnswerVisit={onAnswerVisit} onAnswerSpan={onAnswerSpan} onOpenJob={onOpenJob} onEndJob={onEndJob}
                 onPeek={() => setPeek({ jobId: it.job.id, trade: it.trade || null, kind: "yt" })} />
             ))}
           </DashRows>
@@ -41753,6 +41807,12 @@ strong.insp-name{background:none;border:0;padding:0}
 .yt-row .dash-row-main{flex:1 1 260px}
 .yt-lede{font-weight:700;font-size:14px;color:var(--amber-ink)}
 .yt-when{font-size:16px;font-weight:700;color:var(--ink)}
+.fill-badge.none{background:var(--amber-soft,#fbefd9);color:#8a5a12}
+.req-trade{margin:14px 0 4px}
+.req-trade h4{margin:0 0 4px}
+.req-trade .chips{margin-top:8px}
+.chip .chip-n{font-size:11px;opacity:.7;margin-left:4px}
+.chip.chip-none{opacity:.75}
 .yt-when.yt-gone{text-decoration:line-through;color:var(--ink-soft);font-weight:600}
 .yt-lapsed .yt-lede{color:var(--red)}
 .yt-acts{flex:1 1 320px;max-width:440px}
