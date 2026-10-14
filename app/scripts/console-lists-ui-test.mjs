@@ -35,8 +35,10 @@ const BOOT = {
   accounts: [
     acct("acc_sub", "Pacific Apartment Maintenance", "subcontractor", "basic",
       { trades: ["roofing", "gutters", "painting", "plumbing"] }),
+    // Outerhome's own company row is cmp_own_acc_gc (031). The company
+    // window lists the account's own team from this link.
     acct("acc_gc", "Outerhome", "general_contractor", "scale",
-      { trades: ["roofing", "gutters", "painting", "siding", "electrical"] }),
+      { trades: ["roofing", "gutters", "painting", "siding", "electrical"], companyId: "cmp_own_acc_gc" }),
     // A comped Scale account: on the plan, paying nothing. Only this row can
     // tell "paying" from "on Scale".
     acct("acc_gc2", "Northline Builders", "general_contractor", "scale", { comped: true, compNote: "Design partner",
@@ -67,6 +69,10 @@ const BOOT = {
     { userId: "u_a4", accountId: "acc_gc2", role: "admin", companyId: null },
     { userId: "u_a5", accountId: "acc_own", role: "admin", companyId: null },
     { userId: "u_a6", accountId: "acc_gone", role: "admin", companyId: null },
+    // The reported shape: Outerhome accepted Sound's connect request, so its
+    // admin also holds a CONTRACTOR seat on Sound for Outerhome's own row.
+    // Before, that was the only way in the company window offered.
+    { userId: "u_a1", accountId: "acc_pm", role: "contractor", companyId: "cmp_own_acc_gc" },
   ],
   companies: [
     { id: "cmp_own_acc_gc", company: "Outerhome", contact: "Rae Admin", accountName: "Outerhome",
@@ -124,7 +130,12 @@ const STUCK = {
 };
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const impersonated = [];
+const api = serveApi({ port: API, routes: (path, method, body) => {
+  if (path.startsWith("/api/platform/impersonate/") && method === "POST") {
+    impersonated.push({ path, body });
+    return [403, { error: "stub" }];
+  }
   if (path === "/api/platform/me") return [200, STAFF()];
   if (path === "/api/platform/bootstrap") return [200, BOOT];
   if (path === "/api/platform/companies") return [200, []];
@@ -473,6 +484,35 @@ try {
   t.ck("for the row that was pressed", cw?.h2 === "Skagit Framing", cw?.h2);
   t.ck("with its detail", cw?.detail === true);
   t.ck("and its edit form, in the same window", cw?.edit === true);
+  await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
+  await wait(300);
+
+  console.log("\n-- an account's own company can be opened as the account's own admin --");
+  await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row")]
+    .find((r) => /^Outerhome/.test((r.innerText || "").trim()))?.click());
+  await wait(600);
+  const own = await page.evaluate(() => {
+    const m = document.querySelector(".modal.modal-co");
+    if (!m) return null;
+    return { h2: m.querySelector("h2")?.innerText.trim(),
+      seats: [...m.querySelectorAll(".pfc-seats .pfc-seat")].map((x) => ({
+        text: x.innerText.replace(/\s+/g, " ").trim(), own: x.classList.contains("pfc-seat-own"),
+        btn: !!x.querySelector("button") })) };
+  });
+  t.ck("the account's own company opens in a window", own?.h2 === "Outerhome", JSON.stringify(own));
+  t.ck("its admin is listed first, as the admin of their own account",
+    own?.seats?.[0]?.own === true && /Rae Admin/.test(own.seats[0].text)
+      && /admin of Outerhome \(their own account\)/.test(own.seats[0].text), JSON.stringify(own?.seats));
+  t.ck("with an Open as them of their own", own?.seats?.[0]?.btn === true, JSON.stringify(own?.seats));
+  t.ck("and the contractor seat on the client is still listed after it",
+    own?.seats?.length === 2 && /contractor on Sound Property Management/.test(own.seats[1].text),
+    JSON.stringify(own?.seats));
+  impersonated.length = 0;
+  await page.evaluate(() => document.querySelector(".modal-co .pfc-seat-own button")?.click());
+  await wait(600);
+  t.ck("pressing it signs in to THEIR account, as them",
+    impersonated.length === 1 && /\/acc_gc$/.test(impersonated[0].path) && impersonated[0].body?.userId === "u_a1",
+    JSON.stringify(impersonated));
   await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
   await wait(300);
 

@@ -97,6 +97,20 @@ try {
     `${co.cmp_sj?.email} ${co.cmp_sj?.phone}`);
   ck("and where they are", co.cmp_sj?.city === "Seattle" && co.cmp_sj?.state === "WA");
 
+  console.log("\n-- an account says which company row is its own --");
+  {
+    // The company window lists the account's own team from this link; a
+    // bootstrap without it left a subcontractor account's admin reachable
+    // only as somebody else's contractor.
+    const { db, env: env2 } = seed();
+    db.exec(`UPDATE accounts SET company_id = 'cmp_far' WHERE id = 'acc2'`);
+    const [s2, b2] = await json(await boot(env2, "staff"));
+    const a2 = (b2.accounts || []).find((a) => a.id === "acc2");
+    const a1 = (b2.accounts || []).find((a) => a.id === "acc1");
+    ck("an account carries its own company id", s2 === 200 && a2?.companyId === "cmp_far", JSON.stringify(a2));
+    ck("and one with none carries null, not a guess", a1 && a1.companyId === null, JSON.stringify(a1));
+  }
+
   console.log("\n-- the number that could only ever be zero --");
   {
     const sj = mine.find((e) => e.companyId === "cmp_sj");

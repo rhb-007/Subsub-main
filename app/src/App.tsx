@@ -9554,11 +9554,22 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
         acct: accounts.find((a) => a.id === m.accountId),
       }))
       .filter((x) => x.u && x.acct);
+    // The account this company row BELONGS to, and its own team. A
+    // subcontractor account's admin holds an admin seat on their own
+    // account, not a contractor seat anywhere, so the list above never
+    // named them: support could open the company only as somebody else's
+    // contractor, which is that client's view of them rather than theirs.
+    // Team seats only -- an owner or a tenant on their account is a guest.
+    const ownSeats = accounts.filter((a) => a.companyId === c.id).flatMap((acct) =>
+      memberships.filter((m) => m.accountId === acct.id && isTeamSeat(m.role))
+        .sort((x, y) => (x.role === "admin" ? 0 : 1) - (y.role === "admin" ? 0 : 1))
+        .map((m) => ({ m, acct, u: users.find((u) => u.id === m.userId) }))
+        .filter((x) => x.u));
     // What is outstanding before this company has fully joined, per account
     // that asked them. Most actionable first, which is the order STAGES is in.
     const notJoined = (stuck?.rows || []).filter((x) => x.companyId === c.id)
       .sort((x, y) => STAGE_ORDER[x.stage] - STAGE_ORDER[y.stage]);
-    return { c, accts, engs: engRows, seats, notJoined, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
+    return { c, accts, engs: engRows, seats, ownSeats, notJoined, lic, licOk: !lic || String(lic.status).toLowerCase() === "active",
       dup: companies.filter((x) => x.license && x.license.toUpperCase().trim() === (c.license || "").toUpperCase().trim()).length > 1 };
   });
 
@@ -9566,8 +9577,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     const f = coFilters;
     if (f.type === "account" && !r.c.accountName) return false;
     if (f.type === "contractor" && r.c.accountName) return false;
-    if (f.login === "yes" && !r.seats.length) return false;
-    if (f.login === "no" && r.seats.length) return false;
+    if (f.login === "yes" && !r.seats.length && !r.ownSeats.length) return false;
+    if (f.login === "no" && (r.seats.length || r.ownSeats.length)) return false;
     if (f.lic === "issue" && r.licOk) return false;
     if (f.lic === "ok" && !(r.lic && r.licOk)) return false;
     if (f.lic === "none" && r.lic) return false;
@@ -10882,6 +10893,18 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                         <div className="pfc-row pfc-seats">
                           <span>Signs in as</span>
                           <span>
+                            {r.ownSeats.map(({ u, acct, m }) => (
+                              <span key={`own:${u.id}:${acct.id}`} className="pfc-seat pfc-seat-own">
+                                <b>{u.name}</b>
+                                <span className="pf-sub"> · {m.role === "admin" ? "admin" : "project manager"} of {acct.name} (their own account)</span>
+                                {admin?.impersonate && (
+                                  <button className="pf-mini" title={`Open SubSub as ${u.name}`}
+                                    onClick={() => onImpersonate(acct, u.id)}>
+                                    <LogIn size={12} /> Open as them
+                                  </button>
+                                )}
+                              </span>
+                            ))}
                             {r.seats.length ? r.seats.map(({ u, acct }) => (
                               <span key={`${u.id}:${acct.id}`} className="pfc-seat">
                                 <b>{u.name}</b>
@@ -10893,7 +10916,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                                   </button>
                                 )}
                               </span>
-                            )) : <span className="pf-sub">
+                            )) : r.ownSeats.length ? null : <span className="pf-sub">
                               Nobody. This company was typed in by an account and never claimed,
                               so there is no seat to open.
                             </span>}

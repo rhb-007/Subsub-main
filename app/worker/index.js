@@ -21816,6 +21816,11 @@ app.get("/api/platform/bootstrap", async (c) => {
     accounts: accounts.results.map((a) => ({
       id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
       plan: a.plan, billing: a.billing, comped: !!a.comped, compNote: a.comp_note,
+      // The account's own company row (031). A company window reads it to
+      // list the account's OWN team beside the contractor seats other
+      // accounts gave them: without it a subcontractor account's admin was
+      // reachable only as somebody else's contractor.
+      companyId: a.company_id || null,
       // What this account hires out. The console ranks these into "top trades",
       // which is the only demand signal that exists before anyone engages a sub.
       trades: parseJson(a.trades, []),

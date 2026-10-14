@@ -12396,6 +12396,29 @@ refactor.
   Four mutations fire, each on its own assertions: the kind gate dropped,
   read-only jobs counted, the turn ignored, and the job row not wired.
 
+- **A COMPANY THAT IS AN ACCOUNT CAN BE OPENED AS THAT ACCOUNT'S OWN ADMIN.**
+  Reported from the console with Cascade Apartment Services open: *"Why can't
+  I login to Cascade as its admin ... only as a random contractor for Sound
+  property management"*. *Signs in as* listed `memberships` with role
+  `contractor` and this `company_id` and nothing else. Those are the seats
+  other accounts give a company, here the ones Cascade's team got by
+  accepting Sound's connect request. Cascade's own admin holds an **admin**
+  seat on Cascade, which carries no `company_id`, so the one person who runs
+  the company was the one person the window could not name. Opening them as
+  Sound's contractor shows Sound's view of Cascade, not Cascade's.
+
+  The bootstrap's accounts now carry `companyId` (031's `accounts.company_id`),
+  and the window lists the owning account's **team seats** first: *admin of
+  Cascade (their own account)*, with its own *Open as them* that impersonates
+  into that account as that person. Team seats only, through `isTeamSeat`:
+  an owner or a tenant on their account is a guest. The contractor seats
+  stay listed after them, and the *has a login* filter counts both.
+
+  `test:consolelists` drives it with Outerhome's admin holding both seats,
+  and checks the press goes to Outerhome as them. `test:consoleroster` pins
+  the field on the real bootstrap. Dropping the list fails three assertions,
+  and dropping the field fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
