@@ -12849,13 +12849,28 @@ refactor.
   15px text fails all four.
 
   **And the list folds away.** Asked for as *"minimize message summary and
-  maximize message pane"*. A button at the left of the conversation's header
-  hides the list so the conversation takes the whole width, and the same
-  button brings it back. It is remembered on this device only, in
+  maximize message pane"*, then *"more minimal against the line, not a large
+  button"*. A small tab (18 by 40px, a chevron) sits on the divider between the
+  list and the conversation; pressing it hides the list so the conversation
+  takes the whole width, and it then sits against the left edge to bring the
+  list back. The test measures its center on the divider line, not just that
+  it exists. It is remembered on this device only, in
   `localStorage` with try/catch, because it is a preference about a screen and
   not a record. It is offered wherever there are two panes, which includes a
   phone held sideways, and nowhere there is one. Removing the fold rule fails
   the three two-pane sizes.
+
+  **A conversation refreshes without reloading the page.** It already re-read
+  itself every 30 seconds, which is too slow for a conversation and nothing a
+  person could ask for. Now an open conversation checks every 15 seconds
+  while the page is in front of somebody, and at once when they come back to
+  it, because switching apps on an iPad is the commonest way a reply is
+  missed. A refresh icon beside the other person's name, and another beside
+  the list's search, check right away. The Inbox list does the same on return
+  and skips its 60-second check while the page is hidden. The test puts a
+  reply on the server, presses refresh, and requires it in the conversation
+  and on the list with the page not reloaded. A refresh that does nothing
+  fails it.
 
 ## Working here
 

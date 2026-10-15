@@ -545,10 +545,44 @@ try {
     const fold = () => page.evaluate(() => {
       const b = document.querySelector(".inbox .thr-fold"), l = document.querySelector(".inbox .inbox-list");
       const w = document.querySelector(".inbox"), p = document.querySelector(".inbox .inbox-pane");
+      const br = b?.getBoundingClientRect();
+      const hit = br ? document.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2) : null;
       return { button: !!b && getComputedStyle(b).display !== "none", label: b?.getAttribute("aria-label") || null,
+        pressable: !!b && (hit === b || b.contains(hit)),
         list: l ? getComputedStyle(l).display !== "none" : null,
         share: w && p ? Math.round(p.getBoundingClientRect().width / w.getBoundingClientRect().width * 100) : null };
     });
+    if (!vp.phone && vp.height > vp.width) {
+      // A REPLY ARRIVES WHILE THE CONVERSATION IS OPEN, and the refresh beside
+      // its name brings it in -- no page reload, and the list follows.
+      MESSAGES.th1.push({ id: "m_new", threadId: "th1", authorUserId: "usr_t", authorName: "Tess Nguyen", authorSide: "party",
+        body: "Thanks, I'll be home after 3", photos: [], createdAt: new Date().toISOString(), editedAt: null });
+      THREADS = THREADS.map((x) => x.id === "th1" ? { ...x, lastBody: "Thanks, I'll be home after 3", lastSide: "party", unread: 1 } : x);
+      const marker = await page.evaluate(() => { window.__notReloaded = true; return true; });
+      await page.evaluate(() => document.querySelector(".inbox .thr-head [data-refresh]")?.click());
+      await wait(700);
+      const got = await page.evaluate(() => ({
+        stayed: window.__notReloaded === true,
+        msg: [...document.querySelectorAll(".inbox .msg-bubble")].some((b) => /home after 3/.test(b.innerText)),
+        row: [...document.querySelectorAll(".inbox .ib-row")].some((r) => /home after 3/.test(r.innerText)) }));
+      t.ck(`${vp.name}: refresh brings a new reply into the open conversation and the list, without reloading the page`,
+        marker && got.stayed && got.msg && got.row, JSON.stringify(got));
+      const listBtn = await page.evaluate(() => !!document.querySelector(".inbox-tools [data-refresh-list]"));
+      t.ck(`${vp.name}: the list has its own refresh too`, listBtn);
+    }
+    // The fold control is a small tab ON the line between the two panes, not
+    // a button in the header.
+    if (vp.width > 760) {
+      const tab = await page.evaluate(() => {
+        const b = document.querySelector(".inbox .thr-fold"), l = document.querySelector(".inbox .inbox-list");
+        if (!b || !l) return null;
+        const r = b.getBoundingClientRect(), lr = l.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height), center: Math.round(r.left + r.width / 2), line: Math.round(lr.right),
+          inHead: !!b.closest(".thr-head") };
+      });
+      t.ck(`${vp.name}: the fold control is a small tab sitting on the divider line`,
+        !!tab && tab.w <= 22 && tab.h <= 44 && Math.abs(tab.center - tab.line) <= 2 && !tab.inHead, JSON.stringify(tab));
+    }
     if (vp.width <= 760) {
       t.ck(`${vp.name}: no fold button, since there is one pane`, !(await fold()).button);
     } else {
@@ -561,6 +595,7 @@ try {
       const f2 = await fold();
       t.ck(`${vp.name}: the list folds away and the conversation takes the whole width`,
         f0.button && f0.list && f0.share < 80 && !f1.list && f1.share >= 98 && /Show/.test(f1.label || ""), JSON.stringify([f0, f1]));
+      t.ck(`${vp.name}: folded, the tab is still there to press, against the left edge`, f0.pressable && f1.pressable, JSON.stringify([f0, f1]));
       t.ck(`${vp.name}: and the same button brings it back`, f2.list && f2.share === f0.share, JSON.stringify(f2));
     }
     if (vp.phone) {

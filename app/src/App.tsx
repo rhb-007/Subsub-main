@@ -35,7 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, PanelLeftClose, PanelLeftOpen,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -3865,8 +3865,13 @@ export default function SubSub() {
   useEffect(() => {
     if (!loggedIn || !currentAccountId) { setInbox({ threads: [], unread: 0 }); return undefined; }
     refreshInbox();
-    const t = setInterval(refreshInbox, 60000);
-    return () => clearInterval(t);
+    // Not while the page is behind another app, and at once on coming back.
+    const seen = () => document.visibilityState !== "hidden";
+    const t = setInterval(() => { if (seen()) refreshInbox(); }, 60000);
+    const back = () => { if (seen()) refreshInbox(); };
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); };
   }, [loggedIn, currentAccountId, refreshInbox]);
   const openInbox = (threadId = null) => { setInboxOpen(threadId ? { id: threadId, n: Date.now() } : null); setTab("inbox"); };
   // The new-message email links here: ?open=inbox, with the thread when there
@@ -35419,7 +35424,7 @@ function threadEventText(e) {
   }
 }
 
-function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = false, listHidden = false, onToggleList = null }) {
+function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = false, nonce = 0 }) {
   const ictx = React.useContext(InboxCtx);
   const [proposing, setProposing] = useState(false);
   const [actBusy, setActBusy] = useState("");
@@ -35453,7 +35458,24 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
   useEffect(() => { if (ictx?.threadNonce) load(true); }, [ictx?.threadNonce, load]);
   // A conversation is read while it is open, so it is checked while it is
   // open: every half minute, quietly, and never over somebody's typing.
-  useEffect(() => { const t = setInterval(() => load(true), 30000); return () => clearInterval(t); }, [load]);
+  // Every 15 seconds while the page is in front of somebody, at once when they
+  // come back to it (switching apps on an iPad is the commonest way a reply is
+  // missed), and on a press of the refresh button -- never a page reload.
+  useEffect(() => {
+    const seen = () => document.visibilityState !== "hidden";
+    const t = setInterval(() => { if (seen()) load(true); }, 15000);
+    const back = () => { if (seen()) load(true); };
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("focus", back);
+    return () => { clearInterval(t); document.removeEventListener("visibilitychange", back); window.removeEventListener("focus", back); };
+  }, [load]);
+  useEffect(() => { if (nonce) load(true); }, [nonce, load]);
+  const [checking, setChecking] = useState(false);
+  const checkNow = async () => {
+    if (checking) return;
+    setChecking(true);
+    try { await Promise.all([load(true), onChange?.()]); } finally { setChecking(false); }
+  };
   useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; },
     [data?.messages?.length]);
   useEffect(() => { if (autoFocus && data && boxRef.current) boxRef.current.focus(); }, [autoFocus, data]);
@@ -35535,13 +35557,6 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
     <div className="thr-pane">
       <div className="thr-head">
         {onBack && <button className="thr-back" onClick={onBack} aria-label="Back to the inbox"><ChevronLeft size={18} /></button>}
-        {onToggleList && (
-          <button className="thr-fold" onClick={onToggleList} data-fold={listHidden ? "show" : "hide"}
-            aria-label={listHidden ? "Show the conversation list" : "Hide the conversation list"}
-            title={listHidden ? "Show the conversation list" : "Hide the conversation list"}>
-            {listHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-          </button>
-        )}
         <span className="thr-av">{initialsOf(side === "home" ? t.partyName : t.accountName)}</span>
         <div className="thr-who">
           <b>{otherName}</b>
@@ -35552,6 +35567,10 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
           )}
           {!t.jobTitle && t.kind === "owner" && t.propertyName && <span className="thr-about">About: {t.propertyName}</span>}
         </div>
+        <button className="thr-refresh" onClick={checkNow} disabled={checking} data-refresh
+          aria-label="Check for new messages" title="Check for new messages">
+          <RefreshCw size={15} className={checking ? "spin" : ""} />
+        </button>
       </div>
       {cx?.job && (
         <div className={`thr-job ${jv?.status === "confirmed" && !passed ? "booked" : ""}`} data-thr-job>
@@ -35821,6 +35840,13 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
     return !v;
   });
   useEffect(() => { if (openId) setSel(openId); }, [openId]);
+  const [nonce, setNonce] = useState(0);
+  const [checking, setChecking] = useState(false);
+  const checkNow = async () => {
+    if (checking) return;
+    setChecking(true); setNonce((n) => n + 1);
+    try { await onRefresh?.(); } finally { setChecking(false); }
+  };
   // Where the window starts on the page, so CSS can make it exactly as tall as
   // the rest of the screen -- on any device, held either way. Measured again
   // on a turn, a resize, and when opening a conversation hides the title.
@@ -35858,6 +35884,10 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
             <input placeholder="Search messages" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search messages" />
             <button className={`chip ${onlyUnread ? "on" : ""}`} onClick={() => setOnlyUnread((v) => !v)} aria-pressed={onlyUnread}>
               Unread{inbox?.unread ? ` (${inbox.unread})` : ""}</button>
+            <button className="thr-refresh" onClick={checkNow} disabled={checking} data-refresh-list
+              aria-label="Check for new messages" title="Check for new messages">
+              <RefreshCw size={15} className={checking ? "spin" : ""} />
+            </button>
           </div>
           {!shown.length && (
             <p className="inbox-empty">{threads.length ? "Nothing matches." : "No conversations yet. Start one with New message."}</p>
@@ -35876,8 +35906,17 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
           ))}
         </div>
         <div className="inbox-pane">
+          {/* A small tab on the line between the list and the conversation:
+              it folds the list away, and brings it back. */}
+          {sel && (
+            <button className="thr-fold" onClick={toggleList} data-fold={listHidden ? "show" : "hide"}
+              aria-label={listHidden ? "Show the conversation list" : "Hide the conversation list"}
+              title={listHidden ? "Show the conversation list" : "Hide the conversation list"}>
+              {listHidden ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+            </button>
+          )}
           {sel ? <ThreadPane threadId={sel} me={me} onChange={onRefresh} onBack={() => setSel(null)} onOpenJob={onOpenJob}
-            listHidden={listHidden} onToggleList={toggleList} />
+            nonce={nonce} />
             : <div className="inbox-none"><MessageSquareText size={28} /><p>Choose a conversation, or start a new one.</p></div>}
         </div>
       </div>
@@ -46187,9 +46226,18 @@ button.job-insp:hover{border-color:#2f5577}
 .thr-back{display:none;border:0;background:transparent;padding:6px;cursor:pointer;color:var(--ink)}
 /* Fold the list away and give the conversation the whole width; the same
    button brings it back. Not on a phone, where there is only one pane. */
-.thr-fold{flex:none;display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:10px;
-  border:1px solid var(--line);background:var(--card);cursor:pointer;color:var(--ink-soft)}
-.thr-fold:hover{color:var(--ink);border-color:var(--brand)}
+.inbox-pane{position:relative}
+.thr-fold{position:absolute;left:0;top:50%;z-index:2;transform:translate(-50%,-50%);width:18px;height:40px;padding:0;
+  display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:999px;
+  background:var(--card);color:var(--ink-soft);cursor:pointer;opacity:.85}
+.thr-fold::before{content:"";position:absolute;inset:-6px -12px}
+.thr-fold:hover,.thr-fold:focus-visible{opacity:1;color:var(--ink);border-color:var(--brand)}
+.inbox.list-hidden .thr-fold{transform:translate(0,-50%);border-left:0;border-radius:0 999px 999px 0}
+.thr-refresh{flex:none;margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:0;
+  border:0;border-radius:8px;background:transparent;color:var(--ink-soft);cursor:pointer}
+.thr-refresh:hover{background:var(--paper);color:var(--ink)}
+.thr-refresh:disabled{cursor:default}
+.inbox-tools .thr-refresh{margin-left:0;align-self:center}
 .inbox.list-hidden{grid-template-columns:1fr}
 .inbox.list-hidden .inbox-list{display:none}
 .inbox.list-hidden .msg{max-width:72%}
