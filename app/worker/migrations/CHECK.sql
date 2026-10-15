@@ -298,6 +298,9 @@ WITH spec(j) AS (SELECT
   -- which file, and every account is billed the flat $99 as before.
   ',["m084_occupied_units","col","properties",["occupied_units"]]' ||
   ',["m084_account_setup_fees","col","account_setup_fees",["account_id","tier","units","amount_cents","status","stripe_ref","charged_at"]]') ||
+  -- 085. Where an address is, for the Jobs and Properties maps. Until it is
+  -- run the map says which file to paste and every other screen is unchanged.
+  ',["m085_geocodes","col","geocodes",["address_key","lat","lng","precision","source","checked_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -804,6 +807,11 @@ WITH inv(j) AS (SELECT '['
   -- homes than the building has; the route refuses one, and a negative one.
   || (',' || json_array('m084_inv_occupied_over_units', (SELECT COUNT(*) FROM properties
     WHERE occupied_units IS NOT NULL AND (occupied_units < 0 OR occupied_units > COALESCE(units, 0)))))
+  -- 085. A cached point is a place or an honest "could not place it", never
+  -- half of one: a pin with a latitude and no longitude lands on the equator.
+  || (',' || json_array('m085_inv_geocode_half', (SELECT COUNT(*) FROM geocodes
+    WHERE (precision = 'none') <> (lat IS NULL OR lng IS NULL)
+       OR (lat IS NULL) <> (lng IS NULL))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

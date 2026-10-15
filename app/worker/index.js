@@ -41,6 +41,8 @@ import { INSPECT_PRESETS, isInspectSource, readInspection,
 // cannot put it in the database.
 import { normalizeState, stateName } from "../shared/states.js";
 import { pickPlace } from "../shared/geopick.js";
+import { jobsMapFor, buildingsMapFor, addressLine, addressKey, jobAddress, censusPoint, retryDue,
+  GEOCODE_BATCH, GEOCODE_CONCURRENCY } from "../shared/mapgeo.js";
 // Money, and whether a chain of waivers is clear. Shared with the browser
 // so a figure on screen and a figure written here cannot disagree.
 import { releaseAmounts, milestonesCover } from "../shared/money.js";
@@ -4972,6 +4974,185 @@ app.get("/api/weather", async (c) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// 085. WHERE THINGS ARE, FOR THE MAPS. app/shared/mapgeo.js holds the rules.
+//
+// A general contractor gets the Jobs map and a property manager, a portfolio
+// manager and a building owner get the Properties map. Each is a map of the
+// caller's OWN rows and nothing else: this route reads exactly the jobs and
+// buildings the list routes would hand the same seat -- the property scope,
+// the job scope, a building owned and run by somebody else for an unscoped
+// seat -- and answers only with a point per id. Names, tenants and crews are
+// joined in the browser from lists it already holds, so the route never
+// carries anything the screen does not already have.
+//
+// GEOCODED HERE, NEVER IN THE BROWSER. One cached answer per address instead
+// of one per viewer, and the address leaves from our origin rather than from
+// every iPad that opens the map. What leaves is the address line alone -- no
+// building name, no tenant, no account -- to the US Census Bureau's public
+// geocoder (no key), and a ZIP or a town to Open-Meteo when the street will
+// not match, which is the lookup the weather card already makes.
+// ---------------------------------------------------------------------------
+const CENSUS_GEOCODER = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress";
+const OPEN_METEO_GEOCODER = "https://geocoding-api.open-meteo.com/v1/search";
+
+async function geocodeAddress({ line, city, state, zip }) {
+  try {
+    const r = await fetch(`${CENSUS_GEOCODER}?benchmark=Public_AR_Current&format=json`
+      + `&address=${encodeURIComponent(line)}`, { signal: AbortSignal.timeout(8000) });
+    if (r.ok) {
+      const p = censusPoint(await r.json(), state);
+      if (p) return { ...p, source: "census" };
+    }
+  } catch { /* the fallback below is the answer to a geocoder that is down */ }
+  const om = (name) => fetch(`${OPEN_METEO_GEOCODER}?count=20&language=en&format=json&countryCode=US`
+    + `&name=${encodeURIComponent(name)}`, { signal: AbortSignal.timeout(8000) })
+    .then((r) => r.json()).catch(() => null);
+  // A ZIP is close enough to put a pin near the work, and the map draws it
+  // hollow and says so. A town is coarser still, and only with a state to
+  // hold it to: "Springfield" with no state is a pin in the wrong one.
+  if (/^\d{5}$/.test(zip)) {
+    const p = pickPlace((await om(zip))?.results, { state, zip });
+    if (p) return { lat: p.latitude, lng: p.longitude, precision: "zip", source: "open-meteo" };
+  }
+  if (city && state) {
+    const p = pickPlace((await om(city))?.results, { city, state, zip });
+    if (p) return { lat: p.latitude, lng: p.longitude, precision: "city", source: "open-meteo" };
+  }
+  return null;
+}
+
+const inMarks = (n) => Array.from({ length: n }, () => "?").join(",");
+
+async function cachedPoints(env, keys) {
+  const out = new Map();
+  for (let i = 0; i < keys.length; i += 90) {
+    const part = keys.slice(i, i + 90);
+    const { results } = await env.DB.prepare(
+      `SELECT address_key, lat, lng, precision, checked_at FROM geocodes WHERE address_key IN (${inMarks(part.length)})`
+    ).bind(...part).all();
+    for (const r of results || []) out.set(r.address_key, r);
+  }
+  return out;
+}
+
+app.get("/api/map/points", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const { accountId } = auth;
+  const of = c.req.query("of") === "buildings" ? "buildings" : "jobs";
+  const kind = (await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first())?.kind;
+  // The kind decides which map, on the server as well as on the screen: a
+  // screen that hides the tab is a suggestion, and this route answers anybody
+  // holding a token.
+  if (of === "jobs" ? !jobsMapFor(kind) : !buildingsMapFor(kind)) {
+    return c.json({ error: "no_map_for_this_account" }, 403);
+  }
+
+  // id -> { line, city, state, zip }
+  const where = new Map();
+  if (of === "jobs") {
+    const scope = scopeClause(auth, "j.property_id");
+    const jscope = jobScopeClause(auth, "j.id");
+    // CURRENT jobs: active, not taken back, not turned down. A finished job
+    // is history, and a map of everywhere you have ever worked is a map of
+    // nothing in particular.
+    const { results: rows } = await c.env.DB.prepare(
+      `SELECT j.id, j.address, j.area, j.zip, j.property_id FROM jobs j
+        WHERE j.account_id = ? AND j.status = 'active'
+          AND j.withdrawn_at IS NULL AND j.declined_at IS NULL
+          ${scope.sql} ${jscope.sql}
+        ORDER BY COALESCE(j.date, j.created_at) DESC LIMIT 500`
+    ).bind(accountId, ...scope.vals, ...jscope.vals).all();
+    const propIds = [...new Set((rows || []).map((r) => r.property_id).filter(Boolean))];
+    const props = new Map();
+    for (let i = 0; i < propIds.length; i += 90) {
+      const part = propIds.slice(i, i + 90);
+      const { results } = await c.env.DB.prepare(
+        `SELECT id, address, city, state, zip FROM properties WHERE account_id = ? AND id IN (${inMarks(part.length)})`
+      ).bind(accountId, ...part).all();
+      for (const p of results || []) props.set(p.id, p);
+    }
+    for (const r of rows || []) where.set(r.id, jobAddress(r, props.get(r.property_id)));
+  } else {
+    const scope = scopeClause(auth, "id");
+    const { results: rows } = await c.env.DB.prepare(
+      `SELECT id, address, city, state, zip FROM properties WHERE account_id = ? ${scope.sql} ORDER BY name LIMIT 1000`
+    ).bind(accountId, ...scope.vals).all();
+    let owned = [];
+    // A building this account owns and has appointed somebody else to run is
+    // on its Properties list, so it is on its map -- for an unscoped seat, the
+    // same line the list draws. A database without 039 has none.
+    if (!auth.propertyIds) {
+      try {
+        owned = (await c.env.DB.prepare(
+          `SELECT id, address, city, state, zip FROM properties
+            WHERE owner_account_id = ? AND account_id != ? LIMIT 1000`
+        ).bind(accountId, accountId).all()).results || [];
+      } catch (err) { if (!missingSchema(err)) throw err; }
+    }
+    for (const p of [...(rows || []), ...owned]) {
+      where.set(p.id, { line: addressLine(p), city: String(p.city || "").trim(),
+        state: String(p.state || "").trim(), zip: String(p.zip || "").trim().slice(0, 5) });
+    }
+  }
+
+  const noAddress = [];
+  const keyOf = new Map();
+  for (const [id, w] of where) {
+    if (!w.line) { noAddress.push(id); continue; }
+    keyOf.set(id, addressKey(w.line));
+  }
+  const keys = [...new Set(keyOf.values())];
+  const cache = await cachedPoints(c.env, keys);
+
+  // What still needs asking about: never looked up, or a failure old enough
+  // to try again. One call does a batch; the rest come back pending and the
+  // map asks again, so a large portfolio fills in rather than timing out.
+  const due = keys.filter((k) => !cache.has(k) || (cache.get(k).precision === "none" && retryDue(cache.get(k).checked_at)));
+  const batch = due.slice(0, GEOCODE_BATCH);
+  if (batch.length) {
+    // Per account, because every lookup is a request to somebody else's
+    // service on this account's behalf, and the one thing a limit must stop
+    // is a loop.
+    const limit = await rateLimit(c.env, "map-geocode", accountId, { limit: 400, windowMinutes: 60 });
+    if (limit.ok) {
+      const sample = new Map();
+      for (const [id, k] of keyOf) if (batch.includes(k) && !sample.has(k)) sample.set(k, where.get(id));
+      const todo = [...sample.entries()];
+      let next = 0;
+      const work = async () => {
+        while (next < todo.length) {
+          const [k, w] = todo[next++];
+          let pt = null;
+          try { pt = await geocodeAddress(w); } catch { pt = null; }
+          const row = pt
+            ? { address_key: k, lat: pt.lat, lng: pt.lng, precision: pt.precision, source: pt.source }
+            : { address_key: k, lat: null, lng: null, precision: "none", source: null };
+          await c.env.DB.prepare(
+            `INSERT INTO geocodes (address_key, lat, lng, precision, source, checked_at)
+             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT (address_key) DO UPDATE SET lat = excluded.lat, lng = excluded.lng,
+               precision = excluded.precision, source = excluded.source, checked_at = excluded.checked_at`
+          ).bind(row.address_key, row.lat, row.lng, row.precision, row.source).run();
+          cache.set(k, { ...row, checked_at: new Date().toISOString() });
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(GEOCODE_CONCURRENCY, todo.length) }, work));
+    }
+  }
+
+  // Each id: a point, null (looked up and could not be placed), or pending.
+  const points = {};
+  const pending = [];
+  for (const [id, k] of keyOf) {
+    const hit = cache.get(k);
+    const stillDue = !hit || (hit.precision === "none" && retryDue(hit.checked_at));
+    if (stillDue) { pending.push(id); continue; }
+    points[id] = hit.precision === "none" ? null : { lat: hit.lat, lng: hit.lng, precision: hit.precision };
+  }
+  return c.json({ of, points, pending, noAddress });
+});
+
 app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const q = c.req.query();
@@ -9195,6 +9376,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
   if (/\boccupied_units\b|\baccount_setup_fees\b/i.test(m)) return "084_unit_pricing";
   if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";

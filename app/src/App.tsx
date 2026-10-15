@@ -36,6 +36,8 @@ import {
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
   Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet,
+  // Aliased: Map is the JavaScript built-in, which this file uses constantly.
+  Map as MapIcon,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -63,6 +65,7 @@ import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
 import { feeTermsText, DEFAULT_FEE_TERMS } from "../shared/fee.js";
 import { unitPriced, unitTermsText, formatUsd as unitUsd, UNIT_THRESHOLD } from "../shared/unitpricing.js";
+import { jobsMapFor, buildingsMapFor, groupPins, pinBounds, PRECISION as MAP_PRECISION } from "../shared/mapgeo.js";
 import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS, SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
@@ -2402,7 +2405,7 @@ export default function SubSub() {
   // localStorage throws in a private window, on both read and write, so both
   // are guarded and it simply opens on the list.
   const [jobView, setJobView] = useState(() => {
-    try { const v = localStorage.getItem("subsub.jobs.view"); return v === "calendar" || v === "timeline" ? v : "list"; }
+    try { const v = localStorage.getItem("subsub.jobs.view"); return v === "calendar" || v === "timeline" || v === "map" ? v : "list"; }
     catch { return "list"; }
   });
   const pickJobView = (v) => {
@@ -2644,6 +2647,11 @@ export default function SubSub() {
   // fallback — otherwise every subdomain would show the same generic/demo
   // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
+  // 085. A saved Map view on an account that has no jobs map (a different
+  // seat on this browser, or an account that changed kind) opens on the list.
+  useEffect(() => {
+    if (jobView === "map" && account && !jobsMapFor(kindOf(account))) setJobView("list");
+  }, [jobView, account]);
   // Signed out on a hostname that belongs to nobody — app.subsub.work, a
   // preview URL, localhost — is SubSub's own front door, so it wears SubSub's
   // branding. Falling through to `account` here meant whichever account
@@ -6890,7 +6898,9 @@ export default function SubSub() {
           transfers={transfers} viewingAccountId={account.id} accountKind={kindOf(account)}
           onAskTransfer={askTransfer} onDecideTransfer={decideTransfer}
           onCancelTransfer={cancelTransfer} onAppointManager={appointManager}
-          onDeclareOwnership={declareOwnership} />
+          onDeclareOwnership={declareOwnership}
+          mapAllowed={buildingsMapFor(kindOf(account)) && (role === "admin" || role === "pm")}
+          onOpenJob={openJob} />
       )}
 
       {tab === "calendar" && can("calendar") && (
@@ -6984,7 +6994,11 @@ export default function SubSub() {
                     could not. */}
                 <div className="seg-tabs sm jv-seg">
                   {[["list", "List", ClipboardList], ["calendar", "Calendar", Calendar],
-                    ["timeline", "Timeline", ChartGantt]].map(([id, l, Icon]) => (
+                    ["timeline", "Timeline", ChartGantt],
+                    // 085. A general contractor works job to job, so where
+                    // the work is is a question about jobs; an account with
+                    // buildings has its map on Properties instead.
+                    ...(jobsMapFor(kindOf(account)) ? [["map", "Map", MapIcon]] : [])].map(([id, l, Icon]) => (
                     <button key={id} className={jobView === id ? "on" : ""} onClick={() => pickJobView(id)}
                       aria-pressed={jobView === id}>
                       <Icon size={13} /> {l}
@@ -7045,7 +7059,11 @@ export default function SubSub() {
                   it has a key of its own for done and not done, and hiding
                   last month's finished work would make it lie about the
                   month it is showing. */}
-              {jobView === "timeline" ? (
+              {jobView === "map" && jobsMapFor(kindOf(account)) ? (
+                <JobsMap jobs={jobs.filter((j) => !jobProperty || j.propertyId === jobProperty)}
+                  subs={subs} visits={visits} now={now} today={todayKey}
+                  onOpenJob={openJob} propName={propName} />
+              ) : jobView === "timeline" ? (
                 <JobsTimeline subs={subs}
                   jobs={jobs.filter((j) => !jobProperty || j.propertyId === jobProperty)}
                   onOpenJob={openJob} />
@@ -7076,22 +7094,9 @@ export default function SubSub() {
                 // never a second opinion about the job.
                 if (!jobCards && !openJobs.has(j.id)) {
                   const slots = j.trades.map((t) => j.assignments[t]);
-                  const unfilled = j.trades.length - filled;
-                  const noReply = slots.some((a) => a && a.status === "pending" && isExpired(a, now));
-                  const waiting = slots.some((a) => a && a.status === "pending" && !isExpired(a, now));
-                  // ASSIGNED, NO TIME: a crew has taken it and nobody is
-                  // booked to go. Its own colour, never the scheduled one.
-                  const lv = newestLiveVisit(visits, j.id);
-                  const noTime = slots.some((a) => a && (a.status === "accepted" || a.auto))
-                    && (!lv || (lv.status === "proposed" && visitPassed(lv)));
-                  const flag = done || j.readOnly ? null
-                    : jobHold(j, todayKey).held ? null
-                    : noReply ? { tone: "bad", text: "No reply" }
-                    : unfilled > 0 ? { tone: "warn", text: `${unfilled} unassigned` }
-                    : waiting ? { tone: "wait", text: "Waiting on a reply" }
-                    : noTime ? { tone: "arrange", text: "Time to be arranged" }
-                    : lv?.status === "proposed" ? { tone: "wait", text: "Time proposed" }
-                    : null;
+                  // One rule for what a job needs, read by this line and by
+                  // the Jobs map's pins, so the two cannot disagree.
+                  const flag = jobLineFlag(j, { now, today: todayKey, visits });
                   return (
                     <div key={j.id} data-job-id={j.id}
                       className={`job-card job-line ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""} ${j.readOnly ? "not-mine" : ""}`}>
@@ -7803,7 +7808,7 @@ export default function SubSub() {
           <PageHead title="Tenants"
             sub="Everybody who lives in your buildings, whether they have signed in, and what is waiting on them." />
           <TenantsPane properties={accountProperties} accountKind={kindOf(account)}
-            jobs={jobs} visits={visits} onOpenJob={openJob}
+            jobs={jobs} visits={visits} onOpenJob={openJob} subs={subs}
             focusProperty={tenantProperty} onFocusUsed={() => setTenantProperty("")} />
         </main>
       )}
@@ -13200,8 +13205,11 @@ function tenantWork(userId, jobs, latestVisit, today) {
 }
 
 function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJob = null,
-  focusProperty = "", onFocusUsed = null }) {
+  focusProperty = "", onFocusUsed = null, subs = [] }) {
   const [rows, setRows] = useState(null);
+  // 085. The same buildings on a map, its cards leading with who lives there.
+  const [tnView, setTnView] = useState("list");
+  const mapAllowed = buildingsMapFor(accountKind);
   const [err, setErr] = useState("");
   const [adding, setAdding] = useState(false);
   const [opened, setOpened] = useState(null);
@@ -13340,6 +13348,14 @@ function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJo
       <div className="jobs-head">
         <h3>{(rows || []).length} tenant{(rows || []).length === 1 ? "" : "s"}</h3>
         <div className="tn-head-actions">
+          {mapAllowed && (rows || []).length > 0 && (
+            <div className="seg-tabs sm tn-view" role="group" aria-label="Show tenants as">
+              {[["list", "List", Rows3], ["map", "Map", MapIcon]].map(([id, l, Icon]) => (
+                <button key={id} className={tnView === id ? "on" : ""} aria-pressed={tnView === id}
+                  onClick={() => setTnView(id)}><Icon size={13} /> {l}</button>
+              ))}
+            </div>
+          )}
           <button className="btn-ghost" onClick={() => setImporting(true)}>
             <ClipboardList size={14} /> Import a spreadsheet
           </button>
@@ -13440,7 +13456,13 @@ function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJo
         </div>
       )}
 
-      {rows === null ? <p className="fine">Loading…</p> : rows.length === 0 ? (
+      {mapAllowed && tnView === "map" && (rows || []).length > 0 ? (
+        <BuildingsMap focus="tenants" tenants={rows} jobs={jobs} subs={subs}
+          properties={propsShown.filter((pr) => !fProp || pr.id === fProp)}
+          onOpenTenant={(t) => setOpened(t)}
+          onGoTenants={(pid) => { setFProp(pid); setTnView("list"); }}
+          onOpenJob={onOpenJob} />
+      ) : rows === null ? <p className="fine">Loading…</p> : rows.length === 0 ? (
         <div className="dash-empty"><Users size={24} />
           <p>No tenants yet. Add one, or import the list you already have.</p>
         </div>
@@ -17418,8 +17440,10 @@ function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInv
 function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, onGoTenants = null, newAt, canManage = true, asOwner = false, canPostNotices = false,
   owners = [], onAddOwner, onEditOwner, onResendInvite,
   transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager,
-  accountKind, onDeclareOwnership }) {
+  accountKind, onDeclareOwnership, mapAllowed = false, onOpenJob = null }) {
   const [form, setForm] = useState(null);   // null | {} | property
+  // 085. List or map. In memory: every visit starts as the list.
+  const [propView, setPropView] = useState("list");
   const [assigning, setAssigning] = useState(null);   // the property whose vendor list is open
   const [detail, setDetail] = useState(null);         // the property whose panel is open
   const [pq, setPq] = useState("");
@@ -17512,11 +17536,21 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
         {/* A building owner does not run the portfolio: the buildings are
             added, edited and removed by whoever manages them, and the server
             refuses all three from this seat anyway. */}
-        {canManage && (
-          <button className="add-btn small" onClick={() => setForm({})}>
-            <Plus size={14} /> New property
-          </button>
-        )}
+        <div className="prop-head-acts">
+          {mapAllowed && properties.length > 0 && (
+            <div className="seg-tabs sm prop-view" role="group" aria-label="Show properties as">
+              {[["list", "List", Rows3], ["map", "Map", MapIcon]].map(([id, l, Icon]) => (
+                <button key={id} className={propView === id ? "on" : ""} aria-pressed={propView === id}
+                  onClick={() => setPropView(id)}><Icon size={13} /> {l}</button>
+              ))}
+            </div>
+          )}
+          {canManage && (
+            <button className="add-btn small" onClick={() => setForm({})}>
+              <Plus size={14} /> New property
+            </button>
+          )}
+        </div>
       </div>
 
       {canManage && unscoped.length > 0 && properties.length > 0 && (
@@ -17563,6 +17597,15 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
               options: [...new Set(properties.map((p) => (p.city || "").trim()).filter(Boolean))]
                 .sort().map((c) => [c, c]) },
           ]} />
+        {/* The map takes the same filters as the list: narrowing to one city
+            and then looking at the map should show that city. */}
+        {mapAllowed && propView === "map" ? (
+          <BuildingsMap properties={shownProps} jobs={jobs} subs={subs}
+            onOpenProperty={(p) => setDetail(p)}
+            onGoTenants={onGoTenants ? (pid) => onGoTenants(properties.find((x) => x.id === pid)) : null}
+            onGoJobs={(pid) => onGoJobs(properties.find((x) => x.id === pid), "active")}
+            onOpenJob={onOpenJob} />
+        ) : (<>
         {shownProps.length === 0 && (
           <div className="dash-empty"><Building2 size={24} /><p>No properties match these filters.</p></div>
         )}
@@ -17642,6 +17685,7 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
             );
           })}
         </div>
+        </>)}
         </>
         );
       })()}
@@ -24776,6 +24820,373 @@ const startOfWeekKey = (k) => {
   return dayKey(d);
 };
 const shiftKey = (k, n) => { const d = dayFromKey(k); d.setDate(d.getDate() + n); return dayKey(d); };
+
+// ---------------------------------------------------------------------------
+// MAPS (085). Where the work is. A general contractor's Jobs map and a
+// managing agent's Properties map are one component: pins, a card per pin
+// that opens on hover with a mouse and on a tap on an iPad or a phone, and a
+// list of anything that could not be placed rather than a pin quietly
+// missing. The points come from GET /api/map/points, scoped exactly as the
+// lists are; everything the card says is joined here from rows this screen
+// already holds.
+//
+// The map library is loaded only when a map opens (src/lib/maplib.js), and
+// the tiles are OpenFreeMap's, which needs no key: what a tile request tells
+// them is the area being looked at, never a name or an address.
+// ---------------------------------------------------------------------------
+const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+
+// The points for one map, asked again while some are still being placed.
+// A large portfolio is geocoded a batch per call, so the map fills in over a
+// few seconds rather than one request running for a minute.
+function useMapPoints(of, key = "") {
+  const [state, setState] = useState({ points: {}, pending: [], noAddress: [], loading: true, error: "" });
+  useEffect(() => {
+    let live = true, tries = 0, timer = null;
+    const ask = async () => {
+      try {
+        const r = await api.mapPoints(of);
+        if (!live) return;
+        setState({ points: r.points || {}, pending: r.pending || [], noAddress: r.noAddress || [], loading: false, error: "" });
+        // Bounded: an address the geocoder never answers about must not keep
+        // a tab polling for ever. Ten more asks is a few hundred addresses.
+        if ((r.pending || []).length && tries++ < 10) timer = setTimeout(ask, 2500);
+      } catch (e) {
+        if (!live) return;
+        const migration = e?.body?.error === "migration_needed" ? (e.body.migration || "") : "";
+        setState((cur) => ({ ...cur, loading: false,
+          error: migration ? `Maps need ${migration}.sql to be run in the database first.`
+            : "Couldn't load where these are. Try again in a moment." }));
+      }
+    };
+    ask();
+    return () => { live = false; if (timer) clearTimeout(timer); };
+  }, [of, key]);
+  return state;
+}
+
+// One pin's card. On a phone it docks at the foot of the SCREEN instead of
+// floating beside the pin: a card that runs off the edge of a 390px screen
+// is a card nobody can read, and the foot of the map is often below the
+// fold, which the first version found by putting it there.
+function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText, ariaLabel }) {
+  const box = useRef(null);
+  const mapRef = useRef(null);
+  const markers = useRef([]);
+  const [lib, setLib] = useState(null);
+  const [failed, setFailed] = useState("");
+  const [hover, setHover] = useState(null);   // pin key under the pointer
+  const [picked, setPicked] = useState(null); // pin key tapped or clicked
+  const [, setTick] = useState(0);
+  const [narrow, setNarrow] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    import("./lib/maplib.js").then((m) => { if (live) setLib(m.default); })
+      .catch(() => { if (live) setFailed("load"); });
+    return () => { live = false; };
+  }, []);
+
+  // The map itself, once the library is here. A device that cannot draw it
+  // (no WebGL) gets the places as a list instead of an empty box.
+  useEffect(() => {
+    if (!lib || !box.current || mapRef.current) return;
+    let map;
+    try {
+      map = new lib.Map({
+        container: box.current, style: MAP_STYLE_URL, center: [-98.5, 39.8], zoom: 3,
+        attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false,
+      });
+    } catch {
+      setFailed("webgl");
+      return;
+    }
+    map.addControl(new lib.NavigationControl({ showCompass: false }), "top-right");
+    map.touchZoomRotate.disableRotation();
+    const redraw = () => setTick((n) => n + 1);
+    map.on("move", redraw);
+    map.on("resize", redraw);
+    map.on("click", () => setPicked(null));
+    mapRef.current = map;
+    const measure = () => setNarrow((box.current?.clientWidth || 0) < 560);
+    measure();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    ro?.observe(box.current);
+    return () => { ro?.disconnect(); map.remove(); mapRef.current = null; };
+  }, [lib]);
+
+  // The pins. Plain buttons with their label set as text, never as markup:
+  // a contractor's company name is somebody else's typing.
+  const pinsKey = pins.map((p) => `${p.key}:${p.items.length}:${pinTone(p)}:${pinLabel(p)}`).join("|");
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!lib || !map) return;
+    markers.current.forEach((m) => m.remove());
+    markers.current = pins.map((p) => {
+      const el = document.createElement("button");
+      el.type = "button";
+      el.className = `map-pin tone-${pinTone(p)}${p.exact ? "" : " approx"}`;
+      el.dataset.pin = p.key;
+      const dot = document.createElement("span");
+      dot.className = "map-pin-dot";
+      if (p.items.length > 1) dot.textContent = String(p.items.length);
+      const lab = document.createElement("span");
+      lab.className = "map-pin-label";
+      lab.textContent = pinLabel(p);
+      el.append(dot, lab);
+      el.setAttribute("aria-label", pinLabel(p));
+      el.addEventListener("mouseenter", () => setHover(p.key));
+      el.addEventListener("mouseleave", () => setHover((h) => (h === p.key ? null : h)));
+      el.addEventListener("click", (e) => { e.stopPropagation(); setPicked((k) => (k === p.key ? null : p.key)); });
+      return new lib.Marker({ element: el, anchor: "bottom" }).setLngLat([p.lng, p.lat]).addTo(map);
+    });
+    // Opens on the work, not on the country. One pin is a street, not a
+    // continent at zoom 18.
+    const b = pinBounds(pins);
+    if (b) map.fitBounds(b, { padding: 64, maxZoom: 14, duration: 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lib, pinsKey, failed]);
+
+  const openKey = picked || hover;
+  const open = pins.find((p) => p.key === openKey);
+  let at = null;
+  if (open && mapRef.current && !narrow) {
+    const pt = mapRef.current.project([open.lng, open.lat]);
+    const w = box.current?.clientWidth || 0;
+    at = { left: Math.max(8, Math.min(pt.x - 150, w - 308)), top: pt.y };
+  }
+
+  if (failed) {
+    return (
+      <div className="map-fallback" role="region" aria-label={ariaLabel}>
+        <p className="panel-note"><MapIcon size={14} />{" "}
+          {failed === "webgl" ? "This device can't draw the map, so here are the places as a list."
+            : "The map didn't load, so here are the places as a list."}</p>
+        {pins.length === 0 ? <p className="fine">{emptyText}</p> : pins.map((p) => (
+          <div key={p.key} className="map-fallback-row">{renderCard(p)}</div>
+        ))}
+      </div>
+    );
+  }
+  return (
+    <div className="map-wrap" role="region" aria-label={ariaLabel}>
+      <div className="map-box" ref={box} />
+      {!lib && <div className="map-loading">Loading the map…</div>}
+      {lib && pins.length === 0 && <div className="map-empty">{emptyText}</div>}
+      {open && (narrow || at) && (
+        <div className={`map-card ${narrow ? "docked" : ""} ${picked ? "pinned" : ""}`}
+          style={narrow ? undefined : { left: at.left, top: at.top }}
+          onMouseEnter={() => setHover(open.key)}
+          onMouseLeave={() => setHover((h) => (h === open.key ? null : h))}>
+          {picked && (
+            <button type="button" className="map-card-x" aria-label="Close" onClick={() => setPicked(null)}><X size={14} /></button>
+          )}
+          {renderCard(open)}
+          {!open.exact && <p className="map-approx-note">Approximate: {MAP_PRECISION[open.items.find((i) => MAP_PRECISION[i.precision] && !MAP_PRECISION[i.precision].exact)?.precision]?.label?.toLowerCase() || "placed nearby"}.</p>}
+        </div>
+      )}
+      {legend && <div className="map-legend">{legend}</div>}
+    </div>
+  );
+}
+
+// What could not be placed, said rather than left as pins quietly missing.
+function MapUnplaced({ pending, noAddress, failed, nameOf, onOpen }) {
+  if (!pending.length && !noAddress.length && !failed.length) return null;
+  const row = (id, why) => (
+    <li key={`${why}-${id}`}>
+      {onOpen ? <button type="button" className="link-btn" onClick={() => onOpen(id)}>{nameOf(id)}</button> : nameOf(id)}
+      <span className="fine"> — {why}</span>
+    </li>
+  );
+  return (
+    <div className="map-unplaced">
+      {pending.length > 0 && <p className="fine">Placing {pending.length} more on the map…</p>}
+      {(noAddress.length > 0 || failed.length > 0) && (
+        <>
+          <h4>Not on the map ({noAddress.length + failed.length})</h4>
+          <ul>
+            {noAddress.map((id) => row(id, "no address"))}
+            {failed.map((id) => row(id, "the address couldn't be found"))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+// A GENERAL CONTRACTOR'S JOBS MAP. Current work only -- a finished job is
+// history -- with the company on each job on the pin, so "who is where
+// today" is the first thing it answers. The pin's colour is the job line's
+// own flag, through jobLineFlag, so the map and the list never disagree.
+function JobsMap({ jobs, subs = [], visits = [], now, today, onOpenJob, propName = () => "" }) {
+  const pts = useMapPoints("jobs", String(jobs.length));
+  const current = jobs.filter((j) => !jobIsClosed(j) && !j.readOnly);
+  const byId = Object.fromEntries(current.map((j) => [j.id, j]));
+  const who = (j) => [...new Set(j.trades.map((t) => j.assignments[t]).filter(Boolean)
+    .map((a) => a.company || subs.find((s) => s.id === a.subId)?.company).filter(Boolean))];
+  const rank = { bad: 4, warn: 3, wait: 2, arrange: 1 };
+  const items = current.filter((j) => pts.points[j.id])
+    .map((j) => ({ ...pts.points[j.id], id: j.id, job: j, flag: jobLineFlag(j, { now, today, visits }) }));
+  const pins = groupPins(items);
+  const toneOf = (p) => {
+    const worst = p.items.reduce((m, it) => Math.max(m, rank[it.flag?.tone] || 0), 0);
+    return worst >= 3 ? "bad" : worst >= 1 ? "wait" : "ok";
+  };
+  const labelOf = (p) => {
+    if (p.items.length > 1) return `${p.items.length} jobs`;
+    const names = who(p.items[0].job);
+    return names.length ? names[0] + (names.length > 1 ? ` + ${names.length - 1}` : "") : "Nobody assigned";
+  };
+  const card = (p) => (
+    <div className="map-card-body">
+      {p.items.map(({ job: j, flag }) => {
+        const lv = newestLiveVisit(visits, j.id);
+        return (
+          <div key={j.id} className="mc-item">
+            <button type="button" className="mc-title" onClick={() => onOpenJob(j.id)}>{j.title}</button>
+            <p className="mc-line"><MapPin size={11} /> {[j.address, j.area].filter(Boolean).join(", ") || propName(j.propertyId) || "No address"}</p>
+            <p className="mc-line"><Calendar size={11} /> {lv ? visitWhen(lv) + (lv.status === "proposed" ? " · not confirmed yet" : "")
+              : formatWhen(j.date, j.time) || "No date yet"}</p>
+            <ul className="mc-trades">
+              {j.trades.map((t) => {
+                const a = j.assignments[t];
+                const name = a ? (a.company || subs.find((s) => s.id === a.subId)?.company || "A contractor") : null;
+                return (
+                  <li key={t}><b>{catMeta(t).label}</b>{" "}
+                    {name ? <>{name} <span className={`mc-st st-${a.status}`}>{a.status === "accepted" || a.auto ? "on it" : a.status === "pending" ? (isExpired(a, now) ? "no reply" : "asked") : a.status}</span></>
+                      : <span className="mc-st st-open">nobody yet</span>}
+                  </li>
+                );
+              })}
+            </ul>
+            {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+  const failedIds = current.filter((j) => j.id in pts.points && pts.points[j.id] === null).map((j) => j.id);
+  return (
+    <div className="jobs-map">
+      {pts.error && <p className="billing-err" role="alert">{pts.error}</p>}
+      <PinMap pins={pins} renderCard={card} pinLabel={labelOf} pinTone={toneOf}
+        ariaLabel="Map of current jobs"
+        emptyText={pts.loading ? "Finding your jobs…" : current.length ? "None of your current jobs could be placed yet." : "No current jobs to show."}
+        legend={<>
+          <span><i className="map-key tone-ok" /> On track</span>
+          <span><i className="map-key tone-wait" /> Waiting on a reply or a time</span>
+          <span><i className="map-key tone-bad" /> Needs a contractor</span>
+          <span><i className="map-key approx" /> Approximate</span>
+        </>} />
+      <MapUnplaced pending={pts.pending.filter((id) => byId[id])} noAddress={pts.noAddress.filter((id) => byId[id])}
+        failed={failedIds} nameOf={(id) => byId[id]?.title || "A job"} onOpen={onOpenJob} />
+    </div>
+  );
+}
+
+// THE PORTFOLIO MAP, for a property manager, a portfolio manager and a
+// building owner. A pin per building, its card saying how full it is, who
+// lives there and what is open there. Two doors -- Properties and Tenants --
+// and one component, with `focus` deciding which the card leads with.
+function BuildingsMap({ properties, jobs = [], subs = [], tenants = null, focus = "buildings",
+  onOpenProperty = null, onGoTenants = null, onGoJobs = null, onOpenTenant = null, onOpenJob = null }) {
+  const pts = useMapPoints("buildings", String(properties.length));
+  const [fetched, setFetched] = useState(null);
+  useEffect(() => {
+    if (tenants) return;
+    let live = true;
+    api.listTenants().then((r) => { if (live) setFetched(Array.isArray(r) ? r : []); })
+      .catch(() => { if (live) setFetched([]); });
+    return () => { live = false; };
+  }, [tenants]);
+  const tenantRows = tenants || fetched || [];
+  const byId = Object.fromEntries(properties.map((p) => [p.id, p]));
+  const openAt = (pid) => jobs.filter((j) => j.propertyId === pid && !jobIsClosed(j));
+  const items = properties.filter((p) => pts.points[p.id]).map((p) => ({ ...pts.points[p.id], id: p.id, property: p }));
+  const pins = groupPins(items);
+  const toneOf = (p) => p.items.some((it) => openAt(it.id).length) ? "wait" : "ok";
+  const labelOf = (p) => p.items.length > 1 ? `${p.items.length} buildings` : p.items[0].property.name;
+  const card = (pin) => (
+    <div className="map-card-body">
+      {pin.items.map(({ property: p }) => {
+        const here = tenantRows.filter((t) => t.propertyId === p.id);
+        const open = openAt(p.id);
+        const units = Number(p.units) || 0;
+        const occ = p.occupiedUnits;
+        const tenantList = (
+          <div className="mc-block">
+            <p className="mc-line"><Users size={11} /> {here.length} tenant{here.length === 1 ? "" : "s"}</p>
+            {here.length > 0 && (
+              <ul className="mc-tenants">
+                {here.slice(0, 4).map((t) => (
+                  <li key={t.userId}>{onOpenTenant
+                    ? <button type="button" className="link-btn" onClick={() => onOpenTenant(t)}>{t.name || "A tenant"}</button>
+                    : (t.name || "A tenant")}{t.unit ? <span className="fine"> · unit {t.unit}</span> : null}</li>
+                ))}
+                {here.length > 4 && <li className="fine">and {here.length - 4} more</li>}
+              </ul>
+            )}
+          </div>
+        );
+        const jobList = (
+          <div className="mc-block">
+            <p className="mc-line"><ClipboardList size={11} /> {open.length} open job{open.length === 1 ? "" : "s"}</p>
+            {open.length > 0 && (
+              <ul className="mc-jobs">
+                {open.slice(0, 3).map((j) => {
+                  const names = [...new Set(j.trades.map((t) => j.assignments[t]).filter(Boolean)
+                    .map((a) => a.company || subs.find((s) => s.id === a.subId)?.company).filter(Boolean))];
+                  return (
+                    <li key={j.id}>{onOpenJob
+                      ? <button type="button" className="link-btn" onClick={() => onOpenJob(j.id)}>{j.title}</button>
+                      : j.title}<span className="fine"> · {names.length ? names.join(", ") : "nobody assigned yet"}</span></li>
+                  );
+                })}
+                {open.length > 3 && <li className="fine">and {open.length - 3} more</li>}
+              </ul>
+            )}
+          </div>
+        );
+        return (
+          <div key={p.id} className="mc-item">
+            {onOpenProperty
+              ? <button type="button" className="mc-title" onClick={() => onOpenProperty(p)}>{p.name}</button>
+              : <p className="mc-title">{p.name}</p>}
+            <p className="mc-line"><MapPin size={11} /> {[p.address, p.city, [p.state, p.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}</p>
+            {units > 0 && (
+              <p className="mc-line"><Building2 size={11} /> {units} unit{units === 1 ? "" : "s"}
+                {occ != null ? ` · ${occ} occupied` : ""}</p>
+            )}
+            {p.ownedNotOperated && p.managedBy && <p className="mc-line fine">Run by {p.managedBy}</p>}
+            {focus === "tenants" ? <>{tenantList}{jobList}</> : <>{jobList}{tenantList}</>}
+            <div className="mc-acts">
+              {onGoTenants && !p.ownedNotOperated && <button type="button" className="btn-ghost" onClick={() => onGoTenants(p.id)}>Tenants</button>}
+              {onGoJobs && open.length > 0 && <button type="button" className="btn-ghost" onClick={() => onGoJobs(p.id)}>Jobs</button>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+  const failedIds = properties.filter((p) => p.id in pts.points && pts.points[p.id] === null).map((p) => p.id);
+  return (
+    <div className="buildings-map">
+      {pts.error && <p className="billing-err" role="alert">{pts.error}</p>}
+      <PinMap pins={pins} renderCard={card} pinLabel={labelOf} pinTone={toneOf}
+        ariaLabel={focus === "tenants" ? "Map of your tenants' buildings" : "Map of your buildings"}
+        emptyText={pts.loading ? "Finding your buildings…" : properties.length ? "None of your buildings could be placed yet." : "No buildings yet."}
+        legend={<>
+          <span><i className="map-key tone-wait" /> Open work</span>
+          <span><i className="map-key tone-ok" /> Nothing open</span>
+          <span><i className="map-key approx" /> Approximate</span>
+        </>} />
+      <MapUnplaced pending={pts.pending.filter((id) => byId[id])} noAddress={pts.noAddress.filter((id) => byId[id])}
+        failed={failedIds} nameOf={(id) => byId[id]?.name || "A building"}
+        onOpen={onOpenProperty ? (id) => onOpenProperty(byId[id]) : null} />
+    </div>
+  );
+}
 
 function JobsTimeline({ jobs, subs = [], onOpenJob }) {
   const todayK = dayKey();
@@ -32659,6 +33070,29 @@ function crewAction(m, now) {
 
 // The newest window on a job that is still in play (proposed or confirmed), or
 // null. Same rule the Waiting on you list reads.
+// WHAT A JOB NEEDS, IN ONE LINE. The minimized job line and the Jobs map's
+// pins both say it, so it is one function: a pin coloured by a second opinion
+// would disagree with the line under it about the same job.
+function jobLineFlag(j, { now, today, visits = [] }) {
+  if (jobIsClosed(j) || j.readOnly) return null;
+  if (jobHold(j, today).held) return null;
+  const slots = j.trades.map((t) => j.assignments[t]);
+  const unfilled = slots.filter((a) => !a).length;
+  const noReply = slots.some((a) => a && a.status === "pending" && isExpired(a, now));
+  const waiting = slots.some((a) => a && a.status === "pending" && !isExpired(a, now));
+  // ASSIGNED, NO TIME: a crew has taken it and nobody is booked to go. Its
+  // own colour, never the scheduled one.
+  const lv = newestLiveVisit(visits, j.id);
+  const noTime = slots.some((a) => a && (a.status === "accepted" || a.auto))
+    && (!lv || (lv.status === "proposed" && visitPassed(lv)));
+  return noReply ? { tone: "bad", text: "No reply" }
+    : unfilled > 0 ? { tone: "warn", text: `${unfilled} unassigned` }
+    : waiting ? { tone: "wait", text: "Waiting on a reply" }
+    : noTime ? { tone: "arrange", text: "Time to be arranged" }
+    : lv?.status === "proposed" ? { tone: "wait", text: "Time proposed" }
+    : null;
+}
+
 function newestLiveVisit(visits, jobId) {
   let best = null;
   for (const v of visits || []) {
@@ -43016,6 +43450,61 @@ strong.insp-name{background:none;border:0;padding:0}
 .jtl-key.t-wait{background:#f6e3b8;border:1px solid #e3c47c}
 .jtl-key.t-open{background:#fff;border:1.5px dashed var(--amber)}
 .jtl-key-dot{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--ink-soft)}
+/* 085. Maps. The box fills most of a tablet screen and never less than a
+   phone can use; the card floats beside its pin, or docks at the foot on a
+   narrow box, because a card off the edge of a phone cannot be read. */
+.map-wrap{position:relative;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#eef0ec}
+.map-box{width:100%;height:min(68dvh,640px);min-height:340px}
+.map-loading,.map-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:14px;color:var(--ink-soft);pointer-events:none}
+.map-empty{inset:auto 0 16px 0;height:auto}
+.map-pin{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;padding:0;cursor:pointer;
+  font:inherit;min-width:44px;min-height:44px;justify-content:flex-end}
+.map-pin-dot{display:flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;border-radius:11px;
+  background:var(--brand);color:#fff;font-size:11px;font-weight:800;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.map-pin-label{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:700;
+  color:var(--ink);background:rgba(255,253,248,.95);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+.map-pin.tone-wait .map-pin-dot{background:var(--amber)}
+.map-pin.tone-bad .map-pin-dot{background:var(--red)}
+.map-pin.approx .map-pin-dot{background:#fff;color:var(--ink);border:3px solid var(--brand)}
+.map-pin.approx.tone-wait .map-pin-dot{border-color:var(--amber)}
+.map-pin.approx.tone-bad .map-pin-dot{border-color:var(--red)}
+.map-card{position:absolute;z-index:3;width:300px;max-height:min(52dvh,420px);overflow:auto;background:var(--card);
+  border:1px solid var(--line);border-radius:12px;box-shadow:0 6px 24px rgba(26,43,35,.18);padding:12px 14px;
+  transform:translateY(calc(-100% - 52px))}
+.map-card.docked{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));top:auto;width:auto;
+  transform:none;max-height:50dvh;z-index:60}
+.map-card-x{position:absolute;top:6px;right:6px;border:0;background:none;cursor:pointer;color:var(--ink-soft);
+  width:32px;height:32px;display:flex;align-items:center;justify-content:center}
+.mc-item + .mc-item{border-top:1px solid var(--line);margin-top:10px;padding-top:10px}
+.mc-title{display:block;border:0;background:none;padding:0 28px 2px 0;font:inherit;font-size:14.5px;font-weight:800;
+  color:var(--ink);text-align:left;cursor:pointer;margin:0}
+button.mc-title:hover{text-decoration:underline}
+.mc-line{display:flex;gap:5px;align-items:center;font-size:12.5px;color:var(--ink-soft);margin:3px 0}
+.mc-trades,.mc-tenants,.mc-jobs{list-style:none;margin:4px 0 6px;padding:0;font-size:12.5px}
+.mc-trades li,.mc-tenants li,.mc-jobs li{margin:2px 0}
+.mc-block + .mc-block{margin-top:4px}
+.mc-st{font-size:11px;font-weight:700;padding:1px 6px;border-radius:9px;background:#e7f1eb;color:var(--brand-dk)}
+.mc-st.st-pending{background:#f8ecd2;color:#7a5410}
+.mc-st.st-open,.mc-st.st-declined{background:#f6dcd5;color:#8a2f1d}
+.mc-acts{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.mc-acts .btn-ghost{padding:6px 12px;font-size:12.5px;min-height:36px}
+.map-approx-note{font-size:11.5px;color:var(--ink-soft);margin:8px 0 0}
+.map-legend{display:flex;flex-wrap:wrap;gap:12px;padding:8px 12px;font-size:12px;color:var(--ink-soft);
+  background:var(--card);border-top:1px solid var(--line)}
+.map-legend span{display:inline-flex;align-items:center;gap:6px}
+.map-key{display:inline-block;width:11px;height:11px;border-radius:50%;background:var(--brand)}
+.map-key.tone-wait{background:var(--amber)}
+.map-key.tone-bad{background:var(--red)}
+.map-key.approx{background:#fff;border:2.5px solid var(--ink-soft)}
+.map-unplaced{margin-top:12px}
+.map-unplaced h4{font-size:13px;margin:8px 0 4px}
+.map-unplaced ul{margin:0;padding-left:18px;font-size:13px}
+.map-fallback{border:1px solid var(--line);border-radius:14px;padding:12px 14px;background:var(--card)}
+.map-fallback-row{border-top:1px solid var(--line);padding:10px 0}
+.prop-head-acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.prop-head-acts .seg-tabs{margin:0}
+.tn-head-actions .seg-tabs{margin:0}
 @media (max-width:700px){
   .jtl-head,.jtl-job{grid-template-columns:minmax(0,1fr)}
   .jtl-head .jtl-lbl{display:none}

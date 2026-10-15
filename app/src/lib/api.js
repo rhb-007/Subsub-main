@@ -582,6 +582,9 @@ export const api = {
   // Decoration for the dashboard greeting. Answers {} for anything that goes
   // wrong, including an account with no city on it, so callers never branch.
   weather: () => request("/weather"),
+  // 085. A point per job or building this seat can already list; names and
+  // crews are joined on the screen from what it holds.
+  mapPoints: (of) => request(`/map/points?of=${of === "buildings" ? "buildings" : "jobs"}`),
   myCompany: () => request("/my-company"),
   // 075. This seat's referral code, link, who it brought in and what that
   // earned; and sending the pre-written invite. Texts are only COUNTED here --

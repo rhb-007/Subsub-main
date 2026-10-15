@@ -17,6 +17,8 @@
     "test:feesmsui": "node --no-warnings scripts/fee-sms-ui-test.mjs",
     "test:unitpricing": "node --no-warnings scripts/unit-pricing-test.mjs",
     "test:unitpricingui": "node --no-warnings scripts/unit-pricing-ui-test.mjs",
+    "test:map": "node --no-warnings scripts/map-test.mjs",
+    "test:mapui": "node --no-warnings scripts/map-ui-test.mjs",
     "test:feeterms": "node --no-warnings scripts/fee-terms-test.mjs",
     "test:feetermsui": "node --no-warnings scripts/fee-terms-ui-test.mjs",
     "test:agreement": "node --no-warnings scripts/agreement-test.mjs",
@@ -281,6 +283,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
     "lucide-react": "^0.460.0",
+    "maplibre-gl": "6.11.2",
     "postal-mime": "3.0.1",
     "qrcode-generator": "^2.0.4",
     "react": "^18.3.1",

@@ -2525,3 +2525,14 @@ CREATE TABLE account_setup_fees (
   created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   charged_at   TEXT
 );
+
+-- 085. Where an address is, for the maps. A shared cache keyed by the address
+-- line, with no account column on purpose. See app/shared/mapgeo.js.
+CREATE TABLE geocodes (
+  address_key TEXT PRIMARY KEY,
+  lat         REAL,
+  lng         REAL,
+  precision   TEXT NOT NULL CHECK (precision IN ('address', 'zip', 'city', 'none')),
+  source      TEXT,
+  checked_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

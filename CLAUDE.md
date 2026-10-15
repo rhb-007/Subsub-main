@@ -13008,6 +13008,76 @@ refactor.
   and count every unit as occupied, the property form says the occupied count
   was not kept, and no setup fee is ever charged.
 
+- **A MAP OF WHERE THE WORK IS, AND ONLY OF THE CALLER'S OWN ROWS.** Asked
+  for as a general contractor's map of current jobs, with the sub on each one,
+  a tooltip on hover or a tap on an iPad or phone, and then *"maps of
+  properties / tenants"* for property managers, portfolio managers and owners.
+  Migration 085 (`geocodes`), `app/shared/mapgeo.js`, `GET /api/map/points`.
+
+  **Two maps, decided by the account kind on the server too.** A general
+  contractor gets **Jobs -> Map**, beside List, Calendar and Timeline, because
+  it works job to job and keeps no buildings. The three kinds with buildings
+  get **Properties -> Map** and **Tenants -> Map**. These are one component,
+  and `focus` decides whether a building's card leads with its tenants or its
+  open work. Asking for the other map answers `no_map_for_this_account`,
+  because a hidden tab is only a suggestion. Admin and pm only, the gate the
+  tenants route already uses.
+
+  **The route returns a point per id and nothing else.** It reads the same
+  rows the list routes give that seat:
+  - the property scope and the job scope;
+  - a building owned and run by somebody else, for an unscoped seat only;
+  - current jobs only: active, not taken back, not turned down.
+
+  Names, crews, tenants and open work are joined in the browser from lists it
+  already holds, so the map carries nothing the screen did not already have.
+
+  **The pin's color is `jobLineFlag`, the job line's own rule.** It was pulled
+  out of the line so the map and the list cannot disagree. The pin carries the
+  first company on the job. Two jobs at one address are **one pin with a
+  count**, because drawn as two only the top one could ever be pressed.
+
+  **Geocoded on the server, cached, and only the address leaves.** The Census
+  Bureau's public geocoder (no key) is asked about the address line alone, with
+  no job title, building name or account; the test reads the URLs actually
+  requested. If the street cannot be matched, the building's ZIP (or its town,
+  only with a state) goes to Open-Meteo, the lookup the weather card already
+  makes, and the pin is drawn **hollow and labeled approximate**. A Census match
+  in a **different state** is refused, the Ruston lesson again. The cache is
+  shared across accounts **on purpose and has no account column**: where an
+  address is, is a public fact, and the route only ever answers for the
+  caller's own ids, so sharing it shares nothing. A failure is cached as
+  `none`, so it is not asked about on every open, and retried after
+  `GEOCODE_RETRY_DAYS`. One call places `GEOCODE_BATCH` addresses and returns
+  the rest as pending; the map asks again, at most ten times, so a large
+  portfolio fills in rather than one request running for a minute.
+
+  **Nothing is quietly missing.** Under the map, *Not on the map* names every
+  row with no address or an address that could not be found, and *Placing N
+  more* covers the rows still pending.
+
+  **The card opens on hover and stays on a tap.** On a narrow box it docks to
+  the foot of the SCREEN, not the foot of the map. The first version docked it
+  to the map, and at 390px that was below the fold, which the suite caught by
+  measuring the card against the viewport. **A device that cannot draw WebGL
+  gets the places as a list**, not an empty box.
+
+  **The library is loaded only when a map opens.** MapLibre 6.11.2 is pinned
+  exactly, three weeks old when added. It is about 290 KB gzipped plus its
+  worker, and none of it is in the main bundle. Its worker had to be bundled
+  through `?worker&url` and handed to `setWorkerUrl`, because MapLibre finds it
+  by a variable name Vite cannot see (`src/lib/maplib.js`). **Tiles are
+  OpenFreeMap's**, with no key, fetched by the browser directly. That tells
+  them the area being looked at and nothing else; proxying them was refused as
+  a lot of Worker traffic to hide a bounding box.
+
+  `test:map` (48) and `test:mapui` (32). Nine server mutations and seven browser
+  ones fire, each on its own assertion. The suite answers the style request
+  itself, because OpenFreeMap is unreachable from the test container. **Not
+  verified here:** a live Census or OpenFreeMap answer. Both are their
+  documented shapes, and the first real map is the test. **Pasting 085 is
+  required**; until then the map names the file and nothing else changes.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
