@@ -269,7 +269,8 @@
     "test:claim": "node --no-warnings scripts/claim-test.mjs",
     "test:claimui": "node --no-warnings scripts/claim-ui-test.mjs",
     "test:woaccess": "node --no-warnings scripts/wo-access-ui-test.mjs",
-    "test:connectwhy": "node --no-warnings scripts/connect-why-ui-test.mjs"
+    "test:connectwhy": "node --no-warnings scripts/connect-why-ui-test.mjs",
+    "test:propdetaillinks": "node --no-warnings scripts/property-detail-links-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

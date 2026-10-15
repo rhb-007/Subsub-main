@@ -12534,6 +12534,39 @@ refactor.
   cover quote requests, hours sent for approval or milestones to verify.
   Not verified here: a live email to a real inbox.
 
+- **A BUILDING'S WINDOW LINKS TO ITS TENANTS, ITS JOBS AND ITS VENDORS.**
+  Reported with Properties → Ballard Apts open and "6 units", "2 open jobs" and
+  "0 vendors scoped" circled: *"need to add a link to tenants, jobs, and
+  vendors"*. In the window they were plain text. On the list row the same
+  figures were buttons, but they only looked like buttons on hover, which an
+  iPad never does.
+
+  **In the window each figure is a visible control**: brand ink, a pill
+  border, a chevron and a 38px target (`.pd-link`).
+  - **Units** opens Tenants narrowed to that building. Tenants takes
+    `focusProperty`, seeds its building filter from it, and draws *Showing
+    tenants at Ballard Apts* with Show all above the list. A list narrowed
+    inside folded filters does not say so otherwise.
+  - **Open jobs** opens Jobs narrowed to the building, through the same
+    `onGoJobs` the row uses. It shows active jobs, or all of them when only
+    finished ones are left.
+  - **Vendors** opens the roster narrowed to the building, or the vendor
+    picker when none are scoped yet.
+
+  **The narrowing is used once.** The app clears `tenantProperty` as Tenants
+  opens, so a later visit from the nav lands on everybody rather than on the
+  last building looked at.
+
+  **Three figures stay plain, each for a reason:**
+  - jobs on a building with no jobs at all, because a link onto an empty list
+    answers nothing;
+  - units on a building somebody else runs, because its tenants are that
+    account's;
+  - units for a seat without the Tenants screen.
+
+  `test:propdetaillinks` (18). Three mutations fire: the filter not seeded,
+  the narrowing never cleared, and the run-by-another gate dropped.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -2429,6 +2429,10 @@ export default function SubSub() {
   // because the property page is what sets it, on the way out.
   const [fProperty, setFProperty] = useState("");
   const [jobProperty, setJobProperty] = useState("");
+  // A building's tenants, asked for from that building's own window. Read once
+  // by the Tenants screen as it opens and then cleared, so the nav entry on a
+  // later visit lands on everybody rather than on the last building looked at.
+  const [tenantProperty, setTenantProperty] = useState("");
   // The Jobs filter bar: free text, a trade, and what the job needs.
   const [jobQ, setJobQ] = useState("");
   const [jobTrade, setJobTrade] = useState("");
@@ -6788,6 +6792,7 @@ export default function SubSub() {
           onAdd={addProperty} onPatch={patchProperty} onRemove={removeProperty}
           onGoVendors={(p) => { setFProperty(p.id); setTab("network"); }}
           onGoJobs={(p, phase) => { setJobProperty(p.id); setJobPhase(phase || "active"); setTab("jobs"); }}
+          onGoTenants={can("tenants") ? (p) => { setTenantProperty(p.id); setTab("tenants"); } : null}
           onOpenSub={(s) => { setSelected(s); setTab("contractors"); }}
           onNewJob={(p) => tryAddJob(null, p)} newAt={newPropertyAt}
           canManage={runsTheAccount(role, membership)} asOwner={role === "owner"}
@@ -7705,7 +7710,8 @@ export default function SubSub() {
           <PageHead title="Tenants"
             sub="Everybody who lives in your buildings, whether they have signed in, and what is waiting on them." />
           <TenantsPane properties={accountProperties} accountKind={kindOf(account)}
-            jobs={jobs} visits={visits} onOpenJob={openJob} />
+            jobs={jobs} visits={visits} onOpenJob={openJob}
+            focusProperty={tenantProperty} onFocusUsed={() => setTenantProperty("")} />
         </main>
       )}
 
@@ -13083,7 +13089,8 @@ function tenantWork(userId, jobs, latestVisit, today) {
     approvals: rows.filter((r) => r.stage === "Waiting on your approval").length };
 }
 
-function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJob = null }) {
+function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJob = null,
+  focusProperty = "", onFocusUsed = null }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState("");
   const [adding, setAdding] = useState(false);
@@ -13127,7 +13134,9 @@ function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJo
   // roster needs narrowing by the three things somebody actually works from:
   // which building, whether they are in yet, and -- for a portfolio spread
   // across more than one -- which state.
-  const [fProp, setFProp] = useState("");
+  // Arriving from a building's window starts narrowed to that building.
+  const [fProp, setFProp] = useState(focusProperty || "");
+  useEffect(() => { if (focusProperty) onFocusUsed?.(); }, []);
   const [fStatus, setFStatus] = useState("");
   const [fState, setFState] = useState("");
 
@@ -13249,6 +13258,17 @@ function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJo
           }
           onConfirm={async () => { await remove(removing); setRemoving(null); }}
           onCancel={() => setRemoving(null)} />
+      )}
+
+      {/* Said above the list rather than only inside the folded filters: a
+          list narrowed to one building that does not say so reads as the
+          account having six tenants when it has sixty. */}
+      {fProp && (
+        <div className="scoped-to tn-scoped">
+          <Building2 size={14} />
+          <span>Showing tenants at <strong>{(properties.find((x) => x.id === fProp) || {}).name || "this building"}</strong>.</span>
+          <button onClick={() => setFProp("")}><X size={13} /> Show all</button>
+        </div>
       )}
 
       {(rows || []).length > 0 && (
@@ -17235,7 +17255,7 @@ function PropertyOwners({ property, owners, onAddOwner, onEditOwner, onResendInv
   );
 }
 
-function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, newAt, canManage = true, asOwner = false, canPostNotices = false,
+function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOpenSub, onNewJob, onScopeVendor, onGoVendors, onGoJobs, onGoTenants = null, newAt, canManage = true, asOwner = false, canPostNotices = false,
   owners = [], onAddOwner, onEditOwner, onResendInvite,
   transfers = [], viewingAccountId, onAskTransfer, onDecideTransfer, onCancelTransfer, onAppointManager,
   accountKind, onDeclareOwnership }) {
@@ -17496,11 +17516,45 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                 )}
               </div>
 
+              {/* Each figure is the way into the list it counts, narrowed to
+                  this building, and drawn as a control rather than as text:
+                  an underline that only appears on hover is no signal at all
+                  on an iPad. Tenants only where this account runs the
+                  building -- they are its tenants nowhere else -- and only
+                  for a seat that has the Tenants screen. A building with no
+                  jobs at all keeps a plain figure, because a link onto an
+                  empty list answers nothing. */}
               <div className="pd-stats">
-                <span><strong>{p.units || "\u2014"}</strong> units</span>
-                <span><strong>{open}</strong> open job{open === 1 ? "" : "s"}</span>
-                {js.length - open > 0 && <span><strong>{js.length - open}</strong> finished</span>}
-                {runs && <span><strong>{vs.length}</strong> vendor{vs.length === 1 ? "" : "s"} scoped</span>}
+                {onGoTenants && !p.ownedNotOperated ? (
+                  <button className="pd-link" data-go="tenants"
+                    onClick={() => { setDetail(null); onGoTenants(p); }}>
+                    <strong>{p.units || "\u2014"}</strong> units<span className="stat-sub"> · tenants</span>
+                    <ChevronRight size={13} aria-hidden="true" />
+                  </button>
+                ) : (
+                  <span><strong>{p.units || "\u2014"}</strong> units</span>
+                )}
+                {js.length > 0 ? (
+                  <button className="pd-link" data-go="jobs"
+                    onClick={() => { setDetail(null); onGoJobs(p, open > 0 ? "active" : "all"); }}>
+                    <strong>{open}</strong> open job{open === 1 ? "" : "s"}
+                    {js.length - open > 0 && <span className="stat-sub"> · {js.length - open} finished</span>}
+                    <ChevronRight size={13} aria-hidden="true" />
+                  </button>
+                ) : (
+                  <span><strong>0</strong> open jobs</span>
+                )}
+                {runs && (
+                  <button className="pd-link" data-go="vendors"
+                    onClick={() => {
+                      setDetail(null);
+                      if (vs.length > 0) onGoVendors(p); else setAssigning(p);
+                    }}>
+                    <strong>{vs.length}</strong> vendor{vs.length === 1 ? "" : "s"} scoped
+                    {vs.length === 0 && <span className="stat-sub"> · choose</span>}
+                    <ChevronRight size={13} aria-hidden="true" />
+                  </button>
+                )}
               </div>
 
               {/* The vendor list is the account's roster and its compliance
@@ -43451,6 +43505,16 @@ iframe.dv-frame{display:block}
 .stat-link:hover strong,.stat-link:focus-visible strong{color:var(--brand)}
 .stat-link:focus-visible{outline:2px solid var(--brand);outline-offset:3px;text-decoration:none}
 .stat-sub{opacity:.75}
+/* The property window's figures. A control you can see is one -- brand ink
+   and a chevron -- with a thumb-sized target, unlike the tile's row of
+   figures, which is scanned rather than pressed. */
+.pd-link{background:var(--paper);border:1px solid var(--line);border-radius:999px;
+  padding:7px 10px 7px 12px;min-height:38px;font:inherit;font-size:12.5px;color:var(--brand);
+  cursor:pointer;display:inline-flex;align-items:center;gap:5px}
+.pd-link strong{color:var(--brand)}
+.pd-link:hover,.pd-link:focus-visible{border-color:var(--brand)}
+.pd-link:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.pd-stats{align-items:center}
 
 /* "You are looking at one building." A filtered list that does not say it is
    filtered is how somebody concludes they have three contractors. */
