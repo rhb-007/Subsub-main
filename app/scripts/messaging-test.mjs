@@ -498,6 +498,21 @@ console.log("\n-- one email per inbox, however many seats somebody reads from --
   const digests = sent.filter((m) => toOf(m).includes("juan@pacific.test"));
   ck("the digest also goes once to that inbox", digests.length === 1, JSON.stringify(sent.map(toOf)));
   ck("(the thread was there to be owed)", !!r?.thread?.id);
+
+  // Somebody testing both sides with one address: Pacific writes back, and
+  // the office's admin row carries Juan's address too. He wrote it; his
+  // inbox does not get it back.
+  db.exec(`UPDATE users SET email = 'Juan@Pacific.test' WHERE id = 'admin'`);
+  db.exec(`UPDATE message_reads SET read_at = NULL, notified_at = NULL`);
+  sent.length = 0;
+  await say(env, "pac", r.thread.id, "On my way");
+  ck("a message is never emailed to the address it was written from",
+    !sent.some((m) => toOf(m).includes("juan@pacific.test")), JSON.stringify(sent.map(toOf)));
+  db.exec(`UPDATE users SET email = 'admin@cascade.test' WHERE id = 'admin'`);
+  db.exec(`UPDATE message_reads SET read_at = NULL, notified_at = NULL`);
+  sent.length = 0;
+  await say(env, "pac", r.thread.id, "Running late");
+  ck("(while the office's own address still gets it)", sent.some((m) => toOf(m).includes("admin@cascade.test")), JSON.stringify(sent.map(toOf)));
 }
 
 console.log("\n-- 083: a reply through Resend's inbound webhook --");

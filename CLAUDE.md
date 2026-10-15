@@ -12815,7 +12815,13 @@ refactor.
   person's own account wins, because that is where they sign in and answer
   clients from. `test:messaging` gives one person both seats plus a second row
   carrying his address in different case. Dropping the dedupe sends three
-  emails; deduping by person alone sends two.
+  emails; deduping by person alone sends two. **And a message is never
+  emailed to the address it was written from**: the reported pair were
+  Richard's own message, sent to Richard, because one address was on both
+  sides of the test. The first version of that test passed with the rule
+  deleted, because the recipient had read the thread within two minutes and
+  was skipped for that reason instead. Clearing the read is what makes it
+  check the rule.
 
 - **THE MESSAGES WINDOW IS AS TALL AS THE SCREEN BELOW IT, ON EVERY DEVICE AND
   EITHER WAY UP.** Asked for as *"optimize the messaging window depending on

@@ -19552,7 +19552,14 @@ async function emailMessageNow(env, thread, message, nowMs = Date.now()) {
       if (!users.has(r.viewer.userId)) users.set(r.viewer.userId,
         await db.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(r.viewer.userId).first());
     }
-    const readers = onePerInbox(others, thread, (id) => realEmail(users.get(id)?.email)?.toLowerCase() || null);
+    // Nor to the address it was written from: a second user row sharing the
+    // author's inbox (somebody testing both sides with one address, or an
+    // office inbox shared by two logins) does not need their own words back.
+    const authorRow = message.authorUserId
+      ? await db.prepare(`SELECT email FROM users WHERE id = ?`).bind(message.authorUserId).first() : null;
+    const authorAddr = realEmail(authorRow?.email)?.toLowerCase() || null;
+    const readers = onePerInbox(others, thread, (id) => realEmail(users.get(id)?.email)?.toLowerCase() || null)
+      .filter((r) => !authorAddr || realEmail(users.get(r.viewer.userId)?.email)?.toLowerCase() !== authorAddr);
     const domain = replyDomainOf(env);
     const now = new Date(nowMs).toISOString();
     const author = message.authorName || "Somebody";
