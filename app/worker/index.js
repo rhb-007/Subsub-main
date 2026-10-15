@@ -16,7 +16,7 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
-  licenseExpiryEmail, actionReminderEmail } from "./mail.js";
+  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail } from "./mail.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
@@ -137,6 +137,8 @@ import {
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
 import { PREF_IDS, NEEDS_PHONE, validNotice, noticeLive, sortNotices } from "../shared/tenanthome.js";
+import { THREAD_KINDS, TEAM_ROLES, threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage,
+  owesEmail } from "../shared/messaging.js";
 import { systemHealth } from "./syshealth.js";
 import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
@@ -700,6 +702,16 @@ const OWNER_ALLOWED = [
   // photo), setting it on their own row, and reading it back. The read is
   // narrowed to their OWN picture in the handler -- a guest seat has no
   // business fetching everybody else's face on the account.
+  // 081. Their messages with the office: the inbox, one thread, saying
+  // something, a photo in it, correcting a typo, and who they may write to.
+  // Every route checks the thread names them; the upload is the checked kind.
+  [/^\/api\/threads$/, ["GET", "POST"]],
+  [/^\/api\/threads\/[^/]+$/, ["GET"]],
+  [/^\/api\/threads\/[^/]+\/messages$/, ["POST"]],
+  [/^\/api\/threads\/[^/]+\/photos\/[^/]+\/\d+$/, ["GET"]],
+  [/^\/api\/messages\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/message-contacts$/, ["GET"]],
+  [/^\/api\/uploads\/message-photo\/.+$/, ["PUT"]],
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
   [/^\/api\/me\/avatar$/, ["PATCH"]],
   [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
@@ -763,6 +775,16 @@ const TENANT_ALLOWED = [
   // photo), setting it on their own row, and reading it back. The read is
   // narrowed to their OWN picture in the handler -- a guest seat has no
   // business fetching everybody else's face on the account.
+  // 081. Their messages with the office: the inbox, one thread, saying
+  // something, a photo in it, correcting a typo, and who they may write to.
+  // Every route checks the thread names them; the upload is the checked kind.
+  [/^\/api\/threads$/, ["GET", "POST"]],
+  [/^\/api\/threads\/[^/]+$/, ["GET"]],
+  [/^\/api\/threads\/[^/]+\/messages$/, ["POST"]],
+  [/^\/api\/threads\/[^/]+\/photos\/[^/]+\/\d+$/, ["GET"]],
+  [/^\/api\/messages\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/message-contacts$/, ["GET"]],
+  [/^\/api\/uploads\/message-photo\/.+$/, ["PUT"]],
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
   [/^\/api\/me\/avatar$/, ["PATCH"]],
   [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
@@ -6776,6 +6798,472 @@ app.delete("/api/notices/:id", requireRole("admin", "pm"), async (c) => {
   return c.json({ ok: true });
 });
 
+// ---------------------------------------------------------------------------
+// 081. MESSAGES. Every rule about who is on which side is in
+// shared/messaging.js; what lives here is checking each relationship against
+// the database, because a thread is only as good as the relationship it hangs
+// off. There is deliberately no route that takes a name, an address or a trade
+// and finds somebody to write to: GET /api/message-contacts lists the caller's
+// OWN relationships, and POST /api/threads refuses anything outside them.
+// ---------------------------------------------------------------------------
+const MESSAGE_PHOTO_KIND = "message-photo";
+
+// The seat, plus the account's own company row for a team seat. A
+// subcontractor account's team answers its clients from home, the way client
+// work already does, so it needs to know which company it is.
+async function messageViewer(c) {
+  const auth = c.get("auth");
+  let ownCompanyId = null;
+  if (TEAM_ROLES.includes(auth.role)) {
+    try {
+      ownCompanyId = (await c.env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`)
+        .bind(auth.accountId).first())?.company_id || null;
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+  return { userId: auth.userId, accountId: auth.accountId, role: auth.role, companyId: auth.companyId || null,
+    ownCompanyId, propertyIds: auth.propertyIds || null, jobIds: auth.jobIds || null };
+}
+
+const threadRowToJs = (r) => ({
+  id: r.id, accountId: r.account_id, kind: r.kind,
+  partyUserId: r.party_user_id || null, partyCompanyId: r.party_company_id || null,
+  partyAccountId: r.party_account_id || null, jobId: r.job_id || null, propertyId: r.property_id || null,
+  createdAt: r.created_at, lastAt: r.last_at,
+  accountName: r.account_name || null, jobTitle: r.job_title || null, propertyName: r.property_name || null,
+  unit: r.party_unit || null,
+  partyName: r.party_company_name || r.party_account_name || r.party_user_name || null,
+});
+
+const THREAD_SELECT = `SELECT t.*, a.name AS account_name, j.title AS job_title, p.name AS property_name,
+    pu.name AS party_user_name, pc.company AS party_company_name, pa.name AS party_account_name,
+    (SELECT m.unit FROM memberships m WHERE m.user_id = t.party_user_id AND m.account_id = t.account_id
+      AND t.kind = 'tenant' LIMIT 1) AS party_unit
+  FROM message_threads t
+  JOIN accounts a ON a.id = t.account_id
+  LEFT JOIN jobs j ON j.id = t.job_id
+  LEFT JOIN properties p ON p.id = t.property_id
+  LEFT JOIN users pu ON pu.id = t.party_user_id
+  LEFT JOIN companies pc ON pc.id = t.party_company_id
+  LEFT JOIN accounts pa ON pa.id = t.party_account_id`;
+
+// Does the relationship this thread hangs off still hold? A tenant who moved
+// out, a contractor taken off the roster, an owner taken off a building: the
+// history stays on the running account's side, and the other side stops being
+// able to read or write it.
+async function messagePartyLive(db, t) {
+  if (t.kind === "tenant") {
+    return !!(await db.prepare(`SELECT 1 FROM memberships WHERE user_id = ? AND account_id = ? AND role = 'tenant'`)
+      .bind(t.partyUserId, t.accountId).first());
+  }
+  if (t.kind === "crew") {
+    return !!(await db.prepare(`SELECT 1 FROM engagements WHERE account_id = ? AND company_id = ?
+      AND COALESCE(status, '') <> 'ended'`).bind(t.accountId, t.partyCompanyId).first());
+  }
+  // An owner thread is about a building, named directly or through its job.
+  let propertyId = t.propertyId;
+  if (!propertyId && t.jobId) {
+    propertyId = (await db.prepare(`SELECT property_id FROM jobs WHERE id = ?`).bind(t.jobId).first())?.property_id || null;
+  }
+  if (!propertyId) return false;
+  if (t.partyUserId) {
+    const seat = await db.prepare(`SELECT id FROM memberships WHERE user_id = ? AND account_id = ? AND role = 'owner'`)
+      .bind(t.partyUserId, t.accountId).first();
+    if (!seat) return false;
+    return !!(await db.prepare(`SELECT 1 FROM membership_properties WHERE membership_id = ? AND property_id = ?`)
+      .bind(seat.id, propertyId).first());
+  }
+  return !!(await db.prepare(`SELECT 1 FROM properties WHERE id = ? AND account_id = ? AND owner_account_id = ?`)
+    .bind(propertyId, t.accountId, t.partyAccountId).first());
+}
+
+// Is this party connected to THIS job? A job thread is a key to one job, so
+// the party must already be on it: the tenant who reported it or has to let
+// the crew in, a company holding a live work order on it, or the owner of the
+// building it is at.
+async function messageJobPartyOk(db, t, job) {
+  if (!job || job.account_id !== t.accountId) return false;
+  if (t.kind === "tenant") return job.requested_by === t.partyUserId || (job.access_user_id || null) === t.partyUserId;
+  if (t.kind === "crew") {
+    return !!(await db.prepare(`SELECT 1 FROM work_orders WHERE job_id = ? AND company_id = ?
+      AND voided_at IS NULL AND status IN ('pending', 'accepted')`).bind(job.id, t.partyCompanyId).first());
+  }
+  return !!job.property_id && (t.propertyId ? t.propertyId === job.property_id : true);
+}
+
+async function loadMessageJob(db, jobId) {
+  for (const cols of ["id, account_id, title, property_id, requested_by, access_user_id",
+    "id, account_id, title, property_id, requested_by"]) {
+    try { return await db.prepare(`SELECT ${cols} FROM jobs WHERE id = ?`).bind(jobId).first(); }
+    catch (err) { if (!missingSchema(err)) throw err; }
+  }
+  return null;
+}
+
+async function loadThread(db, id) {
+  const r = await db.prepare(`${THREAD_SELECT} WHERE t.id = ?`).bind(id).first();
+  return r ? threadRowToJs(r) : null;
+}
+
+// The thread a viewer may open, with their side, or the reason they may not.
+// A thread the viewer is not on answers like one that does not exist.
+async function threadForViewer(c, id) {
+  const viewer = await messageViewer(c);
+  const t = await loadThread(c.env.DB, id);
+  const side = sideOf(t, viewer);
+  if (!t || !side) return { error: "not_found", status: 404 };
+  const live = await messagePartyLive(c.env.DB, t);
+  if (side === "party" && !live) return { error: "not_found", status: 404 };
+  return { thread: t, side, viewer, live };
+}
+
+const messageRowToJs = (m) => ({
+  id: m.id, threadId: m.thread_id, authorUserId: m.author_user_id || null,
+  authorName: m.author_name || null, authorSide: m.author_side, body: m.body || "",
+  photos: parseJson(m.photos, []).map((p, i) => ({ index: i, type: p.type, name: p.name })),
+  createdAt: m.created_at, editedAt: m.edited_at || null,
+});
+
+async function markThreadRead(db, threadId, userId, at) {
+  await db.prepare(`INSERT INTO message_reads (thread_id, user_id, read_at) VALUES (?, ?, ?)
+    ON CONFLICT(thread_id, user_id) DO UPDATE SET read_at = excluded.read_at`).bind(threadId, userId, at).run();
+}
+
+// Everything the inbox lists, for one viewer: every thread it is on with a
+// message in it, newest first, with the last line and what is unread.
+app.get("/api/threads", async (c) => {
+  const viewer = await messageViewer(c);
+  const team = TEAM_ROLES.includes(viewer.role);
+  try {
+    const { results } = await c.env.DB.prepare(
+      `${THREAD_SELECT}
+        WHERE EXISTS (SELECT 1 FROM messages mm WHERE mm.thread_id = t.id)
+          AND ((t.account_id = ?1 AND ?2 = 1)
+            OR (t.account_id = ?1 AND t.party_user_id = ?3)
+            OR (t.account_id = ?1 AND ?4 IS NOT NULL AND t.party_company_id = ?4)
+            OR (?2 = 1 AND ?5 IS NOT NULL AND t.party_company_id = ?5)
+            OR (?2 = 1 AND t.party_account_id = ?1))
+        ORDER BY t.last_at DESC LIMIT 300`
+    ).bind(viewer.accountId, team ? 1 : 0, viewer.userId,
+      viewer.role === "contractor" ? viewer.companyId : null, viewer.ownCompanyId).all();
+    const rows = (results || []).map(threadRowToJs);
+
+    // Liveness for the cross-account party side, read once rather than per row.
+    let clients = new Set(), owned = new Set();
+    if (team && viewer.ownCompanyId) {
+      const { results: es } = await c.env.DB.prepare(`SELECT account_id FROM engagements
+        WHERE company_id = ? AND COALESCE(status, '') <> 'ended'`).bind(viewer.ownCompanyId).all();
+      clients = new Set((es || []).map((e) => e.account_id));
+    }
+    if (team) {
+      const { results: ps } = await c.env.DB.prepare(`SELECT id, account_id FROM properties
+        WHERE owner_account_id = ? AND account_id <> ?`).bind(viewer.accountId, viewer.accountId).all();
+      owned = new Set((ps || []).map((p) => `${p.account_id}|${p.id}`));
+    }
+    const out = [];
+    for (const t of rows) {
+      const side = sideOf(t, viewer);
+      if (!side) continue;
+      if (side === "party" && t.accountId !== viewer.accountId) {
+        if (t.kind === "crew" && !clients.has(t.accountId)) continue;
+        if (t.kind === "owner") {
+          const pid = t.propertyId || (t.jobId ? (await c.env.DB.prepare(`SELECT property_id FROM jobs WHERE id = ?`)
+            .bind(t.jobId).first())?.property_id : null);
+          if (!owned.has(`${t.accountId}|${pid}`)) continue;
+        }
+      }
+      const stats = await c.env.DB.prepare(
+        `SELECT (SELECT body FROM messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_body,
+                (SELECT author_side FROM messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_side,
+                (SELECT photos FROM messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_photos,
+                (SELECT COUNT(*) FROM messages m WHERE m.thread_id = ?1 AND m.author_side <> ?2
+                   AND m.created_at > COALESCE((SELECT read_at FROM message_reads WHERE thread_id = ?1 AND user_id = ?3), '')) AS unread`
+      ).bind(t.id, side, viewer.userId).first();
+      out.push({ ...t, side, unread: Number(stats?.unread || 0),
+        lastBody: stats?.last_body || "", lastSide: stats?.last_side || null,
+        lastHasPhoto: parseJson(stats?.last_photos, []).length > 0 });
+    }
+    return c.json({ threads: out, unread: out.reduce((n, t) => n + t.unread, 0) });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    // An inbox that says which file to paste, rather than a screen that
+    // fails: nothing else in the product depends on these tables.
+    return c.json({ threads: [], unread: 0, migration });
+  }
+});
+
+// Who this caller may start a conversation with: its OWN relationships, and
+// nothing else. Never a search, never a list of anybody it does not already
+// work with.
+app.get("/api/message-contacts", async (c) => {
+  const viewer = await messageViewer(c);
+  const db = c.env.DB;
+  const out = [];
+  const acct = await db.prepare(`SELECT id, name FROM accounts WHERE id = ?`).bind(viewer.accountId).first();
+  if (TEAM_ROLES.includes(viewer.role)) {
+    const scope = scopeClause(viewer, "mp.property_id");
+    const { results: tenants } = await db.prepare(
+      `SELECT u.id, u.name, m.unit, mp.property_id, p.name AS property_name
+         FROM memberships m JOIN users u ON u.id = m.user_id
+         LEFT JOIN membership_properties mp ON mp.membership_id = m.id
+         LEFT JOIN properties p ON p.id = mp.property_id
+        WHERE m.account_id = ? AND m.role = 'tenant' ${scope.sql}
+        ORDER BY u.name`).bind(viewer.accountId, ...scope.vals).all();
+    const seenT = new Set();
+    for (const t of tenants || []) {
+      if (seenT.has(t.id)) continue; seenT.add(t.id);
+      out.push({ kind: "tenant", group: "Tenants", label: t.name || "Tenant",
+        sub: [t.unit && `Unit ${t.unit}`, t.property_name].filter(Boolean).join(", "),
+        start: { kind: "tenant", partyUserId: t.id } });
+    }
+    const { results: crews } = await db.prepare(
+      `SELECT co.id, co.company, e.engaged_as FROM engagements e JOIN companies co ON co.id = e.company_id
+        WHERE e.account_id = ? AND COALESCE(e.status, '') <> 'ended' ORDER BY co.company`
+    ).bind(viewer.accountId).all().catch(async (err) => {
+      if (!missingSchema(err)) throw err;
+      return db.prepare(`SELECT co.id, co.company FROM engagements e JOIN companies co ON co.id = e.company_id
+        WHERE e.account_id = ? AND COALESCE(e.status, '') <> 'ended' ORDER BY co.company`).bind(viewer.accountId).all();
+    });
+    for (const k of crews || []) {
+      out.push({ kind: "crew", group: "Contractors", label: k.company,
+        sub: k.engaged_as === "handyman" ? "Handyman" : "", start: { kind: "crew", partyCompanyId: k.id } });
+    }
+    const { results: owners } = await db.prepare(
+      `SELECT u.id, u.name, mp.property_id, p.name AS property_name
+         FROM memberships m JOIN users u ON u.id = m.user_id
+         JOIN membership_properties mp ON mp.membership_id = m.id
+         JOIN properties p ON p.id = mp.property_id
+        WHERE m.account_id = ? AND m.role = 'owner' ${scope.sql} ORDER BY u.name`
+    ).bind(viewer.accountId, ...scope.vals).all();
+    for (const o of owners || []) {
+      out.push({ kind: "owner", group: "Owners", label: o.name || "Owner", sub: `Owner of ${o.property_name}`,
+        start: { kind: "owner", partyUserId: o.id, propertyId: o.property_id } });
+    }
+    const pscope = scopeClause(viewer, "p.id");
+    const { results: ownerAccts } = await db.prepare(
+      `SELECT p.id, p.name, a.id AS owner_id, a.name AS owner_name FROM properties p
+         JOIN accounts a ON a.id = p.owner_account_id
+        WHERE p.account_id = ? AND p.owner_account_id IS NOT NULL AND p.owner_account_id <> p.account_id ${pscope.sql}`
+    ).bind(viewer.accountId, ...pscope.vals).all();
+    for (const o of ownerAccts || []) {
+      out.push({ kind: "owner", group: "Owners", label: o.owner_name, sub: `Owner of ${o.name}`,
+        start: { kind: "owner", partyAccountId: o.owner_id, propertyId: o.id } });
+    }
+    // From the other side: the clients that hire this account's own company,
+    // and the operators of buildings this account owns.
+    if (viewer.ownCompanyId) {
+      const { results: clients } = await db.prepare(
+        `SELECT a.id, a.name FROM engagements e JOIN accounts a ON a.id = e.account_id
+          WHERE e.company_id = ? AND COALESCE(e.status, '') <> 'ended' AND e.account_id <> ? ORDER BY a.name`
+      ).bind(viewer.ownCompanyId, viewer.accountId).all();
+      for (const k of clients || []) {
+        out.push({ kind: "crew", group: "Your clients", label: k.name, sub: "Hires you",
+          start: { kind: "crew", accountId: k.id, partyCompanyId: viewer.ownCompanyId } });
+      }
+    }
+    const { results: ops } = await db.prepare(
+      `SELECT p.id, p.name, a.id AS op_id, a.name AS op_name FROM properties p JOIN accounts a ON a.id = p.account_id
+        WHERE p.owner_account_id = ? AND p.account_id <> ?`).bind(viewer.accountId, viewer.accountId).all();
+    for (const o of ops || []) {
+      out.push({ kind: "owner", group: "Your property managers", label: o.op_name, sub: `Runs ${o.name}`,
+        start: { kind: "owner", accountId: o.op_id, partyAccountId: viewer.accountId, propertyId: o.id } });
+    }
+  } else if (viewer.role === "tenant") {
+    out.push({ kind: "tenant", group: "Your building", label: acct?.name || "The office", sub: "Your building's office",
+      start: { kind: "tenant", partyUserId: viewer.userId } });
+  } else if (viewer.role === "owner") {
+    const ids = viewer.propertyIds || [];
+    if (ids.length) {
+      const { results: props } = await db.prepare(
+        `SELECT id, name FROM properties WHERE account_id = ? AND id IN (${ids.map(() => "?").join(",")})`
+      ).bind(viewer.accountId, ...ids).all();
+      for (const p of props || []) {
+        out.push({ kind: "owner", group: "Your property manager", label: acct?.name || "Your property manager",
+          sub: `About ${p.name}`, start: { kind: "owner", partyUserId: viewer.userId, propertyId: p.id } });
+      }
+    }
+  } else if (viewer.role === "contractor" && viewer.companyId) {
+    out.push({ kind: "crew", group: "Your client", label: acct?.name || "Your client", sub: "Hires you",
+      start: { kind: "crew", partyCompanyId: viewer.companyId } });
+  }
+  return c.json({ contacts: out });
+});
+
+// Find or start a thread, and optionally say the first thing in it. The body
+// names a relationship; every part of it is checked against the caller's own
+// seat and the database, and a thread outside the caller's relationships
+// answers not_found, the same as one that does not exist.
+app.post("/api/threads", async (c) => {
+  const viewer = await messageViewer(c);
+  const db = c.env.DB;
+  const b = await c.req.json().catch(() => ({}));
+  const kind = String(b.kind || "");
+  if (!THREAD_KINDS.includes(kind)) return c.json({ error: "bad_kind" }, 400);
+  const accountId = b.accountId ? String(b.accountId) : viewer.accountId;
+  const t = { accountId, kind, partyUserId: b.partyUserId ? String(b.partyUserId) : null,
+    partyCompanyId: b.partyCompanyId ? String(b.partyCompanyId) : null,
+    partyAccountId: b.partyAccountId ? String(b.partyAccountId) : null,
+    jobId: b.jobId ? String(b.jobId) : null, propertyId: b.propertyId ? String(b.propertyId) : null };
+  // A crew writing from its own side need not name its company: it is the
+  // seat's company, or the account's own when its team answers a client from
+  // home. A name in the body is still only a claim -- sideOf checks it.
+  if (kind === "crew" && !t.partyCompanyId) {
+    t.partyCompanyId = viewer.role === "contractor" ? viewer.companyId
+      : accountId !== viewer.accountId ? viewer.ownCompanyId : null;
+  }
+
+  try {
+    let job = null;
+    if (t.jobId) {
+      job = await loadMessageJob(db, t.jobId);
+      if (!job || job.account_id !== accountId) return c.json({ error: "not_found" }, 404);
+      // A job thread sits at the job's building, whatever the body said.
+      t.propertyId = job.property_id || null;
+    } else if (kind === "tenant") {
+      // A tenant's general thread is at their building, so a scoped manager of
+      // that building reads it and one of another building does not.
+      t.propertyId = (await db.prepare(`SELECT mp.property_id FROM memberships m
+        JOIN membership_properties mp ON mp.membership_id = m.id
+        WHERE m.user_id = ? AND m.account_id = ? AND m.role = 'tenant' LIMIT 1`).bind(t.partyUserId, accountId).first())?.property_id || null;
+    } else if (kind === "crew") {
+      t.propertyId = null;
+    }
+    if (!partyShapeOk(t)) return c.json({ error: "bad_party" }, 400);
+    const side = sideOf(t, viewer);
+    if (!side) return c.json({ error: "not_found" }, 404);
+    if (!(await messagePartyLive(db, t))) return c.json({ error: "not_found" }, 404);
+    if (job && !(await messageJobPartyOk(db, t, job))) return c.json({ error: "not_found" }, 404);
+    if (kind === "owner" && !job) {
+      // An owner's general thread is about a building this account runs.
+      const p = await db.prepare(`SELECT 1 FROM properties WHERE id = ? AND account_id = ?`).bind(t.propertyId, accountId).first();
+      if (!p) return c.json({ error: "not_found" }, 404);
+    }
+
+    const key = threadKey(t);
+    const now = new Date().toISOString();
+    await db.prepare(
+      `INSERT OR IGNORE INTO message_threads (id, thread_key, account_id, kind, party_user_id, party_company_id,
+        party_account_id, job_id, property_id, created_by, created_at, last_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(uid(), key, accountId, kind, t.partyUserId, t.partyCompanyId, t.partyAccountId, t.jobId,
+      t.propertyId, viewer.userId, now, now).run();
+    const row = await db.prepare(`SELECT id FROM message_threads WHERE thread_key = ?`).bind(key).first();
+    const thread = await loadThread(db, row.id);
+    let message = null;
+    if (b.body || (Array.isArray(b.photos) && b.photos.length)) {
+      const v = validMessage(b, { keyPrefix: `${viewer.accountId}/${MESSAGE_PHOTO_KIND}/` });
+      if (v.error) return c.json({ error: v.error, max: v.max, thread }, 400);
+      message = await insertMessage(db, thread.id, viewer.userId, side, v);
+    }
+    return c.json({ thread: { ...thread, side }, message }, 201);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+async function insertMessage(db, threadId, userId, side, v) {
+  const id = uid();
+  const now = new Date().toISOString();
+  await db.prepare(`INSERT INTO messages (id, thread_id, author_user_id, author_side, body, photos, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(id, threadId, userId, side, v.body, JSON.stringify(v.photos), now).run();
+  await db.prepare(`UPDATE message_threads SET last_at = ? WHERE id = ?`).bind(now, threadId).run();
+  // Saying something is reading everything before it.
+  await markThreadRead(db, threadId, userId, now);
+  const row = await db.prepare(`SELECT m.*, u.name AS author_name FROM messages m
+    LEFT JOIN users u ON u.id = m.author_user_id WHERE m.id = ?`).bind(id).first();
+  return messageRowToJs(row);
+}
+
+// One thread and every message in it, and opening it is reading it.
+app.get("/api/threads/:id", async (c) => {
+  try {
+    const r = await threadForViewer(c, c.req.param("id"));
+    if (r.error) return c.json({ error: r.error }, r.status);
+    const { results } = await c.env.DB.prepare(`SELECT m.*, u.name AS author_name FROM messages m
+      LEFT JOIN users u ON u.id = m.author_user_id WHERE m.thread_id = ?
+      ORDER BY m.created_at ASC, m.rowid ASC LIMIT 1000`).bind(r.thread.id).all();
+    const messages = (results || []).map(messageRowToJs);
+    await markThreadRead(c.env.DB, r.thread.id, r.viewer.userId, new Date().toISOString());
+    return c.json({ thread: { ...r.thread, side: r.side }, messages,
+      // The running account keeps the history after the other side has gone,
+      // and says so rather than offering a box nobody will read.
+      canPost: r.live, partyGone: !r.live });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+app.post("/api/threads/:id/messages", async (c) => {
+  try {
+    const r = await threadForViewer(c, c.req.param("id"));
+    if (r.error) return c.json({ error: r.error }, r.status);
+    if (!r.live) return c.json({ error: "party_gone" }, 409);
+    const b = await c.req.json().catch(() => ({}));
+    const v = validMessage(b, { keyPrefix: `${r.viewer.accountId}/${MESSAGE_PHOTO_KIND}/` });
+    if (v.error) return c.json({ error: v.error, max: v.max }, 400);
+    const message = await insertMessage(c.env.DB, r.thread.id, r.viewer.userId, r.side, v);
+    return c.json({ message }, 201);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+// A typo, for ten minutes, by whoever wrote it. The words only: a photo once
+// sent is part of what was said.
+app.patch("/api/messages/:id", async (c) => {
+  const viewer = await messageViewer(c);
+  try {
+    const m = await c.env.DB.prepare(`SELECT m.*, u.name AS author_name FROM messages m
+      LEFT JOIN users u ON u.id = m.author_user_id WHERE m.id = ?`).bind(c.req.param("id")).first();
+    if (!m) return c.json({ error: "not_found" }, 404);
+    const r = await threadForViewer(c, m.thread_id);
+    if (r.error) return c.json({ error: r.error }, r.status);
+    const msg = messageRowToJs(m);
+    if (msg.authorUserId !== viewer.userId) return c.json({ error: "not_found" }, 404);
+    if (!mayEditMessage(msg, viewer.userId)) return c.json({ error: "edit_window_closed" }, 409);
+    const b = await c.req.json().catch(() => ({}));
+    const v = validMessage({ body: b.body, photos: parseJson(m.photos, []) });
+    if (v.error) return c.json({ error: v.error, max: v.max }, 400);
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(`UPDATE messages SET body = ?, edited_at = ? WHERE id = ?`).bind(v.body, now, m.id).run();
+    return c.json({ message: { ...msg, body: v.body, editedAt: now } });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+// A photo in a message, reached by thread, message and position -- never by
+// its R2 key -- and only by somebody on the thread.
+app.get("/api/threads/:id/photos/:messageId/:index", async (c) => {
+  try {
+    const r = await threadForViewer(c, c.req.param("id"));
+    if (r.error) return c.json({ error: r.error }, r.status);
+    const m = await c.env.DB.prepare(`SELECT photos FROM messages WHERE id = ? AND thread_id = ?`)
+      .bind(c.req.param("messageId"), r.thread.id).first();
+    const photo = parseJson(m?.photos, [])[Number(c.req.param("index"))];
+    if (!photo) return c.notFound();
+    const obj = await c.env.FILES.get(photo.key);
+    if (!obj) return c.notFound();
+    return new Response(obj.body, { headers: {
+      "Content-Type": photo.type || "image/jpeg",
+      "Cache-Control": "private, max-age=3600",
+      "Content-Disposition": `inline; filename="${String(photo.name || "photo").replace(/[^\w.\- ]/g, "_")}"`,
+    } });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
 // Branding/plan/billing for the current account.
 app.patch("/api/account", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
@@ -8209,6 +8697,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
   if (/\bjob_trade_spans\b/i.test(m)) return "079_job_spans";
@@ -18454,7 +18943,7 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
   // An avatar is the same shape of thing from the same kind of person -- a
   // guest seat may upload one -- so it gets the same checks. A Passport photo
   // is published to anybody holding the link, so it is checked the same way.
-  if (kind === "report-photo" || kind === "avatar" || kind === "passport-photo") {
+  if (kind === "report-photo" || kind === "avatar" || kind === "passport-photo" || kind === "message-photo") {
     if (!PHOTO_TYPES.has(type)) return c.json({ error: "not_an_image", type }, 415);
     const declared = Number(c.req.header("Content-Length") || 0);
     if (declared > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
@@ -18729,6 +19218,110 @@ async function licenseReminderSweep(env) {
 // each person one digest of what is waiting on them. Nothing is stored about
 // the state: the item exists while the job is in it and the sequence ends by
 // itself when it is not. The ledger row is written BEFORE the send.
+// 081. The new-message email. Every ten minutes, for every thread something
+// was said in this week: who on the other side has not read it, has not been
+// told, and has left it for NOTIFY_AFTER_MS. One email per person per run,
+// listing every thread waiting on them -- never one per message. The ledger
+// (`message_reads.notified_at`) is written before the send, so a run that
+// dies halfway does not send the same email twice. Their own email setting is
+// honored: somebody who switched email off is not emailed by the back door of
+// a message.
+async function messageNotifySweep(env, nowMs = Date.now()) {
+  const db = env.DB;
+  let threads;
+  try {
+    const since = new Date(nowMs - 7 * 86400000).toISOString();
+    const { results } = await db.prepare(`${THREAD_SELECT} WHERE t.last_at > ?`).bind(since).all();
+    threads = (results || []).map(threadRowToJs);
+  } catch (err) {
+    if (missingSchema(err)) return { skipped: "081 not migrated" };
+    throw err;
+  }
+  const teamOf = async (accountId) => (await db.prepare(
+    `SELECT * FROM memberships WHERE account_id = ? AND role IN ('admin', 'pm')`).bind(accountId).all()).results || [];
+  const userCache = new Map();
+  const userOf = async (id) => {
+    if (!userCache.has(id)) userCache.set(id, await db.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(id).first());
+    return userCache.get(id);
+  };
+  const acctCache = new Map();
+  const acctOf = async (id) => {
+    if (!acctCache.has(id)) acctCache.set(id, await db.prepare(`SELECT id, name, subdomain, hostname_status, company_id FROM accounts WHERE id = ?`).bind(id).first().catch(() => null));
+    return acctCache.get(id);
+  };
+
+  const owed = new Map();   // `${userId}|${linkAccountId}` -> { user, account, threads: [] }
+  for (const t of threads) {
+    const live = await messagePartyLive(db, t);
+    // Candidate readers, each with the seat they read it from.
+    const seats = [];
+    for (const m of await teamOf(t.accountId)) {
+      seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: m.role,
+        propertyIds: await propertyScope(db, m), jobIds: await jobScope(db, m) } });
+    }
+    if (live) {
+      if (t.partyUserId) {
+        const m = await db.prepare(`SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`).bind(t.partyUserId, t.accountId).first();
+        if (m) seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: m.role,
+          propertyIds: await propertyScope(db, m), jobIds: null } });
+      }
+      if (t.partyCompanyId) {
+        const { results: cs } = await db.prepare(`SELECT * FROM memberships WHERE account_id = ? AND role = 'contractor' AND company_id = ?`)
+          .bind(t.accountId, t.partyCompanyId).all();
+        for (const m of cs || []) seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: "contractor", companyId: m.company_id } });
+        const own = await db.prepare(`SELECT id FROM accounts WHERE company_id = ? AND id <> ?`).bind(t.partyCompanyId, t.accountId).first().catch(() => null);
+        if (own) for (const m of await teamOf(own.id)) {
+          seats.push({ m, viewer: { userId: m.user_id, accountId: own.id, role: m.role, ownCompanyId: t.partyCompanyId } });
+        }
+      }
+      if (t.partyAccountId) {
+        for (const m of await teamOf(t.partyAccountId)) {
+          seats.push({ m, viewer: { userId: m.user_id, accountId: t.partyAccountId, role: m.role } });
+        }
+      }
+    }
+    for (const { viewer } of seats) {
+      const side = sideOf(t, viewer);
+      if (!side) continue;
+      const st = await db.prepare(
+        `SELECT (SELECT MAX(created_at) FROM messages WHERE thread_id = ?1 AND author_side <> ?2) AS latest,
+                (SELECT body FROM messages WHERE thread_id = ?1 AND author_side <> ?2 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS preview,
+                r.read_at, r.notified_at,
+                (SELECT COUNT(*) FROM messages WHERE thread_id = ?1 AND author_side <> ?2
+                   AND created_at > COALESCE(r.read_at, '')) AS unread
+           FROM (SELECT 1) LEFT JOIN message_reads r ON r.thread_id = ?1 AND r.user_id = ?3`
+      ).bind(t.id, side, viewer.userId).first();
+      if (!owesEmail({ latestOtherAt: st?.latest, readAt: st?.read_at, notifiedAt: st?.notified_at, nowMs })) continue;
+      const key = `${viewer.userId}|${viewer.accountId}`;
+      if (!owed.has(key)) owed.set(key, { userId: viewer.userId, accountId: viewer.accountId, threads: [] });
+      owed.get(key).threads.push({ id: t.id, who: side === "home" ? (t.partyName || "Somebody") : (t.accountName || "Your client"),
+        about: t.jobTitle || t.propertyName || "", preview: st.preview, count: Number(st.unread || 1) });
+    }
+  }
+
+  let emailed = 0, skipped = 0;
+  const now = new Date(nowMs).toISOString();
+  for (const o of owed.values()) {
+    // The ledger first, whether or not anything goes: somebody who switched
+    // email off must not be reconsidered every ten minutes.
+    for (const t of o.threads) {
+      await db.prepare(`INSERT INTO message_reads (thread_id, user_id, notified_at) VALUES (?, ?, ?)
+        ON CONFLICT(thread_id, user_id) DO UPDATE SET notified_at = excluded.notified_at`).bind(t.id, o.userId, now).run();
+    }
+    const user = await userOf(o.userId);
+    const to = realEmail(user?.email);
+    if (!to || !notifyOf(user).email) { skipped++; continue; }
+    const account = await acctOf(o.accountId);
+    const link = `${accountOrigin(account)}/?open=inbox${o.threads.length === 1 ? `&thread=${o.threads[0].id}` : ""}`;
+    const m = messageNotifyEmail({ firstName: String(user.name || "").split(" ")[0], threads: o.threads,
+      link, fromName: account?.name });
+    const result = await sendEmail(env, { to, subject: m.subject, text: m.text, html: m.html });
+    await logMail(env, { accountId: o.accountId, to, kind: "message_notify", subject: m.subject, result });
+    if (result?.ok) emailed++; else skipped++;
+  }
+  return { people: owed.size, emailed, skipped };
+}
+
 async function actionReminderSweep(env, nowMs = Date.now()) {
   const today = new Date(nowMs).toISOString().slice(0, 10);
   // The ledger first, so a database without 080 skips cleanly.
@@ -19122,6 +19715,10 @@ app.get("/api/cron/license-reminders", async (c) => {
   return c.json(await licenseReminderSweep(c.env));
 });
 
+app.get("/api/cron/message-notify", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await messageNotifySweep(c.env));
+});
 app.get("/api/cron/action-reminders", async (c) => {
   if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await actionReminderSweep(c.env));
@@ -23758,7 +24355,7 @@ export default {
          ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep]]
-      : [["hostnames", hostnameSweep]];
+      : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep]];
 
     ctx.waitUntil((async () => {
       for (const [name, run] of jobs) {

@@ -324,7 +324,11 @@ try {
     // and that is a new PANEL rather than a new grid -- it reads a job, not a
     // work order or an invite, so it cannot go through JobInspection and it
     // earns its own mount, exactly as the line above says a new audience must.
-    t.ck("mounted wherever a set of photos is shown", uses === 5, String(uses));
+    //
+    // SIX since messages: a conversation is a new PANEL too -- its photos are
+    // reached by thread and message, not by job, invite or work order -- so it
+    // earns its own mount, and every photo in the thread is one set.
+    t.ck("mounted wherever a set of photos is shown", uses === 6, String(uses));
     // ONE INSPECTION PANEL, TWO AUDIENCES. The work order's holder reads it by
     // work order and a company being ASKED to price reads it by invite,
     // pre-award, narrowed by the server to their own trade. A second copy for

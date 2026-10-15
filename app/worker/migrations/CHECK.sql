@@ -283,6 +283,12 @@ WITH spec(j) AS (SELECT
   -- are skipped, and the dashboards still show what is waiting.
   ',["m080_action_reminders","col","action_reminders",["id","account_id","job_id","item_key","party","step","emailed"]]' ||
   ',["m080_action_reminder_unique","index","ux_action_reminder",[]]') ||
+  -- 081. Messages. Until it is run the Inbox says which file to paste and
+  -- nothing else on any screen changes.
+  (',["m081_message_threads","col","message_threads",["id","thread_key","account_id","kind","party_user_id","party_company_id","party_account_id","job_id","property_id","last_at"]]' ||
+  ',["m081_messages","col","messages",["id","thread_id","author_user_id","author_side","body","photos","created_at","edited_at"]]' ||
+  ',["m081_message_reads","col","message_reads",["thread_id","user_id","read_at","notified_at"]]' ||
+  ',["m081_thread_key_unique","index","ux_message_thread_key",[]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -769,7 +775,22 @@ WITH inv(j) AS (SELECT '['
   -- keep them from being offered anything else.
   || ',' || json_array('m079_inv_span_off_job', (SELECT COUNT(*) FROM job_trade_spans s
     JOIN jobs j ON j.id = s.job_id
-    WHERE NOT EXISTS (SELECT 1 FROM json_each(COALESCE(j.trades, '[]')) t WHERE t.value = s.trade))))
+    WHERE NOT EXISTS (SELECT 1 FROM json_each(COALESCE(j.trades, '[]')) t WHERE t.value = s.trade)))
+  -- 081. A message with no words and no photo is a bubble on the record that
+  -- reads as something said and lost; the route refuses one.
+  || ',' || json_array('m081_inv_empty_message', (SELECT COUNT(*) FROM messages
+    WHERE TRIM(body) = '' AND COALESCE(photos, '[]') IN ('[]', '')))
+  -- And a thread whose other side is not exactly the one its kind needs: a
+  -- tenant thread names a person, a crew thread names a company, an owner
+  -- thread names a person or an account and a building or a job. Two parties,
+  -- or none, is two answers to who is on the other end, or none.
+  || ',' || json_array('m081_inv_thread_party', (SELECT COUNT(*) FROM message_threads
+    WHERE NOT (
+      (kind = 'tenant' AND party_user_id IS NOT NULL AND party_company_id IS NULL AND party_account_id IS NULL)
+      OR (kind = 'crew' AND party_company_id IS NOT NULL AND party_user_id IS NULL AND party_account_id IS NULL)
+      OR (kind = 'owner' AND party_company_id IS NULL
+        AND ((party_user_id IS NULL) <> (party_account_id IS NULL))
+        AND (property_id IS NOT NULL OR job_id IS NOT NULL))))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

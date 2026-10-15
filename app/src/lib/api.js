@@ -336,6 +336,22 @@ export const api = {
     return URL.createObjectURL(await res.blob());
   },
 
+  // 081. Messages. The server decides which side the caller is on and which
+  // relationships they may start a thread with; nothing here names anybody
+  // the caller does not already work with.
+  listThreads: () => request("/threads"),
+  messageContacts: () => request("/message-contacts"),
+  startThread: (body) => request("/threads", { method: "POST", body: JSON.stringify(body) }),
+  getThread: (id) => request(`/threads/${id}`),
+  sendMessage: (id, body) => request(`/threads/${id}/messages`, { method: "POST", body: JSON.stringify(body) }),
+  editMessage: (id, body) => request(`/messages/${id}`, { method: "PATCH", body: JSON.stringify({ body }) }),
+  uploadMessagePhoto: async (file) => uploadFile("message-photo", await shrinkPhoto(file)),
+  messagePhotoBlob: async (threadId, messageId, index) => {
+    const res = await fetch(`${API_BASE}/threads/${threadId}/photos/${messageId}/${index}`, { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`photo_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
+
   // Move-in and move-out unit inspections. Every one of these resolves the
   // inspection through one check on the server -- the account AND the seat's
   // property scope -- so there is nothing to narrow here.

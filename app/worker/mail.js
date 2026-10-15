@@ -1201,3 +1201,33 @@ an unmonitored address. Replies aren't received.`;
     : `${n} things are waiting on you`;
   return { subject, text, html: textToHtml(text, link) };
 }
+// 081. Somebody wrote to you and it has sat unread. One email covers every
+// thread that is waiting, and it quotes the start of the last message so the
+// reader can tell a "thanks!" from a "the water is coming through the
+// ceiling" without opening anything. Replies go in the app, because this
+// address is not read by anybody.
+export function messageNotifyEmail({ firstName, threads = [], link, fromName }) {
+  const n = threads.reduce((k, t) => k + (t.count || 1), 0);
+  const quote = (s) => {
+    const one = String(s || "").replace(/\s+/g, " ").trim();
+    return one.length > 160 ? `${one.slice(0, 157)}...` : one;
+  };
+  const lines = threads.map((t) => `  - ${t.who}${t.about ? ` (${t.about})` : ""}: "${quote(t.preview) || "sent a photo"}"`);
+  const text = `Hi ${firstName || "there"},
+
+${n === 1 ? "You have a new message:" : `You have ${n} new messages:`}
+
+${lines.join("\n")}
+
+Read and reply here:
+  ${link}
+
+-- ${fromName || "SubSub"}
+
+This is an automated message from an unmonitored address. Replies to this
+email aren't received; answer in the app instead.`;
+  const subject = threads.length === 1
+    ? `New message from ${threads[0].who}`
+    : `${n} new messages`;
+  return { subject, text, html: textToHtml(text, link) };
+}

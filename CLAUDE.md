@@ -12588,6 +12588,85 @@ refactor.
   comped account, because `mrrOf` reads the plan and not `comped`. That is the
   standing decision recorded under the console entry above.
 
+- **MESSAGES: AN INBOX BETWEEN AN ACCOUNT AND THE PEOPLE IT ALREADY WORKS
+  WITH, AND NOBODY ELSE.** Asked whether free-form messaging between an account
+  and its tenants and subcontractors made sense, then *"build the first
+  version"*. Migration 081, `app/shared/messaging.js`.
+
+  **A THREAD HANGS OFF A RELATIONSHIP THAT ALREADY EXISTS**, which is what keeps
+  this from being the directory the product refuses. Three kinds, and
+  `account_id` is always the side that runs the relationship:
+  - **tenant**: the operator and a tenant seat;
+  - **crew**: the hiring account and a company on its roster;
+  - **owner**: the operator and the owner of a building it runs (an owner seat,
+    or the owning account of a building appointed out to it).
+
+  There is no thread between a tenant and a crew, or a tenant and an owner,
+  because the operator stays in the middle; whoever operates the building is
+  the tenant's contact. There is no "new message to anybody":
+  `GET /api/message-contacts` lists the caller's own relationships, and
+  `POST /api/threads` answers `not_found` for anything outside them, the same as
+  an id that does not exist. Each kind has one general thread per party (per
+  building, for an owner) and one per job, found by `threadKey` under a unique
+  index so two presses find one thread.
+
+  **`sideOf` is the one rule** for who is on which side, read by the list, the
+  read, the post, the photo route and the email sweep. A project manager narrowed
+  to buildings reads the threads at those buildings and general crew threads. A
+  **subcontractor account answers its clients from home** through its own
+  company, with no seat on the client: the same door client work already uses.
+  On every read and write the relationship is checked again
+  (`messagePartyLive`). Once an engagement ends, a tenant moves out or an owner
+  comes off a building, the other side stops being able to open the thread, and
+  the running account keeps the history read-only with no composer (`party_gone`).
+
+  **A job thread is a key to one job.** Its party must already be on it: the
+  tenant who reported it or has to let the crew in, a company holding a live
+  work order, or the owner of its building.
+
+  **Append-only.** The author may correct the words for ten minutes, and nothing
+  is ever deleted, because a thread about a job is part of its record. A message
+  with no words and no photo is refused. Photos go through the checked
+  `message-photo` upload kind (shrunk in the browser first). A key from another
+  account's prefix is refused, and a photo is served only to somebody on the
+  thread, by thread, message and position, never by its R2 key.
+
+  **Unread is per person and per side.** A teammate's message is not waiting on
+  you, and opening a thread reads it. It shows as an amber count on the Inbox
+  entry, as a **New messages** section with Reply under Waiting on you on the
+  manager's dashboard, on Tenant HQ and on the crew's My Jobs, and as a count on
+  the Message buttons beside a job.
+
+  **The email is not nightly.** It runs on the ten-minute cron: anybody on the
+  other side who has not read a message after `NOTIFY_AFTER_MS` (20 minutes),
+  and has not been told, gets one email listing every thread waiting on them.
+  That is never one email per message. Their own email setting is honored. The
+  ledger (`message_reads.notified_at`) is written before the send, and it is an
+  UPDATE when the row exists, which only a fixture where the reader has read the
+  thread before can check. Replies go in the app; the email says so.
+
+  **Where it is on screen.** Inbox in the menu for every role: two panes on a
+  tablet, one at a time on a phone with a way back. The conversation is the same
+  `ThreadPane` everywhere: in the Inbox, in a window from the job card's
+  **Message** row (the tenant or owner who asked for it, and each company with a
+  live work order), from a tenant's report (**Message <office>**), and from the
+  crew's job card (**Message the client**). Its photos are the sixth
+  `PhotoLightbox` mount, because a thread is a new panel rather than a new grid.
+
+  Not in this version, deliberately: texts (each is billed), group threads, and
+  tenant-to-crew messaging. The emergency path is unchanged and separate. Two
+  invariants are seeded both ways (`m081_inv_empty_message`,
+  `m081_inv_thread_party`), and `test:messaging` (87) and `test:messagingui`
+  (27) each fire on their own mutations: thirteen across the two.
+
+  **Pasting 081 is required** before any of it works on the live database.
+  Until then the Inbox names the file and nothing else on any screen changes.
+
+- **THE HANDYMAN PAGE SAYS PROPERTY MANAGER, NOT MANAGER.** Asked for on
+  `/for-handymen`. Every "manager" on it was bare, which reads as a shift
+  manager at a store as easily as the person who hires a handyman. It now reads
+  *property manager* (and *property managers and owners* in the hero).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

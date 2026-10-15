@@ -43,6 +43,7 @@ import { inPool } from "./lib/photoshrink.js";
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
+import { counterpartLabel, MAX_PHOTOS as MSG_MAX_PHOTOS, EDIT_WINDOW_MS as MSG_EDIT_WINDOW_MS } from "../shared/messaging.js";
 import { TENANT_PROBLEMS, tenantGroups, tenantWhere } from "../shared/tenantproblems.js";
 import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
 import { licenseActive } from "../shared/licensecheck.js";
@@ -642,7 +643,7 @@ function hydrateError(broke) {
 }
 
 const ROLES = {
-  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account"] },
+  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account", "inbox"] },
   // The default label. "Property manager" rather than "project manager",
   // because three of the four account kinds are property businesses and
   // project-manager was general-contractor language left on the role
@@ -665,7 +666,7 @@ const ROLES = {
   // only an account with buildings has any, and every tenant route is
   // admin/pm. A scoped manager sees the tenants of their own buildings,
   // because the server narrows the list.
-  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account"] },
+  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account", "inbox"] },
   // A building owner is a guest in somebody else's account, scoped to the
   // buildings they were granted. No contractor directory -- they see who is
   // coming to their own jobs, not who the account works with -- and no
@@ -674,14 +675,14 @@ const ROLES = {
   // is admin/pm, and the server hands them finished reports at their own
   // buildings only. They are the one person besides the agent who has to be
   // able to produce the move-out report when it is argued about.
-  owner: { label: "Building owner", can: ["dashboard", "properties", "inspections", "jobs", "account"] },
+  owner: { label: "Building owner", can: ["dashboard", "properties", "inspections", "jobs", "account", "inbox"] },
   // Somebody who lives or trades in one of the buildings. They report
   // problems and follow what happens to them, and that is the whole of it --
   // no dashboard, no portfolio, no other tenant's repairs, no money. Their
   // screen is its own thing rather than a stripped-down version of the
   // account's, which is why "tenant" is the only view they carry.
-  tenant: { label: "Tenant", can: ["tenant", "account"] },
-  contractor: { label: "Contractor", can: ["portal", "account"] },
+  tenant: { label: "Tenant", can: ["tenant", "account", "inbox"] },
+  contractor: { label: "Contractor", can: ["portal", "account", "inbox"] },
 };
 // What a seat is called inside a given kind of account. The permissions are
 // ROLES[role].can and nothing here touches them -- this is the word on the
@@ -3847,6 +3848,39 @@ export default function SubSub() {
       .catch(() => { /* decoration */ });
     return () => { live = false; };
   }, [loggedIn, currentAccountId]);
+  // 081. The inbox, held here because the nav badge, the dashboards' New
+  // messages and the Inbox screen all read it -- one fetch, refreshed every
+  // minute while somebody is signed in and whenever a conversation changes.
+  const [inbox, setInbox] = useState({ threads: [], unread: 0 });
+  const [inboxOpen, setInboxOpen] = useState(null);
+  const refreshInbox = useCallback(async () => {
+    try { setInbox(await api.listThreads()); }
+    catch (e) { console.warn("[inbox] not read:", e?.body?.error || e?.message || e); }
+  }, []);
+  useEffect(() => {
+    if (!loggedIn || !currentAccountId) { setInbox({ threads: [], unread: 0 }); return undefined; }
+    refreshInbox();
+    const t = setInterval(refreshInbox, 60000);
+    return () => clearInterval(t);
+  }, [loggedIn, currentAccountId, refreshInbox]);
+  const openInbox = (threadId = null) => { setInboxOpen(threadId ? { id: threadId, n: Date.now() } : null); setTab("inbox"); };
+  // The new-message email links here: ?open=inbox, with the thread when there
+  // is one. Held until somebody is signed in, like the other email links.
+  const [inboxAsk] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return q.get("open") === "inbox" ? { thread: q.get("thread") || null } : null;
+    } catch { return null; }
+  });
+  const inboxAimed = useRef(false);
+  useEffect(() => {
+    if (!inboxAsk || inboxAimed.current || !loggedIn) return;
+    inboxAimed.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    openInbox(inboxAsk.thread);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inboxAsk, loggedIn]);
+
   // Who runs a tenant's building. Fetched once here rather than by each place
   // that draws it -- the drawer and the profile menu both carry the card, and
   // two mounts would be two requests for one record.
@@ -5786,6 +5820,7 @@ export default function SubSub() {
   ) : null;
 
   return (
+    <InboxCtx.Provider value={{ inbox, openInbox, refreshInbox, me }}>
     <div className="ss-root">
       <style>{CSS}</style>
       {/* Above everything, because it changes what the rest of the page means. */}
@@ -6117,6 +6152,14 @@ export default function SubSub() {
               {incomingConnects.length > 0 && (
                 <span className="count amber">{incomingConnects.length}</span>
               )}
+            </button>
+          )}
+          {/* 081. One inbox for every kind of seat. Amber with the dot when
+              somebody is waiting on an answer, the same signal as every other
+              thing waiting on this person. */}
+          {can("inbox") && (
+            <button className={tab === "inbox" ? "on" : ""} onClick={() => openInbox()} data-nav="inbox">
+              Inbox{inbox.unread > 0 && <span className="count amber"><ActDot />{inbox.unread}</span>}
             </button>
           )}
           {can("contractors") && (
@@ -7559,6 +7602,8 @@ export default function SubSub() {
                       </div>
                     )}
 
+                    {maySetAccess(role) && !j.readOnly && <JobMessages job={j} subs={subs} people={accountUsers} />}
+
                     {canComplete && !j.readOnly && (
                       <div className="job-footer">
                         {!done ? (
@@ -7705,6 +7750,11 @@ export default function SubSub() {
           }} />
       )}
 
+      {tab === "inbox" && can("inbox") && (
+        <InboxView inbox={inbox} me={me} openId={inboxOpen?.id} onRefresh={refreshInbox}
+          onOpenJob={can("jobs") ? (id) => openJob(id) : null} />
+      )}
+
       {tab === "tenants" && can("tenants") && (
         <main className="ss-main">
           <PageHead title="Tenants"
@@ -7723,7 +7773,7 @@ export default function SubSub() {
           }} />
       )}
 
-      {can("tenant") && tab !== "account" && (
+      {can("tenant") && tab !== "account" && tab !== "inbox" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey} rentKey={rentKey}
           visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
@@ -7740,7 +7790,7 @@ export default function SubSub() {
           portal under every screen: a general contractor's Contractors roster
           and Dashboard each had a second greeting, a second schedule and an
           upload banner stacked below them. */}
-      {(can("portal") ? tab !== "account" : ownWork && tab === "portal") && (
+      {(can("portal") ? tab !== "account" && tab !== "inbox" : ownWork && tab === "portal") && (
         portalSub ? (
           <ContractorPortal weather={weather} sub={portalSub} jobs={jobs} pane={pane} aimAuto={aimAuto}
             /* NOTHING FROM THIS ACCOUNT'S OWN JOB LIST when the seat IS the
@@ -8358,6 +8408,7 @@ export default function SubSub() {
         <PoweredBy className="ss-foot-by" height={13} />
       </footer>
     </div>
+    </InboxCtx.Provider>
   );
 }
 
@@ -14997,6 +15048,9 @@ function TenantReportModal({
                 )}
                 <div className="form-actions">
                   <button className="btn-ghost" onClick={onClose}>Close</button>
+                  {/* 081. A question about this repair goes to the office
+                      here, beside the repair, rather than by phone. */}
+                  <MessageAboutJob job={job} kind="tenant" label={`Message ${brandName || "the office"}`} />
                   {canWithdraw && (
                     <button className="btn-ghost danger" onClick={() => setConfirmWithdraw(true)}>
                       <X size={14} /> Withdraw
@@ -16924,6 +16978,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           <>
             {/* Nothing at all yet: a heading over an empty box says less than
                 the box does, so the section only appears once there is one. */}
+            <UnreadMessages />
             {mine.length === 0 ? (
               <div className="dash-empty">
                 <ClipboardList size={24} />
@@ -25582,6 +25637,8 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
         </section>
       )}
 
+      <UnreadMessages />
+
       {/* Above the tiles and below only the life-safety reports. "What is
           happening, and when" is the question this page exists to answer,
           and the setup checklist is the other thing somebody is working
@@ -30545,6 +30602,8 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             </section>
           )}
 
+          <UnreadMessages />
+
           {/* Asked to price something, which is not the same as being offered
               it. Above job requests because it is the earlier conversation --
               and because a quote nobody sent is work that went elsewhere. */}
@@ -32661,6 +32720,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           <ScrollText size={13} /> View work order {a.wo}
           {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length} measurement doc{job.measurementDocs.length > 1 ? "s" : ""}</span>}
         </button>
+      )}
+      {/* 081. A question about this job goes to whoever gave it, beside the
+          job -- from this account, or from home for a client's row. */}
+      {canAct && (a.status === "pending" || a.status === "accepted" || a.auto) && (
+        <MessageAboutJob job={job} kind="crew" className="wo-open-btn"
+          label={away ? `Message ${elsewhere.name || "the client"}` : "Message the client"}
+          accountId={away ? elsewhere.accountId : null} />
       )}
       {!away && !past && (a.status === "accepted" || a.auto) && onRequestChange && (
         <button className="wo-open-btn wo-change-btn" onClick={() => onRequestChange(job, trade, a)}>
@@ -35232,6 +35298,428 @@ const matchesQuery = (q, ...fields) => {
   const hay = fields.flat().filter(Boolean).join(" ").toLowerCase();
   return terms.every((t) => hay.includes(t));
 };
+
+// ---- 081. Messages -------------------------------------------------------
+//
+// One thread pane, used by the Inbox and by every place a conversation sits
+// beside the thing it is about (a job card, a tenant's report). Two of these
+// would be two composers, two photo uploads and two edit windows to keep in
+// step. Who may write to whom is the server's answer; nothing on this screen
+// offers a name the caller does not already work with.
+const messageErrText = (e) => {
+  const code = e?.body?.error || e?.message || "";
+  if (code === "migration_needed") return `Messages are not switched on yet: migration ${e.body.migration || "081_messages"} has to be pasted first.`;
+  if (code === "party_gone") return "They are no longer connected to this account, so this can't be sent. What was said is kept here.";
+  if (code === "too_long") return "That's too long for one message. Split it in two.";
+  if (code === "too_many_photos") return `At most ${MSG_MAX_PHOTOS} photos in one message.`;
+  if (code === "empty") return "Write something or add a photo first.";
+  if (code === "edit_window_closed") return "It's too late to change that one. Send a correction instead.";
+  if (code === "not_found") return "That conversation isn't available to you.";
+  if (code === IMPERSONATION_LAPSED || code === "impersonation_expired") return "This staff sign-in has run out. Sign in again from the banner.";
+  if (code === "unauthenticated") return "You've been signed out. Sign in again and try once more.";
+  if (/fetch|network/i.test(String(code))) return "No connection. Check it and try again.";
+  return `That didn't go through (${code || "unknown error"}). Try again.`;
+};
+const msgTime = (iso) => {
+  const t = Date.parse(iso || "");
+  if (!Number.isFinite(t)) return "";
+  const d = new Date(t), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  return sameDay ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) })
+      + ", " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+};
+
+// The inbox, its refresh and who is signed in, for the places a
+// conversation is drawn beside something else -- read here rather than
+// threaded through every component between the app and a job card.
+const InboxCtx = React.createContext(null);
+
+function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = false }) {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [text, setText] = useState("");
+  const [pending, setPending] = useState([]);   // uploaded photos not yet sent
+  const [uploading, setUploading] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [sendErr, setSendErr] = useState("");
+  const [editing, setEditing] = useState(null);  // { id, text }
+  const [urls, setUrls] = useState({});
+  const [lightAt, setLightAt] = useState(null);
+  const listRef = useRef(null);
+  const boxRef = useRef(null);
+  const fileRef = useRef(null);
+
+  const load = useCallback(async (quiet = false) => {
+    try {
+      const d = await api.getThread(threadId);
+      setData(d); setErr("");
+      if (!quiet) onChange?.();
+    } catch (e) { if (!quiet) setErr(messageErrText(e)); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
+  useEffect(() => { setData(null); setErr(""); setText(""); setPending([]); setEditing(null); setSendErr(""); load(); }, [load]);
+  // A conversation is read while it is open, so it is checked while it is
+  // open: every half minute, quietly, and never over somebody's typing.
+  useEffect(() => { const t = setInterval(() => load(true), 30000); return () => clearInterval(t); }, [load]);
+  useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight; },
+    [data?.messages?.length]);
+  useEffect(() => { if (autoFocus && data && boxRef.current) boxRef.current.focus(); }, [autoFocus, data]);
+
+  const t = data?.thread;
+  const side = t?.side;
+  const msgs = data?.messages || [];
+  const photoSet = msgs.flatMap((m) => m.photos.map((p) => ({ id: `${m.id}:${p.index}`, name: p.name })));
+
+  const pick = async (files) => {
+    const list = [...(files || [])].slice(0, MSG_MAX_PHOTOS - pending.length);
+    if (!list.length) return;
+    setSendErr(""); setUploading((n) => n + list.length);
+    try {
+      const got = await inPool(list, 3, async (f) => {
+        try { const r = await api.uploadMessagePhoto(f); return { key: r.key, type: r.type || f.type, name: f.name, local: URL.createObjectURL(f) }; }
+        finally { setUploading((n) => n - 1); }
+      });
+      setPending((p) => [...p, ...got]);
+    } catch (e) {
+      setSendErr(/not_an_image|415/.test(e?.message || "") ? "That file isn't a photo." : "A photo didn't upload. Try it again.");
+    }
+  };
+  const send = async () => {
+    if (busy || uploading || (!text.trim() && !pending.length)) return;
+    setBusy(true); setSendErr("");
+    try {
+      const { message } = await api.sendMessage(threadId, { body: text,
+        photos: pending.map(({ key, type, name }) => ({ key, type, name })) });
+      pending.forEach((p) => URL.revokeObjectURL(p.local));
+      setText(""); setPending([]);
+      setData((d) => d ? { ...d, messages: [...d.messages, message] } : d);
+      onChange?.();
+    } catch (e) { setSendErr(messageErrText(e)); }
+    finally { setBusy(false); }
+  };
+  const saveEdit = async () => {
+    if (!editing) return;
+    try {
+      const { message } = await api.editMessage(editing.id, editing.text);
+      setData((d) => ({ ...d, messages: d.messages.map((m) => m.id === message.id ? message : m) }));
+      setEditing(null);
+    } catch (e) { setSendErr(messageErrText(e)); }
+  };
+
+  if (err) return <div className="thr-pane"><p className="err-note">{err}</p>{onBack && <button className="btn-ghost" onClick={onBack}>Back</button>}</div>;
+  if (!t) return <div className="thr-pane thr-loading">Loading the conversation…</div>;
+
+  const otherName = counterpartLabel(t, side);
+  return (
+    <div className="thr-pane">
+      <div className="thr-head">
+        {onBack && <button className="thr-back" onClick={onBack} aria-label="Back to the inbox"><ChevronLeft size={18} /></button>}
+        <span className="thr-av">{initialsOf(side === "home" ? t.partyName : t.accountName)}</span>
+        <div className="thr-who">
+          <b>{otherName}</b>
+          {t.jobTitle && (
+            <span className="thr-about">About: {onOpenJob && side === "home"
+              ? <button className="link-btn" onClick={() => onOpenJob(t.jobId)}>{t.jobTitle}</button>
+              : t.jobTitle}</span>
+          )}
+          {!t.jobTitle && t.kind === "owner" && t.propertyName && <span className="thr-about">About: {t.propertyName}</span>}
+        </div>
+      </div>
+      <div className="thr-list" ref={listRef}>
+        {!msgs.length && (
+          <p className="thr-empty"><MessageSquareText size={18} />
+            {`Nothing said yet. Whatever you write goes to ${side === "home" ? (t.partyName || "them") : (t.accountName || "the office")} and stays on the record here.`}</p>
+        )}
+        {msgs.map((m) => {
+          const mine = m.authorSide === side;
+          const own = m.authorUserId === me?.id;
+          const canEdit = own && Date.now() - Date.parse(m.createdAt) <= MSG_EDIT_WINDOW_MS && !!m.body;
+          return (
+            <div key={m.id} className={`msg ${mine ? "msg-mine" : "msg-theirs"}`} data-msg={m.id}>
+              <div className="msg-meta">{own ? "You" : (m.authorName || (mine ? "Your team" : otherName))} · {msgTime(m.createdAt)}
+                {m.editedAt && <span className="msg-edited"> · edited</span>}</div>
+              {editing?.id === m.id ? (
+                <div className="msg-edit">
+                  <textarea value={editing.text} onChange={(e) => setEditing({ ...editing, text: e.target.value })} rows={3} />
+                  <div className="msg-edit-acts">
+                    <button className="btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+                    <button className="btn-solid" onClick={saveEdit} disabled={!editing.text.trim()}>Save</button>
+                  </div>
+                </div>
+              ) : (m.body && <div className="msg-bubble">{m.body}</div>)}
+              {m.photos.length > 0 && (
+                <div className="msg-photos">
+                  {m.photos.map((p) => (
+                    <ReportPhoto key={p.index} jobId={m.id} photo={{ id: `${m.id}:${p.index}`, name: p.name }}
+                      load={() => api.messagePhotoBlob(t.id, m.id, p.index)}
+                      onLoaded={(id, u) => setUrls((x) => ({ ...x, [id]: u }))}
+                      onOpen={() => setLightAt(photoSet.findIndex((x) => x.id === `${m.id}:${p.index}`))} />
+                  ))}
+                </div>
+              )}
+              {canEdit && editing?.id !== m.id && (
+                <button className="msg-edit-btn" onClick={() => setEditing({ id: m.id, text: m.body })}>Edit</button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {lightAt != null && (
+        <PhotoLightbox photos={photoSet} urls={urls} at={lightAt} onAt={setLightAt} onClose={() => setLightAt(null)} />
+      )}
+      {data.partyGone ? (
+        <p className="thr-gone"><Info size={15} /> {t.partyName || "They"} {t.kind === "crew" ? "are no longer on your roster" : "are no longer connected to this account"}, so nothing more can be sent. What was said stays here.</p>
+      ) : (
+        <div className="thr-compose">
+          {pending.length > 0 && (
+            <div className="thr-pending">
+              {pending.map((p, i) => (
+                <span key={p.key} className="thr-pend">
+                  <img src={p.local} alt={p.name} />
+                  <button aria-label={`Remove ${p.name}`} onClick={() => { URL.revokeObjectURL(p.local); setPending((x) => x.filter((_, j) => j !== i)); }}><X size={12} /></button>
+                </span>
+              ))}
+            </div>
+          )}
+          {sendErr && <p className="err-note">{sendErr}</p>}
+          <div className="thr-row">
+            <button className="thr-attach" onClick={() => fileRef.current?.click()} aria-label="Add a photo"
+              disabled={pending.length >= MSG_MAX_PHOTOS}><ImagePlus size={18} /></button>
+            <input ref={fileRef} type="file" accept="image/*" multiple hidden
+              onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
+            <textarea ref={boxRef} className="thr-box" rows={2} value={text} placeholder="Write a message"
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); } }} />
+            <button className="btn-solid thr-send" onClick={send}
+              disabled={busy || uploading > 0 || (!text.trim() && !pending.length)}>
+              <Send size={15} /> {uploading ? "Uploading…" : busy ? "Sending…" : "Send"}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Who the caller may start a conversation with: their own relationships,
+// grouped, and a search box over THAT list only.
+function NewMessagePicker({ onPick, onClose }) {
+  const [contacts, setContacts] = useState(null);
+  const [q, setQ] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(null);
+  useEffect(() => {
+    api.messageContacts().then((r) => setContacts(r.contacts || [])).catch((e) => setErr(messageErrText(e)));
+  }, []);
+  const shown = (contacts || []).filter((c) => !q.trim()
+    || `${c.label} ${c.sub}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const groups = [...new Set(shown.map((c) => c.group))];
+  const choose = async (c) => {
+    setBusy(c); setErr("");
+    try { const r = await api.startThread(c.start); onPick(r.thread.id); }
+    catch (e) { setErr(messageErrText(e)); setBusy(null); }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <h3>New message</h3>
+      <p className="fld-note">You can write to the people you already work with. To reach somebody new, add them first.</p>
+      {(contacts?.length || 0) > 6 && (
+        <input className="nm-search" placeholder="Search your contacts" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+      )}
+      {err && <p className="err-note">{err}</p>}
+      {!contacts && !err && <p className="fld-note">Loading…</p>}
+      {contacts && !contacts.length && <p className="fld-note">Nobody to write to yet.</p>}
+      <div className="nm-list">
+        {groups.map((g) => (
+          <div key={g} className="nm-group">
+            <div className="form-sec">{g}</div>
+            {shown.filter((c) => c.group === g).map((c, i) => (
+              <button key={`${g}-${i}`} className="nm-row" disabled={!!busy} onClick={() => choose(c)}>
+                <span className="thr-av sm">{initialsOf(c.label)}</span>
+                <span className="nm-txt"><b>{c.label}</b>{c.sub && <span>{c.sub}</span>}</span>
+                <ChevronRight size={16} />
+              </button>
+            ))}
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+// The Inbox: the list on the left, the conversation on the right, and on a
+// phone one of the two at a time.
+function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
+  const [sel, setSel] = useState(openId || null);
+  const [q, setQ] = useState("");
+  const [onlyUnread, setOnlyUnread] = useState(false);
+  const [picking, setPicking] = useState(false);
+  useEffect(() => { if (openId) setSel(openId); }, [openId]);
+  const threads = inbox?.threads || [];
+  const shown = threads.filter((t) => (!onlyUnread || t.unread > 0)
+    && (!q.trim() || [t.partyName, t.accountName, t.jobTitle, t.propertyName, t.lastBody].filter(Boolean)
+      .join(" ").toLowerCase().includes(q.trim().toLowerCase())));
+  const name = (t) => t.side === "home" ? (t.partyName || "Somebody") : (t.accountName || "The office");
+  const about = (t) => t.jobTitle || (t.kind === "owner" ? t.propertyName : "")
+    || (t.side === "home" ? ({ tenant: [t.unit && `Unit ${t.unit}`, t.propertyName].filter(Boolean).join(", "), crew: "Contractor", owner: "Owner" })[t.kind] : "");
+  return (
+    <main className="ss-main inbox-main">
+      <PageHead title="Inbox" sub="Your conversations with the people you already work with.">
+        <button className="btn-solid" onClick={() => setPicking(true)}><Pencil size={15} /> New message</button>
+      </PageHead>
+      {inbox?.migration && (
+        <p className="err-note">Messages are not switched on yet: migration {inbox.migration} has to be pasted first.</p>
+      )}
+      <div className={`inbox ${sel ? "has-sel" : ""}`}>
+        <div className="inbox-list">
+          <div className="inbox-tools">
+            <input placeholder="Search messages" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search messages" />
+            <button className={`chip ${onlyUnread ? "on" : ""}`} onClick={() => setOnlyUnread((v) => !v)} aria-pressed={onlyUnread}>
+              Unread{inbox?.unread ? ` (${inbox.unread})` : ""}</button>
+          </div>
+          {!shown.length && (
+            <p className="inbox-empty">{threads.length ? "Nothing matches." : "No conversations yet. Start one with New message."}</p>
+          )}
+          {shown.map((t) => (
+            <button key={t.id} className={`ib-row ${sel === t.id ? "on" : ""} ${t.unread ? "unread" : ""}`}
+              onClick={() => setSel(t.id)} data-thread={t.id}>
+              <span className="thr-av">{initialsOf(name(t))}</span>
+              <span className="ib-main">
+                <span className="ib-top"><b>{name(t)}</b><span className="ib-time">{msgTime(t.lastAt)}</span></span>
+                {about(t) && <span className="ib-about">{about(t)}</span>}
+                <span className="ib-last">{t.lastSide === t.side ? "You: " : ""}{t.lastBody || (t.lastHasPhoto ? "Photo" : "")}</span>
+              </span>
+              {t.unread > 0 && <span className="count amber ib-n"><ActDot />{t.unread}</span>}
+            </button>
+          ))}
+        </div>
+        <div className="inbox-pane">
+          {sel ? <ThreadPane threadId={sel} me={me} onChange={onRefresh} onBack={() => setSel(null)} onOpenJob={onOpenJob} />
+            : <div className="inbox-none"><MessageSquareText size={28} /><p>Choose a conversation, or start a new one.</p></div>}
+        </div>
+      </div>
+      {picking && <NewMessagePicker onClose={() => setPicking(false)}
+        onPick={(id) => { setPicking(false); setSel(id); onRefresh?.(); }} />}
+    </main>
+  );
+}
+
+// A conversation opened beside the thing it is about: a job card, a tenant's
+// report, a contractor's job. Finds or starts the thread, then it is the same
+// pane the Inbox uses.
+function ThreadModal({ start, me, onClose, onChange, title }) {
+  const [id, setId] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.startThread(start).then((r) => { if (live) setId(r.thread.id); }).catch((e) => { if (live) setErr(messageErrText(e)); });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return (
+    <Modal onClose={onClose} wide className="thr-modal">
+      {title && <h3 className="thr-modal-title">{title}</h3>}
+      {err ? <p className="err-note">{err}</p>
+        : id ? <ThreadPane threadId={id} me={me} onChange={onChange} autoFocus />
+        : <p className="fld-note">Opening the conversation…</p>}
+    </Modal>
+  );
+}
+
+// Unread conversations, on the dashboards, right under what else is waiting.
+// The conversations about one job, on its card: the tenant who reported it
+// or has to let the crew in, the owner who asked for it, and each company
+// holding a live work order on it. Nobody else -- a job thread is a key to one
+// job, and the server checks that again.
+function JobMessages({ job, subs = [], people = [] }) {
+  const ctx = React.useContext(InboxCtx);
+  const [open, setOpen] = useState(null);
+  const parties = [];
+  const personOf = (id) => people.find((u) => u.id === id);
+  for (const uid of [job.requestedBy, job.accessUserId].filter(Boolean)) {
+    if (parties.some((p) => p.start.partyUserId === uid)) continue;
+    const u = personOf(uid);
+    const kind = u?.role === "owner" ? "owner" : u?.role === "tenant" || !u ? "tenant" : null;
+    if (!kind) continue;
+    parties.push({ key: `u:${uid}`, label: `${(u?.name || "the tenant").split(" ")[0]} (${kind})`,
+      start: { kind, partyUserId: uid, jobId: job.id } });
+  }
+  const seen = new Set();
+  for (const a of Object.values(job.assignments || {})) {
+    if (!a?.subId || seen.has(a.subId) || (a.status !== "pending" && a.status !== "accepted")) continue;
+    seen.add(a.subId);
+    const co = subs.find((x) => x.id === a.subId);
+    parties.push({ key: `c:${a.subId}`, label: co?.company || a.company || "the contractor",
+      start: { kind: "crew", partyCompanyId: a.subId, jobId: job.id } });
+  }
+  if (!parties.length) return null;
+  const threads = (ctx?.inbox?.threads || []).filter((t) => t.jobId === job.id);
+  const unreadFor = (p) => threads.filter((t) => (p.start.partyCompanyId ? t.partyCompanyId === p.start.partyCompanyId
+    : t.partyUserId === p.start.partyUserId)).reduce((n, t) => n + t.unread, 0);
+  return (
+    <div className="job-msgs">
+      <span className="jm-lab"><MessageSquareText size={14} /> Message</span>
+      {parties.map((p) => (
+        <button key={p.key} className="jm-btn" onClick={() => setOpen(p)} data-msg-party={p.key}>
+          {p.label}{unreadFor(p) > 0 && <span className="count amber"><ActDot />{unreadFor(p)}</span>}
+        </button>
+      ))}
+      {open && <ThreadModal start={open.start} me={ctx?.me} title={`${job.title} · ${open.label}`}
+        onClose={() => { setOpen(null); ctx?.refreshInbox(); }} onChange={ctx?.refreshInbox} />}
+    </div>
+  );
+}
+
+// One button that opens the conversation about a job from the party's side:
+// a tenant about their report, a crew about the work order it holds. The
+// server checks the job is theirs; this only names it.
+function MessageAboutJob({ job, kind, label, companyId = null, accountId = null, className = "btn-ghost" }) {
+  const ctx = React.useContext(InboxCtx);
+  const [open, setOpen] = useState(false);
+  if (!ctx?.me) return null;
+  // A crew's own company is the server's to fill in: the seat's company for a
+  // contractor seat, the account's own company for a team answering a client.
+  const start = kind === "crew"
+    ? { kind: "crew", jobId: job.id, ...(companyId ? { partyCompanyId: companyId } : {}), ...(accountId ? { accountId } : {}) }
+    : { kind, partyUserId: ctx.me.id, jobId: job.id };
+  const unread = (ctx.inbox?.threads || []).filter((t) => t.jobId === job.id).reduce((n, t) => n + t.unread, 0);
+  return (
+    <>
+      <button type="button" className={`${className} msg-about`} onClick={() => setOpen(true)}>
+        <MessageSquareText size={14} /> {label}
+        {unread > 0 && <span className="count amber"><ActDot />{unread}</span>}
+      </button>
+      {open && <ThreadModal start={start} me={ctx.me} title={job.title}
+        onClose={() => { setOpen(false); ctx.refreshInbox(); }} onChange={ctx.refreshInbox} />}
+    </>
+  );
+}
+
+function UnreadMessages() {
+  const ctx = React.useContext(InboxCtx);
+  const inbox = ctx?.inbox, onOpen = (id) => ctx?.openInbox(id);
+  const rows = (inbox?.threads || []).filter((t) => t.unread > 0);
+  if (!rows.length) return null;
+  const name = (t) => t.side === "home" ? (t.partyName || "Somebody") : (t.accountName || "The office");
+  return (
+    <section className="dash-sec sec-yt sec-msgs" aria-label="New messages">
+      <h3><ActDot /><MessageSquareText size={15} /> New messages
+        <span className="sec-count amber">{rows.reduce((n, t) => n + t.unread, 0)}</span></h3>
+      <DashRows id="messages">
+        {rows.map((t) => (
+          <div key={t.id} className="dash-row yt-row msg-row">
+            <div className="dash-row-main">
+              <span className="yt-lede">{name(t)}{t.jobTitle ? ` · ${t.jobTitle}` : ""}</span>
+              <span className="dr-title">{t.lastBody || (t.lastHasPhoto ? "Sent a photo" : "")}</span>
+            </div>
+            <button className="btn-solid" onClick={() => onOpen(t.id)}>Reply</button>
+          </div>
+        ))}
+      </DashRows>
+    </section>
+  );
+}
 
 function Modal({ children, onClose, wide, className = "" }) {
   return (
@@ -45356,4 +45844,93 @@ button.job-insp:hover{border-color:#2f5577}
 .pf-pill.st-paid,.pf-pill.st-applied{background:var(--brand);color:#fff}
 .pf-mini.pf-danger{color:var(--red)}
 .pf-warn{color:var(--amber-ink)}
+/* 081. Messages. The Inbox is two panes on a tablet and one at a time on a
+   phone; the thread pane is the same in the Inbox and in a window beside a
+   job. Mine on the right in the brand color, theirs on the left on paper. */
+.inbox-main{max-width:1200px}
+.inbox{display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:0;background:var(--card);
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;min-height:560px}
+.inbox-list{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;max-height:72vh;overflow-y:auto}
+.inbox-tools{display:flex;gap:8px;padding:12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--card);z-index:1}
+.inbox-tools input{flex:1;min-width:0;min-height:38px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:#fff}
+.inbox-empty{color:var(--ink-soft);padding:20px 16px;font-size:14px}
+.ib-row{display:flex;gap:10px;align-items:flex-start;text-align:left;padding:12px 14px;border:0;border-bottom:1px solid var(--line);
+  background:transparent;font:inherit;color:var(--ink);cursor:pointer;width:100%;min-height:64px}
+.ib-row:hover{background:var(--paper)}
+.ib-row.on{background:color-mix(in srgb,var(--brand) 9%,var(--card))}
+.ib-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.ib-top{display:flex;justify-content:space-between;gap:8px}
+.ib-top b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ib-time{font-size:12px;color:var(--ink-soft);flex:none}
+.ib-about{font-size:12.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ib-last{font-size:13.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ib-row.unread .ib-last{color:var(--ink);font-weight:600}
+.ib-n{flex:none;align-self:center}
+.inbox-pane{display:flex;min-width:0}
+.inbox-none{margin:auto;text-align:center;color:var(--ink-soft);padding:40px}
+.thr-av{flex:none;width:38px;height:38px;border-radius:50%;background:color-mix(in srgb,var(--brand) 14%,var(--card));
+  color:var(--brand-dk);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+.thr-av.sm{width:32px;height:32px;font-size:12px}
+.thr-pane{display:flex;flex-direction:column;flex:1;min-width:0;min-height:520px;max-height:72vh}
+.thr-loading{padding:24px;color:var(--ink-soft)}
+.thr-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.thr-back{display:none;border:0;background:transparent;padding:6px;cursor:pointer;color:var(--ink)}
+.thr-who{display:flex;flex-direction:column;min-width:0}
+.thr-who b{overflow:hidden;text-overflow:ellipsis}
+.thr-about{font-size:13px;color:var(--ink-soft)}
+.link-btn{border:0;background:none;padding:0;font:inherit;color:var(--brand);text-decoration:underline;cursor:pointer}
+.thr-list{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--paper)}
+.thr-empty{color:var(--ink-soft);display:flex;gap:8px;align-items:center;margin:auto;max-width:42ch;text-align:center}
+.msg{display:flex;flex-direction:column;max-width:78%;gap:4px}
+.msg-mine{align-self:flex-end;align-items:flex-end}
+.msg-theirs{align-self:flex-start;align-items:flex-start}
+.msg-meta{font-size:12px;color:var(--ink-soft)}
+.msg-bubble{white-space:pre-wrap;overflow-wrap:anywhere;padding:10px 13px;border-radius:14px;font-size:15px;line-height:1.4}
+.msg-mine .msg-bubble{background:var(--brand);color:#fff;border-bottom-right-radius:4px}
+.msg-theirs .msg-bubble{background:var(--card);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg-photos{display:flex;flex-wrap:wrap;gap:6px}
+.msg-photos .ph-thumb{width:96px;height:96px}
+.msg-edit-btn{border:0;background:none;padding:0;font:inherit;font-size:12px;color:var(--ink-soft);text-decoration:underline;cursor:pointer}
+.msg-edit textarea{width:min(420px,70vw);font:inherit;padding:8px;border:1px solid var(--line);border-radius:10px}
+.msg-edit-acts{display:flex;gap:6px;justify-content:flex-end;margin-top:4px}
+.thr-gone{display:flex;gap:8px;align-items:center;padding:12px 14px;margin:0;border-top:1px solid var(--line);color:var(--ink-soft);font-size:14px}
+.thr-compose{border-top:1px solid var(--line);padding:10px 12px;background:var(--card)}
+.thr-row{display:flex;gap:8px;align-items:flex-end}
+.thr-box{flex:1;min-width:0;min-height:44px;max-height:180px;resize:vertical;padding:10px 12px;font:inherit;font-size:15px;
+  border:1px solid var(--line);border-radius:12px;background:#fff}
+.thr-attach{flex:none;width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--card);
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink)}
+.thr-send{flex:none;min-height:44px}
+.thr-pending{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.thr-pend{position:relative;width:56px;height:56px}
+.thr-pend img{width:56px;height:56px;object-fit:cover;border-radius:8px}
+.thr-pend button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;border:0;
+  background:var(--ink);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.thr-modal .thr-pane{min-height:440px;max-height:68vh;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.thr-modal-title{margin:0 40px 12px 0}
+.nm-search{width:100%;min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;margin:4px 0 10px}
+.nm-list{max-height:60vh;overflow-y:auto}
+.nm-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 6px;border:0;border-bottom:1px solid var(--line);
+  background:transparent;font:inherit;color:var(--ink);cursor:pointer;min-height:52px}
+.nm-row:hover{background:var(--paper)}
+.nm-txt{flex:1;display:flex;flex-direction:column;min-width:0}
+.nm-txt span{font-size:13px;color:var(--ink-soft)}
+.job-msgs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0 4px}
+.jm-lab{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;color:var(--ink-soft)}
+.jm-btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border:1px solid var(--line);border-radius:999px;
+  background:var(--card);font:inherit;font-size:13.5px;color:var(--ink);cursor:pointer}
+.jm-btn:hover{border-color:var(--brand)}
+.msg-about{display:inline-flex;align-items:center;gap:6px}
+.sec-msgs .dr-title{font-size:14px;color:var(--ink)}
+.msg-row .btn-solid{flex:none}
+@media (max-width:760px){
+  .inbox{grid-template-columns:1fr;min-height:0}
+  .inbox-list{border-right:0;max-height:none}
+  .inbox.has-sel .inbox-list{display:none}
+  .inbox:not(.has-sel) .inbox-pane{display:none}
+  .thr-back{display:inline-flex}
+  .thr-pane{max-height:none;min-height:70vh}
+  .msg{max-width:90%}
+}
+
 `;
