@@ -12917,6 +12917,17 @@ refactor.
   every outcome cannot pass. No invariant: a crew withdrawn after a real
   visit legitimately leaves an answered visit with nobody on the job.
 
+- **THE PAST-DUE CHIP RAN OUT OF ITS BOX, BECAUSE THE BOX IS NARROW ON A WIDE
+  SCREEN.** Reported from Cascade's dashboard: *Date passed, nobody has accepted
+  it* ran past the right edge of the amber *1 job is past due* box. The chip
+  was `flex:none` and `nowrap`, and the only wrap rule was a media query on the
+  SCREEN (560px). On an iPad the screen is wide and the panel is half of it, so
+  the chip took the row and the title went to 0px. The rule is now a container
+  query on `.sh-late` itself: under 560px of box the chip goes under the title,
+  lined up with it, and wraps its own words. `test:visitnocrew` measures the
+  chip against the box and the title's width at 1340, 1024, 820, 600 and 390px.
+  Removing the container fails four, and reproduces the report at 820px.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -131,6 +131,30 @@ try {
   t.ck("and a job with a crew still says its visit passed",
     /Visit passed/.test(late["Bathroom fan is loud"] || ""), JSON.stringify(late));
 
+  // The chip is the longest thing on the row, and in the half-width panel an
+  // iPad draws it ran past the amber box. Measured, because only the drawn
+  // box knows whether it fits.
+  for (const width of [1340, 1024, 820, 600, 390]) {
+    await m.page.setViewport({ width, height: 1600 });
+    await wait(500);
+    const fit = await m.page.evaluate(() => {
+      const box = document.querySelector(".sh-late");
+      if (!box) return null;
+      const edge = box.getBoundingClientRect().right;
+      return [...box.querySelectorAll(".shl-row")].map((r) => {
+        const st = r.querySelector(".shl-state").getBoundingClientRect();
+        const ti = r.querySelector(".shl-title").getBoundingClientRect();
+        return { over: Math.round(st.right - edge), title: Math.round(ti.width) };
+      });
+    });
+    t.ck(`at ${width}px every chip stays inside the past-due box`,
+      !!fit && fit.length >= 2 && fit.every((f) => f.over <= 0), JSON.stringify(fit));
+    t.ck(`at ${width}px every title keeps room to be read`,
+      !!fit && fit.length >= 2 && fit.every((f) => f.title >= 90), JSON.stringify(fit));
+  }
+  await m.page.setViewport({ width: 1340, height: 1600 });
+  await wait(400);
+
   console.log("\n-- the manager's job cards --");
   await nav(m.page, "^Jobs");
   await wait(1200);

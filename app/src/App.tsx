@@ -42241,9 +42241,19 @@ strong.insp-name{background:none;border:0;padding:0}
 .shl-state{flex:none;font-size:11px;font-weight:700;color:#a3311f;background:#fbe6e1;
   border:1px solid #f0c2b8;border-radius:999px;padding:2px 8px;white-space:nowrap}
 .shl-when{min-width:96px}
+/* In the half-width panel an iPad draws, the chip took the row's whole width
+   and the title went to nothing, or the chip ran past the box. Measured
+   against the box itself rather than the screen, because the box is narrow
+   on a wide screen too: under 560px of box the chip goes under the title,
+   lined up with it, and wraps its own words if it has to. */
+.sh-late{container:shl / inline-size}
+@container shl (max-width:560px){
+  .shl-row{flex-wrap:wrap;row-gap:3px}
+  .shl-title{flex:1 1 calc(100% - 106px)}
+  .shl-state{margin-left:106px;max-width:calc(100% - 106px);white-space:normal}
+}
 @media (max-width:560px){
   .shl-row{flex-wrap:wrap;gap:4px 10px}
-  .shl-title{flex:1 1 60%}
 }
 .shl-more{background:none;border:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--amber-ink);
   padding:5px 4px;text-align:left}
