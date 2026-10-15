@@ -12848,6 +12848,15 @@ refactor.
   under it on purpose. Putting the fixed pane back fails all four sizes, and
   15px text fails all four.
 
+  **And the list folds away.** Asked for as *"minimize message summary and
+  maximize message pane"*. A button at the left of the conversation's header
+  hides the list so the conversation takes the whole width, and the same
+  button brings it back. It is remembered on this device only, in
+  `localStorage` with try/catch, because it is a preference about a screen and
+  not a record. It is offered wherever there are two panes, which includes a
+  phone held sideways, and nowhere there is one. Removing the fold rule fails
+  the three two-pane sizes.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

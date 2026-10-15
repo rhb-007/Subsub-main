@@ -35,7 +35,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, PanelLeftClose, PanelLeftOpen,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
@@ -35419,7 +35419,7 @@ function threadEventText(e) {
   }
 }
 
-function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = false }) {
+function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = false, listHidden = false, onToggleList = null }) {
   const ictx = React.useContext(InboxCtx);
   const [proposing, setProposing] = useState(false);
   const [actBusy, setActBusy] = useState("");
@@ -35535,6 +35535,13 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
     <div className="thr-pane">
       <div className="thr-head">
         {onBack && <button className="thr-back" onClick={onBack} aria-label="Back to the inbox"><ChevronLeft size={18} /></button>}
+        {onToggleList && (
+          <button className="thr-fold" onClick={onToggleList} data-fold={listHidden ? "show" : "hide"}
+            aria-label={listHidden ? "Show the conversation list" : "Hide the conversation list"}
+            title={listHidden ? "Show the conversation list" : "Hide the conversation list"}>
+            {listHidden ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+          </button>
+        )}
         <span className="thr-av">{initialsOf(side === "home" ? t.partyName : t.accountName)}</span>
         <div className="thr-who">
           <b>{otherName}</b>
@@ -35806,6 +35813,13 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
   const [q, setQ] = useState("");
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [picking, setPicking] = useState(false);
+  // The list folds away so a conversation can have the whole width. Remembered
+  // on this device only -- a preference about a screen, not a record.
+  const [listHidden, setListHidden] = useState(() => { try { return localStorage.getItem("ss_inbox_list") === "hidden"; } catch { return false; } });
+  const toggleList = () => setListHidden((v) => {
+    try { localStorage.setItem("ss_inbox_list", v ? "shown" : "hidden"); } catch { /* storage off */ }
+    return !v;
+  });
   useEffect(() => { if (openId) setSel(openId); }, [openId]);
   // Where the window starts on the page, so CSS can make it exactly as tall as
   // the rest of the screen -- on any device, held either way. Measured again
@@ -35838,7 +35852,7 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
       {inbox?.migration && (
         <p className="err-note">Messages are not switched on yet: migration {inbox.migration} has to be pasted first.</p>
       )}
-      <div ref={boxRef} className={`inbox ${sel ? "has-sel" : ""}`}>
+      <div ref={boxRef} className={`inbox ${sel ? "has-sel" : ""} ${sel && listHidden ? "list-hidden" : ""}`}>
         <div className="inbox-list">
           <div className="inbox-tools">
             <input placeholder="Search messages" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search messages" />
@@ -35862,7 +35876,8 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
           ))}
         </div>
         <div className="inbox-pane">
-          {sel ? <ThreadPane threadId={sel} me={me} onChange={onRefresh} onBack={() => setSel(null)} onOpenJob={onOpenJob} />
+          {sel ? <ThreadPane threadId={sel} me={me} onChange={onRefresh} onBack={() => setSel(null)} onOpenJob={onOpenJob}
+            listHidden={listHidden} onToggleList={toggleList} />
             : <div className="inbox-none"><MessageSquareText size={28} /><p>Choose a conversation, or start a new one.</p></div>}
         </div>
       </div>
@@ -46170,6 +46185,14 @@ button.job-insp:hover{border-color:#2f5577}
 .thr-loading{padding:24px;color:var(--ink-soft)}
 .thr-head{flex:none;display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
 .thr-back{display:none;border:0;background:transparent;padding:6px;cursor:pointer;color:var(--ink)}
+/* Fold the list away and give the conversation the whole width; the same
+   button brings it back. Not on a phone, where there is only one pane. */
+.thr-fold{flex:none;display:inline-flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:10px;
+  border:1px solid var(--line);background:var(--card);cursor:pointer;color:var(--ink-soft)}
+.thr-fold:hover{color:var(--ink);border-color:var(--brand)}
+.inbox.list-hidden{grid-template-columns:1fr}
+.inbox.list-hidden .inbox-list{display:none}
+.inbox.list-hidden .msg{max-width:72%}
 .thr-who{display:flex;flex-direction:column;min-width:0}
 .thr-who b{overflow:hidden;text-overflow:ellipsis}
 .thr-about{font-size:13px;color:var(--ink-soft)}
@@ -46242,6 +46265,7 @@ button.job-insp:hover{border-color:#2f5577}
   .inbox-main.has-sel .dash-hello{display:none}
   .inbox.has-sel{border-radius:0;border-left:0;border-right:0;margin:0 -16px}
   .thr-back{display:inline-flex}
+  .thr-fold{display:none}
   .msg{max-width:88%}
   .modal-backdrop:has(> .thr-modal){padding:0}
   .modal.thr-modal{max-width:none;width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding:12px 12px 0}

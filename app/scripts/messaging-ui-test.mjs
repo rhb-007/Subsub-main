@@ -540,6 +540,29 @@ try {
     if (vp.phone) t.ck(`${vp.name}: an open conversation takes the screen; the title goes`, fit && !fit.title, JSON.stringify(fit));
     else t.ck(`${vp.name}: the list stays beside the conversation`,
       await page.evaluate(() => getComputedStyle(document.querySelector(".inbox .inbox-list")).display !== "none"));
+    // The list folds away so the conversation can have the whole width, and
+    // the same button brings it back. Not offered on a phone: one pane there.
+    const fold = () => page.evaluate(() => {
+      const b = document.querySelector(".inbox .thr-fold"), l = document.querySelector(".inbox .inbox-list");
+      const w = document.querySelector(".inbox"), p = document.querySelector(".inbox .inbox-pane");
+      return { button: !!b && getComputedStyle(b).display !== "none", label: b?.getAttribute("aria-label") || null,
+        list: l ? getComputedStyle(l).display !== "none" : null,
+        share: w && p ? Math.round(p.getBoundingClientRect().width / w.getBoundingClientRect().width * 100) : null };
+    });
+    if (vp.width <= 760) {
+      t.ck(`${vp.name}: no fold button, since there is one pane`, !(await fold()).button);
+    } else {
+      const f0 = await fold();
+      await page.evaluate(() => document.querySelector(".inbox .thr-fold")?.click());
+      await wait(250);
+      const f1 = await fold();
+      await page.evaluate(() => document.querySelector(".inbox .thr-fold")?.click());
+      await wait(250);
+      const f2 = await fold();
+      t.ck(`${vp.name}: the list folds away and the conversation takes the whole width`,
+        f0.button && f0.list && f0.share < 80 && !f1.list && f1.share >= 98 && /Show/.test(f1.label || ""), JSON.stringify([f0, f1]));
+      t.ck(`${vp.name}: and the same button brings it back`, f2.list && f2.share === f0.share, JSON.stringify(f2));
+    }
     if (vp.phone) {
       // The window opened beside a job is full screen on a phone too.
       await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Jobs/.test((b.innerText || "").trim()))?.click());
