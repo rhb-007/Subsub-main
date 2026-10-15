@@ -16,7 +16,7 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
-  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail } from "./mail.js";
+  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail } from "./mail.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
@@ -417,6 +417,10 @@ app.use("/api/*", async (c, next) => {
     // Connect events, same reasoning: Stripe holds no session and the
     // signature over the raw body is the whole of the authentication.
     || c.req.path === "/api/stripe/connect-webhook"
+    // 083. A reply to a message, delivered by Resend's inbound webhook. The
+    // Svix signature over the raw body is the whole of the authentication,
+    // and what it may write is decided by the reply address, not the caller.
+    || c.req.path === "/api/inbound/resend"
     || c.req.path === "/api/impersonation/end"
     // A liveness answer and nothing else: no database, no account, nothing
     // about anybody. The console's health light reads it through the public
@@ -19593,42 +19597,48 @@ function htmlReplyText(html) {
 // A refusal bounces with a sentence saying why, so nobody believes they
 // answered when they did not.
 const MAX_INBOUND_BYTES = 25 * 1024 * 1024;
-export async function handleInboundEmail(message, env) {
-  const reject = (why) => { try { message.setReject(why); } catch { /* not in a test */ } return { rejected: why }; };
+
+// The one place a reply is accepted, whichever door it came through.
+// `mail` is { to: [addresses], from, text, html, attachments: [{ filename,
+// mimeType, content (ArrayBuffer) }] }. Answers { ok, messageId },
+// { duplicate }, or { rejected: why, notify } -- `notify` is true only when
+// the sender is the person the address belongs to, so telling them why never
+// sends mail to a stranger who guessed or forwarded an address.
+async function acceptEmailReply(env, mail) {
   const domain = replyDomainOf(env);
-  if (!domain) return reject("Replies by email are not switched on. Please answer in SubSub.");
-  const token = tokenFromAddress(message.to, domain);
-  if (!token) return reject("This address does not belong to a SubSub conversation.");
-  if (Number(message.rawSize || 0) > MAX_INBOUND_BYTES) return reject("That reply is too large. Please answer in SubSub.");
+  if (!domain) return { rejected: "Replies by email are not switched on. Please answer in SubSub." };
+  const token = (mail.to || []).map((a) => tokenFromAddress(a, domain)).find(Boolean);
+  if (!token) return { rejected: "This address does not belong to a SubSub conversation." };
   const db = env.DB;
   let row;
   try {
     row = await db.prepare(`SELECT * FROM message_reply_tokens WHERE token = ?`).bind(token).first();
   } catch (err) {
-    if (missingSchema(err)) return reject("Replies by email are not switched on yet. Please answer in SubSub.");
+    if (missingSchema(err)) return { rejected: "Replies by email are not switched on yet. Please answer in SubSub." };
     throw err;
   }
-  if (!row) return reject("This address does not belong to a SubSub conversation.");
+  if (!row) return { rejected: "This address does not belong to a SubSub conversation." };
   const user = await db.prepare(`SELECT id, name, email FROM users WHERE id = ?`).bind(row.user_id).first();
-  const parsed = await PostalMime.parse(message.raw);
   const own = String(realEmail(user?.email) || "").toLowerCase();
-  const senders = [parsed?.from?.address, message.from].map((x) => String(x || "").trim().toLowerCase()).filter(Boolean);
+  const senders = (Array.isArray(mail.from) ? mail.from : [mail.from])
+    .map((x) => String(x || "").trim().toLowerCase().replace(/^.*<([^>]+)>.*$/, "$1")).filter(Boolean);
   if (!own || !senders.includes(own)) {
-    return reject("This reply address only takes replies from the person it was sent to. Please answer in SubSub.");
+    return { rejected: "This reply address only takes replies from the person it was sent to. Please answer in SubSub." };
   }
+  const notify = { notify: true, to: own };
   const t = await db.prepare(`${THREAD_SELECT} WHERE t.id = ?`).bind(row.thread_id).first();
-  if (!t) return reject("That conversation no longer exists.");
+  if (!t) return { rejected: "That conversation no longer exists.", ...notify };
   const thread = threadRowToJs(t);
   const live = await messagePartyLive(db, thread);
   const seat = (await threadReaders(db, thread, live))
     .find((r) => r.viewer.userId === row.user_id && r.viewer.accountId === row.account_id && r.side === row.side);
-  if (!seat) return reject("You can no longer write in this conversation.");
-  if (!live) return reject("This conversation is closed. The other side is no longer connected.");
+  if (!seat) return { rejected: "You can no longer write in this conversation.", ...notify };
+  if (!live) return { rejected: "This conversation is closed. The other side is no longer connected.", ...notify };
 
-  const body = replyTextFrom(parsed?.text || htmlReplyText(parsed?.html));
+  const body = replyTextFrom(mail.text || htmlReplyText(mail.html));
   const keyPrefix = `${row.account_id}/${MESSAGE_PHOTO_KIND}/`;
   const photos = [];
-  for (const a of parsed?.attachments || []) {
+  for (const a of mail.attachments || []) {
     const type = String(a.mimeType || "").toLowerCase();
     const bytes = a.content?.byteLength || 0;
     if (!PHOTO_TYPES.has(type) || !bytes || bytes > MAX_PHOTO_BYTES || photos.length >= MSG_MAX_PHOTOS) continue;
@@ -19637,8 +19647,8 @@ export async function handleInboundEmail(message, env) {
     photos.push({ key, type, name: String(a.filename || "photo").slice(0, 120) });
   }
   const v = validMessage({ body, photos }, { keyPrefix });
-  if (v.error === "empty") return reject("Your reply came through empty. Write above the quoted message, or answer in SubSub.");
-  if (v.error) return reject("That reply could not be added. Please answer in SubSub.");
+  if (v.error === "empty") return { rejected: "Your reply came through empty. Write above the quoted message, or answer in SubSub.", ...notify };
+  if (v.error) return { rejected: "That reply could not be added. Please answer in SubSub.", ...notify };
   // The same email delivered twice is one message: mail is retried.
   const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
   const dupe = await db.prepare(`SELECT id FROM messages WHERE thread_id = ? AND author_user_id = ? AND body = ?
@@ -19649,6 +19659,143 @@ export async function handleInboundEmail(message, env) {
   await emailMessageNow(env, thread, saved);
   return { ok: true, messageId: saved.id };
 }
+
+// Door 1: Cloudflare Email Routing hands the Worker the raw message. A
+// refusal bounces, which tells the sender why.
+export async function handleInboundEmail(message, env) {
+  if (Number(message.rawSize || 0) > MAX_INBOUND_BYTES) {
+    try { message.setReject("That reply is too large. Please answer in SubSub."); } catch { /* not in a test */ }
+    return { rejected: "too_large" };
+  }
+  const parsed = await PostalMime.parse(message.raw);
+  const out = await acceptEmailReply(env, {
+    to: [message.to, ...(parsed?.to || []).map((x) => x.address)],
+    from: [parsed?.from?.address, message.from],
+    text: parsed?.text, html: parsed?.html,
+    attachments: (parsed?.attachments || []).map((a) => ({ filename: a.filename, mimeType: a.mimeType, content: a.content })),
+  });
+  if (out.rejected) { try { message.setReject(out.rejected); } catch { /* not in a test */ } }
+  return out;
+}
+
+// Door 2: Resend receives mail for MESSAGE_REPLY_DOMAIN and calls a signed
+// webhook (email.received). The event carries who it is from and to; the
+// body and attachments are fetched back from Resend by the email's id, with
+// RESEND_INBOUND_API_KEY when the sending key cannot read received mail.
+//
+// Read defensively, because the first real event is the real test of the
+// shape: a raw MIME download is parsed exactly like Cloudflare's, and failing
+// that the text, html and attachment fields are used as they come. A refusal
+// cannot bounce here, so the person the address belongs to is emailed the
+// reason instead -- nobody else ever is.
+async function resendInboundFetch(env, path) {
+  const key = env.RESEND_INBOUND_API_KEY || env.RESEND_API_KEY;
+  const base = env.RESEND_API_BASE || "https://api.resend.com";
+  const res = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${key}` } });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    const err = new Error(`resend ${path} answered ${res.status}: ${detail.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res;
+}
+async function downloadBytes(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`download answered ${res.status}`);
+  return res.arrayBuffer();
+}
+export async function resendReplyMail(env, data) {
+  const id = data?.email_id || data?.id;
+  let full = data;
+  if (id && !(data?.text || data?.html)) {
+    full = await (await resendInboundFetch(env, `/emails/receiving/${encodeURIComponent(id)}`)).json();
+  }
+  const rawUrl = full?.raw?.download_url || full?.raw_url || null;
+  if (rawUrl) {
+    const parsed = await PostalMime.parse(await downloadBytes(rawUrl));
+    return {
+      to: [...[].concat(data?.to || []), ...(parsed?.to || []).map((x) => x.address)],
+      from: [parsed?.from?.address, ...[].concat(data?.from || [])],
+      text: parsed?.text, html: parsed?.html,
+      attachments: (parsed?.attachments || []).map((a) => ({ filename: a.filename, mimeType: a.mimeType, content: a.content })),
+    };
+  }
+  const attachments = [];
+  for (const a of full?.attachments || data?.attachments || []) {
+    const type = String(a.content_type || a.contentType || "").toLowerCase();
+    if (!PHOTO_TYPES.has(type) || Number(a.size || 0) > MAX_PHOTO_BYTES) continue;
+    let content = null;
+    try {
+      if (a.download_url) content = await downloadBytes(a.download_url);
+      else if (a.content) content = Uint8Array.from(atob(a.content), (ch) => ch.charCodeAt(0)).buffer;
+      else if (a.id && id) {
+        const meta = await (await resendInboundFetch(env, `/emails/receiving/${encodeURIComponent(id)}/attachments/${encodeURIComponent(a.id)}`)).json();
+        if (meta?.download_url) content = await downloadBytes(meta.download_url);
+      }
+    } catch (err) { console.warn("[messages] attachment not fetched:", err?.message || err); }
+    if (content) attachments.push({ filename: a.filename || "photo.jpg", mimeType: type, content });
+  }
+  return { to: [].concat(full?.to || data?.to || []), from: [].concat(full?.from || data?.from || []),
+    text: full?.text || "", html: full?.html || "", attachments };
+}
+
+// Resend signs its webhooks the Svix way: HMAC-SHA256 over "id.timestamp.body"
+// with the secret after its whsec_ prefix, base64; the header can carry
+// several signatures and any one matching is enough. Five-minute replay window.
+export async function verifySvixWebhook(rawBody, headers, secret, toleranceSeconds = 300) {
+  if (!secret) return null;
+  const get = (n) => headers.get(`svix-${n}`) || headers.get(`webhook-${n}`);
+  const id = get("id"), ts = get("timestamp"), sigs = get("signature");
+  if (!id || !ts || !sigs) return null;
+  const age = Math.abs(Math.floor(Date.now() / 1000) - Number(ts));
+  if (!Number.isFinite(age) || age > toleranceSeconds) return null;
+  let keyBytes;
+  try { keyBytes = Uint8Array.from(atob(String(secret).replace(/^whsec_/, "")), (ch) => ch.charCodeAt(0)); }
+  catch { return null; }
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${id}.${ts}.${rawBody}`)));
+  const expected = btoa(String.fromCharCode(...mac));
+  const ok = String(sigs).split(" ").some((p) => {
+    const [ver, sig] = p.split(",");
+    if (ver !== "v1" || !sig || sig.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+    return diff === 0;
+  });
+  if (!ok) return null;
+  try { return JSON.parse(rawBody); } catch { return null; }
+}
+
+app.post("/api/inbound/resend", async (c) => {
+  const secret = c.env.RESEND_WEBHOOK_SECRET;
+  if (!secret) return c.json({ error: "inbound_not_configured" }, 501);
+  const raw = await c.req.text();
+  const event = await verifySvixWebhook(raw, c.req.raw.headers, secret);
+  if (!event) {
+    console.error("[inbound] rejected an unsigned or stale webhook");
+    return c.json({ error: "bad_signature" }, 400);
+  }
+  if (event.type !== "email.received") return c.json({ ok: true, ignored: event.type });
+  let mail;
+  try {
+    mail = await resendReplyMail(c.env, event.data || {});
+  } catch (err) {
+    // Asking Resend again later may well work; a 500 makes it retry.
+    console.error("[inbound] could not read the email:", err?.message || err, JSON.stringify(event.data || {}).slice(0, 500));
+    return c.json({ error: "fetch_failed" }, 500);
+  }
+  const out = await acceptEmailReply(c.env, mail);
+  if (out.rejected) {
+    console.warn("[inbound] reply refused:", out.rejected);
+    if (out.notify && out.to) {
+      const m = messageReplyRefusedEmail(out.rejected);
+      await sendEmail(c.env, { to: out.to, subject: m.subject, text: m.text, html: m.html }).catch(() => null);
+    }
+  }
+  // Answered 200 whatever happened to the reply, so a refusal is not retried.
+  return c.json({ ok: !out.rejected, ...(out.rejected ? { rejected: out.rejected } : {}), ...(out.duplicate ? { duplicate: true } : {}) });
+});
 
 async function messageNotifySweep(env, nowMs = Date.now()) {
   const db = env.DB;

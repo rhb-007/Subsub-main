@@ -39,32 +39,42 @@ quote.
 `npm run paste 83`. One table, no ALTER TABLE, safe to run twice. Until it is
 pasted, emails still go but carry no reply address.
 
-### 2. Route reply mail to the Worker (Cloudflare Email Routing)
+### 2. Receive reply mail with Resend (done on Oct 15)
 
-On a subdomain, so nothing about mail to subsub.work itself changes:
+subsub.work's own mail is Google Workspace, so Cloudflare Email Routing cannot
+run there (it refused with "existing non-Cloudflare MX records"). Instead
+`reply.subsub.work` is its own domain in Resend's **outerhome** team, with
+**Enable Receiving** on. Every record it adds ends in `.reply`, so Google's
+records for subsub.work are untouched.
 
-1. Cloudflare dashboard, subsub.work, **Email**, **Email Routing**. Enable it
-   for the subdomain `reply.subsub.work` and let it add the DNS records.
-2. Add a **catch-all** rule for that subdomain: action **Send to a Worker**,
-   Worker **subsub-api**.
+### 3. The webhook and the Worker settings
 
-### 3. Then, and only then, set the variable
+1. Resend, **Webhooks**, add an endpoint: `https://api.subsub.work/api/inbound/resend`,
+   event **email.received**. Copy its signing secret (`whsec_...`).
+2. Worker **subsub-api**, Settings, Variables and Secrets:
+   - `RESEND_WEBHOOK_SECRET` (secret) = the signing secret.
+   - `RESEND_INBOUND_API_KEY` (secret), only if SubSub's sending key is
+     sending-only: a Resend key with full access, so received mail can be read
+     back.
+   - `MESSAGE_REPLY_DOMAIN` (plain text) = `reply.subsub.work`, **last**, once
+     the two above are set. Until it is set, every message email says to answer
+     in the app.
 
-Worker **subsub-api**, Settings, Variables: `MESSAGE_REPLY_DOMAIN` =
-`reply.subsub.work`. A Reply-To address nobody receives is a reply that
-vanishes, so until this is set every message email says to answer in the app.
-`keep_vars = true` keeps it across deploys.
+The Worker also has an `email` handler for Cloudflare Email Routing. It is
+unused today and stays in case replies ever move to a domain Cloudflare can route.
 
 ### Not verified here
 
-A real email round trip. The parsing is `postal-mime` 3.0.1, the parser
-Cloudflare's own Email Workers docs use, and the suite feeds it real MIME
-(plain text, a two-line Gmail quote, Outlook's original-message block, a
-multipart reply with a PNG attached). The first real reply is the real test.
+A real email round trip, and the exact shape of Resend's email.received event
+and its received-email read. Both are read defensively (a raw MIME download is
+parsed with `postal-mime` 3.0.1; otherwise the text, html and attachment
+fields), and a body that cannot be read answers 500 so Resend retries. The
+first real reply is the real test; the Worker logs the event data when it
+cannot read one.
 
 ### Tests
 
-`test:messaging` (148).
+`test:messaging` (162).
 
 ## 080 — Client work on your own screens, and "waiting on you" reminder emails
 

@@ -12770,17 +12770,34 @@ refactor.
   away. Image attachments become message photos under the seat's own account
   prefix. The same email delivered twice is one message.
 
-  **`MESSAGE_REPLY_DOMAIN` is set only after Cloudflare Email Routing sends
-  that domain's mail to `subsub-api`.** A Reply-To nobody receives is a reply
+  **Replies arrive through Resend, not Cloudflare, and that was found out
+  rather than chosen.** subsub.work's own mail is Google Workspace, so
+  Cloudflare Email Routing refused to run there ("existing non-Cloudflare MX
+  records"), and removing Google's records would have cost every @subsub.work
+  inbox. `reply.subsub.work` is its own domain in Resend's **outerhome** team
+  (the team SubSub's sending key belongs to, not the empty "subsub" one) with
+  receiving on, and every record ends in `.reply`. Resend calls
+  `POST /api/inbound/resend`, Svix-signed (`RESEND_WEBHOOK_SECRET`), and the
+  body is read back by id (`RESEND_INBOUND_API_KEY` when the sending key is
+  sending-only). Both doors go through one `acceptEmailReply`; the Cloudflare
+  `email` handler stays, unused, in case replies ever move.
+
+  **A refusal through Resend cannot bounce, so it is emailed, and only to the
+  owner.** `notify` is set only once the sender is proven to be the person the
+  address belongs to; a stranger who forwarded or guessed an address hears
+  nothing, which keeps this from being a way to send mail to anybody. Refusals
+  answer 200 so they are not retried; a body Resend cannot hand back answers
+  500 so it is.
+
+  **`MESSAGE_REPLY_DOMAIN` is set last.** A Reply-To nobody receives is a reply
   that vanishes, so until it is set every email says to answer in the app and
-  carries no reply address. A subdomain (`reply.subsub.work`), so mail to
-  subsub.work itself is untouched.
+  carries no reply address.
 
   **`postal-mime` is pinned exactly at 3.0.1**, three weeks old when added.
   4.0.7 was released the same day, and a mail parser on the path that writes
   into conversations is the wrong place to take a day-old release.
 
-  Eight mutations fire, each on its own assertion. One survived at first: the
+  Ten mutations fire, each on its own assertion. One survived at first: the
   live check, because a departed tenant's own reply is already refused by the
   seat lookup. The case only it catches is **the office writing by email to a
   tenant who has gone**, and that is now its test. **Not verified here:** a

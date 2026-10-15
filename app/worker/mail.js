@@ -1234,6 +1234,17 @@ Open the conversation:
   return { subject, text, html: textToHtml(text, link) };
 }
 
+// 083. A reply by email that could not be added, told to the person it came
+// from. Only ever sent to the address the reply address was issued to.
+export function messageReplyRefusedEmail(reason) {
+  const text = `Your email reply couldn't be added to the conversation:
+
+${reason}
+
+-- SubSub`;
+  return { subject: "Your reply didn't reach SubSub", text, html: textToHtml(text) };
+}
+
 export function messageNotifyEmail({ firstName, threads = [], link, fromName }) {
   const n = threads.reduce((k, t) => k + (t.count || 1), 0);
   const quote = (s) => {

@@ -58,15 +58,18 @@ const GROUPS = [
       + "Without its signing secret every Connect event is refused, so a payout status only moves "
       + "when somebody opens the panel.",
   },
-  // Optional. Set only once Cloudflare Email Routing sends mail for this
-  // address to the subsub-api Worker: a Reply-To nobody receives is a reply
-  // that vanishes, so until then every message email says to answer in the app.
+  // Optional. Set MESSAGE_REPLY_DOMAIN only once that domain's mail reaches
+  // the Worker -- through Resend's inbound webhook (the signing secret below)
+  // or Cloudflare Email Routing. A Reply-To nobody receives is a reply that
+  // vanishes, so until then every message email says to answer in the app.
+  // RESEND_INBOUND_API_KEY is only needed when the sending key is
+  // sending-only and cannot read received mail back.
   {
     id: "replies", label: "Email replies to messages",
-    vars: ["MESSAGE_REPLY_DOMAIN"],
-    matters: "Answering a SubSub message by replying to its email. The domain (for example "
-      + "reply.subsub.work) must route its mail to the subsub-api Worker. Unset, message emails "
-      + "still go, and say to reply in the app.",
+    vars: ["MESSAGE_REPLY_DOMAIN", "RESEND_WEBHOOK_SECRET", "RESEND_INBOUND_API_KEY"],
+    matters: "Answering a SubSub message by replying to its email. Resend receives mail for the "
+      + "reply domain (reply.subsub.work) and calls /api/inbound/resend, signed with the webhook "
+      + "secret. Unset, message emails still go, and say to reply in the app.",
   },
   {
     id: "ai", label: "AI photo notes (Claude)",

@@ -99,8 +99,19 @@ const seed = () => {
 };
 
 const sent = [];
+// 083: what Resend hands back for a received email, by id, and raw downloads.
+const RECEIVED = new Map(), DOWNLOADS = new Map();
+const fetched = [];
 globalThis.fetch = async (input, init = {}) => {
   const url = String(input?.url || input);
+  const rm = url.match(/mail\.test\/emails\/receiving\/([^/?]+)$/);
+  if (rm) {
+    fetched.push({ url, auth: (init.headers || {}).Authorization });
+    const got = RECEIVED.get(decodeURIComponent(rm[1]));
+    return got ? new Response(JSON.stringify(got), { headers: { "Content-Type": "application/json" } })
+      : new Response("{}", { status: 404 });
+  }
+  if (DOWNLOADS.has(url)) return new Response(DOWNLOADS.get(url));
   if (url.includes("mail.test")) sent.push(JSON.parse(String(init.body || "{}")));
   return new Response(JSON.stringify({ id: "em_" + sent.length }), { headers: { "Content-Type": "application/json" } });
 };
@@ -457,6 +468,83 @@ console.log("\n-- 083: every message is emailed, and a reply by email comes back
   ck("a reply address is read whatever its case, and a short one is not", tokenFromAddress("M-ABCDEFGHIJKLMNOPQRSTUVWX@Reply.SubSub.work", "reply.subsub.work") === "abcdefghijklmnopqrstuvwx"
     && tokenFromAddress("m-short@reply.subsub.work", "reply.subsub.work") === null
     && tokenFromAddress("m-abcdefghijklmnopqrstuvwx@other.test", "reply.subsub.work") === null);
+}
+
+console.log("\n-- 083: a reply through Resend's inbound webhook --");
+{
+  const db = seed();
+  const secretBytes = new Uint8Array(24).map((_, i) => i * 7 + 3);
+  const SECRET = "whsec_" + Buffer.from(secretBytes).toString("base64");
+  const env = { ...envOf(db), MESSAGE_REPLY_DOMAIN: "reply.subsub.work", RESEND_WEBHOOK_SECRET: SECRET,
+    RESEND_INBOUND_API_KEY: "re_full" };
+  const { createHmac } = await import("node:crypto");
+  const post = async (event, { sign = true, ts = Math.floor(Date.now() / 1000), envOver = env } = {}) => {
+    const body = JSON.stringify(event);
+    const id = "msg_" + Math.random().toString(36).slice(2);
+    const sig = createHmac("sha256", Buffer.from(secretBytes)).update(`${id}.${ts}.${body}`).digest("base64");
+    const headers = { "Content-Type": "application/json", "svix-id": id, "svix-timestamp": String(ts),
+      "svix-signature": sign ? `v1,${sig}` : "v1,AAAA" };
+    const r = await worker.fetch(new Request("https://api.subsub.work/api/inbound/resend", { method: "POST", headers, body }), envOver);
+    return [r.status, await r.json().catch(() => ({}))];
+  };
+  const toOf = (m) => (Array.isArray(m.to) ? m.to : [m.to]).join(",");
+  sent.length = 0;
+  db.exec(`UPDATE message_reads SET read_at = '2020-01-01T00:00:00.000Z'`);
+  const [, r1] = await start(env, "admin", { kind: "tenant", partyUserId: "t1", body: "Can we come Tuesday?" });
+  const id = r1.thread.id;
+  const tok = tokenFromAddress(sent.find((m) => toOf(m).includes("tess@"))?.reply_to, "reply.subsub.work");
+  ck("the office's message reaches the tenant with a reply address", !!tok);
+  const count = () => db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE thread_id = ?`).get(id).n;
+  const before = count();
+
+  let [st] = await post({ type: "email.received", data: { email_id: "e1" } }, { sign: false });
+  ck("an unsigned webhook is refused", st === 400, String(st));
+  [st] = await post({ type: "email.received", data: { email_id: "e1" } }, { ts: Math.floor(Date.now() / 1000) - 3600 });
+  ck("and so is a replayed old one", st === 400, String(st));
+  const noSecret = { ...env }; delete noSecret.RESEND_WEBHOOK_SECRET;
+  [st] = await post({ type: "email.received", data: {} }, { envOver: noSecret });
+  ck("with no signing secret set it is not open to anybody", st === 501, String(st));
+  let [st2, b2] = await post({ type: "email.sent", data: {} });
+  ck("other events are acknowledged and ignored", st2 === 200 && b2.ignored === "email.sent", JSON.stringify(b2));
+
+  // The body comes back from Resend by id, as text and html fields.
+  RECEIVED.set("e1", { id: "e1", from: "Tess <tess@home.test>", to: [`m-${tok}@reply.subsub.work`],
+    text: "Tuesday works, after 3\n\nOn Thu, Oct 15, 2026 at 10:04 AM Cascade <x@y> wrote:\n> Can we come Tuesday?", html: "" });
+  sent.length = 0; fetched.length = 0;
+  [st2, b2] = await post({ type: "email.received", data: { email_id: "e1", from: "tess@home.test", to: [`m-${tok}@reply.subsub.work`] } });
+  const last = db.prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`).get(id);
+  ck("a reply through Resend is added to the conversation", st2 === 200 && b2.ok && count() === before + 1
+    && last.body === "Tuesday works, after 3" && last.author_user_id === "t1", JSON.stringify({ b2, last }));
+  ck("read back from Resend with the inbound key", fetched.length === 1 && fetched[0].auth === "Bearer re_full", JSON.stringify(fetched));
+  ck("and the office is emailed about it", sent.some((m) => toOf(m).includes("admin@") && /after 3/.test(m.text)), JSON.stringify(sent.map(toOf)));
+  [st2, b2] = await post({ type: "email.received", data: { email_id: "e1", from: "tess@home.test", to: [`m-${tok}@reply.subsub.work`] } });
+  ck("Resend delivering it twice is one message", count() === before + 1 && b2.duplicate === true, JSON.stringify(b2));
+
+  // A raw download is parsed like Cloudflare's, photo and all.
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  DOWNLOADS.set("https://dl.test/raw-e2", ["From: Tess <tess@home.test>", `To: m-${tok}@reply.subsub.work`, "Subject: Re",
+    "MIME-Version: 1.0", 'Content-Type: multipart/mixed; boundary="b1"', "", "--b1", "Content-Type: text/plain; charset=utf-8", "",
+    "The stain is here", "--b1", 'Content-Type: image/png; name="s.png"', 'Content-Disposition: attachment; filename="s.png"',
+    "Content-Transfer-Encoding: base64", "", png, "--b1--", ""].join("\r\n"));
+  RECEIVED.set("e2", { id: "e2", raw: { download_url: "https://dl.test/raw-e2" } });
+  [st2, b2] = await post({ type: "email.received", data: { email_id: "e2", from: "tess@home.test", to: [`m-${tok}@reply.subsub.work`] } });
+  const withPhoto = JSON.parse(db.prepare(`SELECT photos FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`).get(id)?.photos || "[]");
+  ck("a raw download is parsed, with its photo", b2.ok && withPhoto.length === 1 && withPhoto[0].type === "image/png", JSON.stringify({ b2, withPhoto }));
+
+  // Refusals: the owner is told why; a stranger is told nothing.
+  RECEIVED.set("e3", { id: "e3", from: "someone@else.test", to: [`m-${tok}@reply.subsub.work`], text: "Not Tess" });
+  sent.length = 0;
+  [st2, b2] = await post({ type: "email.received", data: { email_id: "e3", from: "someone@else.test", to: [`m-${tok}@reply.subsub.work`] } });
+  ck("a reply from another address is refused, and answered 200 so it is not retried", st2 === 200 && !!b2.rejected && !db.prepare(`SELECT 1 FROM messages WHERE body = 'Not Tess'`).get(), JSON.stringify(b2));
+  ck("and nobody is emailed about it, least of all the stranger", sent.length === 0, JSON.stringify(sent.map(toOf)));
+  RECEIVED.set("e4", { id: "e4", from: "tess@home.test", to: [`m-${tok}@reply.subsub.work`], text: "\nOn Thu wrote:\n> only quote" });
+  sent.length = 0;
+  [st2, b2] = await post({ type: "email.received", data: { email_id: "e4", from: "tess@home.test", to: [`m-${tok}@reply.subsub.work`] } });
+  ck("an empty reply from the owner is refused, and they are told why", !!b2.rejected
+    && sent.length === 1 && toOf(sent[0]).includes("tess@home.test") && /empty/.test(sent[0].text), JSON.stringify(sent));
+  sent.length = 0;
+  [st2, b2] = await post({ type: "email.received", data: { email_id: "missing", from: "tess@home.test", to: [`m-${tok}@reply.subsub.work`] } });
+  ck("an email Resend cannot hand back is retried rather than lost", st2 === 500, String(st2));
 }
 
 console.log("\n-- 082: what a message is not --");
