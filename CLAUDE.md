@@ -12662,6 +12662,13 @@ refactor.
   **Pasting 081 is required** before any of it works on the live database.
   Until then the Inbox names the file and nothing else on any screen changes.
 
+  **081 has been pasted and checked on the live database (12, 8 and 4
+  columns).** The first check written for it was refused with
+  `not authorized: SQLITE_AUTH`, because it used `pragma_table_info(name)`
+  correlated over `sqlite_master`. The D1 console refuses that form. A
+  one-off column check names each table as a literal,
+  `pragma_table_info('messages')`, which is the form that ran.
+
 - **THE HANDYMAN PAGE SAYS PROPERTY MANAGER, NOT MANAGER.** Asked for on
   `/for-handymen`. Every "manager" on it was bare, which reads as a shift
   manager at a store as easily as the person who hires a handyman. It now reads
