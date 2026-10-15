@@ -292,6 +292,8 @@ WITH spec(j) AS (SELECT
   -- 082. Which job a conversation turned into. Until it is run the job is
   -- still created; it just is not linked back to the conversation.
   ',["m082_thread_job_links","col","thread_job_links",["thread_id","job_id","created_by","created_at"]]') ||
+  -- 083: a reply address per person per conversation.
+  ',["m083_message_reply_tokens","col","message_reply_tokens",["token","thread_id","user_id","account_id","side","created_at","used_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

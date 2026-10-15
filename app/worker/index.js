@@ -16,7 +16,7 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
-  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail } from "./mail.js";
+  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail } from "./mail.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
@@ -138,7 +138,9 @@ import {
 import { setupCheck } from "./setup-check.js";
 import { PREF_IDS, NEEDS_PHONE, validNotice, noticeLive, sortNotices } from "../shared/tenanthome.js";
 import { THREAD_KINDS, TEAM_ROLES, threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage,
-  owesEmail } from "../shared/messaging.js";
+  owesEmail, REPLY_QUIET_MS, replyAddress, tokenFromAddress, replyTextFrom,
+  MAX_PHOTOS as MSG_MAX_PHOTOS } from "../shared/messaging.js";
+import PostalMime from "postal-mime";
 import { systemHealth } from "./syshealth.js";
 import { integrationHealth } from "./integrationhealth.js";
 import { verifyWithFallback, configuredProviders, askProvider, PROVIDERS } from "./licenses.js";
@@ -7340,6 +7342,9 @@ app.post("/api/threads", async (c) => {
       const v = validMessage(b, { keyPrefix: `${viewer.accountId}/${MESSAGE_PHOTO_KIND}/` });
       if (v.error) return c.json({ error: v.error, max: v.max, thread }, 400);
       message = await insertMessage(db, thread.id, viewer.userId, side, v);
+      // 083. The first message of a conversation is emailed like any other.
+      const run = emailMessageNow(c.env, thread, message);
+      try { c.executionCtx.waitUntil(run); } catch { await run; }
     }
     return c.json({ thread: { ...thread, side }, message }, 201);
   } catch (err) {
@@ -7400,6 +7405,10 @@ app.post("/api/threads/:id/messages", async (c) => {
     const v = validMessage(b, { keyPrefix: `${r.viewer.accountId}/${MESSAGE_PHOTO_KIND}/` });
     if (v.error) return c.json({ error: v.error, max: v.max }, 400);
     const message = await insertMessage(c.env.DB, r.thread.id, r.viewer.userId, r.side, v);
+    // 083. Emailed to the other side now, after the reply goes back: a slow
+    // mail provider must not hold up the message appearing on screen.
+    const run = emailMessageNow(c.env, r.thread, message);
+    try { c.executionCtx.waitUntil(run); } catch { await run; }
     return c.json({ message }, 201);
   } catch (err) {
     const migration = missingSchema(err);
@@ -8892,6 +8901,7 @@ export function missingSchema(err) {
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
   if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
+  if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
@@ -19428,6 +19438,218 @@ async function licenseReminderSweep(env) {
 // dies halfway does not send the same email twice. Their own email setting is
 // honored: somebody who switched email off is not emailed by the back door of
 // a message.
+// 083. Everybody who could read a thread in the app, each with the seat they
+// read it from and which side that puts them on. One answer for the digest
+// sweep, the email sent with each message and a reply arriving by email, so
+// the three cannot disagree about who is in a conversation.
+async function threadReaders(db, t, live) {
+  const teamOf = async (accountId) => (await db.prepare(
+    `SELECT * FROM memberships WHERE account_id = ? AND role IN ('admin', 'pm')`).bind(accountId).all()).results || [];
+  // Candidate readers, each with the seat they read it from.
+  const seats = [];
+  for (const m of await teamOf(t.accountId)) {
+    seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: m.role,
+      propertyIds: await propertyScope(db, m), jobIds: await jobScope(db, m) } });
+  }
+  if (live) {
+    if (t.partyUserId) {
+      const m = await db.prepare(`SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`).bind(t.partyUserId, t.accountId).first();
+      if (m) seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: m.role,
+        propertyIds: await propertyScope(db, m), jobIds: null } });
+    }
+    if (t.partyCompanyId) {
+      const { results: cs } = await db.prepare(`SELECT * FROM memberships WHERE account_id = ? AND role = 'contractor' AND company_id = ?`)
+        .bind(t.accountId, t.partyCompanyId).all();
+      for (const m of cs || []) seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: "contractor", companyId: m.company_id } });
+      const own = await db.prepare(`SELECT id FROM accounts WHERE company_id = ? AND id <> ?`).bind(t.partyCompanyId, t.accountId).first().catch(() => null);
+      if (own) for (const m of await teamOf(own.id)) {
+        seats.push({ m, viewer: { userId: m.user_id, accountId: own.id, role: m.role, ownCompanyId: t.partyCompanyId } });
+      }
+    }
+    if (t.partyAccountId) {
+      for (const m of await teamOf(t.partyAccountId)) {
+        seats.push({ m, viewer: { userId: m.user_id, accountId: t.partyAccountId, role: m.role } });
+      }
+    }
+  }
+  const out = [], seen = new Set();
+  for (const { viewer } of seats) {
+    const side = sideOf(t, viewer);
+    const k = `${viewer.userId}|${viewer.accountId}`;
+    if (!side || seen.has(k)) continue;
+    seen.add(k);
+    out.push({ viewer, side });
+  }
+  return out;
+}
+
+// 083. A reply address for one person in one conversation, made the first time
+// they are emailed about it and reused after, so every email in one thread
+// carries the same address. Random rather than derived: an address anybody
+// could work out is an address anybody could post into the thread with.
+const REPLY_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
+function replyToken() {
+  const b = new Uint8Array(24);
+  crypto.getRandomValues(b);
+  return [...b].map((x) => REPLY_ALPHABET[x & 31]).join("");
+}
+async function replyTokenFor(db, threadId, viewer, side) {
+  const find = () => db.prepare(`SELECT token FROM message_reply_tokens WHERE thread_id = ? AND user_id = ? AND account_id = ?`)
+    .bind(threadId, viewer.userId, viewer.accountId).first();
+  const have = await find();
+  if (have) return have.token;
+  await db.prepare(`INSERT INTO message_reply_tokens (token, thread_id, user_id, account_id, side, created_at)
+    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id, user_id, account_id) DO NOTHING`)
+    .bind(replyToken(), threadId, viewer.userId, viewer.accountId, side, new Date().toISOString()).run();
+  return (await find())?.token || null;
+}
+const replyDomainOf = (env) => String(env.MESSAGE_REPLY_DOMAIN || "").trim().toLowerCase().replace(/^@/, "") || null;
+
+// 083. EVERY MESSAGE IS EMAILED TO THE OTHER SIDE THE MOMENT IT IS SENT, each
+// reader with their own reply address. Skipped for anybody who has switched
+// email off, and for anybody who read the thread in the last REPLY_QUIET_MS --
+// they are in the conversation right now. The digest sweep stays as the net
+// under this: it only sends where nothing has been sent since the message.
+// Never throws: the message is already stored, and a failed email must not
+// report a sent message as a failure.
+async function emailMessageNow(env, thread, message, nowMs = Date.now()) {
+  try {
+    const db = env.DB;
+    const live = await messagePartyLive(db, thread);
+    const readers = (await threadReaders(db, thread, live))
+      .filter((r) => r.side !== message.authorSide && r.viewer.userId !== message.authorUserId);
+    if (!readers.length) return { emailed: 0 };
+    const domain = replyDomainOf(env);
+    const now = new Date(nowMs).toISOString();
+    const author = message.authorName || "Somebody";
+    let emailed = 0;
+    for (const { viewer, side } of readers) {
+      // Sending a message also marks the thread read (insertMessage), so a
+      // read stamped at the reader's own last message is a send, not somebody
+      // looking at the conversation -- and the person who just wrote and left
+      // is exactly who an answer has to reach.
+      const st = await db.prepare(`SELECT r.read_at, (SELECT MAX(created_at) FROM messages
+          WHERE thread_id = ?1 AND author_user_id = ?2) AS mine
+        FROM (SELECT 1) LEFT JOIN message_reads r ON r.thread_id = ?1 AND r.user_id = ?2`)
+        .bind(thread.id, viewer.userId).first();
+      const readMs = st?.read_at && st.read_at !== st.mine ? Date.parse(st.read_at) : NaN;
+      if (Number.isFinite(readMs) && nowMs - readMs < REPLY_QUIET_MS) continue;
+      const user = await db.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(viewer.userId).first();
+      const to = realEmail(user?.email);
+      // Recorded either way, so the sweep does not reconsider somebody who
+      // switched email off every ten minutes.
+      await db.prepare(`INSERT INTO message_reads (thread_id, user_id, notified_at) VALUES (?, ?, ?)
+        ON CONFLICT(thread_id, user_id) DO UPDATE SET notified_at = excluded.notified_at`).bind(thread.id, viewer.userId, now).run();
+      if (!to || !notifyOf(user).email) continue;
+      let token = null;
+      if (domain) {
+        try { token = await replyTokenFor(db, thread.id, viewer, side); }
+        catch (err) { if (!missingSchema(err)) throw err; }
+      }
+      const account = await db.prepare(`SELECT id, name, subdomain, hostname_status FROM accounts WHERE id = ?`)
+        .bind(viewer.accountId).first().catch(() => null);
+      // Who wrote it, and for whom: the office's people are named with the
+      // office, a company's with the company; a tenant or an owner is themself.
+      const org = side === "party" ? thread.accountName
+        : (thread.kind === "crew" || thread.partyAccountId) ? thread.partyName : null;
+      const who = org && org !== author ? `${author} (${org})` : author;
+      const m = messageEmail({ firstName: String(user.name || "").split(" ")[0], who,
+        about: thread.jobTitle || (thread.kind === "owner" ? thread.propertyName : "") || "",
+        body: message.body, photoCount: (message.photos || []).length,
+        link: `${accountOrigin(account)}/?open=inbox&thread=${thread.id}`, fromName: account?.name,
+        canReply: !!token });
+      const result = await sendEmail(env, { to, subject: m.subject, text: m.text, html: m.html,
+        ...(token ? { replyTo: replyAddress(token, domain) } : {}) });
+      await logMail(env, { accountId: viewer.accountId, to, kind: "message", subject: m.subject, result });
+      if (result?.ok) emailed++;
+    }
+    return { emailed };
+  } catch (err) {
+    console.warn("[messages] email not sent:", err?.message || err);
+    return { error: String(err?.message || err) };
+  }
+}
+
+// Plain text out of an HTML-only email: drop the quoted part first, then tags.
+function htmlReplyText(html) {
+  return String(html || "")
+    .replace(/<blockquote[\s\S]*$/i, "")
+    .replace(/<div[^>]*class="[^"]*(gmail_quote|moz-cite-prefix|OutlookMessageHeader)[^"]*"[\s\S]*$/i, "")
+    .replace(/<(br|\/p|\/div|\/li)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#39;|&apos;/g, "'").replace(/&quot;/g, '"');
+}
+
+// 083. A REPLY ARRIVING BY EMAIL. Cloudflare Email Routing hands every message
+// to MESSAGE_REPLY_DOMAIN to this Worker. It is added to the conversation as
+// the person the address was issued to, through the same checks a message
+// written in the app goes through, and only when:
+//   the address is one we issued (unknown is refused, not guessed at);
+//   it comes FROM that person's own email address, because a forwarded email
+//     must not let whoever it was forwarded to speak for them;
+//   they can still read the thread from that seat, and the other side is
+//     still there (the app refuses a message to somebody who has gone);
+//   there is something in it once the quoted part is cut away.
+// A refusal bounces with a sentence saying why, so nobody believes they
+// answered when they did not.
+const MAX_INBOUND_BYTES = 25 * 1024 * 1024;
+export async function handleInboundEmail(message, env) {
+  const reject = (why) => { try { message.setReject(why); } catch { /* not in a test */ } return { rejected: why }; };
+  const domain = replyDomainOf(env);
+  if (!domain) return reject("Replies by email are not switched on. Please answer in SubSub.");
+  const token = tokenFromAddress(message.to, domain);
+  if (!token) return reject("This address does not belong to a SubSub conversation.");
+  if (Number(message.rawSize || 0) > MAX_INBOUND_BYTES) return reject("That reply is too large. Please answer in SubSub.");
+  const db = env.DB;
+  let row;
+  try {
+    row = await db.prepare(`SELECT * FROM message_reply_tokens WHERE token = ?`).bind(token).first();
+  } catch (err) {
+    if (missingSchema(err)) return reject("Replies by email are not switched on yet. Please answer in SubSub.");
+    throw err;
+  }
+  if (!row) return reject("This address does not belong to a SubSub conversation.");
+  const user = await db.prepare(`SELECT id, name, email FROM users WHERE id = ?`).bind(row.user_id).first();
+  const parsed = await PostalMime.parse(message.raw);
+  const own = String(realEmail(user?.email) || "").toLowerCase();
+  const senders = [parsed?.from?.address, message.from].map((x) => String(x || "").trim().toLowerCase()).filter(Boolean);
+  if (!own || !senders.includes(own)) {
+    return reject("This reply address only takes replies from the person it was sent to. Please answer in SubSub.");
+  }
+  const t = await db.prepare(`${THREAD_SELECT} WHERE t.id = ?`).bind(row.thread_id).first();
+  if (!t) return reject("That conversation no longer exists.");
+  const thread = threadRowToJs(t);
+  const live = await messagePartyLive(db, thread);
+  const seat = (await threadReaders(db, thread, live))
+    .find((r) => r.viewer.userId === row.user_id && r.viewer.accountId === row.account_id && r.side === row.side);
+  if (!seat) return reject("You can no longer write in this conversation.");
+  if (!live) return reject("This conversation is closed. The other side is no longer connected.");
+
+  const body = replyTextFrom(parsed?.text || htmlReplyText(parsed?.html));
+  const keyPrefix = `${row.account_id}/${MESSAGE_PHOTO_KIND}/`;
+  const photos = [];
+  for (const a of parsed?.attachments || []) {
+    const type = String(a.mimeType || "").toLowerCase();
+    const bytes = a.content?.byteLength || 0;
+    if (!PHOTO_TYPES.has(type) || !bytes || bytes > MAX_PHOTO_BYTES || photos.length >= MSG_MAX_PHOTOS) continue;
+    const key = `${keyPrefix}${uid()}-${safeFileName(a.filename || "photo.jpg")}`;
+    await env.FILES.put(key, a.content, { httpMetadata: { contentType: type } });
+    photos.push({ key, type, name: String(a.filename || "photo").slice(0, 120) });
+  }
+  const v = validMessage({ body, photos }, { keyPrefix });
+  if (v.error === "empty") return reject("Your reply came through empty. Write above the quoted message, or answer in SubSub.");
+  if (v.error) return reject("That reply could not be added. Please answer in SubSub.");
+  // The same email delivered twice is one message: mail is retried.
+  const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const dupe = await db.prepare(`SELECT id FROM messages WHERE thread_id = ? AND author_user_id = ? AND body = ?
+    AND created_at > ? LIMIT 1`).bind(thread.id, row.user_id, v.body, since).first();
+  if (dupe) return { duplicate: dupe.id };
+  const saved = await insertMessage(db, thread.id, row.user_id, row.side, v);
+  await db.prepare(`UPDATE message_reply_tokens SET used_at = ? WHERE token = ?`).bind(new Date().toISOString(), token).run();
+  await emailMessageNow(env, thread, saved);
+  return { ok: true, messageId: saved.id };
+}
+
 async function messageNotifySweep(env, nowMs = Date.now()) {
   const db = env.DB;
   let threads;
@@ -19439,8 +19661,6 @@ async function messageNotifySweep(env, nowMs = Date.now()) {
     if (missingSchema(err)) return { skipped: "081 not migrated" };
     throw err;
   }
-  const teamOf = async (accountId) => (await db.prepare(
-    `SELECT * FROM memberships WHERE account_id = ? AND role IN ('admin', 'pm')`).bind(accountId).all()).results || [];
   const userCache = new Map();
   const userOf = async (id) => {
     if (!userCache.has(id)) userCache.set(id, await db.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(id).first());
@@ -19455,36 +19675,7 @@ async function messageNotifySweep(env, nowMs = Date.now()) {
   const owed = new Map();   // `${userId}|${linkAccountId}` -> { user, account, threads: [] }
   for (const t of threads) {
     const live = await messagePartyLive(db, t);
-    // Candidate readers, each with the seat they read it from.
-    const seats = [];
-    for (const m of await teamOf(t.accountId)) {
-      seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: m.role,
-        propertyIds: await propertyScope(db, m), jobIds: await jobScope(db, m) } });
-    }
-    if (live) {
-      if (t.partyUserId) {
-        const m = await db.prepare(`SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`).bind(t.partyUserId, t.accountId).first();
-        if (m) seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: m.role,
-          propertyIds: await propertyScope(db, m), jobIds: null } });
-      }
-      if (t.partyCompanyId) {
-        const { results: cs } = await db.prepare(`SELECT * FROM memberships WHERE account_id = ? AND role = 'contractor' AND company_id = ?`)
-          .bind(t.accountId, t.partyCompanyId).all();
-        for (const m of cs || []) seats.push({ m, viewer: { userId: m.user_id, accountId: t.accountId, role: "contractor", companyId: m.company_id } });
-        const own = await db.prepare(`SELECT id FROM accounts WHERE company_id = ? AND id <> ?`).bind(t.partyCompanyId, t.accountId).first().catch(() => null);
-        if (own) for (const m of await teamOf(own.id)) {
-          seats.push({ m, viewer: { userId: m.user_id, accountId: own.id, role: m.role, ownCompanyId: t.partyCompanyId } });
-        }
-      }
-      if (t.partyAccountId) {
-        for (const m of await teamOf(t.partyAccountId)) {
-          seats.push({ m, viewer: { userId: m.user_id, accountId: t.partyAccountId, role: m.role } });
-        }
-      }
-    }
-    for (const { viewer } of seats) {
-      const side = sideOf(t, viewer);
-      if (!side) continue;
+    for (const { viewer, side } of await threadReaders(db, t, live)) {
       const st = await db.prepare(
         `SELECT (SELECT MAX(created_at) FROM messages WHERE thread_id = ?1 AND author_side <> ?2) AS latest,
                 (SELECT body FROM messages WHERE thread_id = ?1 AND author_side <> ?2 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS preview,
@@ -24540,6 +24731,16 @@ app.get("/api/notify/log", async (c) => {
 
 export default {
   fetch: app.fetch,
+
+  // 083. Mail to MESSAGE_REPLY_DOMAIN, routed here by Cloudflare Email
+  // Routing: a reply to a message email, added to its conversation.
+  async email(message, env) {
+    try { await handleInboundEmail(message, env); }
+    catch (err) {
+      console.error("[messages] inbound reply failed:", err?.message || err);
+      try { message.setReject("That reply could not be added. Please answer in SubSub."); } catch { /* already answered */ }
+    }
+  },
 
   // wrangler.toml declares a nightly Cron Trigger, and until this existed
   // there was no `scheduled` handler for it to call -- the schedule fired

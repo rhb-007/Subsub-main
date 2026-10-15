@@ -12739,6 +12739,53 @@ refactor.
   happened to be inserted in time order. **Paste 082** before linking
   works; until then jobs are still made, just not linked.
 
+- **EVERY MESSAGE IS EMAILED, AND A REPLY BY EMAIL LANDS IN THE
+  CONVERSATION.** Asked for as *"each message sent within subsub app should
+  also get an email notification…if the user replies via email, their response
+  should be added to the subsub messaging string."* Migration 083
+  (`message_reply_tokens`), `replyTextFrom` and `tokenFromAddress` in
+  `shared/messaging.js`, `emailMessageNow` and `handleInboundEmail` in the
+  Worker, and an `email` handler on its default export.
+
+  **Sent at once, to everybody on the other side who can read the thread.**
+  `threadReaders` is the one answer to who that is, read by the per-message
+  email, the digest sweep and an inbound reply, so the three cannot disagree.
+  Skipped for anybody with email off, and for anybody who read the thread in
+  the last `REPLY_QUIET_MS` (two minutes), because they are in the
+  conversation. **A read stamped at the reader's own last message does not
+  count**: sending a message marks the thread read, so without that the person
+  who just wrote and left was the one person an answer could not reach. That
+  failed the suite on its first run. The 20-minute digest is now the backup
+  for an email that failed to send.
+
+  **The reply address is random and stored**, one per person per thread per
+  seat: `m-<token>@MESSAGE_REPLY_DOMAIN`. An address derived from a thread id
+  and a user id is one anybody could post into a thread with.
+
+  **A reply is refused, with a bounce that says why, unless** the address is
+  one we issued, it comes **from** that person's own email address (a forwarded
+  email must not let whoever it was forwarded to speak for them), the person
+  can still read the thread from that seat, the other side is still there (the
+  app refuses `party_gone` too), and something is left once the quote is cut
+  away. Image attachments become message photos under the seat's own account
+  prefix. The same email delivered twice is one message.
+
+  **`MESSAGE_REPLY_DOMAIN` is set only after Cloudflare Email Routing sends
+  that domain's mail to `subsub-api`.** A Reply-To nobody receives is a reply
+  that vanishes, so until it is set every email says to answer in the app and
+  carries no reply address. A subdomain (`reply.subsub.work`), so mail to
+  subsub.work itself is untouched.
+
+  **`postal-mime` is pinned exactly at 3.0.1**, three weeks old when added.
+  4.0.7 was released the same day, and a mail parser on the path that writes
+  into conversations is the wrong place to take a day-old release.
+
+  Eight mutations fire, each on its own assertion. One survived at first: the
+  live check, because a departed tenant's own reply is already refused by the
+  seat lookup. The case only it catches is **the office writing by email to a
+  tenant who has gone**, and that is now its test. **Not verified here:** a
+  real email round trip.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -19,6 +19,53 @@ The standing rules, from `CLAUDE.md`:
 
 ---
 
+## 083 — Every message is emailed, and a reply by email lands in the conversation
+
+Each message sent in SubSub is emailed at once to everybody on the other side
+who can read that conversation, with the whole message in it. Two exceptions:
+anybody who switched email off, and anybody reading that conversation in the
+app in the last two minutes. The 20-minute digest stays as a backup for an
+email that failed to send.
+
+Each email carries its own reply address, `m-<token>@reply.subsub.work`. A
+reply to it is added to the conversation as that person, with the quoted part
+cut off and any photos attached. It is refused (bounced, with a reason) when it
+comes from any other address, when the person can no longer read the
+conversation, when the other side has gone, or when there is nothing above the
+quote.
+
+### 1. Paste migration 083
+
+`npm run paste 83`. One table, no ALTER TABLE, safe to run twice. Until it is
+pasted, emails still go but carry no reply address.
+
+### 2. Route reply mail to the Worker (Cloudflare Email Routing)
+
+On a subdomain, so nothing about mail to subsub.work itself changes:
+
+1. Cloudflare dashboard, subsub.work, **Email**, **Email Routing**. Enable it
+   for the subdomain `reply.subsub.work` and let it add the DNS records.
+2. Add a **catch-all** rule for that subdomain: action **Send to a Worker**,
+   Worker **subsub-api**.
+
+### 3. Then, and only then, set the variable
+
+Worker **subsub-api**, Settings, Variables: `MESSAGE_REPLY_DOMAIN` =
+`reply.subsub.work`. A Reply-To address nobody receives is a reply that
+vanishes, so until this is set every message email says to answer in the app.
+`keep_vars = true` keeps it across deploys.
+
+### Not verified here
+
+A real email round trip. The parsing is `postal-mime` 3.0.1, the parser
+Cloudflare's own Email Workers docs use, and the suite feeds it real MIME
+(plain text, a two-line Gmail quote, Outlook's original-message block, a
+multipart reply with a PNG attached). The first real reply is the real test.
+
+### Tests
+
+`test:messaging` (148).
+
 ## 080 — Client work on your own screens, and "waiting on you" reminder emails
 
 Work another account gives you now shows on your own **Dashboard** and

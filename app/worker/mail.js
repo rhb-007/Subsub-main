@@ -22,6 +22,7 @@ import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
 // without binding either name in this file, so `missingDocs` below throws on
 // `DOC_KINDS` -- a module that loads fine and fails on the first email sent.
 import { DOC_KINDS, DOC_LABELS } from "../shared/docs.js";
+import { REPLY_MARKER } from "../shared/messaging.js";
 export { DOC_KINDS, DOC_LABELS };
 // The schedule and the checklist come from shared/doccheck.js, which is the one
 // list. They were copied here, and agreed with the app by luck -- which stopped
@@ -1206,6 +1207,33 @@ an unmonitored address. Replies aren't received.`;
 // reader can tell a "thanks!" from a "the water is coming through the
 // ceiling" without opening anything. Replies go in the app, because this
 // address is not read by anybody.
+// 083. ONE MESSAGE, SENT THE MOMENT IT IS WRITTEN. It carries the whole
+// message rather than a preview, because the point is that somebody can read
+// it and answer without opening anything. With a reply address it says
+// replying works and puts the marker above the quoted part; without one it
+// says so, because a reply to an address nobody reads is a reply that vanishes.
+export function messageEmail({ firstName, who, about, body, photoCount = 0, link, fromName, canReply }) {
+  const photos = photoCount ? `\n\n(${photoCount === 1 ? "1 photo" : `${photoCount} photos`} attached in SubSub.)` : "";
+  const said = String(body || "").trim() || (photoCount ? "Sent a photo." : "");
+  const how = canReply
+    ? "Reply to this email to answer. Your reply is added to the conversation in SubSub."
+    : "Replies to this email aren't received; answer in SubSub instead.";
+  const text = `${canReply ? `-- ${REPLY_MARKER} --\n\n` : ""}Hi ${firstName || "there"},
+
+${who}${about ? ` (${about})` : ""} wrote:
+
+${said}${photos}
+
+${how}
+
+Open the conversation:
+  ${link}
+
+-- ${fromName || "SubSub"}`;
+  const subject = `${who}${about ? ` · ${about}` : ""}: ${String(said).replace(/\s+/g, " ").slice(0, 60)}${said.length > 60 ? "..." : ""}`;
+  return { subject, text, html: textToHtml(text, link) };
+}
+
 export function messageNotifyEmail({ firstName, threads = [], link, fromName }) {
   const n = threads.reduce((k, t) => k + (t.count || 1), 0);
   const quote = (s) => {

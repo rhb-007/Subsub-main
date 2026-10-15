@@ -2494,3 +2494,16 @@ CREATE TABLE IF NOT EXISTS thread_job_links (
   PRIMARY KEY (thread_id, job_id)
 );
 CREATE INDEX IF NOT EXISTS ix_thread_job_links_job ON thread_job_links(job_id);
+
+-- 083. A reply address per person per conversation; see app/shared/messaging.js.
+CREATE TABLE IF NOT EXISTS message_reply_tokens (
+  token       TEXT PRIMARY KEY,
+  thread_id   TEXT NOT NULL REFERENCES message_threads(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  account_id  TEXT NOT NULL,
+  side        TEXT NOT NULL CHECK (side IN ('home', 'party')),
+  created_at  TEXT NOT NULL,
+  used_at     TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_message_reply_tokens_seat
+  ON message_reply_tokens(thread_id, user_id, account_id);

@@ -34,12 +34,13 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb, makeR2 } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage, owesEmail,
-  NOTIFY_AFTER_MS, EDIT_WINDOW_MS, looksLikeTime, jobSeedFrom } from "../shared/messaging.js";
+  NOTIFY_AFTER_MS, EDIT_WINDOW_MS, looksLikeTime, jobSeedFrom, replyTextFrom, tokenFromAddress,
+  REPLY_MARKER } from "../shared/messaging.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
 
-const { default: worker } = await import("../worker/index.js");
+const { default: worker, handleInboundEmail } = await import("../worker/index.js");
 const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "utf8");
 
 // acc1 (Cascade, a property manager) runs p1 and p3, and p4, which acc4 owns.
@@ -302,6 +303,10 @@ console.log("\n-- the email --");
   const [, r2] = await start(env, "admin", { kind: "tenant", partyUserId: "t2", body: "Your package is at the desk." });
   const cron = async () => (await worker.fetch(new Request("https://api.subsub.work/api/cron/message-notify",
     { headers: { Authorization: "Bearer cron" } }), env)).json();
+  // 083 emails each message the moment it is sent. The sweep is the net under
+  // that: here the immediate sends are taken as having failed, which is the
+  // only case it exists for.
+  db.exec(`UPDATE message_reads SET notified_at = NULL`);
   sent.length = 0;
   let out = await cron();
   ck("nothing goes before the wait", sent.length === 0, JSON.stringify(out));
@@ -329,6 +334,130 @@ console.log("\n-- the email --");
   ck("and only once", sent.filter((m) => String(m.to).includes("admin@")).length === 1, String(sent.length));
 }
 
+
+console.log("\n-- 083: every message is emailed, and a reply by email comes back --");
+{
+  const db = seed();
+  const env = { ...envOf(db), MESSAGE_REPLY_DOMAIN: "reply.subsub.work" };
+  const toOf = (m) => (Array.isArray(m.to) ? m.to : [m.to]).join(",");
+  sent.length = 0;
+  const [, r1] = await start(env, "t1", { kind: "tenant", partyUserId: "t1", body: "The water is coming through the ceiling" });
+  const id = r1.thread.id;
+  const toAdmin = sent.find((m) => toOf(m).includes("admin@cascade.test"));
+  ck("a message is emailed to the other side at once, with the whole message", !!toAdmin && /ceiling/.test(toAdmin.text)
+    && /Tess Tenant/.test(toAdmin.subject), JSON.stringify(sent.map(toOf)));
+  ck("not to whoever wrote it, nor a manager narrowed to another building",
+    !sent.some((m) => toOf(m).includes("tess@")) && !sent.some((m) => toOf(m).includes("pm3@")), JSON.stringify(sent.map(toOf)));
+  const adminTok = tokenFromAddress(toAdmin?.reply_to, "reply.subsub.work");
+  ck("it carries a reply address of its own", !!adminTok, String(toAdmin?.reply_to));
+  ck("and says replying works, above a marker the reply is cut at",
+    /Reply to this email to answer/.test(toAdmin?.text || "") && (toAdmin?.text || "").startsWith(`-- ${REPLY_MARKER} --`));
+  ck("the send is recorded, so the sweep does not send it again",
+    !!db.prepare(`SELECT notified_at FROM message_reads WHERE thread_id = ? AND user_id = 'admin'`).get(id)?.notified_at);
+
+  // The office answers; Tess left the app long ago.
+  db.exec(`UPDATE message_reads SET read_at = '2020-01-01T00:00:00.000Z' WHERE user_id = 't1'`);
+  sent.length = 0;
+  await say(env, "admin", id, "On it, a plumber is coming");
+  const toTess = sent.find((m) => toOf(m).includes("tess@home.test"));
+  const tessTok = tokenFromAddress(toTess?.reply_to, "reply.subsub.work");
+  ck("an answer is emailed back, with the other person's own address", !!tessTok && tessTok !== adminTok, String(toTess?.reply_to));
+  ck("named with the office it comes from", /Ann Admin \(Cascade Management\)/.test(toTess?.subject || ""), toTess?.subject);
+  // Somebody reading the thread right now is not emailed about it.
+  await call(env, "t1", `/threads/${id}`);
+  sent.length = 0;
+  await say(env, "admin", id, "He'll call ahead");
+  ck("somebody in the conversation right now is not emailed", !sent.some((m) => toOf(m).includes("tess@")), JSON.stringify(sent.map(toOf)));
+  db.exec(`UPDATE message_reads SET read_at = '2020-01-01T00:00:00.000Z'`);
+  sent.length = 0;
+  await say(env, "admin", id, "Also bring towels");
+  ck("the same address comes back on the next email", tokenFromAddress(sent.find((m) => toOf(m).includes("tess@"))?.reply_to, "reply.subsub.work") === tessTok);
+
+  // A reply by email.
+  const mail = (o) => {
+    const raw = o.raw || [`From: ${o.fromName || "Tess"} <${o.from}>`, `To: ${o.to}`, "Subject: Re: message",
+      "Content-Type: text/plain; charset=utf-8", "", o.text].join("\r\n");
+    return { from: o.envFrom || o.from, to: o.to, raw, rawSize: raw.length, rejected: null, setReject(why) { this.rejected = why; } };
+  };
+  const count = () => db.prepare(`SELECT COUNT(*) AS n FROM messages WHERE thread_id = ?`).get(id).n;
+  const before = count();
+  sent.length = 0;
+  let m = mail({ from: "tess@home.test", to: `m-${tessTok}@reply.subsub.work`,
+    text: "Thanks, I'll be home after 3\r\n\r\nOn Thu, Oct 15, 2026 at 10:04 AM Ann Admin <x@y> wrote:\r\n> Also bring towels" });
+  let out = await handleInboundEmail(m, env);
+  const last = db.prepare(`SELECT * FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`).get(id);
+  ck("a reply by email is added to the conversation", out.ok && count() === before + 1 && !m.rejected, JSON.stringify(out));
+  ck("as that person, on their side, without the quoted part", last.author_user_id === "t1" && last.author_side === "party"
+    && last.body === "Thanks, I'll be home after 3", JSON.stringify(last));
+  ck("and the other side is emailed about it in turn", sent.some((m2) => toOf(m2).includes("admin@") && /after 3/.test(m2.text)), JSON.stringify(sent.map(toOf)));
+  out = await handleInboundEmail(mail({ from: "tess@home.test", to: `m-${tessTok}@reply.subsub.work`,
+    text: "Thanks, I'll be home after 3\r\n\r\nOn Thu wrote:\r\n> x" }), env);
+  ck("the same email delivered twice is one message", count() === before + 1 && !!out.duplicate, JSON.stringify(out));
+
+  m = mail({ from: "someone@else.test", to: `m-${tessTok}@reply.subsub.work`, text: "Forwarded and answered by somebody else" });
+  out = await handleInboundEmail(m, env);
+  ck("a reply from any other address is refused, with a reason", !!m.rejected && count() === before + 1, String(m.rejected));
+  m = mail({ from: "tess@home.test", envFrom: "tess@home.test", fromName: "Tess", to: `m-${adminTok}@reply.subsub.work`, text: "using Ann's address" });
+  out = await handleInboundEmail(m, env);
+  ck("nor can somebody use another person's reply address", !!m.rejected && count() === before + 1, String(m.rejected));
+  m = mail({ from: "tess@home.test", to: "m-aaaaaaaaaaaaaaaaaaaaaaaa@reply.subsub.work", text: "hello" });
+  await handleInboundEmail(m, env);
+  ck("an address nobody was given is refused", !!m.rejected, String(m.rejected));
+  m = mail({ from: "tess@home.test", to: `m-${tessTok}@reply.subsub.work`, text: "\r\nOn Thu wrote:\r\n> only the quote" });
+  await handleInboundEmail(m, env);
+  ck("a reply with nothing above the quote is refused, not stored empty", !!m.rejected && count() === before + 1, String(m.rejected));
+
+  // A photo in the reply.
+  const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const raw = ["From: Tess <tess@home.test>", `To: m-${tessTok}@reply.subsub.work`, "Subject: Re: photo",
+    "MIME-Version: 1.0", 'Content-Type: multipart/mixed; boundary="b1"', "", "--b1",
+    "Content-Type: text/plain; charset=utf-8", "", "Here is the stain", "--b1",
+    'Content-Type: image/png; name="stain.png"', 'Content-Disposition: attachment; filename="stain.png"',
+    "Content-Transfer-Encoding: base64", "", png, "--b1--", ""].join("\r\n");
+  m = mail({ from: "tess@home.test", to: `m-${tessTok}@reply.subsub.work`, raw });
+  out = await handleInboundEmail(m, env);
+  const withPhoto = db.prepare(`SELECT photos FROM messages WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`).get(id);
+  const ph = JSON.parse(withPhoto?.photos || "[]");
+  ck("a photo in the reply comes with it, stored under the account", out.ok && ph.length === 1 && ph[0].key.startsWith("acc1/message-photo/")
+    && ph[0].type === "image/png", JSON.stringify({ out, ph }));
+  const [ps] = await call(env, "admin", `/threads/${id}/photos/${out.messageId}/0`);
+  ck("and the office can open it", ps === 200, String(ps));
+
+  // Somebody who has gone can no longer answer by email either.
+  db.exec(`DELETE FROM memberships WHERE id = 'm_t1'`);
+  m = mail({ from: "tess@home.test", to: `m-${tessTok}@reply.subsub.work`, text: "Am I still here?" });
+  await handleInboundEmail(m, env);
+  ck("a tenant who has moved out is refused", !!m.rejected && !db.prepare(`SELECT 1 FROM messages WHERE body = 'Am I still here?'`).get(), String(m.rejected));
+  // And the office cannot write by email to somebody who has gone, which the
+  // app refuses too (party_gone): the office's own seat is still there, so
+  // only the live check can stop it.
+  m = mail({ from: "admin@cascade.test", fromName: "Ann", to: `m-${adminTok}@reply.subsub.work`, text: "Are you still there?" });
+  await handleInboundEmail(m, env);
+  ck("nor can the office write by email to a tenant who has gone", !!m.rejected
+    && !db.prepare(`SELECT 1 FROM messages WHERE body = 'Are you still there?'`).get(), String(m.rejected));
+}
+{
+  const db = seed(); const env = envOf(db);
+  sent.length = 0;
+  const [, r1] = await start(env, "t1", { kind: "tenant", partyUserId: "t1", body: "No reply domain here" });
+  const e = sent.find((m) => String(m.to).includes("admin@"));
+  ck("with no reply domain the email still goes, says to answer in the app, and carries no reply address",
+    !!e && !e.reply_to && /answer in SubSub/.test(e.text), JSON.stringify(e));
+  const m = { from: "tess@home.test", to: "m-aaaaaaaaaaaaaaaaaaaaaaaa@reply.subsub.work", raw: "x", rawSize: 1, rejected: null, setReject(w) { this.rejected = w; } };
+  await handleInboundEmail(m, env);
+  ck("and a reply is refused rather than lost", !!m.rejected && !!r1.thread);
+}
+{
+  const t = (x) => replyTextFrom(x);
+  ck("Gmail's quote is cut", t("Yes Tuesday works\n\nOn Thu, Oct 15, 2026 at 10:04 AM Sound <a@b> wrote:\n> hi") === "Yes Tuesday works");
+  ck("a quote line wrapped onto two lines is cut", t("Fine.\n\nOn Thu, Oct 15, 2026 at 10:04 AM Sound Property\nManagement <a@b> wrote:\n> q") === "Fine.");
+  ck("Outlook's original message is cut", t("Thanks\n\n-----Original Message-----\nFrom: x") === "Thanks");
+  ck("our own marker is cut", t(`A\n\n-- ${REPLY_MARKER} --\nold`) === "A");
+  ck("a phone signature goes", t("ok\n\nSent from my iPhone") === "ok");
+  ck("a reply address is read whatever its case, and a short one is not", tokenFromAddress("M-ABCDEFGHIJKLMNOPQRSTUVWX@Reply.SubSub.work", "reply.subsub.work") === "abcdefghijklmnopqrstuvwx"
+    && tokenFromAddress("m-short@reply.subsub.work", "reply.subsub.work") === null
+    && tokenFromAddress("m-abcdefghijklmnopqrstuvwx@other.test", "reply.subsub.work") === null);
+}
 
 console.log("\n-- 082: what a message is not --");
 {

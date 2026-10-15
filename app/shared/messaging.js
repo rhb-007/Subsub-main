@@ -210,3 +210,57 @@ export function jobSeedFrom(messages, side, linkedAt = null) {
   const photos = theirs.flatMap((m) => (m.photos || []).map((p) => ({ messageId: m.id, index: p.index }))).slice(-12);
   return { title, scope, photos };
 }
+
+// 083. EVERY MESSAGE IS EMAILED, AND AN EMAILED REPLY LANDS IN THE THREAD.
+//
+// The email goes to everybody on the OTHER side who could read the thread in
+// the app, at once, with their own reply address on it. Two exceptions, both
+// about not telling somebody what they already know: anybody who has switched
+// email off, and anybody who read the thread in the last REPLY_QUIET_MS --
+// they are in the conversation right now and an email about it is noise.
+export const REPLY_QUIET_MS = 2 * 60 * 1000;
+
+// The line a reply is cut at. Every mail program quotes the message it answers
+// under the new text, so without a marker the thread would grow a copy of
+// itself with every reply.
+export const REPLY_MARKER = "Reply above this line to answer in SubSub";
+
+// One address per person per thread: m-<token>@<domain>. The token is random
+// and stored, never derived, because an address somebody can work out from a
+// thread id and a user id is an address anybody can post into a thread with.
+// Lower case only: some mail servers fold the local part, and a token that
+// changed case in transit would match nothing.
+export const REPLY_TOKEN_RE = /^[a-z0-9]{24}$/;
+export const replyAddress = (token, domain) => (token && domain ? `m-${token}@${domain}` : null);
+export function tokenFromAddress(addr, domain) {
+  const m = String(addr || "").trim().toLowerCase().match(/^m-([a-z0-9]+)(?:\+[^@]*)?@(.+)$/);
+  if (!m || (domain && m[2] !== String(domain).toLowerCase())) return null;
+  return REPLY_TOKEN_RE.test(m[1]) ? m[1] : null;
+}
+
+// What somebody actually wrote, out of an email that also quotes everything
+// before it. Cut at the first of: our own marker, a line of the "On <date>,
+// <name> wrote:" kind (which some programs wrap onto two lines), Outlook's
+// "-----Original Message-----" or its underscore rule followed by a From:
+// header, and a run of ">" quoted lines. A trailing "Sent from my iPhone" goes
+// too. Anything left is the reply; nothing left is no reply.
+export function replyTextFrom(text) {
+  const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const t = l.trim();
+    if (t.includes(REPLY_MARKER)) break;
+    if (/^On\b.*\bwrote:$/i.test(t)) break;
+    if (/^On\b/i.test(t) && /\bwrote:$/i.test((lines[i + 1] || "").trim())) break;
+    if (/^-{2,}\s*Original Message\s*-{2,}$/i.test(t)) break;
+    if (/^_{8,}$/.test(t) && /^From:/i.test((lines[i + 1] || "").trim())) break;
+    if (/^From:\s.+/i.test(t) && /^(Sent|Date):\s/i.test((lines[i + 1] || "").trim())) break;
+    if (t.startsWith(">")) break;
+    out.push(l);
+  }
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  if (out.length && /^sent from my\b/i.test(out[out.length - 1].trim())) out.pop();
+  if (out.length && /^(--|—)\s*$/.test(out[out.length - 1].trim())) out.pop();
+  return out.join("\n").trim().slice(0, MAX_BODY);
+}
