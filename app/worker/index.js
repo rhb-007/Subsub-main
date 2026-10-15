@@ -19487,6 +19487,30 @@ async function threadReaders(db, t, live) {
   return out;
 }
 
+// ONE EMAIL PER PERSON, whatever number of seats they read a thread from.
+// threadReaders answers per seat because a reply is checked against the seat
+// its address was issued to, but a person whose company is on a client's
+// roster holds a contractor seat THERE and a team seat on their own account,
+// and both read the same crew thread -- so one message became two emails in
+// one inbox. Two user rows sharing one address are one inbox as well. On the
+// party side the seat on the person's own account wins, because that is the
+// account they sign in to and answer clients from.
+function onePerInbox(readers, thread, emailOf = () => null) {
+  const ranked = [...readers].sort((a, b) => {
+    const away = (r) => (r.side === "party" && r.viewer.accountId !== thread.accountId ? 0 : 1);
+    return away(a) - away(b);
+  });
+  const out = [], people = new Set(), inboxes = new Set();
+  for (const r of ranked) {
+    const addr = emailOf(r.viewer.userId);
+    if (people.has(r.viewer.userId) || (addr && inboxes.has(addr))) continue;
+    people.add(r.viewer.userId);
+    if (addr) inboxes.add(addr);
+    out.push(r);
+  }
+  return out;
+}
+
 // 083. A reply address for one person in one conversation, made the first time
 // they are emailed about it and reused after, so every email in one thread
 // carries the same address. Random rather than derived: an address anybody
@@ -19520,9 +19544,15 @@ async function emailMessageNow(env, thread, message, nowMs = Date.now()) {
   try {
     const db = env.DB;
     const live = await messagePartyLive(db, thread);
-    const readers = (await threadReaders(db, thread, live))
+    const others = (await threadReaders(db, thread, live))
       .filter((r) => r.side !== message.authorSide && r.viewer.userId !== message.authorUserId);
-    if (!readers.length) return { emailed: 0 };
+    if (!others.length) return { emailed: 0 };
+    const users = new Map();
+    for (const r of others) {
+      if (!users.has(r.viewer.userId)) users.set(r.viewer.userId,
+        await db.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(r.viewer.userId).first());
+    }
+    const readers = onePerInbox(others, thread, (id) => realEmail(users.get(id)?.email)?.toLowerCase() || null);
     const domain = replyDomainOf(env);
     const now = new Date(nowMs).toISOString();
     const author = message.authorName || "Somebody";
@@ -19538,7 +19568,7 @@ async function emailMessageNow(env, thread, message, nowMs = Date.now()) {
         .bind(thread.id, viewer.userId).first();
       const readMs = st?.read_at && st.read_at !== st.mine ? Date.parse(st.read_at) : NaN;
       if (Number.isFinite(readMs) && nowMs - readMs < REPLY_QUIET_MS) continue;
-      const user = await db.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(viewer.userId).first();
+      const user = users.get(viewer.userId);
       const to = realEmail(user?.email);
       // Recorded either way, so the sweep does not reconsider somebody who
       // switched email off every ten minutes.
@@ -19819,10 +19849,12 @@ async function messageNotifySweep(env, nowMs = Date.now()) {
     return acctCache.get(id);
   };
 
-  const owed = new Map();   // `${userId}|${linkAccountId}` -> { user, account, threads: [] }
+  const owed = new Map();   // inbox address (or user id) -> { userId, accountId, threads: [] }
   for (const t of threads) {
     const live = await messagePartyLive(db, t);
-    for (const { viewer, side } of await threadReaders(db, t, live)) {
+    const seats = await threadReaders(db, t, live);
+    for (const r of seats) await userOf(r.viewer.userId);
+    for (const { viewer, side } of onePerInbox(seats, t, (id) => realEmail(userCache.get(id)?.email)?.toLowerCase() || null)) {
       const st = await db.prepare(
         `SELECT (SELECT MAX(created_at) FROM messages WHERE thread_id = ?1 AND author_side <> ?2) AS latest,
                 (SELECT body FROM messages WHERE thread_id = ?1 AND author_side <> ?2 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS preview,
@@ -19832,8 +19864,11 @@ async function messageNotifySweep(env, nowMs = Date.now()) {
            FROM (SELECT 1) LEFT JOIN message_reads r ON r.thread_id = ?1 AND r.user_id = ?3`
       ).bind(t.id, side, viewer.userId).first();
       if (!owesEmail({ latestOtherAt: st?.latest, readAt: st?.read_at, notifiedAt: st?.notified_at, nowMs })) continue;
-      const key = `${viewer.userId}|${viewer.accountId}`;
+      // One digest per inbox, not per seat: the same rule as the email sent
+      // with each message. The link goes to the first seat it was owed on.
+      const key = realEmail(userCache.get(viewer.userId)?.email)?.toLowerCase() || viewer.userId;
       if (!owed.has(key)) owed.set(key, { userId: viewer.userId, accountId: viewer.accountId, threads: [] });
+      if (owed.get(key).threads.some((x) => x.id === t.id)) continue;
       owed.get(key).threads.push({ id: t.id, who: side === "home" ? (t.partyName || "Somebody") : (t.accountName || "Your client"),
         about: t.jobTitle || t.propertyName || "", preview: st.preview, count: Number(st.unread || 1) });
     }

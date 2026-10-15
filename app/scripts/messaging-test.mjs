@@ -470,6 +470,36 @@ console.log("\n-- 083: every message is emailed, and a reply by email comes back
     && tokenFromAddress("m-abcdefghijklmnopqrstuvwx@other.test", "reply.subsub.work") === null);
 }
 
+console.log("\n-- one email per inbox, however many seats somebody reads from --");
+{
+  // Juan runs Pacific (acc3) and, having accepted Cascade's connect request,
+  // also holds a contractor seat on Cascade for Pacific's company. Both seats
+  // read the crew thread. A second user row carries his address as well.
+  const db = seed();
+  db.exec(`INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES ('m_pac_c','pac','acc1','contractor','cmp3');
+    INSERT INTO users(id,name,email,notify) VALUES ('pac2','Juan S','JUAN@pacific.test',NULL);
+    INSERT INTO memberships(id,user_id,account_id,role,company_id) VALUES ('m_pac2','pac2','acc1','contractor','cmp3');`);
+  const env = { ...envOf(db), MESSAGE_REPLY_DOMAIN: "reply.subsub.work" };
+  const toOf = (m) => (Array.isArray(m.to) ? m.to : [m.to]).join(",").toLowerCase();
+  sent.length = 0;
+  const [, r] = await start(env, "admin", { kind: "crew", partyCompanyId: "cmp3", body: "Can you look at unit 4B?" });
+  const juan = sent.filter((m) => toOf(m).includes("juan@pacific.test"));
+  ck("one message is one email to one inbox, not one per seat", juan.length === 1, JSON.stringify(sent.map(toOf)));
+  const tok = tokenFromAddress(juan[0]?.reply_to, "reply.subsub.work");
+  const seat = db.prepare(`SELECT user_id, account_id FROM message_reply_tokens WHERE token = ?`).get(tok);
+  ck("and it is issued for his own account's seat, the one he answers clients from",
+    seat?.user_id === "pac" && seat?.account_id === "acc3", JSON.stringify(seat));
+  // The digest twenty minutes on, if nobody read it: one email, not two.
+  db.exec(`UPDATE message_reads SET notified_at = NULL`);
+  db.exec(`UPDATE messages SET created_at = '${new Date(Date.now() - NOTIFY_AFTER_MS - 60000).toISOString()}'`);
+  sent.length = 0;
+  await worker.fetch(new Request("https://api.subsub.work/api/cron/message-notify",
+    { headers: { Authorization: "Bearer cron" } }), env);
+  const digests = sent.filter((m) => toOf(m).includes("juan@pacific.test"));
+  ck("the digest also goes once to that inbox", digests.length === 1, JSON.stringify(sent.map(toOf)));
+  ck("(the thread was there to be owed)", !!r?.thread?.id);
+}
+
 console.log("\n-- 083: a reply through Resend's inbound webhook --");
 {
   const db = seed();

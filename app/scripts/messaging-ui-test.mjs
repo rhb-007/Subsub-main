@@ -493,6 +493,73 @@ try {
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
+  // THE WINDOW FITS THE SCREEN, ON EVERY DEVICE AND EITHER WAY UP. Reported
+  // as "optimize the messaging window depending on device and landscape":
+  // the pane was a fixed 520px-or-72vh, so on a phone held sideways the box
+  // to write in sat below the fold and the page scrolled instead of the
+  // conversation. What is measured: the box is on screen with the page at
+  // the top, the window ends at the foot of the screen, the history scrolls,
+  // and the text in the box is 16px (any smaller and iPhone zooms in on tap).
+  console.log("\n-- the window fits the screen, held either way --");
+  for (const vp of [
+    { name: "iPad upright", width: 820, height: 1180, phone: false },
+    { name: "iPad sideways", width: 1180, height: 820, phone: false },
+    { name: "phone upright", width: 390, height: 844, phone: true },
+    { name: "phone sideways", width: 844, height: 390, phone: true, short: true },
+  ]) {
+    asTenant = false; reset();
+    const { ctx, page, crashes } = await visitApp(browser, { host: "x", webPort: WEB,
+      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: vp.width, height: vp.height } });
+    await wait(2600);
+    await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.click());
+    await wait(700);
+    await clickText(page, ".ib-row", /Tess/);
+    await wait(900);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await wait(150);
+    const fit = await page.evaluate(() => {
+      const box = document.querySelector(".inbox .thr-box"), list = document.querySelector(".inbox .thr-list");
+      const head = document.querySelector(".inbox-main .dash-hello");
+      if (!box || !list) return null;
+      const b = box.getBoundingClientRect(), cs = getComputedStyle(list);
+      return { boxTop: Math.round(b.top), boxBottom: Math.round(b.bottom), vh: innerHeight,
+        listScrolls: /auto|scroll/.test(cs.overflowY), listH: list.clientHeight,
+        font: parseFloat(getComputedStyle(box).fontSize),
+        title: head ? getComputedStyle(head).display !== "none" : false,
+        winBottom: Math.round(document.querySelector(".inbox").getBoundingClientRect().bottom),
+        // Nothing drawn over it -- a phone's tab bar along the bottom included.
+        onTop: (() => { const at = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return at === box || box.contains(at); })() };
+    });
+    t.ck(`${vp.name}: the box to write in is on screen without scrolling the page`,
+      !!fit && fit.boxTop >= 0 && fit.boxBottom <= fit.vh && fit.onTop, JSON.stringify(fit));
+    // The window ends at the foot of the screen -- not below it, and not well
+    // short of it. Only the build line in the app's footer is under it.
+    t.ck(`${vp.name}: the window fills the screen and the conversation scrolls inside it`,
+      !!fit && fit.winBottom <= fit.vh && fit.winBottom >= fit.vh - 40 && fit.listScrolls && fit.listH >= (vp.short ? 90 : 200), JSON.stringify(fit));
+    t.ck(`${vp.name}: the box's text is 16px, so the phone does not zoom in`, fit?.font >= 16, String(fit?.font));
+    if (vp.phone) t.ck(`${vp.name}: an open conversation takes the screen; the title goes`, fit && !fit.title, JSON.stringify(fit));
+    else t.ck(`${vp.name}: the list stays beside the conversation`,
+      await page.evaluate(() => getComputedStyle(document.querySelector(".inbox .inbox-list")).display !== "none"));
+    if (vp.phone) {
+      // The window opened beside a job is full screen on a phone too.
+      await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^Jobs/.test((b.innerText || "").trim()))?.click());
+      await wait(900);
+      await openCards(page);
+      await wait(500);
+      await clickText(page, ".job-msgs .jm-btn", /Pacific/);
+      await wait(1000);
+      const m = await page.evaluate(() => {
+        const md = document.querySelector(".modal.thr-modal"), box = md?.querySelector(".thr-box");
+        if (!md || !box) return null;
+        const r = md.getBoundingClientRect(), b = box.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height), boxBottom: Math.round(b.bottom), vw: innerWidth, vh: innerHeight };
+      });
+      t.ck(`${vp.name}: a conversation beside a job fills the screen, box in view`,
+        !!m && m.w >= m.vw - 2 && m.h >= m.vh - 2 && m.boxBottom <= m.vh, JSON.stringify(m));
+    }
+    t.ck(`${vp.name}: nothing crashed`, crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
 } finally {
   await browser.close();
   web.close(); api.close();

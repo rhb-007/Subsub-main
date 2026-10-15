@@ -12803,6 +12803,45 @@ refactor.
   tenant who has gone**, and that is now its test. **Not verified here:** a
   real email round trip.
 
+- **ONE MESSAGE WAS TWO EMAILS, BECAUSE ONE PERSON READS A THREAD FROM TWO
+  SEATS.** Reported while testing the email replies. `threadReaders` answers
+  per seat, and it has to, because a reply is checked against the seat its
+  address was issued to. But somebody whose company is on a client's roster
+  holds a contractor seat THERE and a team seat on their own account, and both
+  read the same crew conversation, so each seat got its own email. Two user
+  rows sharing one address were the same failure from the other side.
+  `onePerInbox` picks one seat per person and per address, in both the email
+  sent with each message and the 20-minute digest. On the party side the
+  person's own account wins, because that is where they sign in and answer
+  clients from. `test:messaging` gives one person both seats plus a second row
+  carrying his address in different case. Dropping the dedupe sends three
+  emails; deduping by person alone sends two.
+
+- **THE MESSAGES WINDOW IS AS TALL AS THE SCREEN BELOW IT, ON EVERY DEVICE AND
+  EITHER WAY UP.** Asked for as *"optimize the messaging window depending on
+  device and landscape"*. The pane was a fixed `min-height:520px;
+  max-height:72vh`, so on a phone held sideways the box to write in sat below
+  the fold and the page scrolled instead of the conversation. The Inbox now
+  measures where it starts (`--ib-top`, measured again on a turn, a resize,
+  and when opening a conversation hides the title) and fills the rest with
+  `dvh`. The history scrolls inside it and the composer stays pinned.
+  - On a phone, an open conversation takes the whole screen with the title
+    gone and the back arrow as the way out. The window opened beside a job is
+    full screen too.
+  - Below 540px of height (a phone sideways), every row that is not the
+    conversation gets thinner, and the action buttons share one scrolling line.
+  - The box is 16px, because iPhone zooms in on any text field smaller than
+    that.
+
+  The `.inbox-list` rules are now scoped under `.inbox`, because the pack
+  inbox page uses the same class and was picking up a border and a scroll box
+  it never asked for. `test:messagingui` opens a conversation at iPad and phone
+  sizes, each held both ways. It checks that the box is on screen and not
+  covered (`elementFromPoint`, which is what a phone's tab bar would fail) and
+  that the window ends at the foot of the screen; the footer's build line sits
+  under it on purpose. Putting the fixed pane back fails all four sizes, and
+  15px text fails all four.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

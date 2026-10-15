@@ -35807,6 +35807,22 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [picking, setPicking] = useState(false);
   useEffect(() => { if (openId) setSel(openId); }, [openId]);
+  // Where the window starts on the page, so CSS can make it exactly as tall as
+  // the rest of the screen -- on any device, held either way. Measured again
+  // on a turn, a resize, and when opening a conversation hides the title.
+  const boxRef = useRef(null);
+  React.useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (!el) return undefined;
+    const fit = () => {
+      const top = el.getBoundingClientRect().top + window.scrollY;
+      el.style.setProperty("--ib-top", `${Math.max(0, Math.round(top))}px`);
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    window.addEventListener("orientationchange", fit);
+    return () => { window.removeEventListener("resize", fit); window.removeEventListener("orientationchange", fit); };
+  }, [sel]);
   const threads = inbox?.threads || [];
   const shown = threads.filter((t) => (!onlyUnread || t.unread > 0)
     && (!q.trim() || [t.partyName, t.accountName, t.jobTitle, t.propertyName, t.lastBody].filter(Boolean)
@@ -35815,14 +35831,14 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
   const about = (t) => t.jobTitle || (t.kind === "owner" ? t.propertyName : "")
     || (t.side === "home" ? ({ tenant: [t.unit && `Unit ${t.unit}`, t.propertyName].filter(Boolean).join(", "), crew: "Contractor", owner: "Owner" })[t.kind] : "");
   return (
-    <main className="ss-main inbox-main">
+    <main className={`ss-main inbox-main ${sel ? "has-sel" : ""}`}>
       <PageHead title="Inbox" sub="Your conversations with the people you already work with.">
         <button className="btn-solid" onClick={() => setPicking(true)}><Pencil size={15} /> New message</button>
       </PageHead>
       {inbox?.migration && (
         <p className="err-note">Messages are not switched on yet: migration {inbox.migration} has to be pasted first.</p>
       )}
-      <div className={`inbox ${sel ? "has-sel" : ""}`}>
+      <div ref={boxRef} className={`inbox ${sel ? "has-sel" : ""}`}>
         <div className="inbox-list">
           <div className="inbox-tools">
             <input placeholder="Search messages" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search messages" />
@@ -46122,11 +46138,16 @@ button.job-insp:hover{border-color:#2f5577}
    phone; the thread pane is the same in the Inbox and in a window beside a
    job. Mine on the right in the brand color, theirs on the left on paper. */
 .inbox-main{max-width:1200px}
+.ss-main.inbox-main{padding-bottom:12px}
+/* The window is as tall as the screen below it, whatever the device or the
+   way it is held: --ib-top is where it starts (measured), so the history
+   scrolls inside it and the box to write in stays on screen. */
 .inbox{display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:0;background:var(--card);
-  border:1px solid var(--line);border-radius:14px;overflow:hidden;min-height:560px}
-.inbox-list{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0;max-height:72vh;overflow-y:auto}
+  border:1px solid var(--line);border-radius:14px;overflow:hidden;
+  height:max(360px,calc(100dvh - var(--ib-top,200px) - 12px))}
+.inbox .inbox-list{border-right:1px solid var(--line);display:flex;flex-direction:column;gap:0;min-width:0;min-height:0;overflow-y:auto}
 .inbox-tools{display:flex;gap:8px;padding:12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--card);z-index:1}
-.inbox-tools input{flex:1;min-width:0;min-height:38px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:#fff}
+.inbox-tools input{flex:1;min-width:0;min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:16px;background:#fff}
 .inbox-empty{color:var(--ink-soft);padding:20px 16px;font-size:14px}
 .ib-row{display:flex;gap:10px;align-items:flex-start;text-align:left;padding:12px 14px;border:0;border-bottom:1px solid var(--line);
   background:transparent;font:inherit;color:var(--ink);cursor:pointer;width:100%;min-height:64px}
@@ -46140,20 +46161,20 @@ button.job-insp:hover{border-color:#2f5577}
 .ib-last{font-size:13.5px;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ib-row.unread .ib-last{color:var(--ink);font-weight:600}
 .ib-n{flex:none;align-self:center}
-.inbox-pane{display:flex;min-width:0}
+.inbox-pane{display:flex;min-width:0;min-height:0}
 .inbox-none{margin:auto;text-align:center;color:var(--ink-soft);padding:40px}
 .thr-av{flex:none;width:38px;height:38px;border-radius:50%;background:color-mix(in srgb,var(--brand) 14%,var(--card));
   color:var(--brand-dk);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
 .thr-av.sm{width:32px;height:32px;font-size:12px}
-.thr-pane{display:flex;flex-direction:column;flex:1;min-width:0;min-height:520px;max-height:72vh}
+.thr-pane{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
 .thr-loading{padding:24px;color:var(--ink-soft)}
-.thr-head{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.thr-head{flex:none;display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
 .thr-back{display:none;border:0;background:transparent;padding:6px;cursor:pointer;color:var(--ink)}
 .thr-who{display:flex;flex-direction:column;min-width:0}
 .thr-who b{overflow:hidden;text-overflow:ellipsis}
 .thr-about{font-size:13px;color:var(--ink-soft)}
 .link-btn{border:0;background:none;padding:0;font:inherit;color:var(--brand);text-decoration:underline;cursor:pointer}
-.thr-list{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--paper)}
+.thr-list{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:14px;display:flex;flex-direction:column;gap:12px;background:var(--paper)}
 .thr-empty{color:var(--ink-soft);display:flex;gap:8px;align-items:center;margin:auto;max-width:42ch;text-align:center}
 .msg{display:flex;flex-direction:column;max-width:78%;gap:4px}
 .msg-mine{align-self:flex-end;align-items:flex-end}
@@ -46165,12 +46186,13 @@ button.job-insp:hover{border-color:#2f5577}
 .msg-photos{display:flex;flex-wrap:wrap;gap:6px}
 .msg-photos .ph-thumb{width:96px;height:96px}
 .msg-edit-btn{border:0;background:none;padding:0;font:inherit;font-size:12px;color:var(--ink-soft);text-decoration:underline;cursor:pointer}
-.msg-edit textarea{width:min(420px,70vw);font:inherit;padding:8px;border:1px solid var(--line);border-radius:10px}
+.msg-edit textarea{width:min(420px,70vw);font:inherit;font-size:16px;padding:8px;border:1px solid var(--line);border-radius:10px}
 .msg-edit-acts{display:flex;gap:6px;justify-content:flex-end;margin-top:4px}
-.thr-gone{display:flex;gap:8px;align-items:center;padding:12px 14px;margin:0;border-top:1px solid var(--line);color:var(--ink-soft);font-size:14px}
-.thr-compose{border-top:1px solid var(--line);padding:10px 12px;background:var(--card)}
+.thr-gone{flex:none;display:flex;gap:8px;align-items:center;padding:12px 14px;margin:0;border-top:1px solid var(--line);color:var(--ink-soft);font-size:14px}
+.thr-compose{flex:none;border-top:1px solid var(--line);padding:10px 12px;padding-bottom:max(10px,env(safe-area-inset-bottom));background:var(--card);
+  max-height:60%;overflow-y:auto}
 .thr-row{display:flex;gap:8px;align-items:flex-end}
-.thr-box{flex:1;min-width:0;min-height:44px;max-height:180px;resize:vertical;padding:10px 12px;font:inherit;font-size:15px;
+.thr-box{flex:1;min-width:0;min-height:44px;max-height:180px;resize:none;padding:10px 12px;font:inherit;font-size:16px;
   border:1px solid var(--line);border-radius:12px;background:#fff}
 .thr-attach{flex:none;width:44px;height:44px;border-radius:12px;border:1px solid var(--line);background:var(--card);
   display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:var(--ink)}
@@ -46180,10 +46202,14 @@ button.job-insp:hover{border-color:#2f5577}
 .thr-pend img{width:56px;height:56px;object-fit:cover;border-radius:8px}
 .thr-pend button{position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;border:0;
   background:var(--ink);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
-.thr-modal .thr-pane{min-height:440px;max-height:68vh;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+/* A conversation opened beside a job: the window is a fixed height and the
+   pane fills it, so the history scrolls and the box stays put. Full screen
+   on a phone, held either way. */
+.modal.thr-modal{max-width:760px;height:min(86dvh,820px);display:flex;flex-direction:column}
+.thr-modal .thr-pane{flex:1;min-height:0;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .thr-modal-title{margin:0 40px 12px 0}
 .nm-filters{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px}
-.nm-search{flex:1 1 220px;min-width:0;min-height:42px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--card)}
+.nm-search{flex:1 1 220px;min-width:0;min-height:42px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;font-size:16px;background:var(--card)}
 .nm-sel{flex:0 1 auto;min-height:42px;max-width:100%;padding:0 10px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--card)}
 .nm-n{font-weight:500;color:var(--ink-soft);margin-left:4px}
 .nm-more{font-size:12.5px;color:var(--ink-soft);margin:8px 6px 12px}
@@ -46202,21 +46228,56 @@ button.job-insp:hover{border-color:#2f5577}
 .msg-about{display:inline-flex;align-items:center;gap:6px}
 .sec-msgs .dr-title{font-size:14px;color:var(--ink)}
 .msg-row .btn-solid{flex:none}
+@media (min-width:1100px){
+  .inbox{grid-template-columns:360px 1fr}
+  .msg{max-width:68%}
+}
+/* A phone, either way up: one pane at a time, and an open conversation takes
+   the whole screen -- the page title goes, the back arrow is the way out. */
 @media (max-width:760px){
-  .inbox{grid-template-columns:1fr;min-height:0}
-  .inbox-list{border-right:0;max-height:none}
+  .inbox{grid-template-columns:1fr}
+  .inbox .inbox-list{border-right:0}
   .inbox.has-sel .inbox-list{display:none}
   .inbox:not(.has-sel) .inbox-pane{display:none}
+  .inbox-main.has-sel .dash-hello{display:none}
+  .inbox.has-sel{border-radius:0;border-left:0;border-right:0;margin:0 -16px}
   .thr-back{display:inline-flex}
-  .thr-pane{max-height:none;min-height:70vh}
-  .msg{max-width:90%}
+  .msg{max-width:88%}
+  .modal-backdrop:has(> .thr-modal){padding:0}
+  .modal.thr-modal{max-width:none;width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding:12px 12px 0}
+  .thr-modal .thr-pane{border:0;border-radius:0;margin:0 -12px}
+}
+/* Short screens -- a phone on its side, or an iPad with the keyboard up:
+   every row that is not the conversation gets thinner, the action buttons
+   share one scrolling line, and the reminder line under them goes (the bar
+   at the top already says whether a time is booked). */
+@media (max-height:540px){
+  .inbox{height:max(240px,calc(100dvh - var(--ib-top,120px) - 12px))}
+  .inbox-main.has-sel .dash-hello{display:none}
+  .thr-head{padding:6px 12px}
+  .thr-head .thr-av{width:30px;height:30px;font-size:11px}
+  .thr-about{font-size:12px}
+  .thr-job{padding:6px 12px 8px}
+  .tj-when{margin-top:2px;font-size:14px}
+  .thr-job .vacts{margin-top:4px}
+  .thr-list{padding:10px;gap:8px}
+  .thr-compose{padding:6px 10px;padding-bottom:max(6px,env(safe-area-inset-bottom))}
+  .thr-unbooked{display:none}
+  .thr-acts{flex-wrap:nowrap;overflow-x:auto;margin-bottom:6px;-webkit-overflow-scrolling:touch}
+  .thr-act{flex:none;min-height:36px}
+  .thr-box{min-height:40px;max-height:84px}
+  .thr-attach{width:40px;height:40px}
+  .thr-send{min-height:40px}
+  .thr-modal-title{margin-bottom:6px;font-size:15px}
+  .modal-backdrop:has(> .thr-modal){padding:0}
+  .modal.thr-modal{max-width:none;width:100%;height:100dvh;max-height:100dvh;border-radius:0;padding:8px 12px 0}
 }
 
 /* 082. The job a conversation is about, at its top, and the only doors that
    change it. Amber while a time is waiting on somebody, green once booked, so
    the bar reads the same as the job card it mirrors. History lines sit
    between the messages, centered and quiet: they are the record, not chat. */
-.thr-job{padding:10px 14px 12px;border-bottom:1px solid var(--line);background:#fffaf0;border-left:4px solid var(--amber)}
+.thr-job{flex:none;padding:10px 14px 12px;border-bottom:1px solid var(--line);background:#fffaf0;border-left:4px solid var(--amber)}
 .thr-job.booked{background:color-mix(in srgb,var(--brand) 7%,var(--card));border-left-color:var(--brand)}
 .tj-top{display:flex;align-items:center;gap:6px;font-size:14px}
 .tj-closed{font-size:12px;font-weight:600;color:var(--ink-soft);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
@@ -46226,7 +46287,7 @@ button.job-insp:hover{border-color:#2f5577}
 .tj-note{font-size:13px;color:var(--amber-ink)}
 .thr-job.booked .tj-note{color:var(--ink-soft)}
 .thr-job .vacts{margin-top:8px}
-.thr-ctx-err{padding:6px 14px;margin:0}
+.thr-ctx-err{flex:none;padding:6px 14px;margin:0}
 .thr-event{align-self:center;display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:92%;
   font-size:12.5px;color:var(--ink-soft);background:var(--card);border:1px dashed var(--line);border-radius:999px;padding:4px 12px;text-align:center}
 .thr-event-t{font-size:11.5px;opacity:.8}
