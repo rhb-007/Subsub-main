@@ -157,6 +157,8 @@ import { validSpan, spanView, busyFromSpans, spanDates, spanDaysFrom, isDayKey }
 import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passportBadge,
   ACCESS_KINDS as PASSPORT_ACCESS_KINDS, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
   CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
+import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_CENTS,
+  MIN_MONTHLY_CENTS } from "../shared/unitpricing.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
@@ -1544,6 +1546,35 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   if (!account) return c.json({ error: "not_found" }, 404);
   const user = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
 
+  // 084. A portfolio past 80 units is billed per occupied unit, monthly only,
+  // with a one-time setup fee on the first invoice. Refused rather than
+  // quietly switched to monthly: somebody who pressed "yearly" should be told.
+  const units = await accountUnitPricing(c.env, accountId, account.kind);
+  if (units.applies && cycle === "annual") {
+    return c.json({ error: "annual_not_available", threshold: UNIT_THRESHOLD }, 409);
+  }
+  let lineItems = [{ price, quantity: 1 }];
+  let setup = null;
+  try {
+    if (units.applies && units.line.kind === "unit") {
+      lineItems = [{ price_data: await unitPriceData(c.env), quantity: units.line.quantity }];
+    }
+    if (units.applies && units.setupCents > 0) {
+      // Charged once per account: one already on record is not asked for again.
+      const row = await setupFeeRow(c.env, accountId);
+      if (!row || row.status === "pending") {
+        setup = { cents: units.setupCents, tier: units.setupLabel, units: units.total };
+        lineItems.push({ quantity: 1, price_data: { currency: "usd", unit_amount: units.setupCents,
+          product_data: { name: `SubSub setup (${units.setupLabel})` } } });
+      }
+    }
+  } catch (err) {
+    console.error("[billing] unit pricing for checkout failed:", err?.message || err);
+    return c.json({ error: "stripe_failed", detail: String(err?.message || err) }, 502);
+  }
+  const setupMeta = setup
+    ? { setup_cents: String(setup.cents), setup_tier: setup.tier, setup_units: String(setup.units) } : {};
+
   // Embedded renders Stripe's form inside our own page; hosted sends the
   // browser to stripe.com. The caller asks for embedded only when it has a
   // publishable key to mount it with, so a build without one still works
@@ -1553,7 +1584,7 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   // Everything that does not depend on where the form is drawn.
   const base = {
     mode: "subscription",
-    line_items: [{ price, quantity: 1 }],
+    line_items: lineItems,
     client_reference_id: accountId,
     allow_promotion_codes: true,
     // Reuse the customer if this account has ever paid, so a second
@@ -1564,8 +1595,10 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
       : { customer_email: user?.email || undefined }),
     // Stamped in two places because the webhook may see either object
     // first, depending on which event arrives.
-    metadata: { account_id: accountId },
-    subscription_data: { metadata: { account_id: accountId } },
+    // The setup fee rides on the subscription as well, which is what tells a
+    // building saved before this webhook arrives that the fee is already paid.
+    metadata: { account_id: accountId, ...setupMeta },
+    subscription_data: { metadata: { account_id: accountId, ...setupMeta } },
   };
 
   // Stripe renamed this value: `embedded` is refused now in favour of
@@ -1601,7 +1634,7 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
           // A double-tapped button within the same minute is one checkout, not
           // two. The spelling is part of the key: a retry after a refusal is a
           // different request, and reusing the key would replay the refusal.
-          idempotencyKey: `checkout:${accountId}:${cycle}:${embedded ? attempt.ui_mode : "h"}:${Math.floor(Date.now() / 60000)}`,
+          idempotencyKey: `checkout:${accountId}:${cycle}:${units.line.kind}${units.line.quantity}:${setup ? setup.cents : 0}:${embedded ? attempt.ui_mode : "h"}:${Math.floor(Date.now() / 60000)}`,
         });
         if (attempt !== attempts[0]) {
           console.warn("[billing] checkout fell back to",
@@ -1717,9 +1750,26 @@ app.post("/api/billing/portal", requireRole("admin"), async (c) => {
 app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   const a = await c.env.DB.prepare(
-    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id
+    `SELECT plan, billing, subscription_status, current_period_end, stripe_customer_id, kind
      FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!a) return c.json({ error: "not_found" }, 404);
+
+  // 084. What Scale costs THIS account, from the rule the checkout and the
+  // nightly sync charge by, so the panel cannot quote another figure.
+  let units = null;
+  if (unitPriced(a.kind)) {
+    const u = await accountUnitPricing(c.env, accountId, a.kind);
+    const fee = await setupFeeRow(c.env, accountId);
+    units = {
+      eligible: u.eligible, applies: u.applies, total: u.total, occupied: u.occupied,
+      unknown: u.unknown, monthlyCents: u.monthlyCents, perUnitCents: u.perUnitCents,
+      setupCents: u.setupCents, setupLabel: u.setupLabel, annualAllowed: u.annualAllowed,
+      threshold: UNIT_THRESHOLD, unitPriceCents: UNIT_PRICE_CENTS, minMonthlyCents: MIN_MONTHLY_CENTS,
+      setupCharged: fee && fee.status !== "pending"
+        ? { amountCents: fee.amount_cents, tier: fee.tier, at: fee.charged_at, status: fee.status } : null,
+      migrated: fee !== undefined,
+    };
+  }
 
   const { results: invoices } = await c.env.DB.prepare(
     `SELECT id, amount_cents, status, period_start, period_end, paid_at, attempt_count
@@ -1759,6 +1809,7 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
     hasCustomer: !!a.stripe_customer_id,
     configured: !!c.env.STRIPE_SECRET_KEY,
     sms,
+    units,
     invoices: invoices.map((i) => ({
       id: i.id, amountCents: i.amount_cents, status: i.status,
       periodStart: i.period_start, periodEnd: i.period_end,
@@ -1855,7 +1906,9 @@ async function applySubscription(env, account, sub) {
   }
 
   if (was !== plan) {
-    const monthly = cycle === "annual" ? 8250 : 9900;   // $990/yr and $99/mo, in cents
+    // $990/yr and $99/mo, in cents -- or, for a portfolio billed per occupied
+    // unit, what the item actually charges a month (084).
+    const monthly = subscriptionMonthlyCents(sub);
     const kind = plan === "scale" ? "upgraded" : (status === "canceled" ? "canceled" : "downgraded");
     await env.DB.prepare(
       `INSERT INTO subscription_events (id, account_id, at, kind, from_plan, to_plan, cycle, mrr_delta_cents, source)
@@ -1874,6 +1927,229 @@ async function applySubscription(env, account, sub) {
     await syncHostname(env, { id: account.id, subdomain: account.subdomain, plan },
       { reason: "stripe" });
   }
+}
+
+// What a subscription charges a month, normalized: a yearly plan is the year
+// over twelve, a monthly one is the item's own price times its quantity. Read
+// off the item rather than assumed, because a portfolio past 80 units is
+// $1.25 x its occupied units rather than $99.
+function subscriptionMonthlyCents(sub) {
+  const item = sub?.items?.data?.[0];
+  if (item?.price?.recurring?.interval === "year") return 8250;
+  const each = Number(item?.price?.unit_amount);
+  const qty = Number(item?.quantity ?? 1);
+  return Number.isFinite(each) && each > 0 ? Math.round(each * (qty > 0 ? qty : 1)) : 9900;
+}
+
+// ---------------------------------------------------------------------------
+// 084. Per-unit pricing for accounts that keep buildings
+// ---------------------------------------------------------------------------
+// A property manager, portfolio manager or building owner pays the flat $99
+// until its buildings hold more than 80 units, and then $1.25 per OCCUPIED unit
+// a month (never less than $99), monthly only, plus a one-time setup fee sized
+// to the portfolio. shared/unitpricing.js is the rule; this is the Stripe half.
+//
+// Counted over the buildings this account OPERATES: a building it owns and has
+// appointed somebody else to run is billed to whoever runs it.
+async function accountUnitPricing(env, accountId, kind) {
+  if (kind === undefined) {
+    kind = (await env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first())?.kind;
+  }
+  if (!unitPriced(kind)) return unitPricing(kind, []);
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT units, occupied_units FROM properties WHERE account_id = ?`).bind(accountId).all());
+  } catch (err) {
+    // A database without 084 has no occupied count: every unit reads as full,
+    // which is the rule for a blank anyway, so nothing is under-billed.
+    if (!missingSchema(err)) throw err;
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT units FROM properties WHERE account_id = ?`).bind(accountId).all());
+  }
+  return unitPricing(kind, rows || []);
+}
+
+// The per-unit line sits on the SAME Stripe product as the flat price, so the
+// invoice and the customer's history read as one plan at two prices rather
+// than as a second product. Looked up once per isolate.
+const scaleProductCache = new Map();
+async function scaleProduct(env) {
+  const price = env.STRIPE_PRICE_SCALE_MONTHLY;
+  if (!price) throw new Error("billing_not_configured");
+  if (scaleProductCache.has(price)) return scaleProductCache.get(price);
+  const p = await stripeCall(env, `/prices/${price}`, { method: "GET" });
+  const product = typeof p.product === "string" ? p.product : p.product?.id;
+  if (!product) throw new Error("scale_product_unknown");
+  scaleProductCache.set(price, product);
+  return product;
+}
+async function unitPriceData(env) {
+  return { currency: "usd", product: await scaleProduct(env), unit_amount: UNIT_PRICE_CENTS,
+    recurring: { interval: "month" } };
+}
+
+// Which line a subscription item is on now: the flat price, or per-unit.
+function itemLine(env, item) {
+  if (!item) return null;
+  if (item.price?.id && item.price.id === env.STRIPE_PRICE_SCALE_MONTHLY) return { kind: "flat", quantity: 1 };
+  if (item.price?.id && item.price.id === env.STRIPE_PRICE_SCALE_ANNUAL) return { kind: "annual", quantity: 1 };
+  if (Number(item.price?.unit_amount) === UNIT_PRICE_CENTS) {
+    return { kind: "unit", quantity: Number(item.quantity) || 0 };
+  }
+  return { kind: "other", quantity: Number(item.quantity) || 0 };
+}
+
+// The setup fee row, or null on a database without 084.
+async function setupFeeRow(env, accountId) {
+  try {
+    return await env.DB.prepare(
+      `SELECT tier, units, amount_cents, status, stripe_ref, charged_at FROM account_setup_fees
+        WHERE account_id = ?`).bind(accountId).first();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return undefined;   // undefined = cannot tell; null = no fee charged yet
+  }
+}
+
+// Bring a subscription's line in step with the portfolio, and charge the setup
+// fee the first time an existing subscriber goes past 80 units. Best effort and
+// never throws: it runs after a building is saved, and a building must save
+// whether or not Stripe answers. The nightly sweep catches anything missed.
+async function syncUnitBilling(env, accountId, { actorId = null } = {}) {
+  try {
+    if (!env.STRIPE_SECRET_KEY) return { skipped: "billing_not_configured" };
+    const a = await env.DB.prepare(
+      `SELECT id, kind, plan, billing, stripe_subscription_id, stripe_customer_id, subscription_status
+         FROM accounts WHERE id = ?`).bind(accountId).first();
+    if (!a) return { skipped: "not_found" };
+    if (!unitPriced(a.kind)) return { skipped: "not_unit_priced" };
+    // A comped account, or one on Basic, has nothing to bill.
+    if (!a.stripe_subscription_id || !ENTITLED.has(a.subscription_status || "")) {
+      return { skipped: "no_subscription" };
+    }
+    // Per-unit is monthly only. A yearly plan already paid for its year; it is
+    // brought onto the per-unit price when it renews, not under it (still open).
+    if (a.billing === "annual") return { skipped: "annual" };
+
+    const units = await accountUnitPricing(env, accountId, a.kind);
+    const sub = await stripeCall(env, `/subscriptions/${a.stripe_subscription_id}`, { method: "GET" });
+    const item = sub.items?.data?.[0];
+    if (!item) return { skipped: "no_item" };
+    const now = itemLine(env, item);
+    const want = units.line;
+    const out = { line: want.kind, quantity: want.quantity, changed: false, setup: null };
+
+    if (now?.kind === "annual" || now?.kind === "other") return { ...out, skipped: `item_${now.kind}` };
+    const same = now && now.kind === want.kind && now.quantity === want.quantity;
+    if (!same) {
+      // No proration: the change takes effect from the next bill. A
+      // portfolio's occupancy moves by a few units at a time, and a credit or
+      // charge for every tenant who moves mid-month is noise on an invoice.
+      // No idempotency key either: setting a value twice is the same value,
+      // and a key would replay a stale answer if it moved back and forth.
+      const params = want.kind === "unit"
+        ? { price_data: await unitPriceData(env), quantity: want.quantity, proration_behavior: "none" }
+        : { price: env.STRIPE_PRICE_SCALE_MONTHLY, quantity: 1, proration_behavior: "none" };
+      await stripeCall(env, `/subscription_items/${item.id}`, { params });
+      out.changed = true;
+      const before = now?.kind === "unit" ? Math.max(0, now.quantity) * UNIT_PRICE_CENTS : MIN_MONTHLY_CENTS;
+      const after = want.kind === "unit" ? want.quantity * UNIT_PRICE_CENTS : MIN_MONTHLY_CENTS;
+      if (after !== before) {
+        // The console counts a 'cycle' event with a positive delta as
+        // expansion and a negative one as contraction, which is what this is.
+        await env.DB.prepare(
+          `INSERT INTO subscription_events (id, account_id, at, kind, from_plan, to_plan, cycle, mrr_delta_cents, source)
+           VALUES (?, ?, ?, 'cycle', 'scale', 'scale', 'monthly', ?, 'system')`
+        ).bind(uid(), accountId, new Date().toISOString(), after - before).run().catch(() => {});
+      }
+      if (now?.kind !== want.kind) {
+        await logActivity(env, accountId, actorId, "plan_changed", want.kind === "unit"
+          ? `Your buildings now hold more than ${UNIT_THRESHOLD} units, so Scale is billed at $1.25 per occupied unit: ${want.quantity} units, $${(after / 100).toFixed(2)} a month from the next bill.`
+          : `Scale is back to the flat $99 a month from the next bill.`).catch(() => {});
+      }
+    }
+
+    if (units.applies && units.setupCents > 0) out.setup = await chargeSetupFee(env, a, units, sub);
+    return out;
+  } catch (err) {
+    console.error("[unit-billing] sync failed:", accountId, err?.message || err);
+    return { error: String(err?.message || err) };
+  }
+}
+
+// The one-time setup fee for a subscriber that went past 80 units after it
+// subscribed. Charged ONCE per account: the row is written before Stripe is
+// asked, so two presses, or a sweep racing a save, find it and charge nothing.
+// A checkout that already carried the fee says so on the subscription's own
+// metadata, which is what stops a save that lands before the checkout webhook
+// charging it twice.
+async function chargeSetupFee(env, account, units, sub) {
+  const existing = await setupFeeRow(env, account.id);
+  if (existing === undefined) return { skipped: "migration_needed" };
+  // One guard, not two: the re-read below answers "already charged" for the
+  // common case and for two requests at once alike.
+  if (Number(sub?.metadata?.setup_cents) > 0) {
+    await env.DB.prepare(
+      `INSERT INTO account_setup_fees (account_id, tier, units, amount_cents, status, stripe_ref, charged_at)
+       VALUES (?, ?, ?, ?, 'paid_at_checkout', ?, ?)
+       ON CONFLICT(account_id) DO UPDATE SET status = 'paid_at_checkout',
+         stripe_ref = excluded.stripe_ref, charged_at = excluded.charged_at
+         WHERE account_setup_fees.status = 'pending'`
+    ).bind(account.id, sub.metadata.setup_tier || units.setupLabel, Number(sub.metadata.setup_units) || units.total,
+      Number(sub.metadata.setup_cents), sub.id, new Date().toISOString()).run();
+    return { skipped: "paid_at_checkout" };
+  }
+  if (!existing) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO account_setup_fees (account_id, tier, units, amount_cents, status)
+       VALUES (?, ?, ?, ?, 'pending')`
+    ).bind(account.id, units.setupLabel, units.total, units.setupCents).run();
+  }
+  const row = await setupFeeRow(env, account.id);
+  if (!row || row.status !== "pending") return { skipped: "already_charged" };
+  if (!account.stripe_customer_id) return { skipped: "no_customer" };
+  // An invoice item lands on the customer's next invoice. Keyed by the
+  // account, so a retry of a row whose first attempt reached Stripe and then
+  // failed to record is the same item rather than a second one.
+  const it = await stripeCall(env, "/invoiceitems", {
+    params: { customer: account.stripe_customer_id, amount: row.amount_cents, currency: "usd",
+      description: `SubSub setup (${row.tier})`, metadata: { account_id: account.id, kind: "setup_fee" } },
+    idempotencyKey: `setup-fee:${account.id}`,
+  });
+  await env.DB.prepare(
+    `UPDATE account_setup_fees SET status = 'invoiced', stripe_ref = ?, charged_at = ?
+      WHERE account_id = ? AND status = 'pending'`
+  ).bind(it.id || null, new Date().toISOString(), account.id).run();
+  await logActivity(env, account.id, null, "plan_changed",
+    `One-time setup fee of $${(row.amount_cents / 100).toLocaleString("en-US")} (${row.tier}) added to your next bill.`).catch(() => {});
+  return { charged: row.amount_cents, ref: it.id || null };
+}
+
+// After a building is added, changed or removed. waitUntil where there is a
+// context, so the save answers without waiting on Stripe.
+function afterPortfolioChange(c, accountId) {
+  const run = syncUnitBilling(c.env, accountId, { actorId: c.get("auth")?.userId ?? null });
+  try { c.executionCtx.waitUntil(run); } catch { return run; }
+  return null;
+}
+
+// Nightly: every unit-priced account with a subscription, so a sync a failed
+// save left behind is caught the same night.
+async function unitBillingSweep(env) {
+  if (!env.STRIPE_SECRET_KEY) return { skipped: "billing_not_configured" };
+  const ph = UNIT_PRICED_KINDS.map(() => "?").join(", ");
+  const { results } = await env.DB.prepare(
+    `SELECT id FROM accounts WHERE kind IN (${ph}) AND stripe_subscription_id IS NOT NULL
+       AND COALESCE(billing, 'monthly') <> 'annual'`).bind(...UNIT_PRICED_KINDS).all();
+  let changed = 0, charged = 0, failed = 0;
+  for (const r of results || []) {
+    const out = await syncUnitBilling(env, r.id);
+    if (out.changed) changed += 1;
+    if (out.setup?.charged) charged += 1;
+    if (out.error) failed += 1;
+  }
+  return { accounts: (results || []).length, changed, charged, failed };
 }
 
 // Stripe's way in. Unauthenticated by necessity -- Stripe has no session --
@@ -1914,6 +2190,21 @@ app.post("/api/stripe/webhook", async (c) => {
         // subscription events arrive late or out of order.
         await c.env.DB.prepare(`UPDATE accounts SET stripe_customer_id = ? WHERE id = ?`)
           .bind(obj.customer, account.id).run();
+        // 084. The setup fee was a line on this checkout; record it before the
+        // subscription is applied, so nothing afterwards asks for it again.
+        if (Number(obj.metadata?.setup_cents) > 0) {
+          try {
+            await c.env.DB.prepare(
+              `INSERT INTO account_setup_fees
+                 (account_id, tier, units, amount_cents, status, stripe_ref, charged_at)
+               VALUES (?, ?, ?, ?, 'paid_at_checkout', ?, ?)
+               ON CONFLICT(account_id) DO UPDATE SET status = 'paid_at_checkout',
+                 stripe_ref = excluded.stripe_ref, charged_at = excluded.charged_at
+                 WHERE account_setup_fees.status = 'pending'`
+            ).bind(account.id, obj.metadata.setup_tier || "", Number(obj.metadata.setup_units) || 0,
+              Number(obj.metadata.setup_cents), obj.id, new Date().toISOString()).run();
+          } catch (err) { if (!missingSchema(err)) throw err; }
+        }
         if (obj.subscription) {
           const sub = await stripeCall(c.env, `/subscriptions/${obj.subscription}`, { method: "GET" });
           await applySubscription(c.env, account, sub);
@@ -8904,6 +9195,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\boccupied_units\b|\baccount_setup_fees\b/i.test(m)) return "084_unit_pricing";
   if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
@@ -20282,6 +20574,14 @@ app.get("/api/cron/sms-overage", async (c) => {
   return c.json(await smsOverageSweep(c.env));
 });
 
+// The per-unit sync by hand, for a portfolio whose bill fell out of step.
+app.get("/api/cron/unit-billing", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  return c.json(await unitBillingSweep(c.env));
+});
+
 app.get("/api/cron/retouch", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await retouchSweep(c.env));
@@ -21586,6 +21886,9 @@ const propertyRowToJs = (r) => ({
   id: r.id, accountId: r.account_id, name: r.name, address: r.address,
   city: r.city, state: r.state, zip: r.zip,
   units: r.units == null ? "" : r.units, notes: r.notes || "",
+  // 084: how many units are lived in. Blank is "not said", which billing
+  // counts as full; a database without 084 has no column and reads blank.
+  occupiedUnits: r.occupied_units == null ? "" : r.occupied_units,
   // Whether somebody else owns this building. A boolean, not the account id:
   // the screen needs to know whether a handover is even possible, and which
   // account it is belongs to the transfer record rather than to every property
@@ -21597,6 +21900,18 @@ const propertyRowToJs = (r) => ({
   // lets an agent who really does own a building appoint a manager for it.
   ownerDeclared: !!r.owner_declared_at,
 });
+
+// 084. A building's occupied count: blank is "not said", otherwise a whole
+// number from 0 to the building's units. More occupied than there are units is
+// refused rather than capped, because the figure is what a portfolio is billed
+// on and a silently different number is a bill nobody can explain.
+function occupiedFrom(v, units) {
+  if (v === "" || v == null) return { value: null };
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) return { error: "bad_occupied_units" };
+  if (n > (Number(units) || 0)) return { error: "occupied_over_units" };
+  return { value: n };
+}
 
 app.get("/api/properties", async (c) => {
   const auth = c.get("auth");
@@ -21652,8 +21967,11 @@ app.post("/api/properties", requireRole("admin", "pm"), async (c) => {
   // building added afterwards arrived unowned -- silently, because
   // propertyWithOwner coalesces to account_id on the way out and the screens
   // looked right. CHECK.sql's m039_unowned is the only thing that ever said so.
+  const units = b.units === "" || b.units == null ? null : Number(b.units);
+  const occ = occupiedFrom(b.occupiedUnits, units);
+  if (occ.error) return c.json({ error: occ.error }, 400);
   const vals = [id, accountId, name, b.address || null, b.city || null, b.state || null,
-    b.zip || null, b.units === "" || b.units == null ? null : Number(b.units), b.notes || null];
+    b.zip || null, units, b.notes || null];
   try {
     await c.env.DB.prepare(
       `INSERT INTO properties (id, account_id, name, address, city, state, zip, units, notes,
@@ -21668,9 +21986,22 @@ app.post("/api/properties", requireRole("admin", "pm"), async (c) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(...vals).run();
   }
+  // Its own statement, so a database without 084 still adds the building and
+  // says the occupied count was not kept rather than refusing the building.
+  let occupiedRecorded = true;
+  if (occ.value != null) {
+    try {
+      await c.env.DB.prepare(`UPDATE properties SET occupied_units = ? WHERE id = ? AND account_id = ?`)
+        .bind(occ.value, id, accountId).run();
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      occupiedRecorded = false;
+    }
+  }
   await logEvent(c.env, accountId, c.get("auth").userId, "property.created", id, { name });
   await logActivity(c.env, accountId, c.get("auth").userId, "property_added", `Added property ${name}`);
-  return c.json({ id }, 201);
+  await afterPortfolioChange(c, accountId);
+  return c.json({ id, ...(occupiedRecorded ? {} : { occupiedRecorded: false, migration: "084_unit_pricing" }) }, 201);
 });
 
 app.patch("/api/properties/:id", requireRole("admin", "pm"), async (c) => {
@@ -21684,12 +22015,41 @@ app.patch("/api/properties/:id", requireRole("admin", "pm"), async (c) => {
     sets.push(`${col} = ?`);
     vals.push(k === "units" ? (b[k] === "" || b[k] == null ? null : Number(b[k])) : b[k]);
   }
-  if (!sets.length) return c.json({ ok: true });
-  vals.push(c.req.param("id"), accountId);
+  // 084. The occupied count is checked against the units the building will
+  // have AFTER this save, so lowering the units below what is lived in is
+  // refused too -- otherwise the bill would be read off a count that cannot be.
+  const id = c.req.param("id");
+  let occupiedRecorded = true;
+  const touchesCount = b.units !== undefined || b.occupiedUnits !== undefined;
+  if (touchesCount) {
+    let stored;
+    try {
+      stored = await c.env.DB.prepare(
+        `SELECT units, occupied_units FROM properties WHERE id = ? AND account_id = ?`).bind(id, accountId).first();
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      stored = await c.env.DB.prepare(
+        `SELECT units FROM properties WHERE id = ? AND account_id = ?`).bind(id, accountId).first();
+      occupiedRecorded = b.occupiedUnits === undefined;
+    }
+    if (!stored) return c.json({ error: "not_found" }, 404);
+    const units = b.units !== undefined ? (b.units === "" || b.units == null ? null : Number(b.units)) : stored.units;
+    const asked = b.occupiedUnits !== undefined ? b.occupiedUnits : stored.occupied_units;
+    if (occupiedRecorded || b.occupiedUnits === undefined) {
+      const occ = occupiedFrom(asked, units);
+      if (occ.error && (b.occupiedUnits !== undefined || stored.occupied_units != null)) {
+        return c.json({ error: occ.error }, 400);
+      }
+      if (b.occupiedUnits !== undefined && occupiedRecorded) { sets.push("occupied_units = ?"); vals.push(occ.value); }
+    }
+  }
+  if (!sets.length) return c.json({ ok: true, ...(occupiedRecorded ? {} : { occupiedRecorded: false, migration: "084_unit_pricing" }) });
+  vals.push(id, accountId);
   await c.env.DB.prepare(
     `UPDATE properties SET ${sets.join(", ")} WHERE id = ? AND account_id = ?`
   ).bind(...vals).run();
-  return c.json({ ok: true });
+  if (touchesCount) await afterPortfolioChange(c, accountId);
+  return c.json({ ok: true, ...(occupiedRecorded ? {} : { occupiedRecorded: false, migration: "084_unit_pricing" }) });
 });
 
 app.delete("/api/properties/:id", requireRole("admin", "pm"), async (c) => {
@@ -21708,6 +22068,7 @@ app.delete("/api/properties/:id", requireRole("admin", "pm"), async (c) => {
     c.env.DB.prepare(`DELETE FROM properties WHERE id = ? AND account_id = ?`).bind(id, accountId),
   ]);
   await logEvent(c.env, accountId, c.get("auth").userId, "property.deleted", id, null);
+  await afterPortfolioChange(c, accountId);
   return c.json({ ok: true });
 });
 
@@ -23304,6 +23665,26 @@ app.get("/api/platform/bootstrap", async (c) => {
     };
   });
 
+  // 084. What a portfolio past 80 units is billed a month, so the console's
+  // MRR reads the per-unit price rather than the flat $99. One aggregate over
+  // the buildings each account operates; a database without 084 counts every
+  // unit as occupied, which is also the billing rule for a blank.
+  const portfolios = {};
+  try {
+    const { results: pr } = await c.env.DB.prepare(
+      `SELECT account_id, units, occupied_units FROM properties`).all()
+      .catch((err) => { if (!missingSchema(err)) throw err;
+        return c.env.DB.prepare(`SELECT account_id, units FROM properties`).all(); });
+    for (const r of pr || []) (portfolios[r.account_id] ||= []).push(r);
+  } catch (err) {
+    console.warn("[platform] portfolio units unavailable:", err?.message || err);
+  }
+  const unitMonthly = (a) => {
+    if (!unitPriced(a.kind) || a.billing === "annual") return null;
+    const u = unitPricing(a.kind, portfolios[a.id] || []);
+    return u.applies ? u.monthlyCents : null;
+  };
+
   return c.json({
     // Financial figures are omitted for a standard user here too, not just on
     // the dedicated revenue route — otherwise the omission is cosmetic.
@@ -23322,6 +23703,7 @@ app.get("/api/platform/bootstrap", async (c) => {
       hostnameCheckedAt: a.hostname_checked_at,
       subscriptionStatus: a.subscription_status, currentPeriodEnd: a.current_period_end,
       createdAt: (a.created_at || "").slice(0, 10),
+      unitMonthlyCents: unitMonthly(a),
       status: "active",
     })),
     users: users.results.map(({ created_at, ...u }) => ({ ...u, createdAt: (created_at || "").slice(0, 10) })),
@@ -24956,7 +25338,8 @@ export default {
          ["doc-expiry", docExpirySweep], ["license-reminders", licenseReminderSweep],
          ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
-         ["referrals", referralSweep], ["action-reminders", actionReminderSweep]]
+         ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
+         ["unit-billing", unitBillingSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep]];
 
     ctx.waitUntil((async () => {

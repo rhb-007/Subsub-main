@@ -293,7 +293,11 @@ WITH spec(j) AS (SELECT
   -- still created; it just is not linked back to the conversation.
   ',["m082_thread_job_links","col","thread_job_links",["thread_id","job_id","created_by","created_at"]]') ||
   -- 083: a reply address per person per conversation.
-  ',["m083_message_reply_tokens","col","message_reply_tokens",["token","thread_id","user_id","account_id","side","created_at","used_at"]]' ||
+  (',["m083_message_reply_tokens","col","message_reply_tokens",["token","thread_id","user_id","account_id","side","created_at","used_at"]]' ||
+  -- 084. Per-unit pricing. Until both pastes are run the property form says
+  -- which file, and every account is billed the flat $99 as before.
+  ',["m084_occupied_units","col","properties",["occupied_units"]]' ||
+  ',["m084_account_setup_fees","col","account_setup_fees",["account_id","tier","units","amount_cents","status","stripe_ref","charged_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -796,6 +800,10 @@ WITH inv(j) AS (SELECT '['
       OR (kind = 'owner' AND party_company_id IS NULL
         AND ((party_user_id IS NULL) <> (party_account_id IS NULL))
         AND (property_id IS NOT NULL OR job_id IS NOT NULL))))))
+  -- 084. An occupied count above the building's own units is billed as more
+  -- homes than the building has; the route refuses one, and a negative one.
+  || (',' || json_array('m084_inv_occupied_over_units', (SELECT COUNT(*) FROM properties
+    WHERE occupied_units IS NOT NULL AND (occupied_units < 0 OR occupied_units > COALESCE(units, 0)))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

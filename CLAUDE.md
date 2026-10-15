@@ -12928,6 +12928,86 @@ refactor.
   chip against the box and the title's width at 1340, 1024, 820, 600 and 390px.
   Removing the container fails four, and reproduces the report at 820px.
 
+- **PAST 80 UNITS, SCALE IS $1.25 PER OCCUPIED UNIT A MONTH, AND THE FIRST
+  BILL AT THAT PRICE CARRIES A ONE-TIME SETUP FEE.** Asked for as *"same
+  minimum month as GC ($99/mo), but if over 80 units in portfolio, then there
+  should instead be per unit fee of $1.25/unit (occupied units only) and a
+  setup fee based on size of portfolio size"*, with the owner's answers:
+  - the setup fee doubles each step: $250 up to 250 units, $500 to 500,
+    $1,000 to 1,000, $2,000 above;
+  - it is charged only to accounts over 80 units;
+  - the manager types the occupied count on each building;
+  - per-unit is monthly only.
+
+  Migration 084, `app/shared/unitpricing.js`.
+
+  **It is the property manager, the portfolio manager and the building owner,
+  and nobody else.** A general contractor with buildings typed in pays the flat
+  price, and the server suite pins that with 500 units on one. Units are
+  counted over the buildings the account **operates**: a building it owns and
+  has appointed somebody else to run is billed to whoever runs it.
+
+  **One rule, read by every place that quotes or charges it.** The checkout,
+  the subscription sync, the billing read, the console's MRR and the screens
+  all call `unitPricing`, so a card cannot quote one figure while Stripe
+  charges another. The bill is `max($99, $1.25 × occupied)`. It is carried as
+  ONE subscription item: the flat price, or a per-unit `price_data` line on the
+  **same Stripe product**, whichever is greater. That way the invoice reads as
+  one plan at two prices and no new Stripe price has to be set up.
+
+  **A blank occupied count is billed as full, and the screen says so.** A blank
+  cannot claim a vacancy. Counting it as empty would make leaving the box blank
+  the cheapest answer, which is the one answer that tells nobody anything. The
+  billing panel names how many buildings have no count. More occupied than
+  units is refused **by name**, not capped, including when the units are
+  lowered under a stored count, because a silently different number is a bill
+  nobody can explain. `m084_inv_occupied_over_units` counts one that got past.
+
+  **The setup fee is charged once, and there are two ways it could have gone
+  twice.**
+  - **At checkout** it is a one-time line on the first invoice, and the webhook
+    records it as `paid_at_checkout`.
+  - **For a subscriber who crosses 80 later** it is a Stripe invoice item on
+    the next bill, keyed `setup-fee:<account>`. The row is written before
+    Stripe is asked, and a re-read guards it.
+  - **A building saved between the checkout and its webhook** would have
+    charged it again, because the sync sees a subscription and no row. So the
+    checkout stamps the fee on the **subscription's** metadata too, and the sync
+    reads it and records the fee as paid instead of charging it. The fixture
+    for that is exactly the race, and removing the metadata check fails it.
+  - Growing into a higher step later is not charged again.
+
+  **Yearly is refused past 80, and a yearly subscriber is left alone.** The
+  checkout answers `annual_not_available`. The billing screen replaces the
+  cycle toggle with a line saying why, and moves a not-yet-paying account off a
+  yearly choice before the press. An account already paying yearly keeps its
+  year. **Still open:** moving it onto the per-unit price at renewal.
+
+  **The sync never moves money mid-month.** Saving or removing a building runs
+  it in the background (`afterPortfolioChange`), and so does a nightly sweep
+  (`/api/cron/unit-billing` by hand). It sets the item with
+  `proration_behavior: none`, so occupancy changes show on the next bill
+  rather than as a credit or charge for every tenant who moves. It never fails
+  a save. A change of price writes a `cycle` subscription event, which the
+  console already counts as expansion or contraction. The account's activity
+  feed says when it moved to or off per-unit billing.
+
+  **The console's MRR reads it too.** `mrrOf` took $99 for every monthly
+  account, so the bootstrap now carries `unitMonthlyCents` from the same rule.
+  `applySubscription` reads what the item charges instead of assuming $99.
+
+  `test:unitpricing` (55) and `test:unitpricingui` (21). Twelve mutations
+  fire, each on its own assertion. One harness trap: SQLite's `DROP COLUMN`
+  rewrites the table's SQL text, and a comment before the last column made
+  the rewrite invalid, so the schema comment now sits after the table.
+
+  **Not verified here:** a live Stripe checkout with a `price_data` line on an
+  existing product, and a live invoice item. Both are the documented shapes and
+  the suite asserts them at `fetch`, but the first real per-unit checkout is
+  the real test. **Pasting 084 is required.** Until then the routes still work
+  and count every unit as occupied, the property form says the occupied count
+  was not kept, and no setup fee is ever charged.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

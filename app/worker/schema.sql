@@ -388,8 +388,13 @@ CREATE TABLE properties (
   -- building. Per building, never per account, and it never outranks ownership.
   owner_declared_at TEXT,
   owner_declared_by TEXT REFERENCES users(id),
-  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+  occupied_units INTEGER
 );
+-- 084. occupied_units: how many units are lived in, typed by the manager. NULL
+-- is "not said" and is billed as full. Never more than units -- CHECK.sql
+-- counts it. The comment sits out here because a comment before the last
+-- column makes SQLite's DROP COLUMN rewrite the table into invalid SQL.
 CREATE INDEX idx_properties_account ON properties(account_id);
 
 -- Which properties an engagement is scoped to. No rows = every property.
@@ -2507,3 +2512,16 @@ CREATE TABLE IF NOT EXISTS message_reply_tokens (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_message_reply_tokens_seat
   ON message_reply_tokens(thread_id, user_id, account_id);
+
+-- 084. The per-unit setup fee, once per account. See app/shared/unitpricing.js.
+CREATE TABLE account_setup_fees (
+  account_id   TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  tier         TEXT NOT NULL,
+  units        INTEGER NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'pending'
+               CHECK (status IN ('pending', 'invoiced', 'paid_at_checkout')),
+  stripe_ref   TEXT,
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  charged_at   TEXT
+);

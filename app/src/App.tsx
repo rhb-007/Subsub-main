@@ -62,6 +62,7 @@ import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, ren
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
 import { feeTermsText, DEFAULT_FEE_TERMS } from "../shared/fee.js";
+import { unitPriced, unitTermsText, formatUsd as unitUsd, UNIT_THRESHOLD } from "../shared/unitpricing.js";
 import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS, SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
   problemsIn, allConfirmed, reviewProgress, outcomeWords } from "../shared/doccheck.js";
@@ -949,7 +950,10 @@ const seedSubscriptionEvents = [
 // Normalized MRR in cents: annual ÷ 12, so a $990/yr account is $82.50/mo.
 const mrrOf = (acct) => {
   if (!acct || acct.status === "canceled" || acct.plan !== "scale") return 0;
-  return acct.billing === "annual" ? Math.round(99000 / 12) : 9900;
+  if (acct.billing === "annual") return Math.round(99000 / 12);
+  // 084: a portfolio past 80 units is billed per occupied unit, which the
+  // bootstrap works out from the same rule the checkout charges by.
+  return Number(acct.unitMonthlyCents) > 0 ? Number(acct.unitMonthlyCents) : 9900;
 };
 
 // ---- Properties ---------------------------------------------------------
@@ -2750,6 +2754,8 @@ export default function SubSub() {
       // with a misconfigured price id.
       setBillingErr(err?.status === 501
         ? "Billing isn't switched on yet, so nothing can be charged. Nobody can upgrade until it is."
+        : err?.body?.error === "annual_not_available"
+        ? `Past ${UNIT_THRESHOLD} units Scale is billed monthly, per occupied unit. Choose monthly to continue.`
         : err?.body?.detail ? `Stripe refused: ${err.body.detail}`
         : "Couldn't start checkout. Try again in a moment.");
     }
@@ -3522,12 +3528,19 @@ export default function SubSub() {
   const addProperty = async (p) => {
     let id;
     try { ({ id } = await api.createProperty(p)); }
-    catch (err) { console.error("[persist] createProperty failed:", err); id = "p" + Date.now(); }
+    catch (err) {
+      // A refusal is the form's to say (an occupied count over the units is
+      // what a portfolio is billed on); only an unreachable server falls back.
+      if (err?.status && err.status < 500) throw err;
+      console.error("[persist] createProperty failed:", err); id = "p" + Date.now();
+    }
     setProperties((ps) => [{ ...p, id, accountId: account.id }, ...ps]);
     return id;
   };
-  const patchProperty = (id, patch) => {
-    persist("patchProperty", api.patchProperty(id, patch));
+  // Awaited, then patched: a refused save must not draw as saved, and the
+  // occupied count is a figure the bill is read from.
+  const patchProperty = async (id, patch) => {
+    await api.patchProperty(id, patch);
     setProperties((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
   };
   const removeProperty = (id) => {
@@ -17435,8 +17448,8 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
 
   if (form) return (
     <main className="ss-main">
-      <PropertyForm existing={form.id ? form : null}
-        onSubmit={(p) => { form.id ? onPatch(form.id, p) : onAdd(p); setForm(null); }}
+      <PropertyForm existing={form.id ? form : null} accountKind={accountKind}
+        onSubmit={async (p) => { form.id ? await onPatch(form.id, p) : await onAdd(p); setForm(null); }}
         onCancel={() => setForm(null)} />
     </main>
   );
@@ -17681,6 +17694,15 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
                 ) : (
                   <span><strong>{p.units || "\u2014"}</strong> units</span>
                 )}
+                {/* 084. What the bill reads past 80 units. Blank says so, since
+                    a blank is billed as full. */}
+                {unitPriced(accountKind) && !p.ownedNotOperated && (
+                  <span className="pd-occ">
+                    {p.occupiedUnits === "" || p.occupiedUnits == null
+                      ? <>Occupied <strong>not set</strong></>
+                      : <><strong>{p.occupiedUnits}</strong> occupied</>}
+                  </span>
+                )}
                 {js.length > 0 ? (
                   <button className="pd-link" data-go="jobs"
                     onClick={() => { setDetail(null); onGoJobs(p, open > 0 ? "active" : "all"); }}>
@@ -17906,12 +17928,36 @@ function BuildingNotices({ property, startOpen = false }) {
   );
 }
 
-function PropertyForm({ existing, onSubmit, onCancel }) {
-  const [f, setF] = useState(existing || {
+// What a refused property save says. The occupied count is what a portfolio
+// past 80 units is billed on, so a refusal about it names the figure.
+const propertySaveErrText = (e) => ({
+  occupied_over_units: "More units are occupied than the building has. Lower the occupied count, or raise the units.",
+  bad_occupied_units: "Occupied units has to be a whole number, 0 or more.",
+  name_required: "Give the property a name.",
+}[e?.body?.error || e?.message] || `That didn't save (${e?.body?.error || e?.message || "no answer"}). Try again.`);
+
+function PropertyForm({ existing, onSubmit, onCancel, accountKind }) {
+  const [f, setF] = useState({ occupiedUnits: "", ...(existing || {
     name: "", address: "", city: "", state: "WA", zip: "", units: "", notes: "",
-  });
-  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
-  const ok = f.name.trim() && f.address.trim();
+  }) });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => { setErr(""); setF((x) => ({ ...x, [k]: v })); };
+  // 084. Asked only of the kinds billed per unit, because nobody else is
+  // billed on it. Checked here as well as on the server so the press is not
+  // the first place somebody hears the count is over the units.
+  const askOccupied = unitPriced(accountKind);
+  const unitsN = f.units === "" || f.units == null ? null : Number(f.units);
+  const occN = f.occupiedUnits === "" || f.occupiedUnits == null ? null : Number(f.occupiedUnits);
+  const occBad = askOccupied && occN != null && (!Number.isInteger(occN) || occN < 0 || occN > (unitsN || 0));
+  const ok = f.name.trim() && f.address.trim() && !occBad && !busy;
+  const save = async () => {
+    setBusy(true); setErr("");
+    const body = askOccupied ? f : (({ occupiedUnits, ...rest }) => rest)(f);
+    try { await onSubmit(body); }
+    catch (e) { setErr(propertySaveErrText(e)); }
+    finally { setBusy(false); }
+  };
   return (
     <div className="portal-panel settings-panel">
       <h4>{existing ? "Edit property" : "New property"}</h4>
@@ -17927,14 +17973,34 @@ function PropertyForm({ existing, onSubmit, onCancel }) {
         <label className="fld">ZIP<input inputMode="numeric" value={f.zip}
           onChange={(e) => set("zip", e.target.value)} /></label>
       </div>
-      <label className="fld">Units or spaces <span className="fld-note">optional</span>
-        <input inputMode="numeric" value={f.units} onChange={(e) => set("units", e.target.value)}
-          placeholder="84" /></label>
+      {askOccupied ? (
+        <div className="two prop-units">
+          <label className="fld">Units or spaces <span className="fld-note">optional</span>
+            <input inputMode="numeric" value={f.units} onChange={(e) => set("units", e.target.value)}
+              placeholder="84" /></label>
+          <label className="fld">Occupied units <span className="fld-note">lived in now</span>
+            <input inputMode="numeric" className="prop-occupied" value={f.occupiedUnits ?? ""}
+              onChange={(e) => set("occupiedUnits", e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder={f.units ? String(f.units) : "80"} aria-invalid={occBad || undefined} /></label>
+        </div>
+      ) : (
+        <label className="fld">Units or spaces <span className="fld-note">optional</span>
+          <input inputMode="numeric" value={f.units} onChange={(e) => set("units", e.target.value)}
+            placeholder="84" /></label>
+      )}
+      {askOccupied && (
+        <p className={`prop-occ-note${occBad ? " is-bad" : ""}`}>
+          {occBad
+            ? "More units are occupied than the building has."
+            : `Past ${UNIT_THRESHOLD} units across your buildings, Scale is billed per occupied unit. Left blank, every unit counts as occupied.`}
+        </p>
+      )}
       <label className="fld">Notes <span className="fld-note">access, gate codes, anything site-specific</span>
         <textarea rows={2} value={f.notes} onChange={(e) => set("notes", e.target.value)} /></label>
+      {err && <p className="fld-err prop-save-err" role="alert">{err}</p>}
       <div className="form-actions">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-solid" disabled={!ok} onClick={() => onSubmit(f)}>
+        <button className="btn-solid" disabled={!ok} onClick={save}>
           {existing ? <><Check size={15} /> Save property</> : <><Plus size={15} /> Add property</>}
         </button>
       </div>
@@ -21850,6 +21916,63 @@ function BillingManage({ accentHex, onFellBack }) {
 // how many are used, what the next bill carries for it so far, and last
 // month's charge. A charge nobody was told about until the invoice is the one
 // that turns into a support call.
+// 084. What Scale costs an account that keeps buildings, with its own numbers
+// in it. Read off /api/billing, which works it out with the same rule the
+// checkout and the monthly sync charge by, so this cannot quote another price.
+function UnitPrice({ onLoad }) {
+  const [u, setU] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.getBilling()
+      .then((b) => { if (!live) return; setU(b?.units || null); onLoad?.(b?.units || null); })
+      .catch(() => { if (live) setU(null); });
+    return () => { live = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!u?.eligible) return null;
+  const n = (x) => Number(x || 0).toLocaleString("en-US");
+  const terms = unitTermsText();
+  return (
+    <div className={`unit-price${u.applies ? " applies" : ""}`}>
+      <h4>Your price on Scale</h4>
+      {!u.applies ? (
+        <>
+          <p className="up-lead">
+            Your buildings hold <b>{n(u.total)}</b> unit{u.total === 1 ? "" : "s"}, so Scale is the flat
+            {" "}<b>{unitUsd(u.minMonthlyCents)} a month</b>.
+          </p>
+          <p className="up-rule">{terms.perUnit} {terms.setup}</p>
+        </>
+      ) : (
+        <>
+          <div className="up-rows">
+            <div className="wd-row"><span>Units across your buildings</span><strong>{n(u.total)}</strong></div>
+            <div className="wd-row"><span>Occupied</span><strong>{n(u.occupied)}</strong></div>
+            <div className="wd-row up-month"><span>Each month</span>
+              <strong>{unitUsd(u.monthlyCents)}
+                <em>{u.perUnitCents >= u.minMonthlyCents
+                  ? ` · ${unitUsd(u.unitPriceCents)} × ${n(u.occupied)}`
+                  : ` · the ${unitUsd(u.minMonthlyCents)} minimum`}</em></strong></div>
+            <div className="wd-row"><span>One-time setup fee</span>
+              <strong>{u.setupCharged
+                ? <>{unitUsd(u.setupCharged.amountCents)} <em>· charged{u.setupCharged.at ? ` ${niceDay(u.setupCharged.at)}` : ""}</em></>
+                : <>{unitUsd(u.setupCents)} <em>· {u.setupLabel}</em></>}</strong></div>
+          </div>
+          {u.unknown > 0 && (
+            <p className="up-unknown">
+              {u.unknown === 1 ? "One building has" : `${n(u.unknown)} buildings have`} no occupied count, so every
+              unit there is counted as occupied. Add it on the building in Properties to bill only what is lived in.
+            </p>
+          )}
+          <p className="up-rule">
+            Billed monthly. A change in occupancy shows on the next bill. The setup fee is charged once
+            {u.setupCharged ? " and has been." : ", on the first bill at this price."}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SmsUsage() {
   const [s, setS] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -22617,6 +22740,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // both the documents and the state that says which of them are missing --
   // scrolling and highlighting from up here would mean guessing at both.
   const [confirmCancel, setConfirmCancel] = useState(false);
+  // 084. What Scale costs THIS account, read off /api/billing so the card and
+  // the checkout quote the same figure. Null until it arrives, and null for a
+  // kind that is never billed per unit.
+  const [unitInfo, setUnitInfo] = useState(null);
+  const perUnit = !!unitInfo?.applies;
+  // Per-unit is monthly only, so a portfolio past 80 units that has not paid
+  // yet is not left on a yearly choice the checkout would refuse. An account
+  // already on a yearly plan keeps it: that year is paid for.
+  useEffect(() => {
+    if (perUnit && billing === "annual" && plan !== "scale") onSetBilling?.("monthly");
+  }, [perUnit, billing, plan]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // profile form
   const [p, setP] = useState({ name: me.name, email: me.email, phone: me.phone || "" });
@@ -23476,6 +23610,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             </div>
           )}
 
+          {unitPriced(accountKind) && (
+            <UnitPrice onLoad={setUnitInfo} />
+          )}
+
+          {perUnit && plan !== "scale" ? (
+            <div className="cycle-row">
+              <span className="cycle-note unit-monthly-only">
+                Billed monthly. Yearly billing is for portfolios of {UNIT_THRESHOLD} units or fewer.
+              </span>
+            </div>
+          ) : (
           <div className="cycle-row">
             <div className="cycle" role="tablist" aria-label="Billing cycle">
               {[["monthly", "Monthly"], ["annual", "Annual"]].map(([c, l]) => (
@@ -23491,6 +23636,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               </span>
             )}
           </div>
+          )}
           <div className="plan-grid">
             {Object.values(PLANS).map((pl) => (
               <div key={pl.id} className={`plan-card ${plan === pl.id ? "on" : ""}`}>
@@ -23498,10 +23644,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <span className="plan-name">{pl.name}</span>
                 {pl.tagline && <span className="plan-tag">{pl.tagline(planWords)}</span>}
                 <div className="plan-price">
-                  {pl.annual && billing === "annual"
+                  {pl.id === "scale" && perUnit && billing !== "annual"
+                    ? <>{unitUsd(unitInfo.monthlyCents)}<span>/mo</span></>
+                    : pl.annual && billing === "annual"
                     ? <>{pl.annualMonthly}<span>{pl.per}</span></>
                     : <>{pl.price}<span>{pl.per}</span></>}
                 </div>
+                {pl.id === "scale" && perUnit && billing !== "annual" && (
+                  <span className="plan-bill plan-unit-bill">
+                    {unitInfo.perUnitCents >= unitInfo.minMonthlyCents
+                      ? `${unitUsd(unitInfo.unitPriceCents)} × ${unitInfo.occupied.toLocaleString("en-US")} occupied units`
+                      : `The ${unitUsd(unitInfo.minMonthlyCents)} minimum`}
+                  </span>
+                )}
                 {pl.annual && (
                   <span className="plan-bill">
                     {/* Sales tax is added at checkout, and it is added
@@ -23519,6 +23674,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   {pl.features(planWords).map(([ft, note]) => (
                     <li key={ft}><Check size={13} /><span><b>{ft}</b>{note && <> — {note}</>}</span></li>
                   ))}
+                  {pl.id === "scale" && unitPriced(accountKind) && (
+                    <li className="plan-unit-feat"><Check size={13} />
+                      <span><b>Over {UNIT_THRESHOLD} units</b> — {unitTermsText().perUnit.replace(/^Over \d+ units: /, "")}</span></li>
+                  )}
                   {(pl.excluded || []).map(([ft, note]) => (
                     <li key={ft} className="feat-off"><X size={13} /><span>{ft}{note && <> — {note}</>}</span></li>
                   ))}
@@ -43449,6 +43608,16 @@ strong.insp-name{background:none;border:0;padding:0}
 .pc-usage{font-size:12.5px;color:var(--ink-soft);display:flex;flex-direction:column;gap:3px;text-align:right}
 .pc-usage strong{font-size:16px;color:var(--ink)}
 .plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;margin-top:4px}
+/* 084. Your price on Scale: the rule, and this account's own numbers in it. */
+.unit-price{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:16px 0 4px}
+.unit-price.applies{border-color:var(--brand)}
+.unit-price h4{margin:0 0 8px;font-size:14px}
+.unit-price .up-lead{margin:0 0 6px;font-size:14px;line-height:1.45}
+.unit-price .up-rule{margin:8px 0 0;font-size:12.5px;line-height:1.5;color:var(--ink-soft)}
+.unit-price .up-rows .wd-row strong em{font-style:normal;font-weight:500;color:var(--ink-soft)}
+.unit-price .up-month strong{font-size:16px}
+.unit-price .up-unknown{margin:10px 0 0;font-size:12.5px;line-height:1.45;color:var(--amber-ink, var(--ink))}
+.plan-unit-bill{font-weight:600}
 .plan-card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:20px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow)}
 .plan-card.on{border-color:var(--brand);background:#f7faf8}
@@ -43609,6 +43778,14 @@ strong.insp-name{background:none;border:0;padding:0}
   color:#fff;padding:2px 6px;border-radius:20px;margin-left:6px;vertical-align:1px}
 .notify-opt.disabled{opacity:.5;cursor:not-allowed}
 .fld-err{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:600;margin:8px 0 0}
+/* 084. Units and occupied units side by side, with the billing rule under
+   them in words so a blank box is a decision rather than a guess. */
+.prop-units{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.prop-units .fld{margin-bottom:0}
+.prop-occ-note{margin:6px 0 14px;font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
+.prop-occ-note.is-bad{color:var(--red);font-weight:600}
+.prop-occupied[aria-invalid]{border-color:var(--red)}
+@media (max-width:420px){.prop-units{grid-template-columns:1fr}}
 
 /* upgrade gate — left aligned, the delta table carries the argument */
 .up-form{gap:0}
