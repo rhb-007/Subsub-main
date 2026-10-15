@@ -41,6 +41,24 @@ INSERT INTO jobs(id,account_id,property_id,title,trades,status,access,access_use
 INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,value_cents) VALUES
   ('wo_1','WO-1','job_rep','plumbing','cmp_pac','en_pac','accepted',40000),
   ('wo_2','WO-2','job_named','plumbing','cmp_pac','en_pac','accepted',40000);
+-- NOBODY EVER SAID YES. An offer that ran out with no reply is still a live,
+-- undeclined work order -- which is exactly the state of a job put out to
+-- overflow -- and the route counted it as somebody sent. Beside it: a job
+-- with no work order at all, and one whose only crew was withdrawn.
+INSERT INTO jobs(id,account_id,property_id,title,trades,status,requested_by,approved_at,created_at) VALUES
+  ('job_offer','acc_pm','prop_1','No power','["electrical"]','active','u_ten','2026-10-01','2026-10-01'),
+  ('job_none','acc_pm','prop_1','No heat','["hvac"]','active','u_ten','2026-10-01','2026-10-01'),
+  ('job_void','acc_pm','prop_1','Leak','["plumbing"]','active','u_ten','2026-10-01','2026-10-01'),
+  ('job_auto','acc_pm','prop_1','Drip','["plumbing"]','active','u_ten','2026-10-01','2026-10-01');
+INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,respond_by,value_cents,voided_at,auto_scheduled) VALUES
+  ('wo_offer','WO-3','job_offer','electrical','cmp_pac','en_pac','pending','2026-09-20',40000,NULL,0),
+  ('wo_void','WO-4','job_void','plumbing','cmp_pac','en_pac','accepted',NULL,40000,'2026-10-06',0),
+  ('wo_auto','WO-5','job_auto','plumbing','cmp_pac','en_pac','accepted',NULL,40000,NULL,1);
+INSERT INTO visits(id,job_id,account_id,date,start_time,end_time,status,proposed_by,created_at) VALUES
+  ('v_offer','job_offer','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20'),
+  ('v_none','job_none','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20'),
+  ('v_void','job_void','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20'),
+  ('v_auto','job_auto','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20');
 INSERT INTO visits(id,job_id,account_id,date,start_time,end_time,status,proposed_by,created_at) VALUES
   ('v_rep','job_rep','acc_pm','2026-10-09','09:45','10:45','confirmed','u_ten','2026-10-05'),
   ('v_named','job_named','acc_pm','2026-10-09','09:45','10:45','confirmed','u_mgr','2026-10-05'),
@@ -68,6 +86,21 @@ try {
   ck("a window that is no longer live answers not_open", r.status === 409 && (await r.json()).error === "not_open");
   r = await say("v_named", { happened: "no" }, "u_ten");
   ck("an answer that is not yes or no is refused", r.status === 400);
+
+  console.log("\n-- nobody was sent, so there is nothing to answer about --");
+  for (const [id, what] of [["v_offer", "an offer nobody accepted (out to overflow)"],
+    ["v_none", "a job with no work order at all"], ["v_void", "a job whose only crew was withdrawn"]]) {
+    for (const happened of [true, false]) {
+      r = await say(id, { happened }, "u_ten");
+      const body = await r.json();
+      ck(`${what}: "${happened ? "they came" : "nobody came"}" is refused no_contractor`,
+        r.status === 409 && body.error === "no_contractor" && st(id).status === "confirmed",
+        `${r.status} ${JSON.stringify(body)} ${st(id).status}`);
+    }
+  }
+  r = await say("v_auto", { happened: true }, "u_ten");
+  ck("a crew issued already accepted by auto-schedule still counts", r.status === 200 && st("v_auto").status === "happened",
+    String(r.status));
 
   console.log("\n-- and the screen names it --");
   const src = readFileSync(join(app, "src", "App.tsx"), "utf8");

@@ -10910,9 +10910,19 @@ app.post("/api/visits/:id/outcome", async (c) => {
   // because a tab that was open before the contractor was withdrawn would
   // still have the buttons on it, and a safeguard only in the browser is
   // not one.
+  //
+  // AND "SENT" MEANS SOMEBODY SAID YES. This read "any live work order that
+  // was not declined", which counts an OFFER -- including one that ran out
+  // with no reply, which is exactly the state a job is in when it has been
+  // put out to overflow. A tenant was then asked whether a vendor came to a
+  // job nobody had ever agreed to do, said yes, and the manager's card read
+  // "a vendor showed up" on a job at 0 of 1 trades. Accepted, or issued
+  // already accepted by auto-schedule, is the same test the tenant's screen
+  // uses (`someoneAccepted`), so the two cannot disagree about it.
   const sent = await c.env.DB.prepare(
     `SELECT 1 AS yes FROM work_orders
-      WHERE job_id = ? AND voided_at IS NULL AND status != 'declined' LIMIT 1`
+      WHERE job_id = ? AND voided_at IS NULL
+        AND (status = 'accepted' OR (auto_scheduled = 1 AND status != 'declined')) LIMIT 1`
   ).bind(v.job_id).first();
   if (!sent) return c.json({ error: "no_contractor" }, 409);
   const note = String(b.note || "").trim().slice(0, 500) || null;

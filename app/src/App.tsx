@@ -14449,6 +14449,18 @@ function tenantStage(job, visit) {
   // A confirmed visit whose window has passed is not "Scheduled" any more.
   // It said "Somebody is coming" about an afternoon two days gone, which is
   // the one sentence on this page that can be flatly untrue.
+  // AN ANSWER ABOUT A VISIT NOBODY WAS SENT TO IS NOT A VISIT. A tenant who
+  // said "yes, they came" -- or "no, nobody came" -- on a job no contractor
+  // had ever accepted was shown "Visited Sep 23", and the manager's card said
+  // a vendor showed up, on a job at 0 of 1 trades. Whatever was answered,
+  // with nobody on the job the honest line is the one below: still lining
+  // somebody up. The server now refuses that answer too; this is for the rows
+  // written before it did, and for a crew withdrawn after the answer.
+  if (visit && (visit.status === "happened" || visit.status === "missed") && !someoneAccepted(job)) {
+    return { key: "nobody",
+      label: someoneAsked(job) ? "Still waiting on a vendor to accept this job" : "Still lining up a vendor for this",
+      tone: "wait" };
+  }
   if (visit?.status === "confirmed") {
     // A time both sides agreed is not a person on the doorstep. Until a
     // contractor has accepted, all that exists is an agreed window -- so
@@ -15634,7 +15646,15 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
     `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}`);
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
-  const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed");
+  // NOBODY ON THE JOB. A window can be agreed before anybody is hired -- that
+  // is deliberate, the tenant's morning is the scarce thing -- but a window
+  // nobody was sent to must not then read as a visit that happened, or one
+  // that is about to. `crew` is the same test the tenant's screen and the
+  // outcome route use.
+  const crew = someoneAccepted(job);
+  const nobodySent = !crew && !!visit && (visit.status === "happened" || visit.status === "missed"
+    || (visit.status === "confirmed" && visitPassed(visit)));
+  const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed" || nobodySent);
   // WHO THE TENANT IS, not just what they are called. Asked as *"who is John
   // Smith? Juan Soto is the account holder"* -- every sentence in this block
   // printed a bare name, and the tenant is the one party on a job a managing
@@ -15686,11 +15706,22 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           standing, with the tenant's screen still reading "Somebody is
           coming". Whoever is looking at this is the only person who can fix
           it, so it is said here, with the way to do it. */}
-      {visit && (visit.status === "proposed" || visit.status === "confirmed") && !someoneAccepted(job) && (
-        <div className="visit-state bad visit-nobody">
+      {visit && (visit.status === "proposed" || visit.status === "confirmed" || nobodySent) && !crew && (
+        <div className="visit-state bad visit-nobody" data-nobody-sent={nobodySent ? "" : undefined}>
           <AlertTriangle size={14} />
           <span>
-            {someoneAsked(job)
+            {/* AND ONCE THE TIME HAS GONE BY, IT IS HISTORY RATHER THAN A
+                WARNING. "Nobody is scheduled to arrive" about a morning that
+                is over says nothing; what is true is that nobody was sent --
+                and if the tenant was asked anyway and said somebody came,
+                that answer was about nobody. Reported from a job at 0/1
+                trades reading "says a vendor showed up". */}
+            {nobodySent ? <>
+                <b>{visitWhen(visit)}</b> has passed and no {hiresWord} was assigned, so nobody was sent.
+                {visit.status === "happened" && <> {cap1(name)} answered that somebody came; that answer
+                  does not count.</>}
+                {" "}Assign one, then propose a new time.</>
+            : someoneAsked(job)
               ? <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and no {hiresWord} has
                   accepted this job yet. Nobody is scheduled to arrive until one does.</>
               : <>A time is {visit.status === "confirmed" ? "agreed" : "proposed"} and <b>no vendor
@@ -15715,6 +15746,13 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           <Key size={14} />
           <div className="va-main">
             <span><b>{ACCESS_KINDS[job.accessEffective].short}.</b> {ACCESS_KINDS[job.accessEffective].note(hiresWord)}</span>
+            {/* The note describes the rule; with nobody on the job yet it would
+                name a party that does not exist. Said, so "the tenant and the
+                subcontractor both confirm" is not read as somebody coming. */}
+            {!crew && (
+              <span className="va-nobody" data-nocrew><AlertTriangle size={12} /> No {hiresWord} has
+                accepted this job yet, so nobody is coming until one does.</span>
+            )}
             {/* AND IT IS CHANGED HERE, which is what was actually asked for:
                 *"allow the property manager to adjust that when scheduling the
                 job"*. What a repair turns out to need is usually only clear
@@ -15798,9 +15836,9 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           {visit.contractorAt && stillOwed.includes("tenant") && <em> The {hiresWord} has confirmed.</em>}
         </p>
       )}
-      {visit?.status === "confirmed" && (
+      {visit?.status === "confirmed" && !nobodySent && (
         visitPassed(visit)
-          ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has passed. {name} hasn't said yet whether anybody showed up.</p>
+          ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has passed. {cap1(name)} hasn't said yet whether anybody showed up.</p>
           /* WHO agreed it, read from the parties rather than from a ternary
              that knew about two of them. The same bug as the waiting line one
              branch along: with three parties this said "the tenant and the
@@ -15814,11 +15852,11 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
       {/* The two answers to that question. "Nobody came" is the one that
           needs something doing, so it reads as a problem and springs the
           propose form open above. */}
-      {visit?.status === "missed" && (
+      {visit?.status === "missed" && !nobodySent && (
         <p className="visit-state bad"><AlertTriangle size={14} /> No vendor showed up for <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} {name} is still waiting.</p>
       )}
-      {visit?.status === "happened" && (
-        <p className="visit-state ok"><CheckCircle2 size={14} /> {name} says a vendor showed up on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
+      {visit?.status === "happened" && !nobodySent && (
+        <p className="visit-state ok"><CheckCircle2 size={14} /> {cap1(name)} says a vendor showed up on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
       )}
       {visit?.status === "declined" && (
         /* WHO said no. A decline from either side ends the window, and
@@ -25120,7 +25158,10 @@ function PageHead({ title, sub, children }) {
 // own line here rather than being quietly sorted to the front of a list
 // that claims everything in it is still to come.
 // Why a past-due row is past due, in the words of what to do about it.
-function lateWhy(when) {
+function lateWhy(when, job) {
+  // Nobody on it is the first thing to fix, and "no visit set" would send
+  // somebody to set a time for a job nobody has agreed to do.
+  if (job && !someoneAccepted(job)) return "Date passed, nobody has accepted it";
   if (when.kind === "confirmed") return "Visit passed \u2014 mark done or reschedule";
   if (when.kind === "proposed") return "Time passed, never confirmed";
   return "Date passed, no visit set";
@@ -25218,7 +25259,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
                     booked visit is marked done or moved, a time nobody
                     confirmed needs a new one, and a bare target needs a time
                     at all. */}
-                <span className="shl-state">{lateWhy(j.when)}</span>
+                <span className="shl-state">{lateWhy(j.when, j)}</span>
               </button>
             ))}
             {late.length > 3 && (

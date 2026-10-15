@@ -74,7 +74,7 @@ cannot read one.
 
 ### Tests
 
-`test:messaging` (168), `test:messagingui` (93).
+`test:messaging` (168), `test:messagingui` (93), `test:visitoutcome` (14), `test:visitnocrew` (21).
 
 ## 080 — Client work on your own screens, and "waiting on you" reminder emails
 

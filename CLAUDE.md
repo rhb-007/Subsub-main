@@ -12872,6 +12872,42 @@ refactor.
   and on the list with the page not reloaded. A refresh that does nothing
   fails it.
 
+- **"DID YOUR VENDOR SHOW UP?" IS ASKED ONLY ABOUT A JOB SOMEBODY ACCEPTED,
+  AND AN OFFER NOBODY ANSWERED IS NOT SOMEBODY SENT.** Reported from a job at
+  0/1 trades, Electrical, no contractor, out to overflow, whose card read *the
+  tenant (Ricard Bond) says a vendor showed up on Sep 23*. A time had been
+  agreed with the tenant before anybody was hired, which is allowed on
+  purpose. The only work order was an offer that ran out with no reply, and
+  the outcome route's "somebody was sent" check was *any live work order not
+  declined*, so that expired offer counted. `test:visitnobody` had fixed the
+  screens for this exact report once already; the server check was the gap.
+
+  **Sent means accepted** (or issued already accepted by auto-schedule), on
+  the route, the same test as the tenant's `someoneAccepted`. An offer, a
+  job with no work order, and a withdrawn crew all answer `no_contractor`.
+
+  **And the screens read an answer about nobody as nothing.** Rows written
+  before the route refused it, and a crew withdrawn after the answer, still
+  exist:
+  - The tenant's chip reads *Still waiting on a vendor to accept this job*
+    (or *Still lining up a vendor*), never *Visited*, and asks nothing.
+  - The manager's card replaces *says a vendor showed up* and *hasn't said yet
+    whether anybody showed up* with one line: the time passed and nobody was
+    assigned, so nobody was sent, with the tenant's answer named as not
+    counting, beside **Assign a contractor**.
+  - The access note gets a second line while nobody has accepted: *nobody is
+    coming until one does*. The rule it states names a party that does not
+    exist yet.
+  - The dashboard's past-due line says *nobody has accepted it* instead of
+    *no visit set*, because setting a time is the wrong next step.
+
+  `test:visitoutcome` (14) and `test:visitnocrew` (21) drive both. Five
+  mutations fire, each on its own assertion: the old server check, the
+  tenant gate, the manager gate, the dashboard line and the access note.
+  A job a crew accepted is asserted in the same places, so a fix that hid
+  every outcome cannot pass. No invariant: a crew withdrawn after a real
+  visit legitimately leaves an answered visit with nobody on the job.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

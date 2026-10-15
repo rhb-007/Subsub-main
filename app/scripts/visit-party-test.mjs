@@ -730,9 +730,10 @@ try {
     // ONE form for all three sides -- the hiring side, the crew and the
     // tenant. A second copy of three inputs and a window validation is two
     // things to keep in step; a fourth mount should raise this number on
-    // purpose, never by a copy.
-    ck("there is one propose form, used three times",
-      (App.match(/<VisitForm /g) || []).length === 3,
+    // purpose, never by a copy. The fourth is the conversation's Propose a
+    // time (082), which opens this same form rather than a second one.
+    ck("there is one propose form, used four times",
+      (App.match(/<VisitForm /g) || []).length === 4,
       String((App.match(/<VisitForm /g) || []).length));
     ck("and the contractor's door opens it", /onProposeVisit={setProposeWO}/.test(App));
     // ONE DOOR INTO ANOTHER ACCOUNT. `onGoClient` -- the only route a
