@@ -34,7 +34,7 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb, makeR2 } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage, owesEmail,
-  NOTIFY_AFTER_MS, EDIT_WINDOW_MS } from "../shared/messaging.js";
+  NOTIFY_AFTER_MS, EDIT_WINDOW_MS, looksLikeTime, jobSeedFrom } from "../shared/messaging.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -327,6 +327,105 @@ console.log("\n-- the email --");
   ck("a new message after reading is emailed once", sent.filter((m) => String(m.to).includes("admin@")).length === 1, String(sent.length));
   await cron();
   ck("and only once", sent.filter((m) => String(m.to).includes("admin@")).length === 1, String(sent.length));
+}
+
+
+console.log("\n-- 082: what a message is not --");
+{
+  ck("a day and a clock time looks like a time", looksLikeTime("Tuesday at 9 works for me"));
+  ck("so does tomorrow, a date and a bare hour", looksLikeTime("can you come tomorrow") && looksLikeTime("10/14?") && looksLikeTime("around 3"));
+  ck("sun damage and a saturated wall do not", !looksLikeTime("sun damage on the deck") && !looksLikeTime("the drywall is saturated"));
+  ck("nor does a count", !looksLikeTime("I have 2 kids and a dog"));
+  const msgs = [
+    { id: "a", authorSide: "party", body: "Old leak, fixed already", photos: [{ index: 0 }], createdAt: "2026-01-01T00:00:00.000Z" },
+    { id: "b", authorSide: "home", body: "Thanks", photos: [], createdAt: "2026-01-02T00:00:00.000Z" },
+    { id: "c", authorSide: "party", body: "Bathroom fan is rattling\nloud at night", photos: [{ index: 0 }, { index: 1 }], createdAt: "2026-02-01T00:00:00.000Z" },
+  ];
+  const seed = jobSeedFrom(msgs, "home", "2026-01-15T00:00:00.000Z");
+  ck("a job seed is the other side's words since the last job", seed.title === "Bathroom fan is rattling" && !/Old leak/.test(seed.scope) && !/Thanks/.test(seed.scope), JSON.stringify(seed));
+  ck("with their photos from then", seed.photos.length === 2 && seed.photos.every((p) => p.messageId === "c"));
+  const mine = jobSeedFrom(msgs, "party");
+  ck("a tenant's seed is their own words", /Old leak/.test(mine.scope) && /rattling/.test(mine.scope) && !/Thanks/.test(mine.scope));
+}
+
+console.log("\n-- 082: the job beside the conversation --");
+{
+  const db = seed(); const env = envOf(db);
+  db.exec(`UPDATE jobs SET approved_at = '2026-10-01 10:00:00', created_at = '2026-10-01 09:00:00' WHERE id = 'j1';
+    UPDATE work_orders SET status = 'accepted', issued_at = '2026-10-02 09:00:00', responded_at = '2026-10-02 12:00:00' WHERE id = 'wo1';
+    INSERT INTO engagements(id,account_id,company_id,status) VALUES ('e9','acc1','cmp_x','active');
+    INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,issued_at)
+      VALUES ('wo9','WO-9','j1','drywall','cmp_x','e9','pending','2026-10-03 09:00:00');
+    INSERT INTO visits(id,account_id,job_id,proposed_by,date,start_time,end_time,status,created_at)
+      VALUES ('v1','acc1','j1','admin','2099-10-14','09:00','10:00','proposed','2026-10-01 09:30:00');`);
+  const [, ta] = await start(env, "admin", { kind: "tenant", partyUserId: "t1", jobId: "j1", body: "Morning works?" });
+  const [, ra] = await call(env, "admin", `/threads/${ta.thread.id}`);
+  const cx = ra.context || {};
+  ck("a job thread carries the job", cx.job?.title === "Leaking sink" && cx.job.approved === true, JSON.stringify(cx.job));
+  ck("and its live window, with whose turn it is", cx.visit?.id === "v1" && Array.isArray(cx.visit.parties) && "turn" in cx.visit, JSON.stringify(cx.visit));
+  const kinds = (cx.events || []).map((e) => e.kind);
+  ck("and its history from the records", ["job_reported", "job_approved", "wo_issued", "wo_accepted", "visit_proposed"].every((k) => kinds.includes(k)), JSON.stringify(kinds));
+  ck("in time order", (cx.events || []).every((e, i, a) => !i || a[i - 1].at <= e.at));
+  ck("the office sees every work order", (cx.events || []).filter((e) => e.kind === "wo_issued").length === 2);
+  ck("the office may propose a time", cx.canPropose === true && cx.viewerParty === "manager");
+  ck("and a message is not an event", !(cx.events || []).some((e) => /Morning works/.test(JSON.stringify(e))));
+
+  const [, tc] = await start(env, "sub1", { kind: "crew", jobId: "j1", body: "Parts in" });
+  ck("a crew writing from its own side need not name its company", tc.thread?.partyCompanyId === "cmp1", JSON.stringify(tc));
+  const [, rc] = await call(env, "sub1", `/threads/${tc.thread.id}`);
+  const ce = rc.context?.events || [];
+  ck("a crew sees its own work order", ce.some((e) => e.kind === "wo_issued" && e.company === "Sam Plumbing"), JSON.stringify(ce));
+  ck("and not another company's", !ce.some((e) => e.company === "Stranger Roofing"), JSON.stringify(ce));
+  ck("and may propose, with its work order to answer through", rc.context?.canPropose === true && rc.context.woId === "wo1" && rc.context.viewerParty === "contractor");
+
+  const [, rt] = await call(env, "t1", `/threads/${ta.thread.id}`);
+  const te = rt.context?.events || [];
+  ck("the tenant is told who is booked", te.some((e) => e.kind === "wo_booked" && e.company === "Sam Plumbing"), JSON.stringify(te));
+  ck("and nothing about work orders", !te.some((e) => /^wo_(issued|accepted|declined|voided)$/.test(e.kind) || e.wo));
+  ck("and not a company only offered the job", !te.some((e) => e.company === "Stranger Roofing"));
+  ck("the tenant who has to be let in may propose", rt.context?.canPropose === true && rt.context.viewerParty === "tenant");
+
+  const [, to] = await start(env, "own1", { kind: "owner", partyUserId: "own1", jobId: "j1", body: "Any news?" });
+  const [, ro] = await call(env, "own1", `/threads/${to.thread.id}`);
+  ck("an owner proposes nothing", ro.context?.canPropose === false && ro.context.viewerParty === null, JSON.stringify(ro.context && { canPropose: ro.context.canPropose, vp: ro.context.viewerParty }));
+}
+
+console.log("\n-- 082: a job made from a conversation --");
+{
+  const db = seed(); const env = envOf(db);
+  const up = await worker.fetch(new Request("https://api.subsub.work/api/uploads/message-photo/fan.jpg", {
+    method: "PUT", body: new Uint8Array([1, 2, 3]),
+    headers: { "Content-Type": "image/jpeg", "X-User-Id": "t1", "X-Account-Id": "acc1" } }), env);
+  const u = await up.json();
+  const [, g] = await start(env, "t1", { kind: "tenant", partyUserId: "t1", body: "The bathroom fan rattles", photos: [{ key: u.key, name: "fan.jpg" }] });
+  const job = (extra) => ({ title: "Bathroom fan", propertyId: "p1", trades: ["electrical"], address: "1 Main", ...extra });
+  const [sj, rj] = await call(env, "admin", "/jobs", { method: "POST", body: JSON.stringify(job({
+    fromThread: { id: g.thread.id, photos: [{ messageId: g.message.id, index: 0 }] } })) });
+  ck("the office makes a job from it", sj === 201 && rj.fromThread?.linked === true, `${sj} ${JSON.stringify(rj.fromThread)}`);
+  ck("and the photo goes onto the job", rj.fromThread?.photos === 1 && (rj.job?.photos || []).length === 1, JSON.stringify(rj.job?.photos));
+  const [, rg] = await call(env, "t1", `/threads/${g.thread.id}`);
+  ck("the conversation says so, from the record", (rg.context?.events || []).some((e) => e.kind === "job_linked" && e.jobId === rj.id), JSON.stringify(rg.context));
+  const [, rg2] = await call(env, "admin", `/threads/${g.thread.id}`);
+  ck("and still no message was written for it", rg2.messages?.length === 1);
+
+  const [, other] = await start(env, "admin", { kind: "tenant", partyUserId: "t2", body: "Hello Olly" });
+  const [s2, r2] = await call(env, "t1", "/jobs", { method: "POST", body: JSON.stringify(job({
+    reportDetail: { problem: "Fan", words: "rattles" }, fromThread: { id: other.thread.id } })) });
+  ck("a tenant cannot link a report to somebody else's conversation", s2 === 201 && r2.fromThread?.linked === false, JSON.stringify(r2.fromThread));
+  const [s3, r3] = await call(env, "t1", "/jobs", { method: "POST", body: JSON.stringify(job({
+    reportDetail: { problem: "Fan", words: "rattles" }, fromThread: { id: g.thread.id } })) });
+  ck("but can link their own report to their own", s3 === 201 && r3.fromThread?.linked === true, JSON.stringify(r3.fromThread));
+  const [, jt] = await start(env, "t1", { kind: "tenant", partyUserId: "t1", jobId: "j1", body: "x",
+    photos: [{ key: u.key, name: "fan.jpg" }] });
+  const [, r4] = await call(env, "admin", "/jobs", { method: "POST", body: JSON.stringify(job({ fromThread: { id: jt.thread.id } })) });
+  ck("a job thread is already about a job, so it links nothing", r4.fromThread?.linked === false);
+  const [, r5] = await call(env, "admin", "/jobs", { method: "POST", body: JSON.stringify(job({
+    fromThread: { id: g.thread.id, photos: [{ messageId: jt.message.id, index: 0 }] } })) });
+  ck("a photo from outside the conversation is not carried", r5.fromThread?.linked === true && r5.fromThread.photos === 0, JSON.stringify(r5.fromThread));
+  db.exec(`DROP TABLE thread_job_links`);
+  const [s6, r6] = await call(env, "admin", "/jobs", { method: "POST", body: JSON.stringify(job({ fromThread: { id: g.thread.id } })) });
+  ck("without 082 the job is still made, and the reply names the file", s6 === 201 && r6.fromThread?.linked === false
+    && r6.fromThread.migration === "082_thread_job_links", `${s6} ${JSON.stringify(r6.fromThread)}`);
 }
 
 console.log("\n-- a database without 081 --");

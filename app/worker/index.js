@@ -6928,6 +6928,187 @@ async function markThreadRead(db, threadId, userId, at) {
     ON CONFLICT(thread_id, user_id) DO UPDATE SET read_at = excluded.read_at`).bind(threadId, userId, at).run();
 }
 
+// 082. WHAT THE CONVERSATION IS ABOUT, READ FROM THE RECORDS AND NEVER FROM
+// THE MESSAGES. A message changes nothing -- "Tuesday at 9 works" books no
+// visit -- so a job thread carries the job's live state and its history as
+// they actually stand, and the screen draws the real buttons beside them.
+// Nothing here is stored as a message, so the conversation and the job cannot
+// disagree about what happened.
+//
+// What each side may see is narrowed here rather than on the screen: a crew
+// sees its own work orders and nobody else's, a tenant or an owner sees who is
+// booked but no work-order numbers.
+const isoOf = (v) => {
+  if (!v) return null;
+  const s = String(v);
+  return /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
+};
+async function threadJobContext(env, t, side, viewer) {
+  const db = env.DB;
+  let job = null;
+  for (const cols of ["id, account_id, title, status, date, property_id, requested_by, approved_at, completed_at, withdrawn_at, declined_at, created_at, access, access_user_id",
+    "id, account_id, title, status, date, property_id, requested_by, approved_at, completed_at, created_at"]) {
+    try { job = await db.prepare(`SELECT ${cols} FROM jobs WHERE id = ?`).bind(t.jobId).first(); break; }
+    catch (err) { if (!missingSchema(err)) throw err; }
+  }
+  if (!job) return null;
+  const myCompany = t.kind === "crew" && side === "party" ? t.partyCompanyId : null;
+  // Names, by seat on the running account; a crew answering from home has no
+  // seat there, so its company is found through the work order it holds.
+  const nameCache = new Map();
+  const who = async (userId) => {
+    if (!userId) return null;
+    if (nameCache.has(userId)) return nameCache.get(userId);
+    let label = null;
+    const m = await db.prepare(`SELECT m.role, m.company_id, u.name, co.company FROM memberships m
+      JOIN users u ON u.id = m.user_id LEFT JOIN companies co ON co.id = m.company_id
+      WHERE m.user_id = ? AND m.account_id = ?`).bind(userId, t.accountId).first();
+    if (m && TEAM_ROLES.includes(m.role)) label = { side: "home", name: t.accountName || "The office" };
+    else if (m?.role === "contractor") label = { side: "crew", name: m.company || "The contractor" };
+    else if (m?.role === "tenant") label = { side: "tenant", name: `${String(m.name || "The tenant").split(" ")[0]} (tenant)` };
+    else if (m?.role === "owner") label = { side: "owner", name: `${String(m.name || "The owner").split(" ")[0]} (owner)` };
+    else {
+      const own = await db.prepare(`SELECT co.company FROM memberships m JOIN accounts a ON a.id = m.account_id
+        JOIN companies co ON co.id = a.company_id JOIN work_orders w ON w.company_id = co.id AND w.job_id = ?
+        WHERE m.user_id = ? LIMIT 1`).bind(job.id, userId).first().catch(() => null);
+      label = { side: "crew", name: own?.company || "Someone" };
+    }
+    nameCache.set(userId, label);
+    return label;
+  };
+
+  const events = [];
+  const add = (at, e) => { const iso = isoOf(at); if (iso) events.push({ at: iso, ...e }); };
+  add(job.created_at, { kind: job.requested_by ? "job_reported" : "job_created",
+    by: job.requested_by ? (await who(job.requested_by))?.name || null : null });
+  if (job.requested_by && job.approved_at) add(job.approved_at, { kind: "job_approved" });
+  if (job.withdrawn_at) add(job.withdrawn_at, { kind: "job_withdrawn" });
+  if (job.declined_at) add(job.declined_at, { kind: "job_declined" });
+  if (job.status === "completed" && job.completed_at) add(job.completed_at, { kind: "job_completed" });
+  try {
+    const { results: ends } = await db.prepare(`SELECT kind, until, at FROM job_endings WHERE job_id = ?
+      ORDER BY at, rowid`).bind(job.id).all();
+    for (const e of ends || []) add(e.at, { kind: `job_${e.kind}`, until: e.until || null });
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
+  const { results: wos } = await db.prepare(`SELECT w.id, w.wo_number, w.trade, w.company_id, w.status, w.issued_at,
+      w.responded_at, w.voided_at, co.company FROM work_orders w JOIN companies co ON co.id = w.company_id
+      WHERE w.job_id = ? ORDER BY w.issued_at`).bind(job.id).all();
+  let woId = null;
+  for (const w of wos || []) {
+    const mine = myCompany && w.company_id === myCompany;
+    if (mine && !w.voided_at) woId = w.id;
+    if (side === "home" || mine) {
+      add(w.issued_at, { kind: "wo_issued", wo: w.wo_number, trade: w.trade, company: w.company });
+      if (w.status === "accepted" && w.responded_at) add(w.responded_at, { kind: "wo_accepted", company: w.company });
+      if (w.status === "declined" && w.responded_at) add(w.responded_at, { kind: "wo_declined", company: w.company });
+      if (w.voided_at) add(w.voided_at, { kind: "wo_voided", wo: w.wo_number, company: w.company });
+    } else if (w.status === "accepted" && !w.voided_at) {
+      // A tenant or an owner learns who is booked, which every screen they
+      // have already says, and nothing about the work order behind it.
+      add(w.responded_at || w.issued_at, { kind: "wo_booked", company: w.company });
+    }
+  }
+
+  const { results: vs } = await db.prepare(`SELECT * FROM visits WHERE job_id = ? ORDER BY created_at, rowid`)
+    .bind(job.id).all().catch(() => ({ results: [] }));
+  for (const r of vs || []) {
+    const v = visitRowToJs(r);
+    const win = { date: v.date, startTime: v.startTime, endTime: v.endTime };
+    add(v.createdAt, { kind: "visit_proposed", window: win, by: (await who(v.proposedBy))?.name || null });
+    if (v.status === "confirmed") {
+      const at = [v.managerAt, v.contractorAt, v.respondedAt].filter(Boolean).map(isoOf).sort().pop() || v.createdAt;
+      add(at, { kind: "visit_confirmed", window: win });
+    }
+    if (v.status === "declined") add(v.contractorAt || v.respondedAt || v.createdAt, { kind: "visit_declined", window: win });
+  }
+
+  // The live window: the newest proposed or confirmed one, with whose turn it
+  // is -- the same parties and the same turn every other screen reads.
+  let visit = null;
+  const live = [...(vs || [])].reverse().find((r) => r.status === "proposed" || r.status === "confirmed");
+  if (live) {
+    const parties = windowParties(await partiesFor(env, job), { byTenant: tenantProposed(live, job) });
+    const v = visitRowToJs(live);
+    visit = { ...v, parties, turn: nextToAnswer(v, parties), waitingOn: visitWaitingOn(v, parties) };
+  }
+  // Who may put a time forward from here, which is who the propose route
+  // takes: the team, a crew holding a live work order, the tenant who has to
+  // be let in. An owner proposes nothing.
+  const approved = !job.requested_by || !!job.approved_at;
+  const closed = ["completed", "cancelled"].includes(job.status) || !!job.withdrawn_at || !!job.declined_at;
+  const viewerParty = side === "home" ? "manager"
+    : t.kind === "crew" ? "contractor" : t.kind === "tenant" ? "tenant" : null;
+  const canPropose = approved && !closed && (side === "home" || (t.kind === "crew" && !!woId)
+    || (t.kind === "tenant" && accessTenant(job) === viewer.userId));
+  events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  return {
+    job: { id: job.id, title: job.title, status: job.status, date: job.date || null, approved, closed },
+    visit, viewerParty, canPropose, woId,
+    // Answering from home goes through the client-work door when the thread
+    // is on another account.
+    away: t.accountId !== viewer.accountId,
+    events,
+  };
+}
+
+// The jobs a general conversation turned into, by link.
+async function threadLinkedJobs(env, t) {
+  try {
+    const { results } = await env.DB.prepare(`SELECT l.job_id, l.created_at, j.title FROM thread_job_links l
+      JOIN jobs j ON j.id = l.job_id WHERE l.thread_id = ? ORDER BY l.created_at`).bind(t.id).all();
+    return (results || []).map((r) => ({ at: isoOf(r.created_at), kind: "job_linked", jobId: r.job_id, jobTitle: r.title }));
+  } catch (err) {
+    if (missingSchema(err)) return [];
+    throw err;
+  }
+}
+
+// 082. A JOB MADE FROM A CONVERSATION is linked back to it, and the photos the
+// caller picked out of that conversation go onto the job. Checked as hard as
+// the thread routes: the caller must be on the thread, it must be a general
+// thread on the account the job was written to, and the relationship must
+// still hold. Never fails the job -- by the time this runs the job exists, so
+// a link that cannot be written is said on the reply rather than turned into
+// an error over work that is already on somebody's screen.
+async function linkJobToThread(c, jobId, jobAccountId, ref) {
+  const db = c.env.DB;
+  const viewer = await messageViewer(c);
+  const t = await loadThread(db, String(ref?.id || ""));
+  const side = sideOf(t, viewer);
+  if (!t || !side || t.accountId !== jobAccountId || t.jobId || (t.kind !== "tenant" && t.kind !== "owner")) {
+    return { linked: false, reason: "not_found" };
+  }
+  if (side === "party" && t.partyUserId !== viewer.userId) return { linked: false, reason: "not_found" };
+  if (!(await messagePartyLive(db, t))) return { linked: false, reason: "party_gone" };
+  const wanted = (Array.isArray(ref.photos) ? ref.photos : []).slice(0, 12);
+  const added = [];
+  for (const p of wanted) {
+    const m = await db.prepare(`SELECT photos FROM messages WHERE id = ? AND thread_id = ?`)
+      .bind(String(p?.messageId || ""), t.id).first();
+    const ph = parseJson(m?.photos, [])[Number(p?.index)];
+    if (ph?.key && !added.some((x) => x.key === ph.key)) {
+      added.push({ id: uid(), key: ph.key, name: String(ph.name || "photo").slice(0, 120),
+        type: PHOTO_TYPES.has(String(ph.type || "").toLowerCase()) ? ph.type : "image/jpeg",
+        size: null, at: new Date().toISOString() });
+    }
+  }
+  if (added.length) {
+    const j = await db.prepare(`SELECT photos FROM jobs WHERE id = ?`).bind(jobId).first();
+    await db.prepare(`UPDATE jobs SET photos = ? WHERE id = ?`)
+      .bind(JSON.stringify([...parseJson(j?.photos, []), ...added]), jobId).run();
+  }
+  try {
+    await db.prepare(`INSERT OR IGNORE INTO thread_job_links (thread_id, job_id, created_by, created_at)
+      VALUES (?, ?, ?, ?)`).bind(t.id, jobId, viewer.userId, new Date().toISOString()).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { linked: false, reason: "migration_needed", migration, photos: added.length };
+  }
+  return { linked: true, threadId: t.id, photos: added.length };
+}
+
 // Everything the inbox lists, for one viewer: every thread it is on with a
 // message in it, newest first, with the last line and what is unread.
 app.get("/api/threads", async (c) => {
@@ -7186,7 +7367,15 @@ app.get("/api/threads/:id", async (c) => {
       ORDER BY m.created_at ASC, m.rowid ASC LIMIT 1000`).bind(r.thread.id).all();
     const messages = (results || []).map(messageRowToJs);
     await markThreadRead(c.env.DB, r.thread.id, r.viewer.userId, new Date().toISOString());
-    return c.json({ thread: { ...r.thread, side: r.side }, messages,
+    // 082. The job's live state and history for a job thread; the jobs a
+    // general thread turned into for the rest. Best effort: a context that
+    // cannot be read costs the panel, never the conversation.
+    let context = null;
+    try {
+      context = r.thread.jobId ? await threadJobContext(c.env, r.thread, r.side, r.viewer)
+        : { events: await threadLinkedJobs(c.env, r.thread) };
+    } catch (err) { console.warn("[threads] context not read:", err?.message || err); context = { error: true }; }
+    return c.json({ thread: { ...r.thread, side: r.side }, messages, context,
       // The running account keeps the history after the other side has gone,
       // and says so rather than offering a box nobody will read.
       canPost: r.live, partyGone: !r.live });
@@ -8697,6 +8886,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
@@ -9984,12 +10174,19 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     emergency = await dispatchEmergency(c, id, accountId);
   }
 
+  // 082. Made from a conversation: link it back and carry the photos over.
+  let fromThread = null;
+  if (b.fromThread?.id && !crossAccount) {
+    try { fromThread = await linkJobToThread(c, id, accountId, b.fromThread); }
+    catch (err) { console.warn("[jobs] thread link failed:", err?.message || err); fromThread = { linked: false, reason: "error" }; }
+  }
+
   const saved = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
   const wos = saved ? (await c.env.DB.prepare(
     `SELECT wo.*, c.company AS company_name FROM work_orders wo LEFT JOIN companies c ON c.id = wo.company_id
       WHERE wo.job_id = ? AND wo.voided_at IS NULL`).bind(id).all()).results : [];
   const savedSpans = saved ? (await spansForJobs(c.env, [id]))[id] || {} : {};
-  return c.json({ id, requested: !!requestedBy, severity,
+  return c.json({ id, requested: !!requestedBy, severity, ...(fromThread ? { fromThread } : {}),
     emergency, job: saved ? { ...jobRowToJs(saved, wos), spans: savedSpans } : null,
     ...(spansSaved ? { spansSaved } : {}) }, 201);
 });

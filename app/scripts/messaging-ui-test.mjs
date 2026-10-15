@@ -63,6 +63,8 @@ const thread = (o) => ({ accountId: "acc_x", kind: "tenant", partyUserId: "usr_t
 let THREADS = [];
 let MESSAGES = {};
 let GONE = new Set();
+let VISIT = null;
+let LINKS = [];
 const sent = [];
 const reset = () => {
   THREADS = [
@@ -77,6 +79,10 @@ const reset = () => {
       body: "Parts arrive Tuesday.", photos: [], createdAt: new Date(Date.now() - 7200000).toISOString(), editedAt: null }],
   };
   GONE = new Set();
+  VISIT = { id: "v1", jobId: "j1", date: "2099-10-14", startTime: "09:00", endTime: "10:00", status: "proposed",
+    proposedBy: "usr_p", parties: ["contractor", "manager", "tenant"], turn: "manager", waitingOn: ["manager", "tenant"],
+    contractorAt: "2026-10-01T00:00:00Z", managerAt: null, respondedAt: null };
+  LINKS = [];
   sent.length = 0;
 };
 reset();
@@ -90,6 +96,12 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   if (path === "/api/account-users") return [200, who === "usr_t" ? USERS.filter((u) => u.id === "usr_t") : USERS];
   if (path === "/api/properties") return [200, [PROP]];
   if (path === "/api/subs") return [200, who === "usr_t" ? [] : SUBS];
+  if (path === "/api/jobs" && method === "POST") {
+    sent.push({ path, body });
+    if (body.fromThread) LINKS.push({ threadId: body.fromThread.id, jobId: "j_new", jobTitle: body.title, at: new Date().toISOString() });
+    return [201, { id: "j_new", requested: false, job: { ...JOB, id: "j_new", title: body.title, requestedBy: null },
+      fromThread: body.fromThread ? { linked: true, photos: 0 } : undefined }];
+  }
   if (path === "/api/jobs") return [200, [JOB]];
   if (path === "/api/threads" && method === "GET") {
     const list = asTenant
@@ -118,7 +130,16 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
       kind: id.includes("crew") ? "crew" : "tenant",
       partyName: id.includes("cmp_p") ? "Pacific Apartment Maintenance" : "Tess Nguyen" });
     THREADS = THREADS.map((x) => x.id === id ? { ...x, unread: 0 } : x);
-    return [200, { thread: { ...base, side: asTenant ? "party" : "home" }, messages: MESSAGES[id] || [],
+    const isJob = id.includes("_j1_");
+    const context = isJob ? {
+      job: { id: "j1", title: JOB.title, status: "active", date: today, approved: true, closed: false },
+      visit: VISIT ? { ...VISIT } : null, viewerParty: asTenant ? "tenant" : "manager", canPropose: true, woId: null, away: false,
+      events: [
+        { at: new Date(Date.now() - 86400000 * 2).toISOString(), kind: "wo_accepted", company: "Pacific Apartment Maintenance" },
+        ...(VISIT ? [{ at: new Date(Date.now() - 86400000).toISOString(), kind: "visit_proposed", by: "Pacific Apartment Maintenance",
+          window: { date: VISIT.date, startTime: VISIT.startTime, endTime: VISIT.endTime } }] : []),
+      ] } : { events: LINKS.filter((l) => l.threadId === id).map((l) => ({ at: l.at, kind: "job_linked", jobId: l.jobId, jobTitle: l.jobTitle })) };
+    return [200, { thread: { ...base, side: asTenant ? "party" : "home" }, messages: MESSAGES[id] || [], context,
       canPost: !GONE.has(id), partyGone: GONE.has(id) }];
   }
   const post = /^\/api\/threads\/([^/]+)\/messages$/.exec(path);
@@ -129,6 +150,9 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
     (MESSAGES[post[1]] = MESSAGES[post[1]] || []).push(m);
     return [201, { message: m }];
   }
+  const vr = /^\/api\/visits\/([^/]+)\/respond$/.exec(path);
+  if (vr && method === "POST") { sent.push({ path, body }); VISIT = { ...VISIT, status: "confirmed", managerAt: new Date().toISOString(), waitingOn: [] }; return [200, { ok: true }]; }
+  if (path === "/api/jobs/j1/visits" && method === "POST") { sent.push({ path, body }); return [201, { ok: true }]; }
   if (path === "/api/visits" || path === "/api/invites" || path === "/api/connect-requests"
     || path === "/api/my-connect-requests" || path === "/api/clients" || path === "/api/tenants") return [200, []];
   if (path === "/api/notices") return [200, { notices: [] }];
@@ -224,6 +248,83 @@ try {
     t.ck("and opens the JOB's thread with that company", js?.body?.jobId === "j1" && js.body.partyCompanyId === "cmp_p" && js.body.kind === "crew", JSON.stringify(js));
     p = await pane(page);
     t.ck("in a window beside the job", !!p && /Leaking sink/.test(p.about || ""), JSON.stringify(p));
+
+    console.log("\n-- 082: the job, not the chat, decides --");
+    const bar = await page.evaluate(() => {
+      const b = document.querySelector(".thr-modal [data-thr-job]");
+      return b ? { text: b.innerText.replace(/\s+/g, " "), buttons: [...b.querySelectorAll("button")].map((x) => x.innerText.trim()) } : null;
+    });
+    t.ck("the job's live window is at the top of its conversation", !!bar && /proposed/i.test(bar.text) && /9 AM/.test(bar.text), JSON.stringify(bar));
+    t.ck("with Confirm and Decline when it is this side's turn", !!bar && bar.buttons.some((x) => /Confirm this time/.test(x)) && bar.buttons.some((x) => /^Decline/.test(x)), JSON.stringify(bar?.buttons));
+    const evs = await page.evaluate(() => [...document.querySelectorAll(".thr-modal .thr-event")].map((e) => e.innerText.replace(/\s+/g, " ")));
+    t.ck("the job's history sits between the messages", evs.some((x) => /accepted the work order/.test(x)) && evs.some((x) => /proposed/.test(x)), JSON.stringify(evs));
+    const unbooked = await page.evaluate(() => document.querySelector(".thr-modal .thr-unbooked")?.innerText || null);
+    t.ck("and the box says a time in a message is not a booking", /aren't booked until someone presses Confirm/.test(unbooked || ""), String(unbooked));
+    await typeInto(page, ".thr-modal .thr-box", "Tuesday at 9 works for me");
+    await wait(250);
+    let nudge = await page.evaluate(() => document.querySelector(".thr-modal [data-nudge]")?.innerText || null);
+    t.ck("typing a time offers to propose it", /Messages don't book visits/.test(nudge || ""), String(nudge));
+    await typeInto(page, ".thr-modal .thr-box", "The dog will be in the yard");
+    await wait(250);
+    nudge = await page.evaluate(() => document.querySelector(".thr-modal [data-nudge]")?.innerText || null);
+    t.ck("and nothing else does", nudge === null, String(nudge));
+    await clickText(page, ".thr-modal [data-thr-job] button", /Confirm this time/);
+    await wait(900);
+    const conf = sent.find((x) => /^\/api\/visits\/v1\/respond$/.test(x.path));
+    t.ck("Confirm is the real answer, through the visit route", conf?.body?.status === "confirmed", JSON.stringify(conf));
+    const after = await page.evaluate(() => document.querySelector(".thr-modal [data-thr-job]")?.innerText.replace(/\s+/g, " ") || "");
+    t.ck("and the bar then reads booked", /booked/i.test(after) && !/Confirm this time/.test(after), after);
+    await clickText(page, ".thr-modal [data-act=propose]", /Propose/);
+    await wait(400);
+    const form = await page.evaluate(() => !!document.querySelector(".thr-modal .thr-propose input[type=date]"));
+    t.ck("Propose another time opens the real time form", form);
+    await page.evaluate(() => {
+      const el = document.querySelector(".thr-modal .thr-propose input[type=date]");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "2099-10-20");
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickText(page, ".thr-modal .thr-propose button", /Propose this time/);
+    await wait(800);
+    const prop = sent.find((x) => x.path === "/api/jobs/j1/visits");
+    t.ck("and proposing goes through the job's visit route", prop?.body?.date === "2099-10-20", JSON.stringify(prop));
+    await page.evaluate(() => document.querySelector(".modal-close")?.click());
+    await wait(400);
+
+    console.log("\n-- 082: a conversation becomes a job through the job form --");
+    await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.click());
+    await wait(700);
+    await clickText(page, ".ib-row", /Tess/);
+    await wait(800);
+    const acts = await page.evaluate(() => [...document.querySelectorAll(".thr-acts button")].map((b) => b.innerText.trim()));
+    t.ck("a general conversation with a tenant offers Create a job", acts.some((x) => /Create a job from this/.test(x)), JSON.stringify(acts));
+    t.ck("and no time buttons, since it is not about a job", !acts.some((x) => /Propose/.test(x)), JSON.stringify(acts));
+    await clickText(page, ".thr-acts button", /Create a job/);
+    await wait(700);
+    const jf = await page.evaluate(() => {
+      const m = [...document.querySelectorAll(".modal")].pop();
+      const title = [...(m?.querySelectorAll("input") || [])].find((i) => /anyone coming/i.test(i.value));
+      const scope = [...(m?.querySelectorAll("textarea") || [])].find((x) => /anyone coming/i.test(x.value));
+      return { open: /Create job|New job/i.test(m?.innerText || ""), title: title?.value || null, scope: !!scope };
+    });
+    t.ck("it opens the job form, filled in from what they said", jf.open && !!jf.title, JSON.stringify(jf));
+    const next = () => page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")]
+      .find((b) => /^Next/.test(b.innerText.trim()))?.click());
+    await page.evaluate(() => {
+      const el = [...document.querySelectorAll(".modal input")].find((i) => /address/i.test(i.placeholder || "") || /address/i.test(i.closest("label")?.innerText || ""));
+      if (el && !el.value) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "12 Cedar St"); el.dispatchEvent(new Event("input", { bubbles: true })); }
+    });
+    await next(); await wait(300); await next(); await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".modal .pick-grid .chip, .modal .pick-grid button")]
+      .find((b) => /Plumbing/i.test(b.innerText))?.click());
+    await wait(200); await next(); await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".modal .form-actions button")].find((b) => /Create job/i.test(b.innerText))?.click());
+    await wait(1000);
+    const made = [...sent].reverse().find((x) => x.path === "/api/jobs");
+    t.ck("the job is created through the real route, naming the conversation", made?.body?.fromThread?.id === "th1", JSON.stringify(made?.body?.fromThread));
+    t.ck("with the tenant it was with", made?.body?.accessUserId === "usr_t", JSON.stringify(made?.body?.accessUserId));
+    await wait(600);
+    const linked = await page.evaluate(() => [...document.querySelectorAll(".thr-event")].map((e) => e.innerText).find((x) => /Job created from this conversation/.test(x)) || null);
+    t.ck("and the conversation says so, staying on screen", !!linked, String(linked));
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -250,6 +351,32 @@ try {
     t.ck("which opens the thread about that report, naming them", st?.body?.kind === "tenant" && st.body.partyUserId === "usr_t" && st.body.jobId === "j1", JSON.stringify(st));
     const p = await pane(page);
     t.ck("ready to write", !!p?.compose, JSON.stringify(p));
+    await page.evaluate(() => document.querySelector(".modal-close")?.click());
+    await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".modal-close")].forEach((b) => b.click()));
+    await wait(300);
+    MESSAGES.th1.push({ id: "m9", threadId: "th1", authorUserId: "usr_t", authorName: "Tess Nguyen", authorSide: "party",
+      body: "The bathroom fan rattles all night", photos: [], createdAt: new Date().toISOString(), editedAt: null });
+    await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.click());
+    await wait(700);
+    await clickText(page, ".ib-row", /Sound/);
+    await wait(800);
+    const tacts = await page.evaluate(() => [...document.querySelectorAll(".thr-acts button")].map((b) => b.innerText.trim()));
+    t.ck("a tenant's conversation with the office offers Report a problem", tacts.some((x) => /Report a problem/.test(x)), JSON.stringify(tacts));
+    await clickText(page, ".thr-acts button", /Report a problem/);
+    await wait(900);
+    // The words go in the box the form shows once they say what it is: the
+    // report is still the structured thing, and picking the problem is theirs.
+    await clickText(page, "button", /^Something else$/);
+    await wait(400);
+    await clickText(page, "button", /I'll describe it/);
+    await wait(400);
+    const rf = await page.evaluate(() => [...document.querySelectorAll("textarea")].map((x) => x.value).find((v) => /fan rattles/.test(v)) || null);
+    t.ck("which opens the real report form with their words in it", !!rf, String(rf));
+    await clickText(page, "button", /^Send it$/);
+    await wait(1000);
+    const rep = [...sent].reverse().find((x) => x.path === "/api/jobs");
+    t.ck("and sending it names the conversation, through the real report", rep?.body?.fromThread?.id === "th1" && !!rep.body.reportDetail, JSON.stringify(rep?.body && { ft: rep.body.fromThread, rd: !!rep.body.reportDetail }));
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

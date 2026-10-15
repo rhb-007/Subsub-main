@@ -288,7 +288,10 @@ WITH spec(j) AS (SELECT
   (',["m081_message_threads","col","message_threads",["id","thread_key","account_id","kind","party_user_id","party_company_id","party_account_id","job_id","property_id","last_at"]]' ||
   ',["m081_messages","col","messages",["id","thread_id","author_user_id","author_side","body","photos","created_at","edited_at"]]' ||
   ',["m081_message_reads","col","message_reads",["thread_id","user_id","read_at","notified_at"]]' ||
-  ',["m081_thread_key_unique","index","ux_message_thread_key",[]]') ||
+  ',["m081_thread_key_unique","index","ux_message_thread_key",[]]' ||
+  -- 082. Which job a conversation turned into. Until it is run the job is
+  -- still created; it just is not linked back to the conversation.
+  ',["m082_thread_job_links","col","thread_job_links",["thread_id","job_id","created_by","created_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

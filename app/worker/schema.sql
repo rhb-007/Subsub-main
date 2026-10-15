@@ -2484,3 +2484,13 @@ CREATE TABLE IF NOT EXISTS message_reads (
   notified_at  TEXT,
   PRIMARY KEY (thread_id, user_id)
 );
+
+-- 082. Which job a conversation turned into; see app/shared/messaging.js.
+CREATE TABLE IF NOT EXISTS thread_job_links (
+  thread_id   TEXT NOT NULL REFERENCES message_threads(id) ON DELETE CASCADE,
+  job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  created_by  TEXT REFERENCES users(id),
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (thread_id, job_id)
+);
+CREATE INDEX IF NOT EXISTS ix_thread_job_links_job ON thread_job_links(job_id);

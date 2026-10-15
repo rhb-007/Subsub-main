@@ -170,3 +170,43 @@ export function owesEmail({ latestOtherAt, readAt, notifiedAt, nowMs = Date.now(
   const at = Date.parse(latestOtherAt);
   return Number.isFinite(at) && nowMs - at >= NOTIFY_AFTER_MS;
 }
+
+// 082. DOES THIS MESSAGE LOOK LIKE IT IS AGREEING A TIME? Only ever a nudge:
+// the screen offers "propose this as a time" under the box and never stops
+// the message going. A message books nothing, so "Tuesday at 9 works" typed
+// into a thread is a time two people believe is agreed and the calendar has
+// never heard of -- the one failure messaging must not add to this product.
+//
+// Generous on purpose, because a false nudge costs a glance and a missed one
+// costs a crew at the wrong door. Whole days and clock times only: "sun",
+// "sat" and "wed" are left out, since sun damage and a saturated wall are
+// ordinary things to write about a repair.
+const TIME_PATTERNS = [
+  /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tues|weds|thurs)\b/i,
+  /\b(today|tomorrow|tonight|this (morning|afternoon|evening|weekend)|next (week|monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/i,
+  /\b([1-9]|1[0-2])(:[0-5]\d)?\s?(am|pm|a\.m\.|p\.m\.)(?![a-z])/i,
+  /\b([01]?\d|2[0-3]):[0-5]\d\b/,
+  /\b(at|by|around|after|before) ([1-9]|1[0-2])\b/i,
+  /\b(noon|midday)\b/i,
+  /\b(1[0-2]|0?[1-9])\/(3[01]|[12]\d|0?[1-9])\b/,
+  /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? (3[01]|[12]\d|[1-9])\b/i,
+];
+export const looksLikeTime = (text) => {
+  const s = String(text || "");
+  return s.trim().length > 0 && TIME_PATTERNS.some((re) => re.test(s));
+};
+
+// What a conversation hands to the job or report made from it: the words the
+// OTHER side wrote since the last job made from it, and their photos. The
+// running account's own replies are left out -- they are not the problem
+// being reported -- and anything before the last job is already a job.
+export function jobSeedFrom(messages, side, linkedAt = null) {
+  const theirs = (messages || []).filter((m) => (side === "party" ? m.authorSide === "party" : m.authorSide !== side)
+    && (!linkedAt || m.createdAt > linkedAt));
+  const words = theirs.map((m) => String(m.body || "").trim()).filter(Boolean);
+  const last = words[words.length - 1] || "";
+  const title = (last.split("\n")[0] || "").slice(0, 80);
+  const scope = words.join("\n\n").slice(0, 1500);
+  const photos = theirs.flatMap((m) => (m.photos || []).map((p) => ({ messageId: m.id, index: p.index }))).slice(-12);
+  return { title, scope, photos };
+}

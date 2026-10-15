@@ -43,7 +43,8 @@ import { inPool } from "./lib/photoshrink.js";
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
-import { counterpartLabel, MAX_PHOTOS as MSG_MAX_PHOTOS, EDIT_WINDOW_MS as MSG_EDIT_WINDOW_MS } from "../shared/messaging.js";
+import { counterpartLabel, MAX_PHOTOS as MSG_MAX_PHOTOS, EDIT_WINDOW_MS as MSG_EDIT_WINDOW_MS,
+  looksLikeTime, jobSeedFrom } from "../shared/messaging.js";
 import { TENANT_PROBLEMS, tenantGroups, tenantWhere } from "../shared/tenantproblems.js";
 import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
 import { licenseActive } from "../shared/licensecheck.js";
@@ -98,7 +99,7 @@ import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/accessplan.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
-  mayAnswer as visitMayAnswer, partySaid as visitPartySaid } from "../shared/visitparty.js";
+  mayAnswer as visitMayAnswer, partySaid as visitPartySaid, mayConfirm as visitMayConfirm } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -3024,7 +3025,7 @@ export default function SubSub() {
     (jobZip ? 1 : 0) + (inRangeOnly ? 1 : 0) + (fProperty ? 1 : 0);
 
   // --- Jobs: a job has multiple trades, each trade gets its own contractor ---
-  const createJob = async (job, forSub) => {
+  const createJob = async (job, forSub, opts = {}) => {
     let id, requested = false, saved = null;
     try { ({ id, requested, job: saved } = await api.createJob(job)); }
     catch (err) {
@@ -3072,7 +3073,9 @@ export default function SubSub() {
       // so it is gone rather than silenced.
       assignments }, ...js]);
     setJobForm(null);
-    setTab("jobs");
+    // 082. A job made from a conversation leaves the conversation on screen,
+    // which now says the job was made and links to it.
+    if (!opts.stay) setTab("jobs");
     return id;
   };
 
@@ -3852,6 +3855,8 @@ export default function SubSub() {
   // messages and the Inbox screen all read it -- one fetch, refreshed every
   // minute while somebody is signed in and whenever a conversation changes.
   const [inbox, setInbox] = useState({ threads: [], unread: 0 });
+  const [threadNonce, setThreadNonce] = useState(0);
+  const [reportPreset, setReportPreset] = useState(null);
   const [inboxOpen, setInboxOpen] = useState(null);
   const refreshInbox = useCallback(async () => {
     try { setInbox(await api.listThreads()); }
@@ -5820,7 +5825,24 @@ export default function SubSub() {
   ) : null;
 
   return (
-    <InboxCtx.Provider value={{ inbox, openInbox, refreshInbox, me }}>
+    <InboxCtx.Provider value={{ inbox, openInbox, refreshInbox, me, threadNonce,
+      // 082. A time answered or proposed from a conversation is the same
+      // write the job card makes, so the job card's own list is re-read.
+      onScheduleChanged: async () => {
+        const vs = await api.listVisits().catch(() => null);
+        if (Array.isArray(vs)) setVisits(vs);
+      },
+      // The two ways a conversation becomes work, both through the real
+      // forms: a manager's job form, a tenant's report form. Never a message.
+      startJobFromThread: maySetAccess(role) && can("jobs") ? (thread, seed) => setJobForm({
+        forProperty: accountProperties.find((pp) => pp.id === thread.propertyId) || null,
+        preset: { title: seed?.title || "", scope: seed?.scope || "",
+          accessUserId: thread.kind === "tenant" ? thread.partyUserId : "" },
+        fromThread: { id: thread.id, photos: seed?.photos || [] } }) : null,
+      reportFromThread: can("tenant") ? (thread, seed) => {
+        setReportPreset({ scope: seed?.scope || "", fromThread: { id: thread.id, photos: seed?.photos || [] } });
+        setTab("tenant"); setReportKey((k) => k + 1);
+      } : null }}>
     <div className="ss-root">
       <style>{CSS}</style>
       {/* Above everything, because it changes what the rest of the page means. */}
@@ -7776,10 +7798,15 @@ export default function SubSub() {
       {can("tenant") && tab !== "account" && tab !== "inbox" && (
         <TenantPortal me={me} brand={brand} jobs={jobs} properties={accountProperties}
           unit={membership.unit} accountKind={kindOf(account)} reportKey={reportKey} homeKey={homeKey} rentKey={rentKey}
+          reportPreset={reportPreset} onPresetUsed={() => setReportPreset(null)}
           visits={visits} onRespondVisit={respondVisit} onVisitOutcome={visitOutcome}
           onProposeVisit={proposeVisit}
           onWithdraw={withdrawReport} onEdit={editReport} onPhotosChanged={changeReportPhotos}
-          onReport={(r) => createJob({ ...r, trades: r.trades || [] })} weather={weather}
+          onReport={async (r) => {
+            const id = await createJob({ ...r, trades: r.trades || [] });
+            if (r.fromThread) { refreshInbox(); setThreadNonce((n) => n + 1); }
+            return id;
+          }} weather={weather}
           onOpenAccount={(pane) => { setOpenPane({ pane, n: Date.now() }); setTab("account"); }} />
       )}
 
@@ -7950,7 +7977,13 @@ export default function SubSub() {
              exports rather than a second list written here. */
           canSetAccess={mayChooseAccess(kindOf(account))}
           canPickTenant={mayChooseAccess(kindOf(account)) && maySetAccess(role)}
-          onSubmit={(job) => createJob(job, jobForm.forSub)}
+          preset={jobForm.preset || null}
+          onSubmit={async (job) => {
+            const ft = jobForm.fromThread;
+            const id = await createJob(ft ? { ...job, fromThread: ft } : job, jobForm.forSub, { stay: !!ft });
+            if (ft) { refreshInbox(); setThreadNonce((n) => n + 1); }
+            return id;
+          }}
           onCancel={() => setJobForm(null)} /></Modal>}
       {/* THE SAME FORM OVER A JOB THAT ALREADY EXISTS. One component, not a
           second copy: two of these would be two things to keep in step with
@@ -16540,7 +16573,7 @@ function TenantRentSoon({ brandName, onClose }) {
   );
 }
 
-function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, rentKey = 0, visits = [], onRespondVisit, onVisitOutcome, onProposeVisit, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
+function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport, reportKey = 0, homeKey = 0, rentKey = 0, reportPreset = null, onPresetUsed = null, visits = [], onRespondVisit, onVisitOutcome, onProposeVisit, onWithdraw, onEdit, onPhotosChanged, weather = null, onOpenAccount = null }) {
   // 072. The notices posted to their building. A failure is silence: the
   // reports below are what this screen is for, and a table the account has
   // not created yet must not cost them.
@@ -16588,13 +16621,19 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   const drafting = useRef(0);
   // "Report a problem" in the nav. Same as the button on this screen, reachable
   // from anywhere in the tenant's view.
+  // 082. Opened from a conversation with the office: their words in the box
+  // and the conversation remembered, so the report is linked back to it. They
+  // still pick what the problem is -- the report is the structured thing.
+  const fromThreadRef = useRef(null);
   useEffect(() => {
     if (!reportKey) return;
     setSent(false);
     seeded.current = { problem: null, title: "", scope: "" };
     setDraft({ state: "idle" });
+    fromThreadRef.current = reportPreset?.fromThread || null;
     setForm({ propertyId: (properties[0] || {}).id || "", group: "", query: "",
-      problem: null, title: "", when: "", scope: "" });
+      problem: null, title: "", when: "", scope: reportPreset?.scope || "" });
+    if (reportPreset) onPresetUsed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reportKey]);
   useEffect(() => {
@@ -16766,7 +16805,9 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         words: form.scope.trim(),
         unit: unit || "",
       },
+      ...(fromThreadRef.current ? { fromThread: fromThreadRef.current } : {}),
       });
+      fromThreadRef.current = null;
     } catch (e) {
       // The form stays open with everything still in it. Somebody who has
       // just described a leak and picked a photo should not have to do it
@@ -26126,7 +26167,7 @@ function MaterialSource({ value, onChange }) {
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
-function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false, canSetAccess = false, canPickTenant = false, existing = null, lockedTrades = [] }) {
+function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false, canSetAccess = false, canPickTenant = false, existing = null, lockedTrades = [], preset = null }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
   // EDITING, which this form could not do. Asked for as *"when you click on a
@@ -26172,7 +26213,9 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     spans: Object.fromEntries(Object.entries(existing.spans || {}).map(([t, sp]) =>
       [t, { start: sp.start || "", days: sp.days ? String(sp.days) : "", weekends: !!sp.weekends }])),
   } : {
-    title: start ? `${start.name} — ` : "",
+    // 082. Made from a conversation: what they said, as the title and the
+    // scope, for somebody to read and correct before anything is created.
+    title: preset?.title || (start ? `${start.name} — ` : ""),
     client: "", propertyId: start ? start.id : "",
     address: start ? start.address || "" : "",
     area: start ? start.city || "" : "",
@@ -26182,7 +26225,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     // the question the form is about to ask.
     date: forDate || "", time: "07:00",
     trades: forSub ? [...forSub.categories] : [],
-    scope: "",
+    scope: preset?.scope || "",
     // materialSource is the seed the chooser parses, empty on a new job. The
     // three below it are what gets sent; the Worker composes the line back
     // from them, so the browser never decides what the work order says.
@@ -26197,9 +26240,11 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     // alone changes nothing, and that is why there is no preselected answer.
     // A guess here would be a preselection mistaken for a choice, which this
     // project has already paid for on the trade grid.
-    access: "",
+    // Naming the tenant a conversation was with pre-answers who lets the crew
+    // in, the same as picking them below does.
+    access: preset?.accessUserId ? "tenant" : "",
     // 062. Which tenant lives where the work is. Empty is nobody named.
-    accessUserId: "",
+    accessUserId: preset?.accessUserId || "",
     measurementDocs: [],
     spans: {},
   });
@@ -35335,7 +35380,39 @@ const msgTime = (iso) => {
 // threaded through every component between the app and a job card.
 const InboxCtx = React.createContext(null);
 
+// 082. One line of the job's own history, between the messages. Read from the
+// records, so the chat and the job cannot disagree about what happened.
+function threadEventText(e) {
+  const w = e.window ? visitWhen(e.window) : "";
+  switch (e.kind) {
+    case "job_created": return "Job created";
+    case "job_reported": return `${e.by || "The tenant"} reported this`;
+    case "job_approved": return "Approved";
+    case "job_withdrawn": return "Withdrawn";
+    case "job_declined": return "Not approved";
+    case "job_completed": return "Marked complete";
+    case "job_cancelled": return "Cancelled";
+    case "job_no_work": return "Closed: no work needed";
+    case "job_deferred": return `Put on hold${e.until ? ` until ${niceDay(e.until)}` : ""}`;
+    case "job_resumed": return "Taken off hold";
+    case "wo_issued": return `Work order ${e.wo || ""} issued to ${e.company}`.replace("  ", " ");
+    case "wo_accepted": return `${e.company} accepted the work order`;
+    case "wo_declined": return `${e.company} declined the work order`;
+    case "wo_voided": return `Work order ${e.wo || ""} withdrawn`.replace("  ", " ");
+    case "wo_booked": return `${e.company} is booked for this`;
+    case "visit_proposed": return `${e.by || "Someone"} proposed ${w}`;
+    case "visit_confirmed": return `Confirmed: ${w}`;
+    case "visit_declined": return `${w} was turned down`;
+    case "job_linked": return `Job created from this conversation: ${e.jobTitle}`;
+    default: return null;
+  }
+}
+
 function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = false }) {
+  const ictx = React.useContext(InboxCtx);
+  const [proposing, setProposing] = useState(false);
+  const [actBusy, setActBusy] = useState("");
+  const [actErr, setActErr] = useState("");
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [text, setText] = useState("");
@@ -35358,7 +35435,11 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
     } catch (e) { if (!quiet) setErr(messageErrText(e)); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
-  useEffect(() => { setData(null); setErr(""); setText(""); setPending([]); setEditing(null); setSendErr(""); load(); }, [load]);
+  useEffect(() => { setData(null); setErr(""); setText(""); setPending([]); setEditing(null); setSendErr("");
+    setProposing(false); setActErr(""); load(); }, [load]);
+  // A job made from this conversation, elsewhere on the screen, re-reads it so
+  // the line saying so appears without waiting for the next check.
+  useEffect(() => { if (ictx?.threadNonce) load(true); }, [ictx?.threadNonce, load]);
   // A conversation is read while it is open, so it is checked while it is
   // open: every half minute, quietly, and never over somebody's typing.
   useEffect(() => { const t = setInterval(() => load(true), 30000); return () => clearInterval(t); }, [load]);
@@ -35407,6 +35488,34 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
     } catch (e) { setSendErr(messageErrText(e)); }
   };
 
+  // 082. The job's live state, and the only doors that change it.
+  const cx = data?.context || null;
+  const jv = cx?.visit || null;
+  const passed = jv ? visitPassed(jv) : false;
+  const closed = !!cx?.job?.closed;
+  const canAnswer = !!jv && jv.status === "proposed" && !passed && !!cx?.viewerParty && !data?.partyGone
+    && visitMayConfirm(jv, jv.parties || [], cx.viewerParty);
+  const canPropose = !!cx?.canPropose && !data?.partyGone;
+  const runAct = async (label, fn) => {
+    setActBusy(label); setActErr("");
+    try { await fn(); await load(true); ictx?.onScheduleChanged?.(); }
+    catch (e) { setActErr(proposeErrText(e)); }
+    finally { setActBusy(""); }
+  };
+  const answer = (status) => runAct(status, () => (cx.away && cx.woId
+    ? api.answerMyWork(cx.woId, jv.id, { status })
+    : api.respondVisit(jv.id, { status })));
+  const propose = (jobId, f) => (cx.away && cx.woId
+    ? api.proposeMyWork(cx.woId, { date: f.date, startTime: f.startTime, endTime: f.endTime, note: f.note })
+    : api.proposeVisit(jobId, f)).then(async () => { await load(true); ictx?.onScheduleChanged?.(); });
+  const linkedAt = (cx?.events || []).filter((e) => e.kind === "job_linked").map((e) => e.at).sort().pop() || null;
+  const general = data?.thread && !data.thread.jobId;
+  const canMakeJob = general && data.thread.side === "home" && ["tenant", "owner"].includes(data.thread.kind)
+    && !!ictx?.startJobFromThread && !data.partyGone;
+  const canReport = general && data.thread.side === "party" && data.thread.kind === "tenant" && !!ictx?.reportFromThread;
+  const seed = data ? jobSeedFrom(data.messages, data.thread.side, linkedAt) : null;
+  const timeNudge = cx?.job && canPropose && !closed && looksLikeTime(text);
+
   if (err) return <div className="thr-pane"><p className="err-note">{err}</p>{onBack && <button className="btn-ghost" onClick={onBack}>Back</button>}</div>;
   if (!t) return <div className="thr-pane thr-loading">Loading the conversation…</div>;
 
@@ -35426,12 +35535,53 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
           {!t.jobTitle && t.kind === "owner" && t.propertyName && <span className="thr-about">About: {t.propertyName}</span>}
         </div>
       </div>
+      {cx?.job && (
+        <div className={`thr-job ${jv?.status === "confirmed" && !passed ? "booked" : ""}`} data-thr-job>
+          <div className="tj-top"><ClipboardList size={15} /> <b>{cx.job.title}</b>
+            {closed && <span className="tj-closed">Closed</span>}</div>
+          {jv ? (
+            <div className="tj-when">
+              <span className="tj-lab">{jv.status === "confirmed" ? "Booked" : "Proposed"}</span>
+              <b className={passed ? "tj-gone" : ""}>{visitWhen(jv)}</b>
+              {passed && <span className="tj-note">{jv.status === "confirmed" ? "This time has passed." : "This time passed without being confirmed."}</span>}
+              {!passed && jv.status === "proposed" && (
+                <span className="tj-note">{canAnswer ? "Waiting on you to confirm."
+                  : (jv.waitingOn || []).length ? `Waiting on ${partyWords(jv.waitingOn)} to confirm.` : ""}</span>
+              )}
+            </div>
+          ) : !closed && <div className="tj-when"><span className="tj-note">No time set yet.</span></div>}
+          {canAnswer && (
+            <VisitActs acts={[
+              { kind: "yes", label: "Confirm this time", busy: actBusy === "confirmed" ? "Confirming…" : null,
+                disabled: !!actBusy, onClick: () => answer("confirmed"), icon: <Check size={16} /> },
+              { kind: "no", label: "Decline", busy: actBusy === "declined" ? "Declining…" : null,
+                disabled: !!actBusy, onClick: () => answer("declined") },
+            ]} />
+          )}
+          {cx.error && <p className="fld-note">The job's status couldn't be loaded just now. The messages are all here.</p>}
+          {actErr && <p className="err-note">{actErr}</p>}
+        </div>
+      )}
+      {cx?.error && !cx.job && <p className="fld-note thr-ctx-err">The job's status couldn't be loaded just now.</p>}
       <div className="thr-list" ref={listRef}>
         {!msgs.length && (
           <p className="thr-empty"><MessageSquareText size={18} />
             {`Nothing said yet. Whatever you write goes to ${side === "home" ? (t.partyName || "them") : (t.accountName || "the office")} and stays on the record here.`}</p>
         )}
-        {msgs.map((m) => {
+        {[...msgs.map((m) => ({ at: m.createdAt, m })), ...(cx?.events || []).map((e) => ({ at: e.at, e }))]
+          .sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0)).map((it, k) => {
+          if (it.e) {
+            const words = threadEventText(it.e);
+            return words ? (
+              <div key={`e${k}`} className={`thr-event ev-${it.e.kind}`} data-event={it.e.kind}>
+                <span>{words}</span><span className="thr-event-t">{msgTime(it.e.at)}</span>
+                {it.e.kind === "job_linked" && onOpenJob && side === "home" && (
+                  <button className="link-btn" onClick={() => onOpenJob(it.e.jobId)}>Open</button>
+                )}
+              </div>
+            ) : null;
+          }
+          const m = it.m;
           const mine = m.authorSide === side;
           const own = m.authorUserId === me?.id;
           const canEdit = own && Date.now() - Date.parse(m.createdAt) <= MSG_EDIT_WINDOW_MS && !!m.body;
@@ -35472,6 +35622,36 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
         <p className="thr-gone"><Info size={15} /> {t.partyName || "They"} {t.kind === "crew" ? "are no longer on your roster" : "are no longer connected to this account"}, so nothing more can be sent. What was said stays here.</p>
       ) : (
         <div className="thr-compose">
+          {proposing && cx?.job && (
+            <div className="thr-propose">
+              <VisitForm jobId={cx.job.id} replacing={!!jv} forWhom="everybody on the job"
+                placeholder="e.g. Ring the bell at the side gate"
+                onPropose={propose} onDone={() => setProposing(false)} onCancel={() => setProposing(false)} />
+            </div>
+          )}
+          {cx?.job && !closed && !(jv?.status === "confirmed" && !passed) && (
+            <p className="thr-unbooked"><Info size={13} /> {jv
+              ? "Times agreed in messages aren't booked until someone presses Confirm."
+              : "Times agreed in messages aren't booked. Use Propose a time."}</p>
+          )}
+          {(canPropose && cx?.job && !closed && !proposing) || canMakeJob || canReport ? (
+            <div className="thr-acts">
+              {canPropose && cx?.job && !closed && !proposing && (
+                <button className="btn-ghost thr-act" onClick={() => setProposing(true)} data-act="propose">
+                  <Calendar size={14} /> {jv ? "Propose another time" : "Propose a time"}</button>
+              )}
+              {canMakeJob && (
+                <button className="btn-ghost thr-act" data-act="make-job"
+                  onClick={() => ictx.startJobFromThread(data.thread, seed)}>
+                  <ClipboardList size={14} /> Create a job from this</button>
+              )}
+              {canReport && (
+                <button className="btn-ghost thr-act" data-act="report"
+                  onClick={() => ictx.reportFromThread(data.thread, seed)}>
+                  <Wrench size={14} /> Report a problem</button>
+              )}
+            </div>
+          ) : null}
           {pending.length > 0 && (
             <div className="thr-pending">
               {pending.map((p, i) => (
@@ -35483,6 +35663,15 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
             </div>
           )}
           {sendErr && <p className="err-note">{sendErr}</p>}
+          {timeNudge && !proposing && (
+            <p className="thr-nudge" data-nudge>
+              <Clock size={13} /> {jv?.status === "confirmed" && !passed
+                ? "Changing the time? Messages don't move the booked visit."
+                : "Agreeing a time? Messages don't book visits."}
+              <button className="link-btn" onClick={() => setProposing(true)}>
+                {jv ? "Propose it as a new time" : "Propose it as a time"}</button>
+            </p>
+          )}
           <div className="thr-row">
             <button className="thr-attach" onClick={() => fileRef.current?.click()} aria-label="Add a photo"
               disabled={pending.length >= MSG_MAX_PHOTOS}><ImagePlus size={18} /></button>
@@ -45932,5 +46121,32 @@ button.job-insp:hover{border-color:#2f5577}
   .thr-pane{max-height:none;min-height:70vh}
   .msg{max-width:90%}
 }
+
+/* 082. The job a conversation is about, at its top, and the only doors that
+   change it. Amber while a time is waiting on somebody, green once booked, so
+   the bar reads the same as the job card it mirrors. History lines sit
+   between the messages, centered and quiet: they are the record, not chat. */
+.thr-job{padding:10px 14px 12px;border-bottom:1px solid var(--line);background:#fffaf0;border-left:4px solid var(--amber)}
+.thr-job.booked{background:color-mix(in srgb,var(--brand) 7%,var(--card));border-left-color:var(--brand)}
+.tj-top{display:flex;align-items:center;gap:6px;font-size:14px}
+.tj-closed{font-size:12px;font-weight:600;color:var(--ink-soft);border:1px solid var(--line);border-radius:999px;padding:1px 8px}
+.tj-when{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;margin-top:4px;font-size:15px}
+.tj-lab{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft)}
+.tj-gone{text-decoration:line-through;color:var(--ink-soft)}
+.tj-note{font-size:13px;color:var(--amber-ink)}
+.thr-job.booked .tj-note{color:var(--ink-soft)}
+.thr-job .vacts{margin-top:8px}
+.thr-ctx-err{padding:6px 14px;margin:0}
+.thr-event{align-self:center;display:flex;flex-wrap:wrap;justify-content:center;align-items:baseline;gap:6px;max-width:92%;
+  font-size:12.5px;color:var(--ink-soft);background:var(--card);border:1px dashed var(--line);border-radius:999px;padding:4px 12px;text-align:center}
+.thr-event-t{font-size:11.5px;opacity:.8}
+.thr-event.ev-visit_confirmed,.thr-event.ev-job_linked{color:var(--brand-dk);border-color:color-mix(in srgb,var(--brand) 35%,var(--line))}
+.thr-event.ev-visit_declined,.thr-event.ev-wo_declined{color:var(--red)}
+.thr-propose{margin-bottom:10px;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}
+.thr-unbooked{display:flex;align-items:center;gap:6px;margin:0 0 8px;font-size:12.5px;color:var(--ink-soft)}
+.thr-acts{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.thr-act{display:inline-flex;align-items:center;gap:6px;min-height:40px}
+.thr-nudge{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8px;padding:6px 10px;font-size:13px;
+  color:var(--amber-ink);background:#fffaf0;border:1px solid #f0d9a8;border-radius:10px}
 
 `;

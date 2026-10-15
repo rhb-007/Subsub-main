@@ -12674,6 +12674,71 @@ refactor.
   manager at a store as easily as the person who hires a handyman. It now reads
   *property manager* (and *property managers and owners* in the hero).
 
+- **A MESSAGE CHANGES NOTHING, AND THE CONVERSATION SAYS SO.** Asked as *"how
+  are we structuring these messages so that we don't lose the structured
+  features ... like creating a job or telling them times within the app
+  itself and not messaging"*, then *"build the five changes"*. 081 shipped a
+  chat that could not change a job, and also said nothing about the buttons
+  that do, so two people could agree "Tuesday at 9" in it and nothing would
+  be booked. Migration 082 (`thread_job_links`); `looksLikeTime` and
+  `jobSeedFrom` in `app/shared/messaging.js`.
+
+  **1. The job's live state leads every job conversation.** It shows the
+  current window (Proposed, Booked, or passed), who it is waiting on, and
+  **Confirm this time** / **Decline** when it is this side's turn. Whose turn
+  it is comes from `mayConfirm` over the server's parties. The answers go
+  through the same routes the job card uses: `/api/visits/:id/respond`, or
+  the client-work door when a crew answers from home. Nothing in the
+  conversation is a second way to book.
+
+  **2. The job's history appears between the messages, read from the records
+  and never stored as a message.** That covers reported, approved, work orders
+  issued, accepted, declined and withdrawn, times proposed, confirmed and
+  turned down, holds and closures, and *Job created from this
+  conversation*. `threadJobContext` decides what each side may see. A crew
+  sees its own work orders and not another company's. A tenant or an owner
+  is told who is booked and nothing about work-order numbers. Only fixtures
+  carrying a second company on the job, and a visit older than the work
+  orders, can check the narrowing and the time order.
+
+  **3. One action per need, beside the box:**
+  - **Propose a time** (or **Propose another time**) on a job conversation
+    opens the same `VisitForm` the job card uses.
+  - **Create a job from this** for the office in a general conversation with
+    a tenant or an owner.
+  - **Report a problem** for a tenant in their general conversation with the
+    office.
+
+  The last two open the **real** forms, pre-filled by `jobSeedFrom`: the other
+  side's words since the last job made from that conversation, plus their
+  photos. The tenant still picks what the problem is, because the report is
+  the structured thing. `POST /api/jobs` takes `fromThread` and
+  `linkJobToThread` links the job back:
+  - only from a general conversation the caller is on;
+  - only on the job's own account;
+  - only while the relationship holds;
+  - and only photos from that conversation are copied onto the job.
+
+  The link never fails the job: by then the job exists, so a missing 082
+  is reported on the reply (`fromThread.migration`) instead.
+
+  **4. A nudge, never a block.** Typing something that looks like a time on a
+  job someone may propose for offers *Agreeing a time? Messages don't book
+  visits* (or *don't move the booked visit*), with the propose form one tap
+  away. `looksLikeTime` is generous on purpose, because a false nudge costs a
+  glance and a missed one costs a crew at the wrong door. It leaves out
+  "sun", "sat" and "wed", because sun damage and a saturated wall are
+  ordinary things to write about a repair.
+
+  **5. The box says it out loud.** On a job conversation with no booked time:
+  *Times agreed in messages aren't booked until someone presses Confirm.*
+
+  `test:messaging` (119) and `test:messagingui` (46). Seventeen mutations
+  fire across the two, each on its own assertion. One survived until the
+  fixture changed: deleting the events sort passed while the fixture's records
+  happened to be inserted in time order. **Paste 082** before linking
+  works; until then jobs are still made, just not linked.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
