@@ -241,7 +241,7 @@ try {
     NAME = mode === "toReview" ? "Puget Electricity / Plumbing" : "Pacific apartment maintenance";
     const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
       seat: { userId: "usr_r", accountId: "acc_x" },
-      viewport: mode === "toReview" ? { width: 1024, height: 1366 } : { width: 1340, height: 1500 } });
+      viewport: { width: Number(process.env.VW || 1024), height: 1366 } });
     await wait(2600);
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
@@ -276,7 +276,18 @@ try {
         const hit = st ? document.elementFromPoint(st.left + st.width / 2, st.top + st.height / 2) : null;
         const lh = h4 ? parseFloat(getComputedStyle(r.querySelector(".rec-head h4")).lineHeight) || 20 : 20;
         const chips = [...(r?.querySelectorAll(".rec-tags > span") || [])].map((c) => c.getBoundingClientRect().height);
-        return { h4: h4 && { w: h4.width, h: h4.height }, lh, mainBottom: main?.bottom, whyTop: why?.top,
+        // NOTHING HANGS OFF THE CARD. Reported with "Review surety bond" and
+        // "Request docs" cut off at the row's right edge: the panel was the
+        // row's full width AND pushed in by the rank column, so it overran
+        // by exactly that. Every box and every button is measured against
+        // the row, and a button whose label is clipped inside it is caught
+        // by its own scroll width.
+        const rr = rect(r);
+        const boxes = [...(r?.querySelectorAll(".rec-blocked, .rec-why, button") || [])].map((el) => ({
+          what: (el.innerText || el.className).trim().slice(0, 30), right: el.getBoundingClientRect().right,
+          clipped: el.scrollWidth > el.clientWidth + 1 }));
+        const over = boxes.filter((b) => b.right > rr.right - 1 || b.clipped);
+        return { over, h4: h4 && { w: h4.width, h: h4.height }, lh, mainBottom: main?.bottom, whyTop: why?.top,
           whyW: why?.width, rowW: rect(r)?.width, starsHit: !!(hit && starsEl.contains(hit)), chips };
       });
       t.ck("toReview: the name sits on one line, not a word a line",
@@ -286,6 +297,8 @@ try {
         lay.whyTop != null && lay.mainBottom != null && lay.whyTop >= lay.mainBottom - 1, JSON.stringify(lay));
       t.ck("toReview: and it takes most of the row's width",
         lay.whyW != null && lay.rowW != null && lay.whyW > lay.rowW * 0.75, JSON.stringify(lay));
+      t.ck("toReview: nothing runs off the right edge of the row, and no button is cut off",
+        Array.isArray(lay.over) && lay.over.length === 0, JSON.stringify(lay.over));
       t.ck("toReview: no chip wraps onto a second line",
         lay.chips.length > 0 && lay.chips.every((h) => h < 28), JSON.stringify(lay.chips));
       t.ck("toReview: says it is waiting on YOUR review, naming the document",
@@ -309,6 +322,16 @@ try {
       t.ck("notIn: says what is not uploaded, and asks them",
         /Not uploaded yet/i.test(row?.text || "") && /Surety bond/i.test(row?.text || "")
           && (row?.buttons || []).some((b) => /Request docs/i.test(b)), JSON.stringify(row));
+      const over = await page.evaluate(() => {
+        const r = document.querySelector(".modal .pick-row");
+        if (!r) return null;
+        const right = r.getBoundingClientRect().right;
+        return [...r.querySelectorAll(".rec-blocked, .rec-why, button")]
+          .filter((el) => el.getBoundingClientRect().right > right - 1 || el.scrollWidth > el.clientWidth + 1)
+          .map((el) => (el.innerText || el.className).trim().slice(0, 30));
+      });
+      t.ck("notIn: Request docs stays inside the row, at an iPad's width",
+        Array.isArray(over) && over.length === 0, JSON.stringify(over));
       t.ck("notIn: and no Review button, because there is nothing on file to review",
         !(row?.buttons || []).some((b) => /^Review/i.test(b)), JSON.stringify(row?.buttons));
     }

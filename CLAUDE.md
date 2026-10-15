@@ -11975,6 +11975,15 @@ refactor.
   of the row wide, and each chip one line. Dropping the class reproduces the
   report and fails four; narrowing the panel and letting chips wrap fails four.
 
+  **And the reason panel ran 40px off the card.** It was sized to the row's
+  full width (`flex:1 0 100%`) and then pushed right by the 40px under the
+  rank number, so *Review surety bond* and *Request docs* were cut off at
+  the card's edge. It is now the width left beside that column, and a button
+  that still does not fit wraps its label. `test:assignref` measures every
+  box and button against the row's right edge, plus each button's scroll
+  width, in both blocked states at 1024px. Putting the old width back fails
+  both checks.
+
 - **FOLLOW-UP IS YELLOW AND FAIL IS RED.** Reported with a room marked Fail
   beside its Follow-up button: *"follow up and fail have the exact same color."*
   They were the product's `--amber` (#c8871e) and `--red` (#b5442e), which sit

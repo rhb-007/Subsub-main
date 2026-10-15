@@ -44079,12 +44079,18 @@ iframe.dv-frame{display:block}
    name, the rating and the chips keep the row they had, and the reason gets
    the full width at the same left edge as the name. */
 .pick-row.is-blocked{flex-wrap:wrap}
-.pick-row.is-blocked .rec-blocked{flex:1 0 100%;max-width:none;margin-left:40px;align-items:stretch}
+.pick-row.is-blocked .rec-blocked{flex:0 0 calc(100% - 40px);max-width:calc(100% - 40px);min-width:0;margin-left:40px;align-items:stretch}
 .pick-row.is-blocked .rec-why{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
 .pick-row.is-blocked .rec-why .rec-blocked-why{flex:1 1 240px;text-align:left}
-.pick-row.is-blocked .rec-why .rec-send{margin-top:0}
+.pick-row.is-blocked .rec-why .rec-send{margin-top:0;max-width:100%}
+/* The panel was the row's FULL width and then pushed in by the 40px under the
+   rank number, so it ran 40px off the card and cut "Review surety bond" and
+   "Request docs" off at the edge. The width is what is left beside that
+   column, and a button that still does not fit wraps its label rather than
+   hiding the end of it. */
+.pick-row.is-blocked .rec-send{white-space:normal;text-align:left}
 .rec-tags > span{white-space:nowrap}
-@media (max-width:640px){ .pick-row.is-blocked .rec-blocked{margin-left:0} }
+@media (max-width:640px){ .pick-row.is-blocked .rec-blocked{margin-left:0;flex-basis:100%;max-width:100%} }
 /* The route's refusal, inside the window where the press was made. */
 .assign-refused{display:flex;gap:10px;align-items:flex-start;margin:12px 0 4px;padding:12px 14px;
   border-radius:10px;background:#faece7;border:1px solid #f0c8bb;font-size:14px;line-height:1.45}
