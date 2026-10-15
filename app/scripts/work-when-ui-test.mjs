@@ -287,6 +287,7 @@ const cards = (page) => page.evaluate(() => [...document.querySelectorAll(".jr-c
     // it: a 12.5px question and two inline buttons in a card with five other
     // rows of small bold text.
     ask: (el.querySelector(".vans-q")?.innerText || "").replace(/\s+/g, " ").trim(),
+    client: (el.querySelector(".jr-client")?.innerText || "").replace(/\s+/g, " ").trim(),
     lead: (el.querySelector(".vans-head")?.innerText || "").replace(/\s+/g, " ").trim(),
     big: (el.querySelector(".vans-when")?.innerText || "").replace(/\s+/g, " ").trim(),
     bigPx: el.querySelector(".vans-when")
@@ -391,8 +392,11 @@ try {
   // A hole where an optional field used to be interpolated is the shape this
   // project records about a dangling em dash.
   t.ck("nothing anywhere still says so", !!none && /No date yet/i.test(none.when), none?.when);
+  // Taken with no time on it is ASSIGNED, TIME TO BE ARRANGED -- its own state
+  // and its own panel, rather than the plain status line that read like a job
+  // nobody had to do anything about.
   t.ck("and names it as the problem it is",
-    !!none && /no visit time proposed/i.test(none.note), none?.note);
+    !!none && /time to be arranged/i.test(none.lead), `${none?.lead} | ${none?.note}`);
 
   console.log("\n-- and they have a schedule of their own --");
   const s = await sched(page);
@@ -595,12 +599,13 @@ try {
     // admin every row arrives this way, which is why it matters.
     t.ck("a row at another client still shows the time", !!away?.panelBg,
       `${away?.panelBg} | ${away?.big}`);
-    t.ck("and names where it has to be answered",
-      /Cascade Management/.test(away?.ask || "") || /Cascade Management/.test((away?.btns || []).join(" ")),
-      `${away?.ask} | ${JSON.stringify(away?.btns)}`);
-    t.ck("rather than offering an answer it cannot post",
-      !(away?.btns || []).some((b) => /I'll be there|Can't make it/i.test(b)),
-      JSON.stringify(away?.btns));
+    // AND IT IS ANSWERED HERE NOW. This used to refuse, because answering
+    // posted to the account the seat is on; /api/my-work/:woId/* acts for
+    // this company on the client's account, so the row says whose it is and
+    // takes the answer.
+    t.ck("and names whose job it is", /Cascade Management/.test(away?.client || ""), away?.client);
+    t.ck("and takes the answer here",
+      (away?.btns || []).some((b) => /I'll be there/i.test(b)), JSON.stringify(away?.btns));
 
     // THE CONTROLS ARE LARGE, AND THE SIZE IS WHAT WAS WRONG. The words were
     // already right; the row rendered them at the card's own 12.5px with two
@@ -705,8 +710,11 @@ try {
       .find((el) => /stack leak/i.test(el.querySelector("h3")?.innerText || ""))
       ?.querySelector(".vacts .vact-alt")?.click());
     await wait(400);
-    t.ck("a row at another client cannot even open the form",
-      await page.evaluate(() => !document.querySelector(".modal .visit-form")));
+    t.ck("a row at another client opens the form too",
+      await page.evaluate(() => !!document.querySelector(".modal .visit-form")));
+    await page.evaluate(() => [...document.querySelectorAll(".modal .visit-form button")]
+      .find((b) => /Cancel/i.test(b.innerText))?.click());
+    await wait(300);
     await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
       .find((el) => /Unit 12 shower/i.test(el.querySelector("h3")?.innerText || ""))
       ?.querySelector(".vacts .vact-alt")?.click());

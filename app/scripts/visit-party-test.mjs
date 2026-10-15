@@ -699,7 +699,10 @@ try {
       /!past && when\.visitId && when\.kind === "proposed"/.test(block)
         && /when\.turn === "contractor"/.test(block)
         && /: !when\.mine/.test(block), block.slice(0, 40));
-    ck("and answerable only at this account", /canAnswer={!away}/.test(block));
+    // A row at another client is answerable too now, through
+    // /api/my-work/:woId/*, but only where the caller wired that up.
+    ck("answerable at this account, or a client's row when wired to act for us",
+      /canAnswer={canAct}/.test(block) && /const canAct = !away \|\| actAway;/.test(block));
     ck("and it says who is left once we have answered", /jr-vis-wait/.test(block));
     // THE MANAGER'S BLOCK READS THE HELPER, not a ternary of its own. The bug
     // was a two-branch map written at the call site, so what is pinned is the

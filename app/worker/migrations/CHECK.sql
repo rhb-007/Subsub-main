@@ -278,7 +278,11 @@ WITH spec(j) AS (SELECT
   ',["m078_hour_request_pending_unique","index","ux_wo_hour_request_pending",[]]' ||
   -- 079. How long each trade takes. Until it is run jobs keep their single
   -- date, the timeline draws dots, and saving an estimate says which file.
-  ',["m079_job_trade_spans","col","job_trade_spans",["job_id","trade","start_date","work_days","weekends","proposed_start","proposed_days"]]') ||
+  ',["m079_job_trade_spans","col","job_trade_spans",["job_id","trade","start_date","work_days","weekends","proposed_start","proposed_days"]]' ||
+  -- 080. The reminder ledger. Until it is run the nightly reminder emails
+  -- are skipped, and the dashboards still show what is waiting.
+  ',["m080_action_reminders","col","action_reminders",["id","account_id","job_id","item_key","party","step","emailed"]]' ||
+  ',["m080_action_reminder_unique","index","ux_action_reminder",[]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

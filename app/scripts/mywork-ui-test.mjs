@@ -10,9 +10,10 @@
 //   THE BADGE COUNTS EVERY CLIENT. If it counted only the local ones this test
 //   reads 1 where it should read 3, which is exactly the bug.
 //
-//   A ROW FROM ANOTHER CLIENT SAYS WHOSE IT IS, and offers no Accept button --
-//   answering posts to the account the seat is on, so an Accept here would reach
-//   the wrong company. It offers the way there instead.
+//   A ROW FROM ANOTHER CLIENT SAYS WHOSE IT IS, and is answered from here.
+//   This used to offer no Accept button, because answering posted to the
+//   account the seat is on. /api/my-work/:woId/* acts for this company on the
+//   client's account now, so the answer goes there and nobody has to switch.
 //
 //   node scripts/mywork-ui-test.mjs
 
@@ -81,9 +82,12 @@ const MY_WORK = { work: [
 ] };
 
 let SERVE_WORK = MY_WORK;
+const POSTS = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method) => {
+  if (method === "POST") POSTS.push(path);
+  if (method === "POST" && path.startsWith("/api/my-work/")) return [200, { ok: true }];
   if (path === "/api/account-users") return [200, [
     { id: "u_bay", name: "Rae Bay", email: "rae@bayroofing.test", phone: null, role: "contractor",
       subId: "cmp_bay", propertyIds: [], unit: null, hasLogin: true,
@@ -121,11 +125,12 @@ try {
         .find((x) => /^My Jobs/.test(x.innerText.trim()));
       return b ? b.innerText.replace(/\s+/g, " ").trim() : null;
     });
-    // Three pending across three companies. One of them is local: a badge
-    // reading 1 is the bug this exists to catch.
+    // Three offers across three companies, and one job taken with no time on
+    // it. One of the offers is local: a badge reading 1 is the bug this exists
+    // to catch, and 3 is the old rule that ignored work nobody has a time for.
     t.ck("the nav badge is on My Jobs", !!badge, String(badge));
-    t.ck("and counts all three, not just the local one",
-      /\b3\b/.test(badge || ""), String(badge));
+    t.ck("and counts everything waiting at every client",
+      /\b4\b/.test(badge || ""), String(badge));
 
     const strip = await page.evaluate(() =>
       document.querySelector(".who-for")?.innerText.trim() || null);
@@ -198,17 +203,15 @@ try {
       String(away?.client));
     t.ck("and says the work is FOR them", /^For /.test(away?.client || ""), String(away?.client));
 
-    // The load-bearing one. Accepting posts to the account the seat is on.
-    t.ck("no Accept button", !away.buttons.some((b) => /^Accept$/i.test(b)),
+    // Answered from here, through our own account.
+    t.ck("Accept is offered", away.buttons.some((b) => /^Accept$/i.test(b)),
       JSON.stringify(away.buttons));
-    t.ck("no Decline button", !away.buttons.some((b) => /^Decline$/i.test(b)),
+    t.ck("and Decline", away.buttons.some((b) => /^Decline$/i.test(b)),
       JSON.stringify(away.buttons));
     t.ck("nor a way to change a work order at another account",
       !away.buttons.some((b) => /Request a change/i.test(b)), JSON.stringify(away.buttons));
     t.ck("nor to open one", !away.buttons.some((b) => /View work order/i.test(b)),
       JSON.stringify(away.buttons));
-    t.ck("it says where to answer instead",
-      /Answer this at Birch Builders/.test(away.text), away.text);
     // The countdown is the whole reason to surface it from another account.
     t.ck("and still shows the clock", /left to respond/.test(away.text), away.text);
 
@@ -219,10 +222,19 @@ try {
         .find((x) => /flat roof patch/i.test(x.innerText));
       return c ? c.innerText.replace(/\s+/g, " ").trim() : null;
     });
-    t.ck("one with no deadline just says whose it is",
-      /This job is at Cedar Contracting/.test(noDeadline || ""), String(noDeadline));
-    t.ck("and offers the way there",
-      away.buttons.some((b) => /Go to Birch Builders/.test(b)), JSON.stringify(away.buttons));
+    t.ck("one with no deadline still says whose it is",
+      /For Cedar Contracting/.test(noDeadline || ""), String(noDeadline));
+    t.ck("and still offers the way there",
+      away.buttons.some((b) => /^Open$/.test(b)), JSON.stringify(away.buttons));
+
+    // Pressing Accept goes through /api/my-work, never Birch's own route.
+    await page.evaluate(() => [...document.querySelectorAll(".jr-card")]
+      .find((x) => /gutter run/i.test(x.innerText))?.querySelector(".resp.accept")?.click());
+    await wait(700);
+    t.ck("Accept on a client's row answers through our own account",
+      POSTS.some((p) => p === "/api/my-work/wo_b/respond"), JSON.stringify(POSTS));
+    t.ck("and not through the client's work-order route",
+      !POSTS.some((p) => p.startsWith("/api/work-orders/wo_b")), JSON.stringify(POSTS));
 
     // The local row keeps everything it had.
     const local = await page.evaluate(() => {

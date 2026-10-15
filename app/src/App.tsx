@@ -3761,9 +3761,11 @@ export default function SubSub() {
 
   // Amber means somebody, somewhere, is waiting on a yes. Counting only the
   // account in front of us is how the thing it is meant to catch got missed.
-  const pendingHere = myAssignments.filter((m) => m.a.status === "pending" && !m.a.auto);
-  const pendingCount = pendingHere.length
-    + elsewhere.filter((m) => m.a.status === "pending" && !m.a.auto).length;
+  // EVERYTHING WAITING ON THIS CREW, not only offers: a time to confirm and
+  // work taken with no time on it stall a job just as surely. One rule,
+  // `crewAction`, so the nav and the sections cannot disagree.
+  const crewActCount = myAssignments.concat(elsewhere)
+    .filter((m) => crewAction(m, now)).length;
 
   // --- user management (admin only) ---
   // A user is global; joining an account is a membership.
@@ -4369,6 +4371,16 @@ export default function SubSub() {
     setJobs((js) => js.map((j) => j.id === jobId
       ? { ...j, access, accessEffective: access } : j));
   };
+  // A CLIENT'S WORK, answered from our own account. See /api/my-work/:woId/*.
+  const respondAway = async (woId, status) => {
+    await api.respondMyWork(woId, status);
+    await refreshMyWork();
+  };
+  const proposeAway = async (woId, body) => {
+    const v = await api.proposeMyWork(woId, body);
+    await refreshMyWork();
+    return v;
+  };
   const proposeVisit = async (jobId, body) => {
     const v = await api.proposeVisit(jobId, body);
     setVisits((vs) => [v, ...vs.filter((x) => x.jobId !== jobId)]);
@@ -4426,7 +4438,14 @@ export default function SubSub() {
   // question only it can settle, and a locally invented "confirmed" over a
   // window the tenant has not answered is precisely the tick-on-a-window-
   // nobody-is-attending lie this whole change exists to stop.
-  const answerVisit = async (id, status, note) => {
+  const answerVisit = async (id, status, note, ctx = null) => {
+    // A CLIENT'S ROW goes through the door that acts for this company on the
+    // client's account; nothing about it is in this account's lists to patch.
+    if (ctx?.elsewhere && ctx.a?.id) {
+      const v = await api.answerMyWork(ctx.a.id, id, { status, ...(note ? { note } : {}) });
+      await refreshMyWork();
+      return v;
+    }
     const v = await api.respondVisit(id, { status, ...(note ? { note } : {}) });
     setVisits((vs) => vs.map((x) => x.id === id ? { ...x, ...v } : x));
     await refreshMyWork();
@@ -5744,6 +5763,24 @@ export default function SubSub() {
     if (staff?.userId) setCurrentUserId(staff.userId);
   };
 
+  // WORK OTHER ACCOUNTS HAVE GIVEN THIS ONE, on the screens this account
+  // actually opens. Reported from Cascade: Sound gave them a tenant's job and
+  // it was on neither their Dashboard nor their Jobs screen -- only behind My
+  // Jobs, which is not where anybody running the company looks first. Same
+  // cards and the same answers as My Jobs; built here, after every handler it
+  // reads, because a const read before its declaration is a blank screen.
+  const clientWorkPanel = ownWork && elsewhere.length > 0 ? (
+    <ClientWorkPanel rows={elsewhere} now={now}
+      onOpenAll={() => setTab("portal")}
+      cardProps={{
+        onRespond: (jobId, trade, status, ctx) => (ctx?.elsewhere
+          ? respondAway(ctx.a.id, status) : respondTrade(jobId, trade, status)),
+        onViewWO: setViewWO, now, changeOrders, onRequestChange: null,
+        onGoClient: goToSeat, onAnswerVisit: answerVisit, onProposeVisit: setProposeWO,
+        onSuggestSpan: null, actAway: true,
+      }} />
+  ) : null;
+
   return (
     <div className="ss-root">
       <style>{CSS}</style>
@@ -6175,7 +6212,7 @@ export default function SubSub() {
               <button key={id} className={tab === "portal" && (id === "jobs" ? JOB_PANES.includes(pane) : pane === id) ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
                 {label}
-                {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
+                {id === "jobs" && crewActCount > 0 && <span className="count amber"><ActDot />{crewActCount}</span>}
               </button>
             ))}
           {can("portal") && [
@@ -6201,7 +6238,7 @@ export default function SubSub() {
             <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
               {label}
-              {id === "jobs" && pendingCount > 0 && <span className="count amber">{pendingCount}</span>}
+              {id === "jobs" && crewActCount > 0 && <span className="count amber"><ActDot />{crewActCount}</span>}
               {/* Somebody is waiting on a yes or a no. Amber for the same
                   reason a job request is: it is theirs to answer and
                   nothing moves until they do. */}
@@ -6307,6 +6344,7 @@ export default function SubSub() {
           onApproveJob={approveJob} onDeclineJob={declineJob} users={accountUsers}
           inspections={can("inspections") ? inspections : []}
           onOpenInspection={can("inspections") ? openInspection : null}
+          clientWork={clientWorkPanel}
           runsAccount={runsTheAccount(role, membership)} />
       )}
 
@@ -6821,6 +6859,7 @@ export default function SubSub() {
               ? "Nothing raised yet."
               : `${jobs.length} job${jobs.length === 1 ? "" : "s"} \u00b7 ${
                   jobs.filter((j) => !isClosed(j)).length} still open`} />
+          {clientWorkPanel}
           {jobProperty && (
             <div className="scoped-to">
               <Building2 size={14} />
@@ -6952,11 +6991,18 @@ export default function SubSub() {
                   const unfilled = j.trades.length - filled;
                   const noReply = slots.some((a) => a && a.status === "pending" && isExpired(a, now));
                   const waiting = slots.some((a) => a && a.status === "pending" && !isExpired(a, now));
+                  // ASSIGNED, NO TIME: a crew has taken it and nobody is
+                  // booked to go. Its own colour, never the scheduled one.
+                  const lv = newestLiveVisit(visits, j.id);
+                  const noTime = slots.some((a) => a && (a.status === "accepted" || a.auto))
+                    && (!lv || (lv.status === "proposed" && visitPassed(lv)));
                   const flag = done || j.readOnly ? null
                     : jobHold(j, todayKey).held ? null
                     : noReply ? { tone: "bad", text: "No reply" }
                     : unfilled > 0 ? { tone: "warn", text: `${unfilled} unassigned` }
                     : waiting ? { tone: "wait", text: "Waiting on a reply" }
+                    : noTime ? { tone: "arrange", text: "Time to be arranged" }
+                    : lv?.status === "proposed" ? { tone: "wait", text: "Time proposed" }
                     : null;
                   return (
                     <div key={j.id} data-job-id={j.id}
@@ -7792,7 +7838,9 @@ export default function SubSub() {
             onSetCaps={(caps) => patchSub(mySub.id, { caps })}
             onUploadDoc={(k, fn) => uploadSubDoc(mySub.id, k, fn)}
             onDeleteDoc={(k) => deleteSubDoc(mySub.id, k)}
-            onRespond={(jobId, trade, status) => respondTrade(jobId, trade, status)} now={now} />
+            onRespond={(jobId, trade, status, ctx) => (ctx?.elsewhere
+              ? respondAway(ctx.a.id, status) : respondTrade(jobId, trade, status))} now={now}
+            actAway />
         ) : (
           <main className="ss-main">
             <div className="empty"><AlertTriangle size={28} />
@@ -8102,9 +8150,10 @@ export default function SubSub() {
         <div className="form-sec">{proposeWO.first ? "Propose a time" : "Propose a different time"}</div>
         <p className="pw-job">{proposeWO.job.title}</p>
         <VisitForm jobId={proposeWO.job.id} startDate={proposeWO.job.date || ""}
-          forWhom="the managing agent" replacing={!proposeWO.first}
+          forWhom={proposeWO.elsewhere?.name || "the managing agent"} replacing={!proposeWO.first}
           placeholder="e.g. We can do Thursday morning instead"
-          onPropose={proposeVisit} onDone={() => setProposeWO(null)}
+          onPropose={proposeWO.elsewhere ? (_jobId, body) => proposeAway(proposeWO.a.id, body) : proposeVisit}
+          onDone={() => setProposeWO(null)}
           onCancel={() => setProposeWO(null)} />
       </Modal>}
       {notifying && <Modal onClose={() => setNotifying(null)} wide>
@@ -14311,7 +14360,7 @@ function tenantStage(job, visit) {
   const assigned = Object.values(job.assignments || {});
   const accepted = assigned.filter((a) => a.status === "accepted" || a.auto);
   if (accepted.length) {
-    return { key: "booked", label: visit?.status === "declined" ? "Finding another time" : "Contractor assigned — time to be arranged", tone: "busy" };
+    return { key: "booked", label: visit?.status === "declined" ? "Finding another time" : "Contractor assigned — time to be arranged", tone: "arrange" };
   }
   if (assigned.length) return { key: "arranging", label: "Finding a time", tone: "busy" };
   if (job.requestedBy && !job.approvedAt) return { key: "sent", label: "With the manager", tone: "wait" };
@@ -16001,6 +16050,7 @@ function TenantSection({ id, title, count, defaultOpen = true, tone = null, chil
     <section className={`tn-sec ${asks ? "tn-sec-ask" : ""}`}>
       {asks ? (
         <h3 className="tn-sec-head tn-sec-askhead">
+          <ActDot />
           <Bell size={15} />
           <span className="tn-sec-title">{title}</span>
           {count > 0 && <span className="sec-count amber">{count}</span>}
@@ -24677,7 +24727,7 @@ function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
   return (
     <div className={`dash-row yt-row yt-${kind}`} data-yt={kind}>
       <button className="dash-row-main dash-row-open" onClick={onPeek}>
-        <span className="yt-lede">{lede}</span>
+        <span className="yt-lede"><ActDot />{lede}</span>
         {when && <span className={`yt-when ${kind === "lapsed" ? "yt-gone" : ""}`}>{when}</span>}
         <span className="dr-title">{job.title}</span>
         <span className="dr-meta">{[where?.name, sub].filter(Boolean).join(" · ")}</span>
@@ -25097,7 +25147,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
 function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" },
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
-  connectsIn = [], onRespondConnect, onReloadConnects,
+  connectsIn = [], onRespondConnect, onReloadConnects, clientWork = null,
   hireable = false, myCompany = null, onGoCompany, kind = null, onGoDocs = null,
   onManagePack = null, onAddPackField = null, onReloadCompany = null, weather = null,
   inspections = [], onOpenInspection = null, onAnswerVisit = null, onAnswerSpan = null, onEndJob = null }) {
@@ -25450,9 +25500,13 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
       {/* WAITING ON YOU, above everything but a life-safety report: these are
           workflows that have stopped until this account answers, and each row
           carries the answer. See yourTurnItems. */}
+      {/* Work OTHER accounts gave this one, led by what is waiting on it.
+          Only a hireable account with client work gets one. */}
+      {clientWork}
+
       {yourTurn.length > 0 && (
         <section className="dash-sec sec-yt" aria-label="Waiting on you">
-          <h3><Bell size={15} /> Waiting on you
+          <h3><ActDot /><Bell size={15} /> Waiting on you
             <span className="sec-count amber">{yourTurn.length}</span></h3>
           <DashRows id="yourturn">
             {yourTurn.map((it) => (
@@ -30125,7 +30179,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   quotes = [], onAnswerQuote, brand, me, orders, now,
   connectRequests = [], onRespondConnect, onReloadConnects, serviceCalls, onConfirmCall, changeOrders, onRespondCO, onVoidCO, onRequestChange, onOrderUniform, onGoDocs, onViewWO, onToggleCrewDay, onToggleCrewAvailable, onSetAutoSchedule, onSetWarranty, onSetCategories, onSetCaps, onUploadDoc, onDeleteDoc, onRespond, onSetCrews, onSetCoverage, crewSaveErr = "",
   overflowStanding, overflowOffers = [], onSetOverflowOptIn, onRespondOverflow,
-  onAnswerVisit, onProposeVisit, onSuggestSpan = null, onGoPane, aimAuto = null }) {
+  onAnswerVisit, onProposeVisit, onSuggestSpan = null, onGoPane, aimAuto = null, actAway = false }) {
   const [sub2, setSub2] = useState("trades");
   // Arriving from the auto-schedule request email: open Availability and ring
   // the switch. Keyed on a counter so asking twice lands twice.
@@ -30218,10 +30272,18 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   // time" in small type -- and the whole chain stops until it is answered, the
   // tenant included. Same test the card draws its own panel from. Not
   // filtered by the bar: a narrowed list must not hide a question.
+  // AND WORK TAKEN WITH NO TIME ON IT, which is the other half of the same
+  // stall: nobody goes until the crew says when, and it read as one quiet
+  // line under Current & upcoming. `crewAction` is the rule; a row at another
+  // client is listed only where it can be answered from here.
   const timeAsks = !onAnswerVisit ? [] : upcoming.filter((m) => {
-    const w = workWhen(m.job);
-    return !!w.visitId && w.kind === "proposed" && !visitPassed(w)
-      && (w.turn ? w.turn === "contractor" : !w.mine);
+    if (m.elsewhere && !actAway) {
+      const w = workWhen(m.job);
+      return !!w.visitId && w.kind === "proposed" && !visitPassed(w)
+        && (w.turn ? w.turn === "contractor" : !w.mine);
+    }
+    const k = crewAction(m, now)?.kind;
+    return k === "confirm" || (k === "arrange" && !!onProposeVisit);
   });
   const askKeys = new Set(timeAsks.map((m) => `${m.job.id}-${m.trade}`));
   const fUpcoming = showing("upcoming")
@@ -30413,9 +30475,10 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
           {timeAsks.length > 0 && (
             <section className="dash-sec sec-yt" aria-label="Waiting on you">
-              <h3><Bell size={15} /> Waiting on you — confirm the time
+              <h3><ActDot /><Bell size={15} /> Waiting on you — {timeAsks.every((m) => crewAction(m, now)?.kind === "arrange")
+                  ? "set a time" : timeAsks.some((m) => crewAction(m, now)?.kind === "arrange") ? "confirm or set a time" : "confirm the time"}
                 <span className="sec-count amber">{timeAsks.length}</span></h3>
-              {timeAsks.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} />)}
+              {timeAsks.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
             </section>
           )}
 
@@ -30440,7 +30503,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {fPending.length > 0 && (
             <section className="dash-sec">
               <h3><Clock size={15} /> Job requests <span className="sec-count amber">{fPending.length}</span></h3>
-              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} showActions />)}
+              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} showActions />)}
             </section>
           )}
 
@@ -30449,7 +30512,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <h3><Calendar size={15} /> Current &amp; upcoming {fUpcoming.length > 0 && <span className="sec-count">{fUpcoming.length}</span>}</h3>
             {fUpcoming.length === 0
               ? <div className="dash-empty"><ClipboardList size={24} /><p>{narrowed ? "No upcoming jobs match these filters." : "No upcoming jobs booked."}</p></div>
-              : fUpcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} />)}
+              : fUpcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
           </section>
           )}
 
@@ -30488,14 +30551,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {fPast.length > 0 && (
             <section className="dash-sec">
               <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{fPast.length}</span></h3>
-              {fPast.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} past />)}
+              {fPast.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} past />)}
             </section>
           )}
 
           {fDeclined.length > 0 && (
             <section className="dash-sec">
               <h3><XCircle size={15} /> Declined <span className="sec-count">{fDeclined.length}</span></h3>
-              {fDeclined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} />)}
+              {fDeclined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
             </section>
           )}
         </>
@@ -32191,7 +32254,91 @@ function VisitAnswer({ when, job, canAnswer, lapsed = false, onAnswer, onPropose
   );
 }
 
-function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient, onAnswerVisit, onProposeVisit, onSuggestSpan = null }) {
+// WHAT THIS CREW HAS TO DO ABOUT ONE ROW, or null. The one rule the Waiting on
+// you sections, the client-work panel, the line flags and the blinking dot all
+// read, so no two of them disagree about whether something needs the crew.
+//   reply    an offer of work, still open
+//   confirm  a time put to them that is their turn to answer
+//   arrange  work they have taken with no time on it -- nobody is coming
+//            until they say when. Its own colour, because "assigned" and
+//            "scheduled" are different states and read the same otherwise.
+// A proposed time that has gone by is deliberately not here: the hiring side
+// is asked to put a new one, and asking both sides at once is two proposals.
+function crewAction(m, now) {
+  const { job, a } = m || {};
+  if (!job || !a || a.status === "declined") return null;
+  if (job.status === "completed" || job.status === "cancelled") return null;
+  if (a.status === "pending" && !a.auto) {
+    if (isExpired(a, now)) return null;
+    return { kind: "reply", text: `Reply · ${countdown(msLeft(a, now))} left` };
+  }
+  if (a.status !== "accepted" && !a.auto) return null;
+  const w = workWhen(job);
+  if (w.kind === "confirmed") return null;
+  if (w.kind === "proposed") {
+    if (visitPassed(w)) return null;
+    return (w.turn ? w.turn === "contractor" : !w.mine) ? { kind: "confirm", text: "Confirm the time" } : null;
+  }
+  return { kind: "arrange", text: "Set a time" };
+}
+
+// The newest window on a job that is still in play (proposed or confirmed), or
+// null. Same rule the Waiting on you list reads.
+function newestLiveVisit(visits, jobId) {
+  let best = null;
+  for (const v of visits || []) {
+    if (v.jobId !== jobId || (v.status !== "proposed" && v.status !== "confirmed")) continue;
+    if (!best || String(v.createdAt || "") > String(best.createdAt || "")) best = v;
+  }
+  return best;
+}
+
+// A small pulsing dot on anything somebody is waiting on this reader for. Still
+// for a reader who has asked for less motion; the words beside it carry the
+// meaning either way.
+function ActDot({ tone = "warn", label = "Needs you" }) {
+  return <span className={`act-dot act-${tone}`} role="img" aria-label={label} />;
+}
+
+// THE CLIENT-WORK PANEL. What other accounts have given this one, led by what
+// is waiting on it, on the Dashboard and the Jobs screen. Every row is the same
+// JobRequestCard My Jobs draws, answered in place.
+function ClientWorkPanel({ rows, now, onOpenAll, cardProps }) {
+  const live = rows.filter((m) => m.a.status !== "declined"
+    && m.job.status !== "completed" && m.job.status !== "cancelled");
+  if (!live.length) return null;
+  const tagged = live.map((m) => ({ m, act: crewAction(m, now) }));
+  const order = { reply: 0, confirm: 1, arrange: 2 };
+  const need = tagged.filter((x) => x.act).sort((x, y) => order[x.act.kind] - order[y.act.kind]);
+  const rest = tagged.filter((x) => !x.act);
+  const clients = [...new Set(live.map((m) => m.elsewhere?.name).filter(Boolean))];
+  const SHOW = 3;
+  const card = ({ m }) => (
+    <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} {...cardProps}
+      showActions={m.a.status === "pending" && !m.a.auto} />
+  );
+  return (
+    <section className={`dash-sec sec-cw ${need.length ? "cw-need" : ""}`} aria-label="Work from your clients">
+      <h3>{need.length > 0 && <ActDot />}<Building2 size={15} /> Work from your clients
+        {need.length > 0
+          ? <span className="sec-count amber">{need.length} waiting on you</span>
+          : <span className="sec-count">{live.length}</span>}</h3>
+      <p className="portal-sec-note">
+        {clients.length === 1 ? `Jobs ${clients[0]} gave you.` : `Jobs from ${clients.length} companies.`}
+        {need.length > 0 ? " Answer them here; the office and the tenant are waiting until you do." : " Nothing is waiting on you."}
+      </p>
+      {need.map(card)}
+      {rest.slice(0, need.length ? 0 : SHOW).map(card)}
+      <button className="dash-more" onClick={onOpenAll}>
+        {rest.length > (need.length ? 0 : SHOW)
+          ? `${rest.length - (need.length ? 0 : SHOW)} more booked — open My Jobs`
+          : "Open My Jobs"} <ChevronRight size={13} />
+      </button>
+    </section>
+  );
+}
+
+function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO, now, changeOrders, onRequestChange, elsewhere, onGoClient, onAnswerVisit, onProposeVisit, onSuggestSpan = null, actAway = false }) {
   const M = catMeta(trade);
   const left = msLeft(a, now);
   const expired = isExpired(a, now);
@@ -32203,6 +32350,15 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // says where the work is and takes them there, in one tap, instead of
   // pretending it can be answered from a company it does not belong to.
   const away = !!elsewhere;
+  // AND A ROW AT ANOTHER CLIENT CAN STILL BE ANSWERED, through
+  // /api/my-work/:woId/*, which acts for this company on the client's account.
+  // `actAway` says the caller wired that up; without it the card keeps the
+  // old "go there" door, which is all a row could offer before.
+  const canAct = !away || actAway;
+  // The answer handlers carry which row they are about, so the caller can
+  // send a client's row through the right door.
+  const ctx = { a, elsewhere: elsewhere || null };
+  const answerVisit = onAnswerVisit ? (id, st, note) => onAnswerVisit(id, st, note, ctx) : null;
   // WHEN. The one thing this card could not say.
   //
   // It read `formatWhen(job.date, job.time) || "No date"`, which is the job's
@@ -32251,7 +32407,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   // appointment, so it counts as untimed too -- nobody has said they will be
   // there on it.
   const untimed = when.kind === "none" || when.kind === "target";
-  const needsTime = !away && !past && untimed && (a.status === "accepted" || !!a.auto);
+  const needsTime = canAct && !past && untimed && (a.status === "accepted" || !!a.auto);
   // MINIMIZED BY DEFAULT, and the line names the thing to do. A closed card
   // that hid an offer running out, or a time waiting on this crew, would be a
   // list that reads as quiet when it is not -- so the flag on the line is
@@ -32259,13 +32415,14 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   const [open, setOpen] = useState(false);
   if (!open) {
     const asked = (showActions || away) && awaitingReply(a);
-    const flag = mustAnswer ? { tone: "warn", text: "Confirm the time" }
-      : lapsed && !away && onProposeVisit ? { tone: "warn", text: "Time passed" }
+    const flag = mustAnswer ? { tone: "warn", text: "Confirm the time", act: true }
+      : lapsed && canAct && onProposeVisit ? { tone: "warn", text: "Time passed" }
       : !past && when.date && when.kind !== "proposed" && visitPassed(when) ? { tone: "bad", text: "Past due" }
       : asked && expired ? { tone: "bad", text: "Expired" }
-      : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left` }
-      : needsTime && onProposeVisit ? { tone: "warn", text: "Set a time" }
+      : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left`, act: true }
+      : needsTime && onProposeVisit ? { tone: "arrange", text: "Set a time", act: true }
       : null;
+    const tone = flag?.tone === "arrange" ? "arrange" : W.tone;
     return (
       <div className={`job-card jr-card job-line ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
         <button type="button" className="jl-btn" aria-expanded="false" onClick={() => setOpen(true)}
@@ -32274,14 +32431,14 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           <span className="jl-main">
             <span className="jl-title">{job.title}</span>
             <span className="jl-meta">
-              <span className={`jl-when jrw-${W.tone}`}><Calendar size={11} /> {when.date ? visitWhen(when) : "No date yet"}</span>
+              <span className={`jl-when jrw-${tone}`}><Calendar size={11} /> {needsTime ? "Time to be arranged" : when.date ? visitWhen(when) : "No date yet"}</span>
               <span className="jl-where"><MapPin size={11} /> {[job.address, job.area].filter(Boolean).join(", ") || "No address"}</span>
               {away && <span className="jl-client"><Building2 size={11} /> {elsewhere.name}</span>}
             </span>
           </span>
           <span className="jl-side">
             <span className={`cat-badge cat-${trade}`}><M.icon size={11} /> {M.label}</span>
-            {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
+            {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.act && <ActDot tone={flag.tone} />}{flag.text}</span>}
           </span>
         </button>
       </div>
@@ -32333,12 +32490,12 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {/* THE ANSWER FIRST, because it is the only thing on this card anybody
           has to DO. Everything under it -- the scope, the crew, the materials,
           the work order -- is reference. */}
-      {(mustAnswer || (lapsed && onProposeVisit && !away)) && (
-        <VisitAnswer when={when} job={job} canAnswer={!away} lapsed={lapsed}
+      {(mustAnswer || (lapsed && onProposeVisit && canAct)) && (
+        <VisitAnswer when={when} job={job} canAnswer={canAct} lapsed={lapsed}
           clientName={elsewhere?.name}
           onOpenClient={() => onGoClient?.(elsewhere?.accountId)}
-          onAnswer={onAnswerVisit}
-          onPropose={() => onProposeVisit({ job, trade, a })} />
+          onAnswer={answerVisit}
+          onPropose={() => onProposeVisit({ job, trade, a, elsewhere: elsewhere || null })} />
       )}
       {/* WHAT KIND OF TIME IT IS, said rather than left to the colour. A
           confirmed window and one nobody has agreed to are the same pixels
@@ -32348,7 +32505,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           Off entirely while the panel above is up: "Proposed, not confirmed
           yet" over a block that says the same thing in bigger type is the line
           that makes somebody stop reading both. */}
-      {!mustAnswer && (
+      {!mustAnswer && !needsTime && (
         <p className={`jr-whennote jrw-${W.tone}`}>
           {W.tone === "ok" ? <CheckCircle2 size={12} /> : <Clock size={12} />}
           <span><b>{W.lead}.</b> {W.note}</span>
@@ -32366,11 +32523,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           panel above. */}
       {needsTime && !mustAnswer && onProposeVisit && (
         <div className="vans jr-notime">
-          <p className="vans-head"><Clock size={16} /> <b>No time set yet</b></p>
-          <p className="vans-q">Say when you can come and the office confirms it.</p>
+          <p className="vans-head"><ActDot tone="arrange" label="Waiting on you" /><Clock size={16} /> <b>Assigned — time to be arranged</b></p>
+          <p className="vans-q">{away
+            ? `${elsewhere.name} is waiting on you to say when you can come. Propose a time and they confirm it.`
+            : "Nobody is booked to go yet. Say when you can come and the office confirms it."}</p>
           <VisitActs acts={[
             { kind: "yes", label: "Propose a time", icon: <Calendar size={16} />,
-              onClick: () => onProposeVisit({ job, trade, a, first: true }) },
+              onClick: () => onProposeVisit({ job, trade, a, first: true, elsewhere: elsewhere || null }) },
           ]} />
         </div>
       )}
@@ -32387,7 +32546,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           And WHO is read off the row rather than named here: 061 said "the
           tenant" whatever the parties were, and on plenty of jobs the tenant
           is not one at all. */}
-      {!away && !past && when.kind === "proposed" && when.mine && !mustAnswer && (
+      {canAct && !past && when.kind === "proposed" && when.mine && !mustAnswer && (
         <p className="jr-vis-wait"><Clock size={12} /> You confirmed this time. Waiting
           on {partyWords((when.waitingOn || []).filter((pp) => pp !== "contractor"))
             || "the others"} to confirm.</p>
@@ -32459,7 +32618,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
                 { weekday: "short", hour: "numeric", minute: "2-digit" })}</span></>}
         </div>
       )}
-      {away ? (
+      {away && !(actAway && showActions && !expired) && !(actAway && !awaitingReply(a)) ? (
         <div className="portal-respond away">
           <span className="respond-label">
             {awaitingReply(a) && !expired
@@ -32476,8 +32635,8 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
         <div className="portal-respond">
           <span className="respond-label">Do you accept this job?</span>
           <div className="respond-btns">
-            <button className="resp accept" onClick={() => onRespond(job.id, trade, "accepted")}><Check size={13} /> Accept</button>
-            <button className="resp decline" onClick={() => onRespond(job.id, trade, "declined")}><X size={13} /> Decline</button>
+            <button className="resp accept" onClick={() => onRespond(job.id, trade, "accepted", ctx)}><Check size={13} /> Accept</button>
+            <button className="resp decline" onClick={() => onRespond(job.id, trade, "declined", ctx)}><X size={13} /> Decline</button>
           </div>
         </div>
       ) : showActions && expired ? null : (
@@ -44831,6 +44990,29 @@ iframe.dv-frame{display:block}
 .jl-warn{background:#fbf0dd;color:#a86a18}
 .jl-bad{background:#fbe5e2;color:#b3261e}
 .jl-wait{background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+/* ASSIGNED, TIME TO BE ARRANGED. Violet, because amber already means
+   "waiting on somebody", green means booked and red means wrong; a crew on
+   the job with nobody booked to go is none of those, and it read as booked. */
+.jl-arrange{background:#efe9fb;color:#4c2f8f;border:1px solid #d5c7f3}
+.jrw-arrange,.jl-when.jrw-arrange{color:#4c2f8f}
+.tn-chip.arrange{background:#efe9fb;color:#4c2f8f;border:1px solid #d5c7f3}
+.jr-notime{border-color:#d5c7f3;background:#f7f3fe}
+.jr-notime .vans-head{color:#4c2f8f}
+/* The action dot. A pulse rather than a blink, so it catches the eye without
+   strobing; still for anybody who has asked for less motion. */
+.act-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;
+  margin:0 6px 0 0;vertical-align:middle;background:#d97706;position:relative}
+.act-dot::after{content:"";position:absolute;inset:-4px;border-radius:50%;
+  border:2px solid currentColor;color:#d97706;opacity:0;animation:act-pulse 1.6s ease-out infinite}
+.act-dot.act-arrange{background:#6b46c1}
+.act-dot.act-arrange::after{color:#6b46c1}
+.act-dot.act-bad{background:#b3261e}
+.act-dot.act-bad::after{color:#b3261e}
+@keyframes act-pulse{0%{transform:scale(.6);opacity:.9}80%,100%{transform:scale(1.6);opacity:0}}
+@media (prefers-reduced-motion:reduce){.act-dot::after{animation:none;opacity:.35;transform:scale(1.2)}}
+.sec-cw{border:1px solid var(--line);border-radius:13px;padding:14px 14px 6px;background:var(--card)}
+.sec-cw.cw-need{border-color:#f0d9a8;border-left:4px solid var(--amber);background:#fffaf0}
+.sec-cw h3{margin-top:0}
 .jobs-head{flex-wrap:wrap;gap:8px}
 .jl-all{display:inline-flex;align-items:center;gap:6px;margin-left:auto;padding:7px 11px;font-size:12.5px;font-weight:600;border-radius:9px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
 .jl-all:hover{border-color:var(--brand)}

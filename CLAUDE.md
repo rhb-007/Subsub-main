@@ -12419,6 +12419,75 @@ refactor.
   the field on the real bootstrap. Dropping the list fails three assertions,
   and dropping the field fails two.
 
+- **WORK A CLIENT GIVES YOU IS ON YOUR OWN DASHBOARD AND JOBS SCREEN, AND IS
+  ANSWERED THERE.** Reported from Cascade Apartment Services: Sound Property
+  Management assigned them a tenant's job and it was on neither Cascade's
+  Dashboard nor their Jobs screen. It was only behind My Jobs, where the one
+  move was *Go to Sound*, and that needs a seat on Sound the person running
+  Cascade may not have. Also asked: assigned-with-no-time must look different
+  from scheduled, everything waiting on somebody must say so with a blinking
+  dot, and *"a sequence of emails that goes out until it's scheduled and
+  cleared"*. Migration 080.
+
+  **`/api/my-work/:woId/respond`, `/visits` and `/visits/:id/respond` answer a
+  client's work order from your own account.** They re-dispatch to the real
+  work-order and visit routes as your company's contractor leg on the client's
+  account, so every rule those routes carry still applies (the chain's turn,
+  proposing is agreeing, the date when settled). The inner auth rides on the
+  Request object through `ACTING_AS`, a WeakMap: it exists only in the isolate,
+  nothing outside can put a request in it, and a request the inner route makes
+  in turn is a new object and does not inherit it. **No seat is created on the
+  client's account.** Who may: anybody whose seat answers for the company
+  holding the work order. Refused as `not_found`: somebody else's work order,
+  a voided one, an ended engagement, a visit on another job, an account with
+  no company.
+
+  **`ClientWorkPanel` sits on the Dashboard and the Jobs screen** for an
+  account with client work (`ownWork`). It leads with what is waiting, then
+  points at My Jobs for the rest. Every row is the same `JobRequestCard` My
+  Jobs draws, with `actAway`, so Accept, Propose a time and Confirm work in
+  place. The card still says whose job it is and keeps its *Open* door.
+
+  **`crewAction` is the one rule for what a row needs from the crew**: `reply`
+  (an open offer), `confirm` (a time it is their turn to answer) or
+  `arrange` (work taken with no time on it). The panel, My Jobs's *Waiting on
+  you*, the line flags and the nav count all read it. My Jobs's *Waiting on
+  you* now lists `arrange` too, not only `confirm`. **A proposed time that has
+  gone by is still not the crew's item.** The hiring side is asked to put a
+  new one, because asking both sides at once is two proposals.
+
+  **Assigned, time to be arranged, is violet** (`jl-arrange`, `tn-chip
+  arrange`, `jrw-arrange`): on the crew's line, on the manager's Jobs line
+  (*Time to be arranged*) and on the tenant's chip. Amber already means
+  waiting, green means booked and red means wrong; this is none of them.
+  **`ActDot` is the pulsing dot**, on every *Waiting on you* heading and row
+  (manager, crew, tenant), on the crew's action flags and on the My Jobs nav
+  count. It is still for a reader who has asked for less motion.
+
+  **The reminder sweep (`actionReminderSweep`, `shared/remind.js`) runs
+  nightly.** It works out whose move each open job is and emails each person
+  one digest. Moves it covers:
+  - the crew to reply, to propose a time, or to confirm one;
+  - the hiring side to approve a time, to put a new one forward after one
+    passed, or to put somebody on an approved request;
+  - the tenant to confirm, if their own email preference allows.
+
+  It runs on day 1, 2, 4, 7, 11 and 15 from when the wait began. `since` is in
+  the ledger key, so a new proposal restarts the count. **Only the latest step
+  is sent, never a backlog.** The ledger row is written before the send. **It
+  stops after six:** the dashboards keep the dot. From day 4 the hiring side
+  also hears that a crew has not moved. A held, closed or confirmed job gets
+  nothing, because the item no longer exists.
+
+  `test:clientwork` (20), `test:clientworkui` (25), `test:actionremind` (26).
+  Nine mutations fire, each on its own assertion. `test:myworkui`,
+  `test:workwhenui` and `test:visitparty` pinned the old rule (*a row at
+  another client cannot be answered here*) and were rewritten to the new one.
+
+  **Still open:** reminders are email only, never text, and they do not yet
+  cover quote requests, hours sent for approval or milestones to verify.
+  Not verified here: a live email to a real inbox.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -2428,3 +2428,17 @@ CREATE TABLE IF NOT EXISTS job_trade_spans (
   PRIMARY KEY (job_id, trade)
 );
 CREATE INDEX IF NOT EXISTS ix_job_trade_spans_start ON job_trade_spans(start_date);
+
+-- 080. The ledger for "waiting on you" reminder emails; see app/shared/remind.js.
+CREATE TABLE IF NOT EXISTS action_reminders (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL,
+  job_id      TEXT NOT NULL,
+  item_key    TEXT NOT NULL,
+  party       TEXT NOT NULL CHECK (party IN ('contractor', 'manager', 'tenant')),
+  step        INTEGER NOT NULL CHECK (step BETWEEN 1 AND 6),
+  emailed     INTEGER NOT NULL DEFAULT 0,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_action_reminder ON action_reminders(item_key, party, step);
+CREATE INDEX IF NOT EXISTS ix_action_reminders_job ON action_reminders(job_id);

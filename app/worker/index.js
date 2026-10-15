@@ -16,7 +16,9 @@ import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, app
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
-  licenseExpiryEmail } from "./mail.js";
+  licenseExpiryEmail, actionReminderEmail } from "./mail.js";
+import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
+  parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
 import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, smsOverageCents,
   SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS, SMS_OVERAGE_MAX_BLOCKS,
@@ -315,6 +317,16 @@ async function resolveSupabaseUser(env, authHeader) {
   return user;
 }
 
+// ACTING FOR OUR OWN COMPANY ON A CLIENT'S WORK ORDER. The routes under
+// /api/my-work/:woId/* re-dispatch to the real work-order and visit routes as
+// the company's contractor leg on the client's account, so every gate those
+// routes carry still applies and there is one set of rules, not two. The auth
+// for that inner request rides on the Request OBJECT through this WeakMap: it
+// exists only in this isolate, nothing outside can put a request in it, and a
+// request the inner route makes in turn (the auto-scheduler's) is a new
+// object and does not inherit it.
+const ACTING_AS = new WeakMap();
+
 app.use("/api/*", async (c, next) => {
   // A brand logo has to render on the login screen, before anyone is
   // authenticated — so this one route is intentionally public. Never do
@@ -407,6 +419,11 @@ app.use("/api/*", async (c, next) => {
     // hostname, and an uptime monitor can too.
     || c.req.path === "/api/ping"
     || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
+
+  // See ACTING_AS: an inner request made by /api/my-work/:woId/*, whose
+  // outer request was authenticated the ordinary way.
+  const acting = ACTING_AS.get(c.req.raw);
+  if (acting) { c.set("auth", acting); return next(); }
 
   // Staff sitting in a customer's seat. Checked before anything else and
   // taken from the row rather than the request: the caller says which token,
@@ -8193,6 +8210,7 @@ export function missingSchema(err) {
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
+  if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
   if (/\bjob_trade_spans\b/i.test(m)) return "079_job_spans";
   if (/\bpassport(s|_photos|_access)\b|\blicense_reminders\b|ux_passport_|ux_license_reminder/i.test(m)) return "077_passport";
   if (/\bleads\b/i.test(m)) return "076_leads";
@@ -13357,6 +13375,81 @@ app.post("/api/quote-requests/:id/cancel", requireRole("admin", "pm"), async (c)
     if (!missingSchema(err)) throw err;
     return c.json({ error: "migration_needed", migration: "043_quotes" }, 503);
   }
+});
+
+// ANSWERING A CLIENT'S WORK ORDER FROM OUR OWN ACCOUNT. Reported from Cascade:
+// Sound Property Management gave them a tenant's job and it was nowhere on
+// Cascade's own dashboard or Jobs screen, and where it did appear (My Jobs) the
+// only move was "Go to Sound", which needs a seat on Sound that the person
+// running Cascade may well not have. Every answer is a write to the CLIENT's
+// account, so the row could say what was wanted and offer nothing to do it.
+//
+// These three re-dispatch to the real routes as this company's contractor leg
+// on the client account. Who may: anybody whose seat answers for the company
+// holding the work order (an admin or pm of that company's own account, or a
+// contractor seat for it). The work order must be live and the engagement not
+// ended -- ending takes the login away, and this must not hand it back.
+async function clientWorkOrder(c, woId) {
+  const auth = c.get("auth");
+  const companyId = await seatCompany(c);
+  if (!companyId) return { err: c.json({ error: "not_found" }, 404) };
+  const wo = await c.env.DB.prepare(
+    `SELECT w.id, w.job_id, w.company_id, j.account_id
+       FROM work_orders w JOIN jobs j ON j.id = w.job_id
+      WHERE w.id = ? AND w.voided_at IS NULL`
+  ).bind(woId).first();
+  // A work order somebody else holds answers exactly as one that does not
+  // exist, so ids cannot be walked.
+  if (!wo || wo.company_id !== companyId) return { err: c.json({ error: "not_found" }, 404) };
+  const eng = await c.env.DB.prepare(
+    `SELECT status FROM engagements WHERE account_id = ? AND company_id = ? LIMIT 1`
+  ).bind(wo.account_id, companyId).first();
+  if (!eng || eng.status === "ended") return { err: c.json({ error: "not_found" }, 404) };
+  return { wo, as: {
+    userId: auth.userId, accountId: wo.account_id, role: "contractor", companyId,
+    membershipId: null, propertyIds: null, jobIds: null,
+    impersonatedBy: auth.impersonatedBy || null,
+    // Which of our accounts the answer came from, for anything that wants to
+    // tell this apart from a contractor seat on the client account.
+    actingFrom: auth.accountId,
+  } };
+}
+
+async function actAs(c, path, body, as) {
+  let ctx;
+  try { ctx = c.executionCtx; } catch { ctx = undefined; }
+  const req = new Request(new URL(path, c.req.url), {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}),
+  });
+  ACTING_AS.set(req, as);
+  const res = await app.fetch(req, c.env, ctx);
+  return c.json(await res.json().catch(() => ({})), res.status);
+}
+
+app.post("/api/my-work/:woId/respond", async (c) => {
+  const r = await clientWorkOrder(c, c.req.param("woId"));
+  if (r.err) return r.err;
+  const b = await c.req.json().catch(() => ({}));
+  return actAs(c, `/api/work-orders/${r.wo.id}/respond`, { status: b.status }, r.as);
+});
+
+app.post("/api/my-work/:woId/visits", async (c) => {
+  const r = await clientWorkOrder(c, c.req.param("woId"));
+  if (r.err) return r.err;
+  const b = await c.req.json().catch(() => ({}));
+  return actAs(c, `/api/jobs/${r.wo.job_id}/visits`, b, r.as);
+});
+
+app.post("/api/my-work/:woId/visits/:visitId/respond", async (c) => {
+  const r = await clientWorkOrder(c, c.req.param("woId"));
+  if (r.err) return r.err;
+  // The visit must be on the job this work order is for: holding a work order
+  // on one job is not a key to answer times on another.
+  const v = await c.env.DB.prepare(`SELECT job_id FROM visits WHERE id = ?`)
+    .bind(c.req.param("visitId")).first();
+  if (!v || v.job_id !== r.wo.job_id) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  return actAs(c, `/api/visits/${c.req.param("visitId")}/respond`, b, r.as);
 });
 
 app.get("/api/my-work", async (c) => {
@@ -18627,6 +18720,213 @@ async function licenseReminderSweep(env) {
   return { considered: (rows || []).length, sent, skipped };
 }
 
+// "WAITING ON YOU" REMINDERS (080). See app/shared/remind.js for the rules.
+//
+// Works out, for every open job with a live work order, whose move it is --
+// the crew to reply, to say when they can come or to confirm a time; the
+// hiring side to approve a time, put a new one forward after one went by, or
+// put somebody on an approved request; the tenant to confirm -- and emails
+// each person one digest of what is waiting on them. Nothing is stored about
+// the state: the item exists while the job is in it and the sequence ends by
+// itself when it is not. The ledger row is written BEFORE the send.
+async function actionReminderSweep(env, nowMs = Date.now()) {
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  // The ledger first, so a database without 080 skips cleanly.
+  try { await env.DB.prepare(`SELECT 1 FROM action_reminders LIMIT 1`).first(); }
+  catch (err) { if (missingSchema(err)) return { skipped: "080 not migrated" }; throw err; }
+
+  const rowsFor = async (cols) => {
+    const { results } = await env.DB.prepare(
+      `SELECT w.id AS wo_id, w.status, w.auto_scheduled, w.respond_by, w.responded_at, w.issued_at,
+              w.company_id, w.trade, c.company AS company_name,
+              j.id AS job_id, j.account_id, j.title, j.property_id, j.requested_by, j.approved_at,
+              j.status AS job_status, j.withdrawn_at, j.declined_at${cols},
+              a.name AS account_name, a.subdomain, a.hostname_status
+         FROM work_orders w JOIN jobs j ON j.id = w.job_id
+         JOIN companies c ON c.id = w.company_id JOIN accounts a ON a.id = j.account_id
+        WHERE w.voided_at IS NULL AND w.status IN ('pending', 'accepted')
+          AND j.status NOT IN ('completed', 'cancelled')`).all();
+    return results || [];
+  };
+  let wos = null;
+  for (const cols of [", j.access, j.access_user_id", ", j.access", ""]) {
+    try { wos = await rowsFor(cols); break; } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+  wos = wos || [];
+
+  // Jobs, with their ending, and the newest window of any status.
+  const jobs = new Map();
+  for (const r of wos) {
+    if (!jobs.has(r.job_id)) jobs.set(r.job_id, await jobWithEnding(env, { id: r.job_id,
+      account_id: r.account_id, title: r.title, property_id: r.property_id, status: r.job_status,
+      requested_by: r.requested_by, approved_at: r.approved_at, withdrawn_at: r.withdrawn_at,
+      declined_at: r.declined_at, access: r.access ?? null, access_user_id: r.access_user_id ?? null }));
+  }
+  const newestVisit = async (jobId) => env.DB.prepare(
+    `SELECT * FROM visits WHERE job_id = ? AND status <> 'superseded'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(jobId).first().catch(() => null);
+
+  const items = [];
+  const push = (it) => items.push(it);
+  const seenVisit = new Set();
+  for (const r of wos) {
+    const job = jobs.get(r.job_id);
+    if (!job || !jobIsLive(job, today) || job.withdrawn_at || job.declined_at) continue;
+    if (job.requested_by && !job.approved_at) continue;
+    const base = { jobId: r.job_id, accountId: r.account_id, title: r.title,
+      accountName: r.account_name, companyId: r.company_id, companyName: r.company_name, job,
+      account: { id: r.account_id, name: r.account_name, subdomain: r.subdomain, hostname_status: r.hostname_status } };
+    if (r.status === "pending" && !r.auto_scheduled) {
+      if (r.respond_by && parseWhen(r.respond_by) <= nowMs) continue;
+      const since = r.issued_at;
+      push({ ...base, party: "contractor", reason: "reply", subject: r.wo_id, since });
+      push({ ...base, party: "manager", reason: "chase", chaseOf: "reply", subject: r.wo_id, since, escalate: true });
+      continue;
+    }
+    const v = await newestVisit(r.job_id);
+    const live = v && (v.status === "proposed" || v.status === "confirmed") ? v : null;
+    if (!live) {
+      // Taken, and nobody is booked to go. The clock restarts from the last
+      // window that died, if one did.
+      const since = latestOf(r.responded_at, r.issued_at, v?.created_at);
+      push({ ...base, party: "contractor", reason: "arrange", subject: r.wo_id, since });
+      push({ ...base, party: "manager", reason: "chase", chaseOf: "arrange", subject: r.wo_id, since, escalate: true });
+      continue;
+    }
+    if (live.status !== "proposed" || seenVisit.has(live.id)) continue;
+    seenVisit.add(live.id);
+    const win = visitWhen(live);
+    if (windowSurelyPast(live.date, today)) {
+      push({ ...base, party: "manager", reason: "repropose", subject: live.id, since: `${live.date}T23:59:59Z`, win });
+      continue;
+    }
+    let parties = windowParties(await partiesFor(env, job), { byTenant: tenantProposed(live, job) });
+    if (!Object.prototype.hasOwnProperty.call(live, "contractor_at")) parties = parties.filter((pp) => pp !== "contractor");
+    if (!Object.prototype.hasOwnProperty.call(live, "manager_at")) parties = parties.filter((pp) => pp !== "manager");
+    const turn = nextToAnswer(live, parties);
+    if (!turn) continue;
+    const since = latestOf(live.created_at, live.contractor_at, live.manager_at, live.responded_at);
+    push({ ...base, party: turn, reason: "confirm", subject: live.id, since, win });
+    if (turn === "contractor") {
+      push({ ...base, party: "manager", reason: "chase", chaseOf: "confirm", subject: live.id, since, escalate: true });
+    }
+  }
+
+  // Approved requests with a trade nobody is on: the person who asked is
+  // waiting on the hiring side.
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT j.id, j.account_id, j.title, j.trades, j.approved_at, j.requested_by, j.status,
+              u.name AS asker, a.name AS account_name, a.subdomain, a.hostname_status
+         FROM jobs j JOIN accounts a ON a.id = j.account_id LEFT JOIN users u ON u.id = j.requested_by
+        WHERE j.requested_by IS NOT NULL AND j.approved_at IS NOT NULL
+          AND j.status NOT IN ('completed', 'cancelled') AND j.withdrawn_at IS NULL`).all();
+    for (const j of results || []) {
+      const trades = parseJson(j.trades, []) || [];
+      if (!trades.length) continue;
+      const { results: held } = await env.DB.prepare(
+        `SELECT DISTINCT trade FROM work_orders WHERE job_id = ? AND voided_at IS NULL AND status <> 'declined'`)
+        .bind(j.id).all();
+      const have = new Set((held || []).map((x) => x.trade));
+      if (trades.every((t) => have.has(t))) continue;
+      const job = await jobWithEnding(env, { id: j.id, status: j.status });
+      if (!jobIsLive(job, today)) continue;
+      push({ jobId: j.id, accountId: j.account_id, title: j.title, accountName: j.account_name,
+        account: { id: j.account_id, name: j.account_name, subdomain: j.subdomain, hostname_status: j.hostname_status },
+        party: "manager", reason: "assign", subject: j.id, since: j.approved_at,
+        tenantName: j.asker ? String(j.asker).split(" ")[0] : null });
+    }
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
+  // Which items are due tonight, written to the ledger before anything goes.
+  const due = [];
+  for (const it of items) {
+    if (!it.since) continue;
+    const key = itemKey(it);
+    const { results: prior } = await env.DB.prepare(
+      `SELECT step FROM action_reminders WHERE item_key = ? AND party = ?`).bind(key, it.party).all();
+    const step = dueStep(it.since, nowMs, (prior || []).map((x) => x.step),
+      it.escalate ? ESCALATE_AFTER_HOURS : REMIND_AFTER_HOURS);
+    if (!step) continue;
+    try {
+      await env.DB.prepare(
+        `INSERT INTO action_reminders (id, account_id, job_id, item_key, party, step) VALUES (?, ?, ?, ?, ?, ?)`)
+        .bind(uid(), it.accountId, it.jobId, key, it.party, step).run();
+    } catch (err) {
+      if (/UNIQUE constraint failed/i.test(String(err?.message || err))) continue;
+      throw err;
+    }
+    due.push({ ...it, key, step, line: reminderLine(it, nowMs) });
+  }
+
+  // Who each item goes to. One digest per address and account.
+  const people = new Map();
+  const add = (email, name, account, it) => {
+    const to = realEmail(email);
+    if (!to) return;
+    const k = `${to.toLowerCase()}|${account.id}`;
+    if (!people.has(k)) people.set(k, { to, name, account, items: [] });
+    const p = people.get(k);
+    if (!p.items.some((x) => x.key === it.key && x.party === it.party)) p.items.push(it);
+  };
+  for (const it of due) {
+    if (it.party === "contractor") {
+      // The company's own account, if it has one, is where they answer from.
+      const own = await env.DB.prepare(
+        `SELECT id, name, subdomain, hostname_status FROM accounts WHERE company_id = ?`).bind(it.companyId).first()
+        .catch(() => null);
+      let any = false;
+      if (own) {
+        const { results } = await env.DB.prepare(
+          `SELECT u.name, u.email FROM memberships m JOIN users u ON u.id = m.user_id
+            WHERE m.account_id = ? AND m.role IN ('admin', 'pm')`).bind(own.id).all();
+        for (const u of results || []) { add(u.email, u.name, own, it); any = true; }
+      }
+      const { results: seats } = await env.DB.prepare(
+        `SELECT u.name, u.email FROM memberships m JOIN users u ON u.id = m.user_id
+          WHERE m.account_id = ? AND m.role = 'contractor' AND m.company_id = ?`).bind(it.accountId, it.companyId).all();
+      for (const u of seats || []) { add(u.email, u.name, it.account, it); any = true; }
+      if (!any) {
+        const co = await env.DB.prepare(`SELECT contact, email FROM companies WHERE id = ?`).bind(it.companyId).first();
+        if (co?.email) add(co.email, co.contact, own || it.account, it);
+      }
+    } else if (it.party === "manager") {
+      const { results } = await env.DB.prepare(
+        `SELECT m.id AS mid, m.role, u.name, u.email FROM memberships m JOIN users u ON u.id = m.user_id
+          WHERE m.account_id = ? AND m.role IN ('admin', 'pm')`).bind(it.accountId).all();
+      for (const u of results || []) {
+        if (u.role === "pm" && it.job?.property_id) {
+          const scope = await propertyScope(env.DB, { id: u.mid, role: "pm" });
+          if (scope && !scope.includes(it.job.property_id)) continue;
+        }
+        add(u.email, u.name, it.account, it);
+      }
+    } else if (it.party === "tenant") {
+      const who = accessTenant(it.job);
+      const user = who ? await env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(who).first() : null;
+      const prefs = notifyOf(user);
+      if (user && prefs.email && prefs.statusChanges) add(user.email, user.name, it.account, it);
+    }
+  }
+
+  let sent = 0;
+  for (const p of people.values()) {
+    const mail = actionReminderEmail({ firstName: String(p.name || "").split(" ")[0],
+      lines: p.items.map((x) => x.line), link: `${accountOrigin(p.account)}/`, fromName: p.account.name });
+    const result = await sendEmail(env, { to: p.to, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(env, { accountId: p.account.id, to: p.to, kind: "action_reminder",
+      subject: mail.subject, result, sentBy: null });
+    if (result.ok) {
+      sent++;
+      for (const x of p.items) {
+        await env.DB.prepare(`UPDATE action_reminders SET emailed = 1 WHERE item_key = ? AND party = ? AND step = ?`)
+          .bind(x.key, x.party, x.step).run();
+      }
+    }
+  }
+  return { items: items.length, due: due.length, people: people.size, sent };
+}
+
 // ---------------------------------------------------------------------------
 // Growth sweeps. Both are nightly, both are idempotent, and both write their
 // own suppression before they send -- a sweep that cannot be run twice safely
@@ -18820,6 +19120,11 @@ app.get("/api/cron/doc-expiry", async (c) => {
 app.get("/api/cron/license-reminders", async (c) => {
   if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await licenseReminderSweep(c.env));
+});
+
+app.get("/api/cron/action-reminders", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await actionReminderSweep(c.env));
 });
 
 app.get("/api/cron/license-sweep", async (c) => {
@@ -23389,7 +23694,7 @@ export default {
          ["doc-expiry", docExpirySweep], ["license-reminders", licenseReminderSweep],
          ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
-         ["referrals", referralSweep]]
+         ["referrals", referralSweep], ["action-reminders", actionReminderSweep]]
       : [["hostnames", hostnameSweep]];
 
     ctx.waitUntil((async () => {

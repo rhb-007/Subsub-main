@@ -1175,3 +1175,29 @@ This is an automated message from an unmonitored address. Replies aren't receive
     text, html: textToHtml(text, link),
   };
 }
+
+// 080. Everything waiting on one person, in one email. Sent nightly while an
+// item stands (see app/shared/remind.js), so a crew with three jobs to time
+// gets one message rather than three, and the subject says how many.
+export function actionReminderEmail({ firstName, lines = [], link, fromName }) {
+  const n = lines.length;
+  const text = `Hi ${firstName || "there"},
+
+${n === 1 ? "This is waiting on you:" : `These ${n} things are waiting on you:`}
+
+${lines.map((l) => `  - ${l}`).join("\n")}
+
+Nothing moves until it is answered, and the people on the other side can see
+that it is waiting. Answer it here:
+  ${link}
+
+-- ${fromName || "SubSub"}
+
+You'll get a reminder like this for a few days while something is waiting on
+you; it stops by itself once it is answered. This is an automated message from
+an unmonitored address. Replies aren't received.`;
+  const subject = n === 1
+    ? `Waiting on you: ${lines[0].replace(/\s*\(waiting \d+ days?\)\.?$/, "").slice(0, 90)}`
+    : `${n} things are waiting on you`;
+  return { subject, text, html: textToHtml(text, link) };
+}

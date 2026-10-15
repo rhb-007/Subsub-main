@@ -19,6 +19,44 @@ The standing rules, from `CLAUDE.md`:
 
 ---
 
+## 080 — Client work on your own screens, and "waiting on you" reminder emails
+
+Work another account gives you now shows on your own **Dashboard** and
+**Jobs** screen, in a *Work from your clients* panel. It is answered there
+(accept, propose a time, confirm one) without switching accounts. Work
+assigned with no time on it is drawn in its own violet, apart from scheduled
+work, and everything waiting on somebody carries a pulsing dot. A nightly
+sweep emails whoever a job is waiting on, on day 1, 2, 4, 7, 11 and 15, and
+stops once it is answered. From day 4 the hiring side also hears when a crew
+has not moved.
+
+### 1. Paste migration 080
+
+`npm run paste 80`. It is one table (`action_reminders`) and is safe to run
+twice. Until it is pasted, the screens all work and the reminder emails are
+skipped.
+
+### 2. Run CHECK.sql
+
+`m080_action_reminders` and `m080_action_reminder_unique` should read `ok`.
+
+### 3. Nothing to configure
+
+The sweep rides the existing nightly cron (3am UTC) and sends through the same
+Resend settings as every other email. `GET /api/cron/action-reminders` with the
+cron secret runs it by hand.
+
+### Not verified here
+
+A live email to a real inbox. The suite drives the sweep against a stubbed
+mail provider.
+
+### Tests
+
+`test:clientwork`, `test:clientworkui`, `test:actionremind`.
+
+---
+
 ## 077 — The Sub Passport: a free public page a sub hands out
 
 Every company that can be hired (a subcontractor account, a general contractor,

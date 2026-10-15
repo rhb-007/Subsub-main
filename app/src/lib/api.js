@@ -707,6 +707,12 @@ export const api = {
   // Every slot assigned to us, at every client. The portal's job list and its
   // badge both used to read /api/jobs, which is one account at a time.
   myWork: () => request("/my-work"),
+  // Answering a client's work order from our OWN account: the server checks
+  // the work order is held by this account's company and acts on it there,
+  // so nobody has to switch account to say yes, propose a time or confirm one.
+  respondMyWork: (woId, status) => request(`/my-work/${woId}/respond`, { method: "POST", body: JSON.stringify({ status }) }),
+  proposeMyWork: (woId, body) => request(`/my-work/${woId}/visits`, { method: "POST", body: JSON.stringify(body) }),
+  answerMyWork: (woId, visitId, body) => request(`/my-work/${woId}/visits/${visitId}/respond`, { method: "POST", body: JSON.stringify(body) }),
   // Asking your own roster to price a trade before you commit to anybody.
   jobQuoteRequests: (jobId) => request(`/jobs/${encodeURIComponent(jobId)}/quote-requests`),
   askForQuotes: (jobId, body) => request(`/jobs/${encodeURIComponent(jobId)}/quote-requests`,
