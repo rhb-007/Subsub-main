@@ -12567,6 +12567,27 @@ refactor.
   `test:propdetaillinks` (18). Three mutations fire: the filter not seeded,
   the narrowing never cleared, and the run-by-another gate dropped.
 
+- **GMV IN THE CONSOLE WAS A HUNDRED TIMES TOO LARGE.** Reported with Sound
+  Property Management's account window open and *$420,000 GMV to date*
+  circled: *"How is this GMV number getting calculated"*. GMV is the value of
+  every **accepted** work order on the account's jobs; pending offers,
+  declined ones and voided ones do not count. The bootstrap sends each value
+  as `work_orders.value_cents`, and the console ran it through `moneyRaw` and
+  multiplied by 100, which is what a dollar string needs. So $4,200 of work
+  drew as $420,000 on the account window, the dashboard line, Revenue and
+  every period tile. It is the cents-as-dollars mistake `formatCents` was
+  named to stop, on the screen nobody had tested. `jobGmvCents` is the one
+  helper now, read by the account rows and `metricsFor`.
+
+  `test:consolegmv` draws all three places against accepted, pending and
+  declined work orders. Putting the old arithmetic back reproduces the
+  screenshot's $420,000 and fails three assertions; counting a pending offer
+  fails the same three.
+
+  **Still open, and not changed here:** the MRR tile beside it reads $83 on a
+  comped account, because `mrrOf` reads the plan and not `comped`. That is the
+  standing decision recorded under the console entry above.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

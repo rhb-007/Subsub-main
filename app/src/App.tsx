@@ -9448,6 +9448,15 @@ function SuperadminLogin({ onLogin }) {
 // A separate surface, not a role inside the tenant app. Five screens:
 // Accounts, Account detail, Companies, Revenue, Health.
 const fmtC = (cents) => "$" + (Math.round(cents) / 100).toLocaleString("en-US", { maximumFractionDigits: 0 });
+// GMV: the value of every accepted work order on a job. The console bootstrap
+// sends work_orders.value_cents as "value", so it is CENTS already. This used
+// to run it through moneyRaw and multiply by 100, which is what a dollar
+// string needs, so every GMV figure in the console read 100 times too large:
+// $4,200 of work showed as $420,000. One helper, so the account row and the
+// period tiles cannot disagree about the unit.
+const jobGmvCents = (j) => Object.values(j.assignments || {})
+  .filter((x) => x.status === "accepted")
+  .reduce((m, x) => m + (Math.round(Number(x.value)) || 0), 0);
 const monthKey = (iso) => (iso || "").slice(0, 7);
 
 function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
@@ -9518,9 +9527,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     const engs = engagements.filter((e) => e.accountId === a.id);
     const js = jobs.filter((j) => j.accountId === a.id);
     const jobsMo = js.filter((j) => monthKey(j.createdAt) === thisMonth).length;
-    const gmv = js.reduce((n, j) => n + Object.values(j.assignments || {})
-      .filter((x) => x.status === "accepted" || x.auto)
-      .reduce((m, x) => m + Number(moneyRaw(x.value) || 0) * 100, 0), 0);
+    const gmv = js.reduce((n, j) => n + jobGmvCents(j), 0);
     const cur = PLANS[a.plan] || PLANS.basic;
     const atLimit = a.plan === "basic" && (engs.length >= cur.limit || jobsMo >= cur.jobsPerMonth);
     return { a, users: mems.length, subs: engs.length, jobsMo, gmv, mrr: mrrOf(a), atLimit,
@@ -9738,9 +9745,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
   // GMV is per job, not per subscription event, so it is filtered rather
   // than accumulated. Same acceptance rule the per-account figure uses.
-  const jobGmv = (j) => Object.values(j.assignments || {})
-    .filter((x) => x.status === "accepted" || x.auto)
-    .reduce((m, x) => m + Number(moneyRaw(x.value) || 0) * 100, 0);
+  const jobGmv = jobGmvCents;
 
   // Everything a period is judged on, for any window. Both sections of the
   // dashboard call this, which is what makes them comparable.
