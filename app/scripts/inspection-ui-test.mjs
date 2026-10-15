@@ -654,7 +654,7 @@ try {
       const bad = await read(page);
       t.ck("a refused rewrite keeps the paragraph that is there", bad?.text === PARA, bad?.text);
       t.ck("and says why, in SubSub's own words",
-        /Couldn't reach the summarising service/i.test(bad?.err || ""), bad?.err);
+        /Couldn't reach the summarizing service/i.test(bad?.err || ""), bad?.err);
       // AND THE TWO MESSAGES ARE NOT ONE COLOUR. Both are on screen here, so
       // this is the only state either can be compared against the other in --
       // a check with one of them absent passes whatever the colours are.

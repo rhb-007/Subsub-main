@@ -299,14 +299,14 @@ try {
   {
     const can = await cardOf(page, "Repaint the lobby");
     t.ck("the cancelled card is there", !can.missing, can.phase);
-    t.ck("a cancelled job says cancelled", /^cancelled$/i.test(can.phase), can.phase);
+    t.ck("a cancelled job says canceled", /^canceled$/i.test(can.phase), can.phase);
     // A cancellation with no words on the card is indistinguishable from a
     // mis-press.
     t.ck("and carries the reason somebody typed",
       /fixed privately/.test(can.why), can.why);
     t.ck("its slot offers nothing either", can.slotBtns.length === 0, JSON.stringify(can.slotBtns));
-    t.ck("and says it is cancelled, not on hold",
-      /cancelled/i.test(can.shut) && !/on hold/i.test(can.shut), can.shut);
+    t.ck("and says it is canceled, not on hold",
+      /canceled/i.test(can.shut) && !/on hold/i.test(can.shut), can.shut);
   }
   {
     // THE LAPSED HOLD IS LIVE AGAIN, which is what makes the date mean

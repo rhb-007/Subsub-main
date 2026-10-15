@@ -1334,7 +1334,7 @@ function licenseOk(sub) {
 // is the wrong advice for most of these.
 function licenseVerifyErrText(err) {
   const code = err?.body?.error || (err?.status ? String(err.status) : "no_connection");
-  if (code === "no_license_on_file") return "There is no licence number on file. Add it with Edit, then verify.";
+  if (code === "no_license_on_file") return "There is no license number on file. Add it with Edit, then verify.";
   if (code === "impersonation_expired") return "Your staff sign-in has run out, so nothing was checked. Sign in to this account again from the console.";
   if (code === "401" || code === "unauthorized") return "You have been signed out, so nothing was checked. Sign in again, then verify.";
   if (code === "403" || code === "forbidden") return "Only an admin or a project manager can run this check.";
@@ -3625,7 +3625,7 @@ export default function SubSub() {
       console.error("[persist] updateSub refused:", err);
       const who = allSubs.find((x) => x.id === sub.id)?.company || "This contractor";
       setSubSaveErr(err?.body?.error === "company_not_yours"
-        ? `${who} answers for their own record — their name, contact, licence and crews are theirs to change, not yours. Nothing was saved. Close and reopen this form and it will show you the part that is yours.`
+        ? `${who} answers for their own record — their name, contact, license and crews are theirs to change, not yours. Nothing was saved. Close and reopen this form and it will show you the part that is yours.`
         : "That did not save. Try again in a moment.");
     }
   };
@@ -5112,7 +5112,7 @@ export default function SubSub() {
     if (msg) {
       setEntryErr(msg.startsWith("Your login works")
         ? msg + " If you were invited, check it was this email address — an "
-          + "invite sent to a different address won't recognise this one."
+          + "invite sent to a different address won't recognize this one."
         : msg);
     }
   };
@@ -5226,7 +5226,7 @@ export default function SubSub() {
     const outcome = new URLSearchParams(window.location.search).get("billing");
     if (!outcome) return;
     window.history.replaceState(null, "", window.location.pathname);
-    if (outcome === "cancelled") { setBillingNote("Checkout cancelled — nothing was charged."); return; }
+    if (outcome === "cancelled") { setBillingNote("Checkout canceled — nothing was charged."); return; }
     setBillingNote("Payment received. Your plan updates in a moment.");
     const t = setTimeout(() => { resumeSession(); setBillingNote(""); }, 4000);
     return () => clearTimeout(t);
@@ -10784,7 +10784,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 grid, which on an iPad was off the screen entirely -- the
                 window holds both where the press was made. */}
             <FilterBar q={coFilters.q} onQ={(q) => setCoFilters((f) => ({ ...f, q }))}
-              placeholder="Search company, contact, email, licence…"
+              placeholder="Search company, contact, email, license…"
               shown={shownCompanies.length + shownInvites.length} total={compRows.length + inviteRows.length}
               onClear={() => setCoFilters(EMPTY_CO_FILTERS)}
               filters={[
@@ -10800,7 +10800,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 { id: "login", label: "Logins", all: "Any login", value: coFilters.login,
                   onChange: (v) => setCoFilters((f) => ({ ...f, login: v })),
                   options: [["yes", "Somebody signed in"], ["no", "No login"]] },
-                { id: "lic", label: "Licences", value: coFilters.lic,
+                { id: "lic", label: "Licenses", value: coFilters.lic,
                   onChange: (v) => setCoFilters((f) => ({ ...f, lic: v })),
                   options: [["issue", "Failing check"], ["ok", "Active"], ["none", "Not checked"]] },
                 { id: "status", label: "Statuses", value: coFilters.status,
@@ -10850,7 +10850,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                     </span>
                     <span className="pf-row-figs">
                       <span><b>{r.accts.length}</b> account{r.accts.length === 1 ? "" : "s"}</span>
-                      <span className="pf-row-lic">{r.c.license || "no licence"}</span>
+                      <span className="pf-row-lic">{r.c.license || "no license"}</span>
                     </span>
                     <ChevronRight size={16} className="pf-row-chev" />
                   </button>
@@ -12345,7 +12345,7 @@ function CompPanel({ account, onSave }) {
       <h3>{on ? "Complimentary account" : "Give this account Scale for free"}</h3>
       <p className="pf-note">
         {on
-          ? "Scale features, nothing billed. This outranks Stripe: a failed card or a cancelled trial will not take it away."
+          ? "Scale features, nothing billed. This outranks Stripe: a failed card or a canceled trial will not take it away."
           : "Grants every Scale feature and charges nothing. It survives Stripe, adds nothing to MRR, and is recorded against your name."}
       </p>
 
@@ -14942,7 +14942,7 @@ function TenantReportModal({
             {confirmWithdraw ? (
               <div className="tn-edit">
                 <p className="tn-visit-q">Take this report back? Nobody has been booked for it yet,
-                  so nothing is cancelled. You can always report it again.</p>
+                  so nothing is canceled. You can always report it again.</p>
                 <textarea rows={2} value={withdrawNote} onChange={(e) => setWithdrawNote(e.target.value)}
                   placeholder="Why? (optional) — e.g. it fixed itself, or it's no longer a problem" />
                 {err && <p className="billing-err" role="alert">{err}</p>}
@@ -18000,7 +18000,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
             {/* SAID, not merely done. A form that silently asks for less than
                 somebody expected reads as a form that is still loading. */}
             {applyHandyman && (
-              <p className="wl-fine">No contractor licence needed — {brand.name} has
+              <p className="wl-fine">No contractor license needed — {brand.name} has
                 asked you in for maintenance work.</p>
             )}
           </>
@@ -18153,7 +18153,7 @@ function BecomeHiring({ account, onCancel, onConfirm }) {
       </p>
       <p className="bh-keep">
         <strong>Nothing you have set up changes, and there is nothing to pay.</strong> Your
-        documents, your licence, your QR code and every compliance pack you have already sent stay
+        documents, your license, your QR code and every compliance pack you have already sent stay
         exactly as they are — you can still be hired, and the contractors holding your link keep
         seeing it stay current.
       </p>
@@ -18413,7 +18413,7 @@ function ScannedPanel({ scanned, onConnect, onOpenExisting, onClose }) {
         <>
           <p className="panel-note">
             They are already set up, so there is nothing to fill in. Their trades, crews,
-            coverage, insurance and licence come with them. Ask, and they accept on their
+            coverage, insurance and license come with them. Ask, and they accept on their
             own phone.
           </p>
           {err && <p className="cov-hint" role="alert">{err}</p>}
@@ -19044,7 +19044,7 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
               see. Not a warning -- a description. */}
           {isHandyman(relAs) && (
             <p className="fld-note">
-              Their signup form won't ask for a contractor licence, and it will
+              Their signup form won't ask for a contractor license, and it will
               offer the lighter trades only. You can change this until they accept.
             </p>
           )}
@@ -19060,7 +19060,7 @@ function InviteLinks({ onSent, onClose, onConnect, onOpenExisting, subs = [], in
           {/* Said here because the field looks like a search box and is not
               one. Somebody typed a name, watched nothing happen, and
               reasonably reported it as broken. */}
-          <span className="fld-note">we check your own contractors — SubSub is matched on the email, mobile or licence below</span>
+          <span className="fld-note">we check your own contractors — SubSub is matched on the email, mobile or license below</span>
           <input value={companyName} maxLength={160} placeholder="Cascade Roofworks"
             onChange={(e) => { setCompanyName(e.target.value); setErr(""); }}
             onKeyDown={(e) => { if (e.key === "Enter" && canSend && !busy) create(); }} />
@@ -20391,7 +20391,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
       </div>
 
       {plan.scopeKind === "labor_only" && (
-        <p className="cov-hint"><Check size={12} /> Labour only — you supplied the materials, so
+        <p className="cov-hint"><Check size={12} /> Labor only — you supplied the materials, so
           there is no supplier chain to clear on this one.</p>
       )}
 
@@ -21078,7 +21078,7 @@ function SettleRelease({ release, mode = "record", money, onClose, onDone }) {
             {chain.through ? <> through {niceDay(chain.through)}</> : null}
             {chain.lowerTierTotal
               ? <> · {chain.lowerTierSigned} of {chain.lowerTierTotal} below them signed</>
-              : chain.laborOnly ? <> · labour only, nobody below them</> : null}
+              : chain.laborOnly ? <> · labor only, nobody below them</> : null}
           </p>
         ) : (
           <div className="cx-found" role="status">
@@ -22026,7 +22026,7 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
     } catch (e) {
       console.error("[my-company] save failed:", e);
       setErr(e?.body?.error === "license_taken"
-        ? "That licence number is already on another company here. Check the digits."
+        ? "That license number is already on another company here. Check the digits."
         : e?.body?.error === "invalid_email" ? "That email address doesn't look right."
         : e?.body?.error === "invalid_phone" ? "That mobile number doesn't look right."
         : e?.body?.error === "name_required" ? "A company name is needed — it's what people see."
@@ -22089,7 +22089,7 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               <strong>Available to be hired as a subcontractor</strong>
               <span>
                 {openHire
-                  ? "Another general contractor who already has your email, mobile or licence number can find you and ask to work with you. You still decide."
+                  ? "Another general contractor who already has your email, mobile or license number can find you and ask to work with you. You still decide."
                   : "Off. Nobody can look you up and ask \u2014 your QR code still works, because handing somebody that is you asking them."}
               </span>
             </div>
@@ -22101,7 +22101,7 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
           {openHire && <div className={`hire-state ${loaded?.findable ? "on" : "off"}`}>
             {loaded?.findable
               ? <><CheckCircle2 size={15} /> <span>Another contractor can find you by the details below.</span></>
-              : <><AlertTriangle size={15} /> <span>Nobody can find you yet. Add an email, a mobile or a licence
+              : <><AlertTriangle size={15} /> <span>Nobody can find you yet. Add an email, a mobile or a license
                   number — those are the three things a search matches on.</span></>}
           </div>}
 
@@ -22118,7 +22118,7 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
                 placeholder="(206) 555-0100" /></label>
           </div>
           <div className="fld-row fld-nums">
-            <label className={`fld ${isLit("license") ? "lit" : ""}`}>Licence number
+            <label className={`fld ${isLit("license") ? "lit" : ""}`}>License number
               <input value={f.license} onChange={(e) => set("license", e.target.value)} placeholder="RAINIRR891QZ" /></label>
             <label className={`fld ${isLit("ubi") ? "lit" : ""}`}>UBI <span className="fld-note">optional</span>
               <input value={f.ubi} onChange={(e) => set("ubi", e.target.value)} placeholder="601 234 567" /></label>
@@ -27165,7 +27165,7 @@ function PostOverflow({ job, trade, onPost, onCancel }) {
       <div className="notify-note">
         <Zap size={13} />
         This goes to contractors who cover this trade and opted in — good ratings, time
-        on SubSub, current documents, verified licence. You'll see whoever answers.
+        on SubSub, current documents, verified license. You'll see whoever answers.
         Nobody gets a list of anybody.
       </div>
 
@@ -28547,7 +28547,7 @@ function DocPack({ token }) {
           <div className={`pack-lic ${p.licenseVerified ? "ok" : ""}`}>
             {p.licenseVerified ? <ShieldCheck size={15} /> : <FileText size={15} />}
             <span>
-              Licence {p.license}
+              License {p.license}
               {p.licenseVerified
                 ? ` · verified against the state registry${p.licenseCheckedAt ? ` on ${packDay(p.licenseCheckedAt)}` : ""}`
                 : ""}
@@ -28699,7 +28699,7 @@ const PASSPORT_AFTER_LOGIN = "ss_after_login";
 
 function PassportShare({ url, name, compact = false }) {
   const [copied, setCopied] = useState(false);
-  const text = `${name} on SubSub: licence, insurance and work in one place. ${url}`;
+  const text = `${name} on SubSub: license, insurance and work in one place. ${url}`;
   const copy = async () => {
     try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
     catch { setCopied(false); }
@@ -34759,7 +34759,7 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
             <span className="cx-sub rq-note">
               <b>{subdomain}.subsub.work isn't live yet.</b> Until it is, this
               code goes to your sign up form at a SubSub address — the form is
-              still yours, with your name, colours and mark on it, but the
+              still yours, with your name, colors and mark on it, but the
               address bar says SubSub. It switches to your own address on its
               own once the hostname is ready.
             </span>
@@ -34948,10 +34948,10 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
               would be lying by omission. */}
           <p className="embed-note">
             {themed
-              ? <>The button and the focus ring use <b>your branding colours</b>. This is a
+              ? <>The button and the focus ring use <b>your branding colors</b>. This is a
                   copy, so if you change them, paste the form again &mdash; what is already on
-                  your site keeps the colours it was copied with.</>
-              : <>The button uses SubSub&rsquo;s green. Your own colours come with Scale, and
+                  your site keeps the colors it was copied with.</>
+              : <>The button uses SubSub&rsquo;s green. Your own colors come with Scale, and
                   the form works exactly the same either way.</>}
           </p>
           <p className="embed-note">
@@ -38150,8 +38150,8 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
         <p className="form-sub">First — are they already on SubSub?</p>
         <p className="cx-gate-lede">
           If they are, there is nothing to fill in: their trades, crews, coverage,
-          insurance and licence come with them, kept current by them. An email,
-          a mobile or a licence number finds them.
+          insurance and license come with them, kept current by them. An email,
+          a mobile or a license number finds them.
         </p>
 
         {/* THE THIRD ANSWER, which this screen did not have: they are standing
@@ -38335,7 +38335,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
           ) : (
             <>
               <p className="cx-found-note">
-                Nothing to fill in. Their trades, crews, coverage, insurance and licence come with
+                Nothing to fill in. Their trades, crews, coverage, insurance and license come with
                 them, kept current by them. Ask to connect and they decide.
               </p>
               {connectErr && <p className="cov-hint" role="alert">{connectErr}</p>}
@@ -38374,7 +38374,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
         aria-expanded={moreOpen}>
         <ChevronDown size={14} className={`sf-more-chev ${moreOpen ? "open" : ""}`} />
         More details
-        <span className="fld-note">licence, addresses, rating — all optional</span>
+        <span className="fld-note">license, addresses, rating — all optional</span>
       </button>
       {moreOpen && (<>
       <div className="fld-row">
@@ -38464,7 +38464,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
         <div className="doc-block">
           <AlertTriangle size={15} />
           <div><strong>{existing.company} keeps their own details.</strong> Their contact,
-            licence, crews, coverage and documents belong to their account and are the same
+            license, crews, coverage and documents belong to their account and are the same
             for everybody who hires them — so they are not yours to change here. What is
             yours is below: the trades you use them for, the buildings you scope them to and
             your own notes.</div>
@@ -38480,7 +38480,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
         <div className="doc-block doc-block-staff">
           <Shield size={15} />
           <div><strong>You are editing {existing.company}'s own record.</strong> They answer
-            for themselves, so their contact, licence, crews and coverage are the same for
+            for themselves, so their contact, license, crews and coverage are the same for
             every account that hires them — a correction here changes it for all of them.
             It is recorded against your name.</div>
         </div>

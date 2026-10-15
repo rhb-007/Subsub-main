@@ -7592,7 +7592,7 @@ async function storeLead(env, { email, tool, state, detail, refCode }) {
   // Told to a person, because a lead nobody hears about is a row in a table.
   const to = String(env.LEADS_EMAIL || "").trim();
   if (to) {
-    const subject = `[Lead] ${tool === "check" ? "Licence check" : "Handyman limits"} · ${state || "no state"} · ${email}`;
+    const subject = `[Lead] ${tool === "check" ? "License check" : "Handyman limits"} · ${state || "no state"} · ${email}`;
     const text = [`${email} used ${tool === "check" ? "subsub.work/check" : "subsub.work/handyman-limits"}.`,
       `State: ${state || "—"}`, `Asked: ${JSON.stringify(detail || {})}`,
       refCode ? `Arrived on referral code ${refCode}.` : ""].filter(Boolean).join("\n");

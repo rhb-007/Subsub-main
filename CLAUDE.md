@@ -12507,6 +12507,25 @@ refactor.
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
   `app/worker/index.js` (Hono on Cloudflare Workers + D1 + R2), and the
   marketing site is at the repo root.
+- **AMERICAN ENGLISH, EVERYWHERE A PERSON READS IT — AND IN EVERY MESSAGE TO
+  THE OWNER.** Asked for in so many words: *"Use American English not British -
+  even when talking to me. Color not colour."* So: color, gray, license,
+  canceled, labor, center, summarize, recognize, judgment, curb, check (not
+  cheque), and sizes in inches and feet. That covers screen copy, emails, texts,
+  the AI prompts (photodraft and inspectsummary now say so, and give their
+  example sizes in inches), commit messages, CLAUDE.md entries written from here
+  on, and every reply in chat.
+
+  **Three things deliberately keep the British spelling, and they are not
+  oversights.** Stored values: `status = 'cancelled'` and every other enum in
+  the database, because a renamed value is a migration and an invariant, not a
+  spelling fix. Data keys and identifiers: `baseline.licence`,
+  `LICENCE_LEVELS`, `summariseInspection`. And **signed documents**: the
+  subcontractor agreement moved to **1.2.0**, which is spelling only, and 1.1.0
+  is frozen in `agreement-v1-1-0.js` with a hard-coded hash beside 1.0.0's,
+  because "licence" is what was signed under it. Also `/?billing=cancelled`,
+  which is a URL the app reads back. Older comments are left as they are.
+
 - **RUN `npm run lint` BEFORE COMMITTING ANYTHING UNDER `app/`, and check the
   run went green after pushing.** All three deploy workflows run it before they
   build, so a lint error is not a failing test — it is a release that does not

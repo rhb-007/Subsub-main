@@ -458,7 +458,7 @@ try {
     t.ck("handyman becomes the pressed one", (after?.on || [])[0] === "Handyman", JSON.stringify(after?.on));
     t.ck("and the trade grid gets shorter", after.trades > 0 && after.trades < all,
       `${all} -> ${after.trades}`);
-    t.ck("and the note now says a handyman has no contractor licence",
+    t.ck("and the note now says a handyman has no contractor license",
       /no contractor licen/i.test(after?.note || ""), after?.note);
     t.ck("and that insurance is not required of one",
       /insurance is not required/i.test(after?.note || ""), after?.note);

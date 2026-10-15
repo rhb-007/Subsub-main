@@ -204,7 +204,7 @@ try {
     // What it means, where the decision is taken -- not in help text read
     // afterwards.
     t.ck("it says what a handyman is",
-      /no contractor licence/i.test((s.notes || []).join(" ")), JSON.stringify(s.notes));
+      /no contractor license/i.test((s.notes || []).join(" ")), JSON.stringify(s.notes));
     t.ck("and what it changes about the form they will open",
       /lighter trades/i.test((s.notes || []).join(" ")), JSON.stringify(s.notes));
 

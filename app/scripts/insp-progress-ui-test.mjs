@@ -45,7 +45,7 @@ const ROWS = [
   { id: "i_off", unit: "13", job: { id: "offered", tone: "wait", label: "Waiting on a contractor" } },
   { id: "i_sch", unit: "14", job: { id: "scheduled", tone: "ok", label: "Scheduled", date: SOON } },
   { id: "i_prop", unit: "15", job: { id: "proposed", tone: "wait", label: "Time proposed", date: SOON } },
-  { id: "i_can", unit: "16", job: { id: "cancelled", tone: "plain", label: "Cancelled" } },
+  { id: "i_can", unit: "16", job: { id: "cancelled", tone: "plain", label: "Canceled" } },
   // AND ONE THE SERVER COULD NOT ANSWER FOR, which is a database behind the
   // code: the row still has to say a job was raised rather than drawing
   // nothing, or the screen loses a fact it already held.
@@ -143,7 +143,7 @@ try {
   t.ck("a job with nobody on it says so", /Needs a contractor/.test(chip("12")), chip("12"));
   t.ck("an unanswered one says it is waiting", /Waiting on a contractor/.test(chip("13")), chip("13"));
   t.ck("a proposed window says proposed", /Time proposed/.test(chip("15")), chip("15"));
-  t.ck("and a cancelled job says cancelled", /Cancelled/.test(chip("16")), chip("16"));
+  t.ck("and a cancelled job says canceled", /Canceled/.test(chip("16")), chip("16"));
   t.ck("none of them still says \"Job raised\"",
     !["12", "13", "14", "15", "16"].some((u) => /Job raised/.test(chip(u))),
     ["12", "13", "14", "15", "16"].map(chip).join(" // "));
@@ -164,7 +164,7 @@ try {
   const bgOf = (unit, re) => (by[unit]?.chips || []).find((c) => re.test(c.text))?.bg || "";
   const booked = bgOf("14", /Scheduled/);
   const waiting = bgOf("13", /Waiting/);
-  const gone = bgOf("16", /Cancelled/);
+  const gone = bgOf("16", /Canceled/);
   t.ck("every progress chip has a background of its own",
     [booked, waiting, gone].every((b) => b && !/rgba\(0, 0, 0, 0\)/.test(b)),
     JSON.stringify([booked, waiting, gone]));

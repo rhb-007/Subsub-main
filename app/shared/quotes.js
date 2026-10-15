@@ -201,7 +201,7 @@ export function requestState(request = {}, invites = []) {
 
 export function stateLabel(state, { quoted = 0, asked = 0 } = {}) {
   if (state === "awarded") return "Awarded";
-  if (state === "cancelled") return "Cancelled";
+  if (state === "cancelled") return "Canceled";
   if (state === "all_passed") return "Everyone passed";
   if (state === "quotes_in") return `${quoted} of ${asked} quoted`;
   return `Waiting on ${asked}`;

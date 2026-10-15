@@ -82,9 +82,9 @@ const GROUPS = [
     matters: "How this console verifies that a request really came through Access.",
   },
   {
-    id: "licenses", label: "Licence verifiers",
+    id: "licenses", label: "License verifiers",
     vars: ["STATELICENSE_API_KEY", "TRADESAPI_API_KEY"],
-    matters: "Checking a contractor's licence outside the six states wired to their own open data. "
+    matters: "Checking a contractor's license outside the six states wired to their own open data. "
       + "Unset, those states answer as before and everywhere else is reported as unsupported -- "
       + "which is the honest answer, not a silent pass.",
   },
@@ -92,9 +92,9 @@ const GROUPS = [
     // Its own group rather than a third key beside the verifiers: it names WHICH
     // one, and is meaningless without that one's key, so pairing them would
     // read a verifier set up for the app as a half-configured public checker.
-    id: "lookup-partner", label: "Public licence checker partner",
+    id: "lookup-partner", label: "Public license checker partner",
     vars: ["LICENSE_LOOKUP_PARTNER"],
-    matters: "Which licence verifier (statelicense or tradesapi) the public checker at "
+    matters: "Which license verifier (statelicense or tradesapi) the public checker at "
       + "subsub.work/check may use. Unset, the checker answers from the state's own records "
       + "where SubSub reads them (Washington) and links every other state's board.",
   },

@@ -115,11 +115,11 @@ export const canSummarise = (state) => whyNotSummary(state) === null;
 // reason added later arrives with its words rather than falling through to
 // "that didn't work".
 export const SUMMARY_REFUSALS = {
-  ai_not_configured: "Summarising isn't switched on for SubSub yet.",
-  nothing_flagged: "Nothing was flagged, so there is nothing to summarise.",
+  ai_not_configured: "Summarizing isn't switched on for SubSub yet.",
+  nothing_flagged: "Nothing was flagged, so there is nothing to summarize.",
   no_comments: "Add a note or a photo caption to a flagged room first — there is nothing to combine yet.",
-  rate_limited: "That's a lot of summarising in one go. Try again in a few minutes.",
-  ai_unavailable: "Couldn't reach the summarising service. Nothing was changed — try again.",
+  rate_limited: "That's a lot of summarizing in one go. Try again in a few minutes.",
+  ai_unavailable: "Couldn't reach the summarizing service. Nothing was changed — try again.",
   migration_needed: "This needs migration 063 before it can be saved.",
 };
 
@@ -202,7 +202,8 @@ export function summarySystem({ kindLabel = "Move-out" } = {}) {
     "- Do NOT say what caused anything, who is responsible, whether it is fair wear and tear, what it will cost, how long it will take, or which to do first. Every one of those is the manager's to say and the reader is about to quote this.",
     "- Do not tell them how to do the work. Say what is wrong.",
     "- No opening phrase, no heading, no sign-off, no bullet points. Start with the work itself.",
-    "- Plain words, short sentences. This is read on a phone, often at the kerb.",
+    "- Plain words, short sentences. This is read on a phone, often at the curb.",
+    "- Write in American English: American spelling (color, gray, labor, canceled), and sizes in inches and feet.",
     "- If the notes are thin, say so briefly rather than padding. A one-sentence summary of a one-line record is the right answer.",
   ].join("\n");
 }

@@ -690,6 +690,26 @@ console.log("\n-- and 1.0.0 still renders 1.0.0 --");
   ck("1.1.0 is a different document", text !== null && A.canonicalText(
     A.renderAgreement({ templateVersion: "1.1.0", parties, terms, issuedOn: "2026-01-15" })) !== text);
 
+  // 1.1.0 IS FROZEN TOO, since 1.2.0 put the text into American English.
+  // Its British spellings are what was signed, so they must not move.
+  const V11 = "7b038b6a0dbeb88ba969ed87e88ea2cee547de3728f2572c347c05333641117d";
+  const terms11 = { ...terms, warrantyMonths: 36, warrantyResponseHours: 48 };
+  let t11 = null, e11 = null;
+  try {
+    t11 = A.canonicalText(A.renderAgreement({ templateId: "subsub-standard-subcontract",
+      templateVersion: "1.1.0", parties, terms: terms11, issuedOn: "2026-01-15" }));
+  } catch (e) { e11 = e.code || String(e); }
+  ck("1.1.0 is still in TEMPLATES and still renders", t11 !== null, String(e11));
+  ck("the frozen 1.1.0 hashes to exactly what it always did",
+    t11 !== null && createHash("sha256").update(t11, "utf8").digest("hex") === V11,
+    t11 === null ? "" : createHash("sha256").update(t11, "utf8").digest("hex"));
+  const cur = A.canonicalText(A.renderAgreement({ templateVersion: A.STANDARD_AGREEMENT?.version || "1.2.0",
+    parties, terms: terms11, issuedOn: "2026-01-15" }));
+  ck("the current agreement is in American English",
+    !/\b(licence|authoris|authorised|favour|colour|cancelled|cheque|labour)/i.test(cur),
+    (cur.match(/\b(licence|authoris\w*|favour|colour|cancelled|cheque|labour)/i) || [])[0]);
+  ck("and still says license no.", /license no\./.test(cur));
+
   // LOUD, NOT A FALLBACK. A version that is not here has to throw rather than
   // render whatever is current under a heading saying it was signed.
   let threw = null;

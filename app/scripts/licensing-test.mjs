@@ -409,7 +409,7 @@ console.log("\n-- and the generated pages actually render --");
       links: [...document.querySelectorAll(".lic-rel a")].map((a) => a.getAttribute("href")),
       body: document.body.innerText,
     }));
-    t.ck("the page renders", /need a licence in Texas/.test(seen.h1 || ""), String(seen.h1));
+    t.ck("the page renders", /need a license in Texas/.test(seen.h1 || ""), String(seen.h1));
     t.ck("answering in the first line", /^Yes\./.test(seen.answer || ""), String(seen.answer));
     t.ck("with both doors", seen.ctas === 2, String(seen.ctas));
     t.ck("and internal links to related pages", seen.links.length >= 2,

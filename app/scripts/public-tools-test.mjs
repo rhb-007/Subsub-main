@@ -101,7 +101,7 @@ try {
     const lead = S.db.prepare("SELECT * FROM leads").get();
     ck("the address is kept, tagged by tool and state", lead?.email === "gc@build.test" && lead.tool === "check" && lead.state === "WA"
       && JSON.parse(lead.detail).license === "BAYRR*222" && lead.ref_code === "K7Q2MXRB", JSON.stringify(lead));
-    ck("and sales are told", mail.some((m) => (m.to === "sales@subsub.test" || m.to?.[0] === "sales@subsub.test") && /Licence check · WA/.test(m.subject))
+    ck("and sales are told", mail.some((m) => (m.to === "sales@subsub.test" || m.to?.[0] === "sales@subsub.test") && /License check · WA/.test(m.subject))
       && lead.notified === 1);
     const [st3, r3] = await post(S.env, "/api/public/license-lookup", { state: "WA", license: "NOPE*1" });
     ck("a number the state does not know is a plain no", st3 === 200 && r3.found === false && !r3.preview);

@@ -46,13 +46,13 @@ export const STATES = [
       licence: "none",
       body: null,
       detail: "Texas does not license construction contractors at the state level. "
-        + "There is no state general contractor licence and no state registration.",
-      source: "Texas Department of Licensing & Regulation — programme list",
+        + "There is no state general contractor license and no state registration.",
+      source: "Texas Department of Licensing & Regulation — program list",
       sourceUrl: "https://www.tdlr.texas.gov/LicenseSearch/",
       verifiedOn: "2026-09-12",
     },
     registry: {
-      name: "TDLR licence search",
+      name: "TDLR license search",
       url: "https://www.tdlr.texas.gov/LicenseSearch/",
       searchable: true,
       note: "Covers the trades TDLR licenses. A roofer will not be in it, because "
@@ -73,7 +73,7 @@ export const STATES = [
         licence: "state",
         body: "Texas Department of Licensing & Regulation",
         detail: "Electricians are licensed by TDLR. Contractors hold an electrical "
-          + "contractor licence; individuals hold journeyman or master licences.",
+          + "contractor license; individuals hold journeyman or master licenses.",
         source: "Texas Occupations Code ch. 1305, administered by TDLR",
         sourceUrl: "https://www.tdlr.texas.gov/electricians/",
         verifiedOn: "2026-09-12",
@@ -135,7 +135,7 @@ export const STATES = [
         licence: "state",
         body: "Washington State Department of Labor & Industries",
         detail: "Electrical contractors hold a separate L&I electrical contractor "
-          + "licence on top of general registration, and electricians are certified "
+          + "license on top of general registration, and electricians are certified "
           + "individually.",
         source: "RCW 19.28, administered by Washington State L&I",
         sourceUrl: "https://lni.wa.gov/licensing-permits/electrical/",
@@ -160,14 +160,14 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Oregon Construction Contractors Board",
-      detail: "Anyone doing construction work for compensation must hold a CCB licence, "
-        + "which requires a bond, liability insurance and pre-licence training.",
+      detail: "Anyone doing construction work for compensation must hold a CCB license, "
+        + "which requires a bond, liability insurance and pre-license training.",
       source: "ORS 701, administered by the Oregon CCB",
       sourceUrl: "https://www.oregon.gov/ccb/Pages/index.aspx",
       verifiedOn: "2026-09-12",
     },
     registry: {
-      name: "CCB licence search",
+      name: "CCB license search",
       url: "https://search.ccb.state.or.us/search/",
       searchable: true,
       note: "SubSub checks this one directly.",
@@ -186,7 +186,7 @@ export const STATES = [
         licence: "state",
         body: "Oregon Building Codes Division",
         detail: "Plumbing contractors are licensed by the Building Codes Division as "
-          + "well as holding a CCB licence.",
+          + "well as holding a CCB license.",
         source: "ORS 447, administered by the Oregon Building Codes Division",
         sourceUrl: "https://www.oregon.gov/bcd/licensing/Pages/plumbing.aspx",
         verifiedOn: "2026-09-12",
@@ -200,8 +200,8 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Contractors State License Board",
-      detail: "Any job where labour and materials together come to $500 or more needs a "
-        + "CSLB licence. Classifications are A (engineering), B (general building) and "
+      detail: "Any job where labor and materials together come to $500 or more needs a "
+        + "CSLB license. Classifications are A (engineering), B (general building) and "
         + "the C-series specialties; each is a separate exam, and a bond is required.",
       source: "California Business & Professions Code \u00a77000 et seq., administered by CSLB",
       sourceUrl: "https://www.cslb.ca.gov/About_Us/Library/Licensing_Classifications/",
@@ -215,8 +215,8 @@ export const STATES = [
         + "any disciplinary history.",
     },
     quirk: {
-      title: "The classification is the licence",
-      body: "A B licence does not let somebody re-roof a house on its own. California ties "
+      title: "The classification is the license",
+      body: "A B license does not let somebody re-roof a house on its own. California ties "
         + "scope to the classification letter, so \u201clicensed\u201d is only half the "
         + "question \u2014 the other half is licensed for what.",
       source: "California Business & Professions Code \u00a77000 et seq., administered by CSLB",
@@ -278,12 +278,12 @@ export const STATES = [
       name: "DBPR licensee search",
       url: "https://www.myfloridalicense.com/wl11.asp",
       searchable: true,
-      note: "Says which of the two a licence is, which decides where it is good.",
+      note: "Says which of the two a license is, which decides where it is good.",
     },
     quirk: {
-      title: "Certified and registered are not the same licence",
+      title: "Certified and registered are not the same license",
       body: "A registered contractor may work only in the jurisdiction that licensed them. "
-        + "Asking for the licence number is not enough in Florida \u2014 the type decides "
+        + "Asking for the license number is not enough in Florida \u2014 the type decides "
         + "whether it covers the county your job is in.",
       source: "Florida Statutes ch. 489, administered by DBPR",
       sourceUrl: "https://www2.myfloridalicense.com/construction-industry/",
@@ -317,22 +317,22 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Arizona Registrar of Contractors",
-      detail: "Almost all construction work needs an ROC licence. The handyman exemption "
+      detail: "Almost all construction work needs an ROC license. The handyman exemption "
         + "is narrow: one job under $1,000 that needs no building permit.",
       source: "Arizona Revised Statutes title 32 ch. 10, administered by the ROC",
       sourceUrl: "https://roc.az.gov/licensing",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "ROC licence search",
+      name: "ROC license search",
       url: "https://azroc.my.site.com/AZRoc/s/contractor-search",
       searchable: true,
       note: "Shows the classification, the bond and any complaints filed.",
     },
     quirk: {
-      title: "Residential and commercial are separate licences",
+      title: "Residential and commercial are separate licenses",
       body: "Arizona splits its classifications by residential, commercial and dual. A "
-        + "licence good for houses does not cover a commercial fit-out.",
+        + "license good for houses does not cover a commercial fit-out.",
       source: "Arizona Revised Statutes title 32 ch. 10, administered by the ROC",
       sourceUrl: "https://roc.az.gov/licensing",
       verifiedOn: "2026-09-27",
@@ -346,22 +346,22 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Nevada State Contractors Board",
-      detail: "A licence is required for any work of $1,000 or more, or any work needing a "
-        + "building permit. Each licence carries a monetary limit on the size of job it "
+      detail: "A license is required for any work of $1,000 or more, or any work needing a "
+        + "building permit. Each license carries a monetary limit on the size of job it "
         + "may take.",
       source: "Nevada Revised Statutes ch. 624, administered by the NSCB",
       sourceUrl: "https://www.nvcontractorsboard.com/licensing/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "NSCB licence search",
+      name: "NSCB license search",
       url: "https://www.nvcontractorsboard.com/verify-a-license/",
       searchable: true,
-      note: "Shows the classification and, unusually, the monetary limit on the licence.",
+      note: "Shows the classification and, unusually, the monetary limit on the license.",
     },
     quirk: {
-      title: "The licence has a dollar ceiling",
-      body: "Nevada caps how large a single job a given licence may take. A contractor can "
+      title: "The license has a dollar ceiling",
+      body: "Nevada caps how large a single job a given license may take. A contractor can "
         + "be properly licensed and still not be allowed to bid your project.",
       source: "Nevada Revised Statutes ch. 624, administered by the NSCB",
       sourceUrl: "https://www.nvcontractorsboard.com/licensing/",
@@ -376,7 +376,7 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "North Carolina Licensing Board for General Contractors",
-      detail: "A general contractor licence is required for any project costing $40,000 or "
+      detail: "A general contractor license is required for any project costing $40,000 or "
         + "more. Below that threshold the state requires none, though the trades below "
         + "are licensed at any value.",
       source: "North Carolina General Statutes ch. 87 art. 1, administered by NCLBGC",
@@ -384,14 +384,14 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "NCLBGC licence search",
+      name: "NCLBGC license search",
       url: "https://nclbgc.org/licensee-search/",
       searchable: true,
       note: "General contractors only. The trade boards below keep their own registers.",
     },
     quirk: {
       title: "A threshold, not a blanket rule",
-      body: "Under $40,000 there is no state general contractor licence to check. That is "
+      body: "Under $40,000 there is no state general contractor license to check. That is "
         + "not a contractor cutting corners \u2014 it is the statute.",
       source: "North Carolina General Statutes ch. 87 art. 1, administered by NCLBGC",
       sourceUrl: "https://nclbgc.org/licensing/",
@@ -433,7 +433,7 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DPOR licence lookup",
+      name: "DPOR license lookup",
       url: "https://www.dpor.virginia.gov/LicenseLookup/",
       searchable: true,
       note: "Shows the class, which is what decides the size of job they may take.",
@@ -441,7 +441,7 @@ export const STATES = [
     quirk: {
       title: "The class is a spending limit",
       body: "A Class C contractor is properly licensed and may not take a $200,000 job. "
-        + "Check the class against the contract value, not just that a licence exists.",
+        + "Check the class against the contract value, not just that a license exists.",
       source: "Code of Virginia title 54.1 ch. 11, administered by DPOR",
       sourceUrl: "https://www.dpor.virginia.gov/Boards/Contractors/",
       verifiedOn: "2026-09-27",
@@ -456,14 +456,14 @@ export const STATES = [
       licence: "state",
       body: "Utah Division of Professional Licensing",
       detail: "Construction trades are licensed by DOPL, with general building (B100) and "
-        + "residential (R100) as the broad classifications and specialty licences below "
+        + "residential (R100) as the broad classifications and specialty licenses below "
         + "them.",
       source: "Utah Code title 58 ch. 55, administered by DOPL",
       sourceUrl: "https://dopl.utah.gov/contractor/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DOPL licence search",
+      name: "DOPL license search",
       url: "https://secure.utah.gov/llv/search/index.html",
       searchable: true,
       note: "Shows the classification and status.",
@@ -477,22 +477,22 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Louisiana State Licensing Board for Contractors",
-      detail: "A commercial licence is required at $50,000 or more, and a residential "
-        + "licence at $75,000 or more. Below those, the state requires none.",
+      detail: "A commercial license is required at $50,000 or more, and a residential "
+        + "license at $75,000 or more. Below those, the state requires none.",
       source: "Louisiana Revised Statutes title 37 ch. 24, administered by LSLBC",
       sourceUrl: "https://lslbc.louisiana.gov/contractors/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "LSLBC licence search",
+      name: "LSLBC license search",
       url: "https://lslbc.louisiana.gov/contractor-search/",
       searchable: true,
-      note: "Commercial and residential are separate licences with separate thresholds.",
+      note: "Commercial and residential are separate licenses with separate thresholds.",
     },
     quirk: {
       title: "Two thresholds, not one",
       body: "Commercial work crosses the line at $50,000 and residential at $75,000, so "
-        + "the same contractor can need a licence for one job and not the next.",
+        + "the same contractor can need a license for one job and not the next.",
       source: "Louisiana Revised Statutes title 37 ch. 24, administered by LSLBC",
       sourceUrl: "https://lslbc.louisiana.gov/contractors/",
       verifiedOn: "2026-09-27",
@@ -536,10 +536,10 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Licensing Board licence search",
+      name: "Licensing Board license search",
       url: "https://gencontractors.alabama.gov/",
       searchable: true,
-      note: "Shows the licence class and status. Residential builders are in the Home Builders Licensure Board's separate register.",
+      note: "Shows the license class and status. Residential builders are in the Home Builders Licensure Board's separate register.",
     },
     trades: {},
     cities: ["Birmingham", "Mobile"],
@@ -550,16 +550,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Alaska Division of Corporations, Business and Professional Licensing",
-      detail: "Contractors need a state licence, a surety bond and liability insurance before bidding. Residential work needs a residential endorsement on top of the general licence.",
+      detail: "Contractors need a state license, a surety bond and liability insurance before bidding. Residential work needs a residential endorsement on top of the general license.",
       source: "Alaska Statutes title 8 ch. 18, administered by the Division of Corporations, Business and Professional Licensing",
       sourceUrl: "https://www.commerce.alaska.gov/web/cbpl/ProfessionalLicensing/ConstructionContractors.aspx",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Professional licence search",
+      name: "Professional license search",
       url: "https://www.commerce.alaska.gov/cbp/main/search/professional",
       searchable: true,
-      note: "Shows the licence, its endorsements and whether the bond is current.",
+      note: "Shows the license, its endorsements and whether the bond is current.",
     },
     trades: {},
     cities: ["Anchorage"],
@@ -570,7 +570,7 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Arkansas Contractors Licensing Board",
-      detail: "Commercial work of $50,000 or more needs a state contractor licence, and residential work of $2,000 or more needs a residential licence. Below those figures the state does not license the work.",
+      detail: "Commercial work of $50,000 or more needs a state contractor license, and residential work of $2,000 or more needs a residential license. Below those figures the state does not license the work.",
       source: "Arkansas Code title 17 ch. 25, administered by the Contractors Licensing Board",
       sourceUrl: "https://aclb.arkansas.gov/",
       verifiedOn: "2026-09-27",
@@ -579,7 +579,7 @@ export const STATES = [
       name: "Contractors Licensing Board search",
       url: "https://aclb.arkansas.gov/license-search/",
       searchable: true,
-      note: "Shows the classification and the financial limit on the licence.",
+      note: "Shows the classification and the financial limit on the license.",
     },
     trades: {},
     cities: ["Little Rock"],
@@ -590,13 +590,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "Colorado has no state contractor licence. General contractors are licensed by the city or county they build in, and the requirements differ between them. Electricians and plumbers are licensed by the state.",
+      detail: "Colorado has no state contractor license. General contractors are licensed by the city or county they build in, and the requirements differ between them. Electricians and plumbers are licensed by the state.",
       source: "Colorado Revised Statutes title 12 art. 115 (electrical) and art. 155 (plumbing); general contracting is not licensed at state level",
       sourceUrl: "https://dpo.colorado.gov/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DORA licence lookup",
+      name: "DORA license lookup",
       url: "https://apps.colorado.gov/dora/licensing/Lookup/LicenseLookup.aspx",
       searchable: true,
       note: "Covers the trades the state licenses. A general contractor will not be in it, because there is nothing to be in it for.",
@@ -610,7 +610,7 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Connecticut Department of Consumer Protection",
-      detail: "Residential work needs Home Improvement Contractor registration with the Department of Consumer Protection rather than a licence. Electrical, plumbing and heating are separate state licences.",
+      detail: "Residential work needs Home Improvement Contractor registration with the Department of Consumer Protection rather than a license. Electrical, plumbing and heating are separate state licenses.",
       source: "Connecticut General Statutes ch. 400 (Home Improvement Act), administered by the Department of Consumer Protection",
       sourceUrl: "https://portal.ct.gov/DCP/License-Services-Division/Home-Improvement/Home-Improvement-Contractor",
       verifiedOn: "2026-09-27",
@@ -630,8 +630,8 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Delaware Division of Revenue",
-      detail: "Delaware has no state contractor licence. Anyone contracting here needs a Delaware business licence from the Division of Revenue, and non-resident contractors post a bond. Electrical, plumbing and HVAC are licensed by the Division of Professional Regulation.",
-      source: "Delaware Code title 30 ch. 25 (business licences) and title 24 (trade licensing)",
+      detail: "Delaware has no state contractor license. Anyone contracting here needs a Delaware business license from the Division of Revenue, and non-resident contractors post a bond. Electrical, plumbing and HVAC are licensed by the Division of Professional Regulation.",
+      source: "Delaware Code title 30 ch. 25 (business licenses) and title 24 (trade licensing)",
       sourceUrl: "https://revenue.delaware.gov/business-tax/license/",
       verifiedOn: "2026-09-27",
     },
@@ -650,16 +650,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "DC Department of Licensing and Consumer Protection",
-      detail: "The District licenses general contractors and construction managers, and licenses home improvement contractors separately with a bond. There is no dollar threshold below which the licence is optional.",
+      detail: "The District licenses general contractors and construction managers, and licenses home improvement contractors separately with a bond. There is no dollar threshold below which the license is optional.",
       source: "DC Municipal Regulations title 17 ch. 8 and ch. 39, administered by the Department of Licensing and Consumer Protection",
       sourceUrl: "https://dlcp.dc.gov/service/general-contractor-construction-manager-license",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DC business licence search",
+      name: "DC business license search",
       url: "https://dlcp.dc.gov/scoutlicense",
       searchable: true,
-      note: "Shows the licence category and status.",
+      note: "Shows the license category and status.",
     },
     trades: {},
     cities: [],
@@ -670,16 +670,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Georgia State Licensing Board for Residential and General Contractors",
-      detail: "Georgia licenses residential and general contractors in classes, with a general contractor licence required above $2,500 of work. Electrical, plumbing, HVAC and low-voltage are their own licences.",
+      detail: "Georgia licenses residential and general contractors in classes, with a general contractor license required above $2,500 of work. Electrical, plumbing, HVAC and low-voltage are their own licenses.",
       source: "O.C.G.A. title 43 ch. 41, administered by the State Licensing Board for Residential and General Contractors",
       sourceUrl: "https://sos.ga.gov/georgia-state-licensing-board-residential-and-general-contractors",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Secretary of State licence verification",
+      name: "Secretary of State license verification",
       url: "https://verify.sos.ga.gov/verification/",
       searchable: true,
-      note: "Shows the licence class, which is what says how large a project it covers.",
+      note: "Shows the license class, which is what says how large a project it covers.",
     },
     trades: {},
     cities: ["Atlanta", "Savannah"],
@@ -696,7 +696,7 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "MyPVL licence search",
+      name: "MyPVL license search",
       url: "https://mypvl.dcca.hawaii.gov/public-license-search/",
       searchable: true,
       note: "Shows every classification held, which is the part that decides what they may bid.",
@@ -710,16 +710,16 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Idaho Division of Occupational and Professional Licenses",
-      detail: "Construction contractors register with the state rather than hold a licence, and registration needs insurance. Electrical, plumbing and HVAC are full licences with their own boards.",
+      detail: "Construction contractors register with the state rather than hold a license, and registration needs insurance. Electrical, plumbing and HVAC are full licenses with their own boards.",
       source: "Idaho Code title 54 ch. 52 (contractor registration), administered by the Division of Occupational and Professional Licenses",
       sourceUrl: "https://dopl.idaho.gov/con/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DOPL licence search",
+      name: "DOPL license search",
       url: "https://dopl.idaho.gov/licensing-search/",
       searchable: true,
-      note: "Shows the registration and any trade licences held.",
+      note: "Shows the registration and any trade licenses held.",
     },
     trades: {},
     cities: ["Boise"],
@@ -730,13 +730,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "Illinois has no state general-contractor licence, and Chicago and other municipalities license instead. Two trades are exceptions and are licensed by the state: roofing contractors, and plumbers.",
+      detail: "Illinois has no state general-contractor license, and Chicago and other municipalities license instead. Two trades are exceptions and are licensed by the state: roofing contractors, and plumbers.",
       source: "225 ILCS 335 (Illinois Roofing Industry Licensing Act) and 225 ILCS 320 (Illinois Plumbing License Law)",
       sourceUrl: "https://idfpr.illinois.gov/profs/roofing.html",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "IDFPR licence lookup",
+      name: "IDFPR license lookup",
       url: "https://online-dfpr.micropact.com/lookup/licenselookup.aspx",
       searchable: true,
       note: "Roofers are in it, which is unusual — most states do not license roofing at all.",
@@ -750,13 +750,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "Indiana has no state contractor licence; municipalities license general contractors. Plumbing is a state licence, held through the Professional Licensing Agency.",
+      detail: "Indiana has no state contractor license; municipalities license general contractors. Plumbing is a state license, held through the Professional Licensing Agency.",
       source: "Indiana Code title 25 art. 28.5 (plumbing); general contracting is licensed locally",
       sourceUrl: "https://www.in.gov/pla/professions/plumbing-commission-home/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "PLA licence search",
+      name: "PLA license search",
       url: "https://mylicense.in.gov/everification/",
       searchable: true,
       note: "Covers the trades the state licenses, not general contracting.",
@@ -770,7 +770,7 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Iowa Workforce Development",
-      detail: "Anyone doing more than $2,000 of construction in Iowa in a year must register as a contractor with Iowa Workforce Development. It is a registration, not a competency licence. Electrical and plumbing are separate state licences.",
+      detail: "Anyone doing more than $2,000 of construction in Iowa in a year must register as a contractor with Iowa Workforce Development. It is a registration, not a competency license. Electrical and plumbing are separate state licenses.",
       source: "Iowa Code ch. 91C (contractor registration), administered by Iowa Workforce Development",
       sourceUrl: "https://www.iowadivisionoflabor.gov/contractor-registration",
       verifiedOn: "2026-09-27",
@@ -790,7 +790,7 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "Kansas has no state contractor licence of any kind. Every requirement is municipal, so the answer changes at the city limit, and a contractor licensed in one Kansas city is unlicensed in the next.",
+      detail: "Kansas has no state contractor license of any kind. Every requirement is municipal, so the answer changes at the city limit, and a contractor licensed in one Kansas city is unlicensed in the next.",
       source: "Kansas has no statewide contractor licensing statute; see the Kansas Attorney General's consumer guidance",
       sourceUrl: "https://ag.ks.gov/consumer-protection",
       verifiedOn: "2026-09-27",
@@ -799,7 +799,7 @@ export const STATES = [
       name: "None statewide",
       url: null,
       searchable: false,
-      note: "There is no state register to search, because there is no state licence.",
+      note: "There is no state register to search, because there is no state license.",
     },
     trades: {},
     cities: ["Wichita", "Overland Park", "Topeka"],
@@ -810,13 +810,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "Kentucky Department of Housing, Buildings and Construction",
-      detail: "Kentucky has no state general-contractor licence. Electrical, HVAC and plumbing contractors are licensed by the Department of Housing, Buildings and Construction, and cities license general contracting.",
+      detail: "Kentucky has no state general-contractor license. Electrical, HVAC and plumbing contractors are licensed by the Department of Housing, Buildings and Construction, and cities license general contracting.",
       source: "KRS ch. 198B and ch. 318, administered by the Department of Housing, Buildings and Construction",
       sourceUrl: "https://dhbc.ky.gov/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DHBC licence lookup",
+      name: "DHBC license lookup",
       url: "https://dhbc.ky.gov/Pages/Licensing.aspx",
       searchable: true,
       note: "Covers the licensed trades.",
@@ -836,7 +836,7 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "OPOR licence search",
+      name: "OPOR license search",
       url: "https://www.pfr.maine.gov/ALMSOnline/ALMSQuery/SearchIndividual.aspx",
       searchable: true,
       note: "Covers the licensed trades, not general contracting.",
@@ -850,16 +850,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Maryland Home Improvement Commission",
-      detail: "Residential work needs a Maryland Home Improvement Commission licence, and it is a licence rather than a registration — it carries an exam and a guaranty fund. There is no general commercial contractor licence; electrical, plumbing and HVAC have their own boards.",
+      detail: "Residential work needs a Maryland Home Improvement Commission license, and it is a license rather than a registration — it carries an exam and a guaranty fund. There is no general commercial contractor license; electrical, plumbing and HVAC have their own boards.",
       source: "Maryland Business Regulation title 8, administered by the Home Improvement Commission",
       sourceUrl: "https://labor.maryland.gov/license/mhic/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Maryland occupational licence search",
+      name: "Maryland occupational license search",
       url: "https://www.dllr.state.md.us/cgi-bin/ElectronicLicensing/OP_Search/OP_SearchChoosetype.cgi",
       searchable: true,
-      note: "Shows the MHIC licence and any trade licences.",
+      note: "Shows the MHIC license and any trade licenses.",
     },
     trades: {},
     cities: ["Baltimore"],
@@ -870,16 +870,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Massachusetts Board of Building Regulations and Standards",
-      detail: "Structural work needs a Construction Supervisor Licence, and residential work additionally needs Home Improvement Contractor registration. Two separate things, and a contractor doing residential remodelling generally needs both.",
+      detail: "Structural work needs a Construction Supervisor License, and residential work additionally needs Home Improvement Contractor registration. Two separate things, and a contractor doing residential remodelling generally needs both.",
       source: "Massachusetts General Laws ch. 142A (home improvement) and 780 CMR (construction supervisors)",
       sourceUrl: "https://www.mass.gov/how-to/apply-for-a-construction-supervisor-license-csl",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Massachusetts licence verification",
+      name: "Massachusetts license verification",
       url: "https://licensing.reg.state.ma.us/public/licque.asp",
       searchable: true,
-      note: "Shows the supervisor licence; the HIC register is searched separately.",
+      note: "Shows the supervisor license; the HIC register is searched separately.",
     },
     trades: {},
     cities: ["Boston", "Worcester"],
@@ -890,16 +890,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Michigan Department of Licensing and Regulatory Affairs",
-      detail: "Residential work needs a Residential Builder licence, or a Maintenance and Alteration Contractor licence limited to named trades. Both come from LARA and both carry an exam.",
+      detail: "Residential work needs a Residential Builder license, or a Maintenance and Alteration Contractor license limited to named trades. Both come from LARA and both carry an exam.",
       source: "Michigan Occupational Code, Public Act 299 of 1980 art. 24, administered by LARA",
       sourceUrl: "https://www.michigan.gov/lara/bureau-list/bpl/occ/prof/builders",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "LARA licence search",
+      name: "LARA license search",
       url: "https://aca-prod.accela.com/MILARA/GeneralProperty/PropertyLookUp.aspx",
       searchable: true,
-      note: "Shows the licence type, which says which trades it covers.",
+      note: "Shows the license type, which says which trades it covers.",
     },
     trades: {},
     cities: ["Detroit", "Grand Rapids"],
@@ -910,16 +910,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Minnesota Department of Labor and Industry",
-      detail: "Residential building contractors and remodelers need a state licence from the Department of Labor and Industry, which carries continuing education and a recovery fund. Commercial general contracting is not licensed at state level.",
+      detail: "Residential building contractors and remodelers need a state license from the Department of Labor and Industry, which carries continuing education and a recovery fund. Commercial general contracting is not licensed at state level.",
       source: "Minnesota Statutes ch. 326B, administered by the Department of Labor and Industry",
       sourceUrl: "https://www.dli.mn.gov/business/contractors/get-residential-contractor-license",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DLI licence lookup",
+      name: "DLI license lookup",
       url: "https://secure.doli.state.mn.us/lookup/licensing.aspx",
       searchable: true,
-      note: "Shows the licence and whether continuing education is current.",
+      note: "Shows the license and whether continuing education is current.",
     },
     trades: {},
     cities: ["Minneapolis", "Saint Paul"],
@@ -950,7 +950,7 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "Missouri has no state contractor licence. St. Louis, Kansas City, Springfield and others license separately, so a contractor's standing changes with the jurisdiction rather than with the state.",
+      detail: "Missouri has no state contractor license. St. Louis, Kansas City, Springfield and others license separately, so a contractor's standing changes with the jurisdiction rather than with the state.",
       source: "Missouri has no statewide contractor licensing statute; see the Missouri Attorney General's consumer guidance",
       sourceUrl: "https://ago.mo.gov/civil-division/consumer/",
       verifiedOn: "2026-09-27",
@@ -970,16 +970,16 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Montana Department of Labor and Industry",
-      detail: "Contractors with employees must register with the Department of Labor and Industry, which is about workers' compensation rather than competency. Electrical and plumbing are full state licences.",
+      detail: "Contractors with employees must register with the Department of Labor and Industry, which is about workers' compensation rather than competency. Electrical and plumbing are full state licenses.",
       source: "Montana Code Annotated title 39 ch. 9, administered by the Department of Labor and Industry",
       sourceUrl: "https://erd.dli.mt.gov/work-comp-claims/contractor-registration/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Montana licence lookup",
+      name: "Montana license lookup",
       url: "https://ebiz.mt.gov/pol/",
       searchable: true,
-      note: "Shows the registration and any trade licences.",
+      note: "Shows the registration and any trade licenses.",
     },
     trades: {},
     cities: ["Billings", "Bozeman"],
@@ -990,7 +990,7 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Nebraska Department of Labor",
-      detail: "Contractors must register with the Department of Labor before doing business here, which is a registration rather than a competency licence. Electrical work is licensed by the State Electrical Division.",
+      detail: "Contractors must register with the Department of Labor before doing business here, which is a registration rather than a competency license. Electrical work is licensed by the State Electrical Division.",
       source: "Nebraska Revised Statutes ch. 48 art. 21 (contractor registration), administered by the Department of Labor",
       sourceUrl: "https://dol.nebraska.gov/conreg/",
       verifiedOn: "2026-09-27",
@@ -1016,7 +1016,7 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "OPLC licence search",
+      name: "OPLC license search",
       url: "https://forms.nh.gov/licenseverification/",
       searchable: true,
       note: "Covers the licensed trades.",
@@ -1030,13 +1030,13 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "New Jersey Division of Consumer Affairs",
-      detail: "Home improvement contractors register with the Division of Consumer Affairs and must carry liability insurance. Electrical, plumbing and HVAC are full state licences held by individuals.",
+      detail: "Home improvement contractors register with the Division of Consumer Affairs and must carry liability insurance. Electrical, plumbing and HVAC are full state licenses held by individuals.",
       source: "N.J.S.A. 56:8-136 et seq. (Contractors' Registration Act), administered by the Division of Consumer Affairs",
       sourceUrl: "https://www.njconsumeraffairs.gov/hic/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "New Jersey licence verification",
+      name: "New Jersey license verification",
       url: "https://newjersey.mylicense.com/verification/",
       searchable: true,
       note: "Shows the registration and its expiry.",
@@ -1056,10 +1056,10 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "CID licence search",
+      name: "CID license search",
       url: "https://public.psiexams.com/",
       searchable: false,
-      note: "Classification is the part that matters: it says which work the licence actually covers.",
+      note: "Classification is the part that matters: it says which work the license actually covers.",
     },
     trades: {},
     cities: ["Albuquerque", "Santa Fe"],
@@ -1070,13 +1070,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county consumer affairs departments",
-      detail: "New York has no state contractor licence. New York City licenses home improvement contractors through the Department of Consumer and Worker Protection, and Westchester, Nassau, Suffolk and Rockland each license separately.",
+      detail: "New York has no state contractor license. New York City licenses home improvement contractors through the Department of Consumer and Worker Protection, and Westchester, Nassau, Suffolk and Rockland each license separately.",
       source: "New York City Administrative Code title 20 ch. 2 subch. 22; New York has no statewide contractor licensing statute",
       sourceUrl: "https://www.nyc.gov/site/dca/businesses/license-checklist-home-improvement-contractor.page",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "NYC DCWP licence search",
+      name: "NYC DCWP license search",
       url: "https://www.nyc.gov/site/dca/consumers/Search-for-a-Licensee.page",
       searchable: true,
       note: "Covers New York City only. The surrounding counties each keep their own.",
@@ -1090,7 +1090,7 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "North Dakota Secretary of State",
-      detail: "A contractor licence from the Secretary of State is required above $4,000 of work, in classes set by the value of the contract. It is a licence, and bidding public work without the right class is a disqualification.",
+      detail: "A contractor license from the Secretary of State is required above $4,000 of work, in classes set by the value of the contract. It is a license, and bidding public work without the right class is a disqualification.",
       source: "North Dakota Century Code ch. 43-07, administered by the Secretary of State",
       sourceUrl: "https://sos.nd.gov/business/licensing/contractor.html",
       verifiedOn: "2026-09-27",
@@ -1099,7 +1099,7 @@ export const STATES = [
       name: "FirstStop contractor search",
       url: "https://firststop.sos.nd.gov/search/contractor",
       searchable: true,
-      note: "Shows the licence class, which is what caps the size of the contract.",
+      note: "Shows the license class, which is what caps the size of the contract.",
     },
     trades: {},
     cities: ["Fargo", "Bismarck"],
@@ -1130,13 +1130,13 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Oklahoma Construction Industries Board",
-      detail: "Oklahoma licenses roofing, plumbing, electrical and mechanical contractors, and licenses no general contractor. Roofing being a state licence here is unusual and worth checking rather than assuming.",
+      detail: "Oklahoma licenses roofing, plumbing, electrical and mechanical contractors, and licenses no general contractor. Roofing being a state license here is unusual and worth checking rather than assuming.",
       source: "Oklahoma Statutes title 59, administered by the Construction Industries Board",
       sourceUrl: "https://cib.ok.gov/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "CIB licence search",
+      name: "CIB license search",
       url: "https://cib.ok.gov/licensee-search",
       searchable: true,
       note: "Roofers are in it, which most states' registers cannot say.",
@@ -1150,7 +1150,7 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Pennsylvania Office of Attorney General",
-      detail: "Pennsylvania has no contractor licence. Anyone doing more than $5,000 a year of home improvement work must register with the Attorney General and carry insurance, and must put the registration number on every contract and advertisement.",
+      detail: "Pennsylvania has no contractor license. Anyone doing more than $5,000 a year of home improvement work must register with the Attorney General and carry insurance, and must put the registration number on every contract and advertisement.",
       source: "73 P.S. 517.1 et seq. (Home Improvement Consumer Protection Act), administered by the Office of Attorney General",
       sourceUrl: "https://www.attorneygeneral.gov/bcp-hic/",
       verifiedOn: "2026-09-27",
@@ -1190,13 +1190,13 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "South Carolina Contractor's Licensing Board",
-      detail: "Commercial work above $5,000 needs a contractor's licence, and residential work above $200 needs a Residential Builders Commission licence. The residential threshold is among the lowest in the country.",
+      detail: "Commercial work above $5,000 needs a contractor's license, and residential work above $200 needs a Residential Builders Commission license. The residential threshold is among the lowest in the country.",
       source: "South Carolina Code title 40 ch. 11 and ch. 59, administered by LLR",
       sourceUrl: "https://llr.sc.gov/clb/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "LLR licence lookup",
+      name: "LLR license lookup",
       url: "https://verify.llronline.com/LicLookup/",
       searchable: true,
       note: "Shows the classification and the monetary limit.",
@@ -1210,13 +1210,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "South Dakota has no state contractor licence. Electricians and plumbers are licensed by their own state commissions, and general contracting is a municipal matter.",
+      detail: "South Dakota has no state contractor license. Electricians and plumbers are licensed by their own state commissions, and general contracting is a municipal matter.",
       source: "South Dakota Codified Laws title 36 ch. 16 (plumbing) and ch. 25 (electrical); general contracting is licensed locally",
       sourceUrl: "https://dlr.sd.gov/bdcomm/default.aspx",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "South Dakota licence search",
+      name: "South Dakota license search",
       url: "https://dlr.sd.gov/bdcomm/default.aspx",
       searchable: false,
       note: "Each commission keeps its own list; there is no single search.",
@@ -1230,16 +1230,16 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "Tennessee Board for Licensing Contractors",
-      detail: "A contractor licence is required for projects of $25,000 or more, with a monetary limit set by the applicant's financial statement. A separate Home Improvement licence applies in a handful of named counties.",
+      detail: "A contractor license is required for projects of $25,000 or more, with a monetary limit set by the applicant's financial statement. A separate Home Improvement license applies in a handful of named counties.",
       source: "Tennessee Code title 62 ch. 6, administered by the Board for Licensing Contractors",
       sourceUrl: "https://www.tn.gov/commerce/regboards/contractors.html",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Tennessee licence verification",
+      name: "Tennessee license verification",
       url: "https://verify.tn.gov/",
       searchable: true,
-      note: "Shows the classification and the monetary limit, which is the part that says how large a job the licence covers.",
+      note: "Shows the classification and the monetary limit, which is the part that says how large a job the license covers.",
     },
     trades: {},
     cities: ["Nashville", "Memphis"],
@@ -1250,16 +1250,16 @@ export const STATES = [
     baseline: {
       licence: "registration",
       body: "Vermont Office of Professional Regulation",
-      detail: "Residential contractors doing more than $10,000 of work must register with the Office of Professional Regulation, a requirement Vermont added relatively recently. Electricians and plumbers hold full licences.",
+      detail: "Residential contractors doing more than $10,000 of work must register with the Office of Professional Regulation, a requirement Vermont added relatively recently. Electricians and plumbers hold full licenses.",
       source: "26 V.S.A. ch. 106 (residential contractors), administered by the Office of Professional Regulation",
       sourceUrl: "https://sos.vermont.gov/residential-contractors/",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Vermont licence lookup",
+      name: "Vermont license lookup",
       url: "https://secure.professionals.vermont.gov/prweb/PRServletCustom/app/ProfessionalLicensing_/Ls1KEEqZkYNyeaFGWQ7ADg%5B%5B*/!STANDARD",
       searchable: true,
-      note: "Shows the registration and any trade licences.",
+      note: "Shows the registration and any trade licenses.",
     },
     trades: {},
     cities: ["Burlington"],
@@ -1270,13 +1270,13 @@ export const STATES = [
     baseline: {
       licence: "state",
       body: "West Virginia Contractor Licensing Board",
-      detail: "A contractor licence is required for any job of $2,500 or more, in classifications by trade. The threshold is low enough that most work needs one.",
+      detail: "A contractor license is required for any job of $2,500 or more, in classifications by trade. The threshold is low enough that most work needs one.",
       source: "West Virginia Code ch. 21 art. 11, administered by the Contractor Licensing Board",
       sourceUrl: "https://labor.wv.gov/Licensing/Contractor/Pages/default.aspx",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Contractor licence search",
+      name: "Contractor license search",
       url: "https://apps.wv.gov/Labor/ContractorLicenseSearch/",
       searchable: true,
       note: "Shows the classifications held.",
@@ -1296,7 +1296,7 @@ export const STATES = [
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "DSPS licence search",
+      name: "DSPS license search",
       url: "https://licensesearch.wi.gov/",
       searchable: true,
       note: "Shows the certification and the qualifier behind it.",
@@ -1310,13 +1310,13 @@ export const STATES = [
     baseline: {
       licence: "local",
       body: "City and county building departments",
-      detail: "Wyoming has no state contractor licence. Cheyenne, Casper and other municipalities license, and electrical work is licensed by the state Department of Fire Prevention and Electrical Safety.",
+      detail: "Wyoming has no state contractor license. Cheyenne, Casper and other municipalities license, and electrical work is licensed by the state Department of Fire Prevention and Electrical Safety.",
       source: "Wyoming Statutes title 35 ch. 9 (electrical); Wyoming has no statewide contractor licensing statute",
       sourceUrl: "https://wyofire.wyo.gov/electrical-safety",
       verifiedOn: "2026-09-27",
     },
     registry: {
-      name: "Electrical licence search",
+      name: "Electrical license search",
       url: "https://wyofire.wyo.gov/electrical-safety",
       searchable: false,
       note: "Covers electrical only. There is no state contractor register.",

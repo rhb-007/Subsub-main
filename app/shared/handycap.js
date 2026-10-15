@@ -324,7 +324,7 @@ export function handymanCapText(chk) {
     unknown_state: "Without a state there is no handyman limit to check. "
       + "Add the building's state, or the contractor's.",
     trade_not_exempt: "No state's handyman exemption covers it, whatever the amount — "
-      + "it takes the trade licence. Small repairs are usually fine; anything a permit "
+      + "it takes the trade license. Small repairs are usually fine; anything a permit "
       + "would be pulled for is not.",
     no_state_license: "Only city or county rules apply, and they often do.",
     no_exemption: `Unlicensed work is not exempt at any amount. ${above}`.trim(),
@@ -341,7 +341,7 @@ export function handymanCapText(chk) {
     under_cap: chk.figureIs === "year"
       ? `${fig} committed through this account this year, of ${cap} across their whole business.`
       : `${fig} on this job against a ${cap} limit.`,
-    cap_known: `Labour and materials together, per job. ${above}`.trim(),
+    cap_known: `Labor and materials together, per job. ${above}`.trim(),
     cap_unmeasured: "It counts their whole year across every client, which SubSub "
       + "cannot see all of.",
   }[chk.reason] || "";

@@ -294,7 +294,7 @@ export function docExpiryEmail({ company, contact, kind, expiresOn, daysOut, acc
 WORK ALREADY BOOKED
 ${jobs.map((j) => `  ${j.date || "date not set"}  ${j.title || "Job"}`).join("\n")}
 
-  These are NOT cancelled. Nobody is stranding your crew over paperwork.
+  These are NOT canceled. Nobody is stranding your crew over paperwork.
   But they are not covered either, which is a problem for you as much as
   for ${who}.
 ` : "";
@@ -595,7 +595,7 @@ ${by} ${invitedBy ? "added you to" : "added to"} ${who} on SubSub, as ${what}.
 Choose a password and you're in:
   ${link}
 
-SubSub is where ${who} keeps its subcontractors, their insurance and licences,
+SubSub is where ${who} keeps its subcontractors, their insurance and licenses,
 and the work orders that go out to them.
 
 This link works once and expires in 30 days. If you weren't expecting it, you
@@ -620,7 +620,7 @@ export function subInviteSms({ companyName, account, link, known = false }) {
   if (known) return `${who} has added ${companyName || "you"} to SubSub. `
     + `Your details are in -- choose a password to sign in: ${link}`;
   return `${who} has invited ${companyName || "you"} to join them on SubSub. `
-    + `Set up your account and upload your insurance and licence here: ${link}`;
+    + `Set up your account and upload your insurance and license here: ${link}`;
 }
 
 export function tenantInviteEmail({ firstName, account, propertyName, unit, link }) {
@@ -682,7 +682,7 @@ export const TENANT_STAGE_WORDS = {
   // who otherwise finds out by the repair never happening. The fallback below
   // answers "has been updated" for an unknown stage, which is true and
   // useless on the one message that has to say the work is not coming.
-  cancelled: (detail) => `has been cancelled: ${detail}`,
+  cancelled: (detail) => `has been canceled: ${detail}`,
   // A hold without a date is honest about being open-ended rather than
   // promising a day nobody has picked.
   deferred: (detail) => detail
@@ -733,7 +733,7 @@ an unmonitored address. Replies aren't received.`;
     // 066. A subject line decides whether this is read today or next week,
     // and "has moved" over a repair that is not happening is the one that
     // gets left.
-    : stage === "cancelled" ? `${who}: "${title}" has been cancelled`
+    : stage === "cancelled" ? `${who}: "${title}" has been canceled`
     : stage === "deferred" ? `${who}: "${title}" is on hold`
     : stage === "no_work" ? `${who}: "${title}" — nothing needed doing`
     : `${who}: "${title}" has moved`;
@@ -913,7 +913,7 @@ export function connectRequestEmail({ account, company, message, link }) {
 ${who} wants to work with ${company?.company || "your company"} on SubSub.
 
 You are already set up, so there is nothing to fill in. Say yes and they can
-send you work orders; your profile, crews, insurance and licence go with you
+send you work orders; your profile, crews, insurance and license go with you
 exactly as they are.
 ${message ? `\n${who} added: "${message}"\n` : ""}
 Answer here:

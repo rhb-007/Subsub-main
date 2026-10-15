@@ -39,6 +39,7 @@
 
 import { US_STATES } from "./states.js";
 import { AGREEMENT_V1_0_0 } from "./agreement-v1-0-0.js";
+import { AGREEMENT_V1_1_0 } from "./agreement-v1-1-0.js";
 
 const money = (cents) => {
   const n = Math.round(Number(cents) || 0) / 100;
@@ -72,7 +73,7 @@ const months = (n) => {
 const partyLine = (p) => {
   const bits = [p?.name || "", [p?.street, p?.city, p?.state, p?.zip].filter(Boolean).join(", ")]
     .filter(Boolean);
-  if (p?.license) bits.push(`licence no. ${p.license}`);
+  if (p?.license) bits.push(`license no. ${p.license}`);
   return bits.join(" of ");
 };
 
@@ -115,7 +116,12 @@ export const STANDARD_AGREEMENT = {
   // against it, and the period renders as years where it is a whole number of
   // them. 1.0.0 is frozen in `agreement-v1-0-0.js` and still renders every
   // agreement issued under it.
-  version: "1.1.0",
+  //
+  // 1.2.0 is spelling only: the text is in American English (license,
+  // authorizes, authorized, in favor of). 1.1.0 is frozen in
+  // `agreement-v1-1-0.js` with its British spellings, because that is what
+  // was signed under it.
+  version: "1.2.0",
   // IT IS SUBSUB'S FORM AND IT SAYS SO. Whose document this is, is the first
   // thing either party needs to know -- a form headed with the hiring
   // company's name reads as their own bespoke paper, which is the opposite of
@@ -151,7 +157,7 @@ export const STANDARD_AGREEMENT = {
       body: (x) => [
         `The ${x.T.hired} will perform each accepted work order in a good and workmanlike manner, in accordance with the drawings, specifications and scope stated in it, and in compliance with all applicable laws, codes and permit conditions.`,
         `The ${x.T.hired} will keep the site reasonably clean, and will remove its own debris and surplus material on completing the work.`,
-        `The ${x.T.hired} will not perform work outside an accepted work order and expect payment for it. Additional or changed work must be authorised in writing, with its price and any schedule effect agreed, before it is carried out.`,
+        `The ${x.T.hired} will not perform work outside an accepted work order and expect payment for it. Additional or changed work must be authorized in writing, with its price and any schedule effect agreed, before it is carried out.`,
       ],
     },
     {
@@ -160,9 +166,9 @@ export const STANDARD_AGREEMENT = {
       body: (x) => {
         const st = stateName(x.terms.governingState);
         return [
-          `The ${x.T.hired} represents that it holds, and will maintain throughout this agreement, every licence, registration, bond and permit required for the work it performs${st ? ` in ${st}` : ""}, and that it is in good standing under each.`,
+          `The ${x.T.hired} represents that it holds, and will maintain throughout this agreement, every license, registration, bond and permit required for the work it performs${st ? ` in ${st}` : ""}, and that it is in good standing under each.`,
           `The ${x.T.hired} will tell the ${x.T.hiring} promptly if any of those lapses, is suspended or is revoked.`,
-          `The ${x.T.hired} will keep its records in SubSub current, and authorises the ${x.T.hiring} to verify its licence status with the issuing authority.`,
+          `The ${x.T.hired} will keep its records in SubSub current, and authorizes the ${x.T.hiring} to verify its license status with the issuing authority.`,
         ];
       },
     },
@@ -191,7 +197,7 @@ export const STANDARD_AGREEMENT = {
         const endorse = [];
         if (t.additionalInsured) endorse.push(`name the ${x.T.hiring} as an additional insured on the general liability and automobile policies, for both ongoing and completed operations`);
         if (t.primaryNonContributory) endorse.push(`be primary and non-contributory with respect to any insurance the ${x.T.hiring} carries`);
-        if (t.waiverOfSubrogation) endorse.push(`include a waiver of subrogation in favour of the ${x.T.hiring}`);
+        if (t.waiverOfSubrogation) endorse.push(`include a waiver of subrogation in favor of the ${x.T.hiring}`);
         if (endorse.length) {
           lines.push(`The ${x.T.hired}'s policies will ${endorse.join("; ")}.`);
         }
@@ -274,7 +280,7 @@ export const STANDARD_AGREEMENT = {
         `This agreement runs until either party ends it. Either party may end it for convenience on ${plural(x.terms.noticeDays, "day", "days")} written notice.`,
         `Ending this agreement does not affect a work order already accepted, which continues under these terms until it is completed or separately ended.`,
         `The ${x.T.hiring} may suspend or end a particular work order on written notice if the ${x.T.hired} fails to perform it and does not cure the failure within ${plural(x.terms.cureDays, "day", "days")} of being told of it in writing. In that case the ${x.T.hired} is paid for work properly performed up to that point, less the reasonable cost of completing or correcting it.`,
-        `The ${x.T.hiring} may suspend scheduling, without ending this agreement, while the ${x.T.hired}'s licence or required insurance is not current.`,
+        `The ${x.T.hiring} may suspend scheduling, without ending this agreement, while the ${x.T.hired}'s license or required insurance is not current.`,
       ],
     },
     {
@@ -338,4 +344,5 @@ export const TEMPLATES = {
   // Its own file, frozen, never edited -- see the header there for why it is a
   // whole copy rather than a patch on the current text.
   [templateKey(AGREEMENT_V1_0_0.id, AGREEMENT_V1_0_0.version)]: AGREEMENT_V1_0_0,
+  [templateKey(AGREEMENT_V1_1_0.id, AGREEMENT_V1_1_0.version)]: AGREEMENT_V1_1_0,
 };

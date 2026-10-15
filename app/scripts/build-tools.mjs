@@ -591,7 +591,7 @@ ${mine.map((p) => `  <url>\n    <loc>${p.url}</loc>\n    <lastmod>${p.lastmod}</
   }
   if (!quiet) {
     console.log(`Wrote ${pages.length} pages, subs.html, gc.html, check/sitemap.xml and handyman-limits/sitemap.xml`);
-    console.log(`Live licence checks: ${LIVE_STATES.join(", ")}. Every other state links to its own board.`);
+    console.log(`Live license checks: ${LIVE_STATES.join(", ")}. Every other state links to its own board.`);
     const owed = Object.keys(HANDYMAN_CAPS).filter((k) => HANDYMAN_CAPS[k].verify).sort();
     console.log(`Handyman figures not yet confirmed against the state board (${owed.length}): ${owed.join(", ")}`);
   }

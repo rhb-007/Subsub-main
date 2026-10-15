@@ -123,7 +123,7 @@ try {
   VERIFY = [400, { error: "no_license_on_file" }];
   await press(page);
   c = await readCard(page);
-  t.ck("no number on file is named", /no licence number on file/i.test(c.msg), c.msg);
+  t.ck("no number on file is named", /no license number on file/i.test(c.msg), c.msg);
 
   VERIFY = [200, ACTIVE];
   await press(page);

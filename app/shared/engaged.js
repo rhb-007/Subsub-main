@@ -28,7 +28,7 @@ export const ENGAGED_AS = {
   subcontractor: { id: "subcontractor", label: "Subcontractor",
     note: "Licensed trade company. Carries their own insurance and bond." },
   handyman: { id: "handyman", label: "Handyman",
-    note: "Maintenance worker for small jobs. No contractor licence, and insurance is not required." },
+    note: "Maintenance worker for small jobs. No contractor license, and insurance is not required." },
 };
 export const isEngagedAs = (v) => Object.prototype.hasOwnProperty.call(ENGAGED_AS, String(v || ""));
 // UNKNOWN AND ABSENT BOTH READ AS SUBCONTRACTOR, deliberately. Every row that

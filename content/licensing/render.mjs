@@ -262,9 +262,9 @@ export function tradePage({ chrome, state, trade, others }) {
   const a = answerFor(state, trade.id);
   const base = baselineOf(state);
   const needs = a.licence === "state" || a.licence === "registration";
-  const title = `${trade.label} contractor licence in ${state.name} | SubSub`;
+  const title = `${trade.label} contractor license in ${state.name} | SubSub`;
   const body = `
-    <h1>Do ${trade.label.toLowerCase()} contractors need a licence in ${esc(state.name)}?</h1>
+    <h1>Do ${trade.label.toLowerCase()} contractors need a license in ${esc(state.name)}?</h1>
     <p class="lic-sub">What the state requires, and what a hiring contractor will ask you
       for either way.</p>
 
@@ -297,18 +297,18 @@ ${sourceBlock(a.own || a)}
 ${askedAnyway()}
 ${SUB_CTA}
 ${GC_CTA(needs
-    ? `A ${trade.label.toLowerCase()} licence in ${state.name} can be looked up, and should be.`
-    : `There is no ${state.name} licence number to check for this trade, because there isn't one.`)}
+    ? `A ${trade.label.toLowerCase()} license in ${state.name} can be looked up, and should be.`
+    : `There is no ${state.name} license number to check for this trade, because there isn't one.`)}
 ${relatedBlock(state, trade, others)}`;
   // Each answer is the visible text of the block it names, in plain words.
   const faq = [
-    { q: `Do ${trade.label.toLowerCase()} contractors need a licence in ${state.name}?`,
+    { q: `Do ${trade.label.toLowerCase()} contractors need a license in ${state.name}?`,
       a: `${needs ? "Yes" : "No"}. ${plain(a.detail || LEVEL_LABEL[a.licence])}` },
     { q: `Who administers ${trade.label.toLowerCase()} licensing in ${state.name}?`,
       a: a.body
         ? `${plain(a.body)} administers it.`
-        : `Nobody at state level. ${state.name} does not administer a licence for this trade.` },
-    { q: `Is there a searchable ${state.name} licence register?`,
+        : `Nobody at state level. ${state.name} does not administer a license for this trade.` },
+    { q: `Is there a searchable ${state.name} license register?`,
       a: state.registry?.searchable
         ? `Yes — ${plain(state.registry.name)}.`
         : `No. ${state.name} publishes no searchable register for this trade.` },
@@ -374,7 +374,7 @@ ${differs.map((t) => {
 ${same.map((t) => `      <li><span>${esc(t.label)}</span></li>`).join("\n")}
     </ul>
 ${state.registry ? `
-    <h2>Checking a licence</h2>
+    <h2>Checking a license</h2>
     <div class="lic-facts">
       <div class="lic-fact"><span class="k">Registry</span>
         <span class="v">${state.registry.searchable
@@ -388,8 +388,8 @@ ${sourceBlock(base)}
 ${askedAnyway()}
 ${SUB_CTA}
 ${GC_CTA(strict
-    ? `${state.name} registers contractors, so a licence number can be looked up.`
-    : `${state.name} has no general contractor licence to look up.`)}
+    ? `${state.name} registers contractors, so a license number can be looked up.`
+    : `${state.name} has no general contractor license to look up.`)}
 ${state.cities?.length ? `
     <h2>Cities that add their own rules</h2>
     <p>Where the state is quiet, municipalities fill the gap, and they do not agree with
@@ -398,7 +398,7 @@ ${state.cities?.length ? `
 ${state.cities.map((c) => `      <li><span>${esc(c)}</span></li>`).join("\n")}
     </ul>` : ""}`;
   const faq = [
-    { q: `Does ${state.name} require a contractor licence?`,
+    { q: `Does ${state.name} require a contractor license?`,
       a: plain(base.detail || LEVEL_LABEL[base.licence]) },
     { q: `Which trades does ${state.name} treat differently?`,
       a: differs.length
@@ -408,7 +408,7 @@ ${state.cities.map((c) => `      <li><span>${esc(c)}</span></li>`).join("\n")}
     // in a table cell and nothing more, which is too thin to mark up as an
     // answer -- the same rule that keeps the index to one pair.
     ...(state.registry?.searchable ? [{
-      q: `How do you check a ${state.name} contractor licence?`,
+      q: `How do you check a ${state.name} contractor license?`,
       a: `${plain(state.registry.name)}${state.registry.note
         ? `. ${plain(state.registry.note)}` : "."}` }] : []),
     DOCS_QA,
@@ -458,7 +458,7 @@ ${SUB_CTA}`;
   ];
   return page({ chrome, title, faq, modified,
     description: `Which states treat ${trade.label.toLowerCase()} differently from other `
-      + `construction work, who administers the licence, and what hiring contractors ask for.`,
+      + `construction work, who administers the license, and what hiring contractors ask for.`,
     canonical: `/licensing/trade/${trade.id}.html`,
     crumbs: [{ name: "SubSub", url: "/" }, { name: "Licensing", url: "/licensing/" },
       { name: trade.label, url: `/licensing/trade/${trade.id}.html` }],

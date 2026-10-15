@@ -101,8 +101,8 @@ const ITEMS = {
       fix: "The carrier name or policy number cannot be read on this copy. Send a clearer one." },
   ],
   bond: () => [
-    { id: "active", label: "Bond is active, not cancelled",
-      fix: "This bond reads as cancelled or lapsed. Send the current one." },
+    { id: "active", label: "Bond is active, not canceled",
+      fix: "This bond reads as canceled or lapsed. Send the current one." },
     { id: "amount", label: `Bond amount at least ${money(BOND_MIN)}`,
       fix: `The bond needs to be at least ${money(BOND_MIN)}.` },
     { id: "principal", label: "Principal matches the company name on file",

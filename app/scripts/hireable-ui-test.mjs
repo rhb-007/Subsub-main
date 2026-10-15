@@ -84,7 +84,7 @@ try {
   ck("with a QR code on it", panel.qr && panel.qrPaths > 0, `${panel.qrPaths} paths`);
   ck("and the code in words too", /^[0-9A-Z]{10}$/.test(panel.code), panel.code);
   ck("it asks for the three things a search matches on",
-    ["Email", "Mobile", "Licence number"].every((l) => panel.fields.includes(l)),
+    ["Email", "Mobile", "License number"].every((l) => panel.fields.includes(l)),
     panel.fields.join(" | "));
   // A profile with none of them is findable by nobody, and nothing else on
   // the page would ever say so.

@@ -97,7 +97,7 @@ const daysBetween = (from, to) =>
 export const ELIGIBILITY_TEXT = {
   not_opted_in: "You have not opted in to overflow work.",
   no_trades_chosen: "Choose which trades you want overflow work for.",
-  license_not_verified: "Your licence has not been verified yet.",
+  license_not_verified: "Your license has not been verified yet.",
   documents_not_current: "Your insurance or bond is not current.",
   too_few_ratings: `You need at least ${ELIGIBILITY.minRatedJobs} rated jobs.`,
   rating_too_low: `Overflow work goes to contractors rated ${ELIGIBILITY.minRating.toFixed(1)} and above.`,

@@ -30,7 +30,7 @@ export const CLOSED_REASONS = {
   // could not reach at all: `withdraw` is the requester's own move and most
   // jobs have no requester, `decline` refuses anything already approved. So
   // the only way out was to record that work had been done.
-  cancelled: { label: "Cancelled", why: "This work is not being done." },
+  cancelled: { label: "Canceled", why: "This work is not being done." },
   // AND COMPLETE WITH NOTHING DONE, which is a completion and must not read
   // as verified work. Same colour as completed, told apart by the words --
   // the rule `docs.js` keeps about expired and never-added.
@@ -45,7 +45,7 @@ export const CLOSED_REASONS = {
 export const ENDING_KINDS = {
   cancelled: {
     id: "cancelled", label: "Cancel this job", terminal: true, needsNote: true,
-    short: "Cancelled",
+    short: "Canceled",
     // What pressing it says, in the words somebody deciding needs.
     note: "This work is not going ahead. The job and its history stay; anybody booked is stood down.",
   },
@@ -198,7 +198,7 @@ export const ENDING_REFUSALS = {
   job_not_found: "That job isn't here any more.",
   bad_kind: "That isn't one of the ways a job can end.",
   not_approved: "This is still a request nobody has approved. Decline it instead.",
-  already_cancelled: "This job was already cancelled.",
+  already_cancelled: "This job was already canceled.",
   already_completed: "This job is already complete. Reopen it first.",
   already_no_work: "This job is already closed out. Reopen it first.",
   already_withdrawn: "Whoever asked for this took it back already.",
@@ -206,7 +206,7 @@ export const ENDING_REFUSALS = {
   already_deferred: "This job is already on hold.",
   not_deferred: "This job isn't on hold.",
   reason_required: "Say why, so somebody reading this in six months knows.",
-  money_funded: "There is money funded against this job, so cancelling it is a refund"
+  money_funded: "There is money funded against this job, so canceling it is a refund"
     + " rather than a tidy-up. Refund what is unspent first, on the work order.",
 };
 
@@ -279,7 +279,7 @@ export const JOB_PROGRESS = {
   // 066's three, in their own words rather than flattened to "closed":
   // somebody who read the problem and decided nothing needed doing is saying
   // a different thing from somebody calling the work off.
-  cancelled: { id: "cancelled", tone: "plain", label: "Cancelled" },
+  cancelled: { id: "cancelled", tone: "plain", label: "Canceled" },
   no_work: { id: "no_work", tone: "plain", label: "No work needed" },
   on_hold: { id: "on_hold", tone: "wait", label: "On hold" },
   withdrawn: { id: "withdrawn", tone: "plain", label: "Withdrawn" },

@@ -22,10 +22,10 @@ export const LICENCE_LEVELS = ["none", "registration", "local", "state"];
 export const levelRank = (l) => Math.max(0, LICENCE_LEVELS.indexOf(l));
 
 export const LEVEL_LABEL = {
-  none: "No licence required",
+  none: "No license required",
   registration: "Registration required",
   local: "Set by each city",
-  state: "State licence required",
+  state: "State license required",
 };
 
 // Nothing goes out without these. A page that cannot say where its answer came
