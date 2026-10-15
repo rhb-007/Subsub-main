@@ -13001,16 +13001,16 @@ refactor.
   rewrites the table's SQL text, and a comment before the last column made
   the rewrite invalid, so the schema comment now sits after the table.
 
-  **The pricing page has a calculator** (`#unitsCalc`), asked for as *"a place
-  to select how many active units to determine the monthly rate"*. It takes the
-  total units and the occupied count, with occupied following the total until
-  somebody types in it. It shows the month and the setup fee, and it refuses an
-  occupied count above the total. The setup step is read off the TOTAL units and
-  the price off the OCCUPIED ones, the rule the checkout follows. The page has no
-  build step, so the figures sit in data attributes as a hand copy;
-  `test:unitcalc` compares each one with `unitpricing.js` and drives the page
-  against `unitPricing()` itself. A page comment had claimed `test:sitetools`
-  already did this, and no test did.
+  **The price is worked out in signup, not on the pricing page.** A
+  calculator (`#unitsCalc`) sat there briefly and came off on request: *"Work
+  out your price should be part of the flow of signup, should not be on the
+  pricing page"*. Signup is the one place the answer is also what the account
+  is billed on (see below), so a second calculator was a second place to quote
+  a price. The pricing page keeps the rule in words and the table of setup
+  steps, and a **Start on Scale** button opens signup as a property manager
+  on Scale, monthly, with the units asked first. `test:unitcalc` pins each
+  figure the page still states against `unitpricing.js`, and pins that the
+  calculator is gone and the button goes there.
 
   **Not verified here:** a live Stripe checkout with a `price_data` line on an
   existing product, and a live invoice item. Both are the documented shapes and
@@ -13036,10 +13036,10 @@ refactor.
     monthly and says so; back under 80 the yearly choice returns. The figures
     are a hand copy in data attributes, because the page has no build step, and
     `test:signupunits` pins each one against the module.
-  - **The pricing calculator links into signup** (*Start on Scale with these
-    units*) with the units in the query string. Arriving with units and no role
-    preselects Property manager, the commonest of the three. It is the first
-    thing on step 1, so a portfolio manager or owner can see it and change it.
+  - **The pricing page links into signup as a property manager**, the
+    commonest of the three (`?as=property%20manager`). A link carrying
+    `units` and no role does the same. The role is the first thing on step 1,
+    so a portfolio manager or owner can see it and change it.
   - **The server stores the answer and prices from it.** Wrong numbers are
     refused by name (`invalid_units`, `occupied_over_units`). A general
     contractor's units are ignored. Past 80 the server stores monthly even

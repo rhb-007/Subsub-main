@@ -302,18 +302,16 @@ try {
     await page.close();
   }
 
-  console.log("\n-- the pricing calculator links into it --");
+  console.log("\n-- the pricing page sends people here rather than pricing them itself --");
   {
-    const page = await browser.newPage();
-    await page.goto(pathToFileURL(PRICING).href, { waitUntil: "domcontentloaded" });
-    await wait(200);
-    await set(page, "ucTotal", 420); await set(page, "ucOcc", 400);
-    const go = await page.evaluate(() => { const a = document.getElementById("ucGo"); return { href: a.getAttribute("href"), hidden: a.hidden }; });
-    t.ck("the link carries the units and asks for Scale, monthly", !go.hidden
-      && /get-started\.html\?plan=scale&billing=monthly&units=420&occupied=400$/.test(go.href), JSON.stringify(go));
-    await set(page, "ucOcc", 500);
-    t.ck("and is withdrawn while the numbers cannot be priced", await page.evaluate(() => {
-      const a = document.getElementById("ucGo"); return a.hidden && getComputedStyle(a).display === "none"; }));
+    const ph = readFileSync(PRICING, "utf8").replace(/<!--[\s\S]*?-->/g, "");
+    t.ck("the pricing page has no calculator", !/unitsCalc|Work out your price/.test(ph));
+    const href = (ph.match(/id="unitsGoBtn"[^>]*href="([^"]+)"/) || [])[1] || "";
+    t.ck("and links into signup as a property manager on Scale, monthly",
+      href === "get-started.html?plan=scale&amp;billing=monthly&amp;as=property%20manager", href);
+    const { page } = await open("?plan=scale&billing=monthly&as=property%20manager");
+    const s = await read(page);
+    t.ck("which opens on Property manager with the units asked", s.role === "Property manager" && s.shown, JSON.stringify(s));
     await page.close();
   }
 

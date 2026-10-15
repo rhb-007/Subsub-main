@@ -1617,11 +1617,12 @@ body.nav-open{overflow:hidden}
      falls back to the default instead of writing a kind nothing renders. */
   (function(){
     var want = (qs.get('as') || '').trim().toLowerCase();
-    /* 086. The pricing calculator's link carries the units; only the three
-       kinds that keep buildings are priced per unit, so arriving with units
-       and no role opens on the commonest of them rather than on general
-       contractor, where the units would not be asked for at all. It is the
-       first thing on step 1, so a portfolio manager sees it and changes it. */
+    /* 086. A link carrying units (the pricing page's own link names the
+       role instead); only the three kinds that keep buildings are priced per
+       unit, so arriving with units and no role opens on the commonest of them
+       rather than on general contractor, where the units would not be asked
+       for at all. It is the first thing on step 1, so a portfolio manager
+       sees it and changes it. */
     if(!want && /^\d{1,6}$/.test(qs.get('units') || '')) want = 'property manager';
     if(!want) return;
     var hit = null;

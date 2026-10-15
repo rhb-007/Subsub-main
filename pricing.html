@@ -350,20 +350,8 @@ body.nav-open{overflow:hidden}
 .units-tiers th,.units-tiers td{padding:9px 10px;border-bottom:1px solid var(--line, #DDE4E0);text-align:left}
 .units-tiers td:last-child,.units-tiers th:last-child{text-align:right}
 @media (max-width:760px){.units-band{grid-template-columns:1fr;padding:22px 18px}}
-.units-calc{grid-column:1 / -1;border-top:1px solid var(--line, #DDE4E0);padding-top:20px}
-.units-calc h3{margin:0 0 12px;font-size:18px}
-.uc-fields{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:520px}
-.uc-fields label{display:flex;flex-direction:column;gap:6px;font-size:14px;font-weight:600}
-.uc-fields input{font:inherit;font-size:18px;padding:10px 12px;border:1px solid var(--line, #DDE4E0);border-radius:10px;min-height:46px;width:100%;box-sizing:border-box}
-#ucRange{width:100%;max-width:520px;margin:14px 0 6px;height:32px}
-.uc-out{margin-top:6px}
-.uc-month{font-size:30px;font-weight:800;margin:0}
-.uc-month em{font-size:15px;font-weight:600;font-style:normal;opacity:.7}
-.uc-how,.uc-setup{margin:6px 0 0;line-height:1.5}
-.uc-go{margin-top:16px}
-.uc-go[hidden]{display:none}
-.uc-err{color:#b5442e;font-weight:600}
-@media (max-width:520px){.uc-fields{grid-template-columns:1fr}}
+.units-go{grid-column:1 / -1;border-top:1px solid var(--line, #DDE4E0);padding-top:18px;display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px}
+.units-go p{margin:0;line-height:1.5;flex:1 1 280px}
 </style>
 <style>
   .phead{padding:56px 0 10px}
@@ -526,33 +514,16 @@ body.nav-open{overflow:hidden}
             <tr><td>Above 1,000</td><td>$2,000</td></tr>
           </tbody>
         </table>
-        <!-- WORK OUT YOUR PRICE. Asked for as "a place to select how many
-             active units". Every figure the script reads is in the data
-             attributes here, and test:unitcalc compares each one with
-             app/shared/unitpricing.js -- the module the checkout charges by --
-             so this page cannot quote a price the bill does not. The marketing
-             site has no build step, so it is a hand copy kept honest by a test,
-             the same trade get-started.html makes with the states list. -->
-        <div class="units-calc" id="unitsCalc" data-threshold="80" data-unit-cents="125"
-             data-min-cents="9900" data-setup="250:25000,500:50000,1000:100000,0:200000">
-          <h3>Work out your price</h3>
-          <div class="uc-fields">
-            <label>Units across your buildings
-              <input id="ucTotal" type="number" inputmode="numeric" min="0" step="1" value="120"></label>
-            <label>Occupied now
-              <input id="ucOcc" type="number" inputmode="numeric" min="0" step="1" value="110"></label>
-          </div>
-          <input id="ucRange" type="range" min="0" max="1500" step="10" value="120"
-                 aria-label="Units across your buildings">
-          <div class="uc-out" aria-live="polite">
-            <p class="uc-month"><span id="ucMonth">$137.50</span> <em>/month</em></p>
-            <p class="uc-how" id="ucHow">$1.25 × 110 occupied units, billed monthly.</p>
-            <p class="uc-setup" id="ucSetup">Plus a one-time setup fee of <b>$250</b>.</p>
-            <!-- 086. Into signup with the answer, so the form quotes the same
-                 price and the account is billed on it from the first invoice. -->
-            <a class="btn btn-forest uc-go" id="ucGo"
-               href="get-started.html?plan=scale&amp;billing=monthly&amp;units=120&amp;occupied=110">Start on Scale with these units</a>
-          </div>
+        <!-- YOUR PRICE IS WORKED OUT AS YOU SIGN UP, NOT HERE. Asked for in
+             those words: the calculator that sat here came off, and the
+             signup form asks for the units and quotes the month and the setup
+             fee as they are typed (get-started.html, #unitsAsk), which is the
+             one place the answer is also what the account is billed on. -->
+        <div class="units-go" id="unitsGo">
+          <p>Your price is worked out as you sign up: tell us how many units you manage and how many
+            are occupied, and the form shows your monthly price and any setup fee before you pay anything.</p>
+          <a class="btn btn-forest" id="unitsGoBtn"
+             href="get-started.html?plan=scale&amp;billing=monthly&amp;as=property%20manager">Start on Scale</a>
         </div>
       </div>
     </div>
@@ -685,50 +656,6 @@ body.nav-open{overflow:hidden}
 
 </footer>
 
-<script>
-/* The units calculator. The rule is app/shared/unitpricing.js, copied by
-   hand because this page has no build step; the figures come off the
-   data attributes, which test:unitcalc compares with that module. */
-(function(){
-  var box=document.getElementById('unitsCalc'); if(!box) return;
-  var TH=+box.dataset.threshold, UNIT=+box.dataset.unitCents, MIN=+box.dataset.minCents;
-  var STEPS=box.dataset.setup.split(',').map(function(p){var a=p.split(':');return [+a[0]||Infinity,+a[1]];});
-  var tot=document.getElementById('ucTotal'), occ=document.getElementById('ucOcc'), rng=document.getElementById('ucRange');
-  var usd=function(c){return '$'+(c/100).toLocaleString('en-US',{minimumFractionDigits:c%100?2:0,maximumFractionDigits:2});};
-  var num=function(el){var n=Math.floor(Number(el.value));return isFinite(n)&&n>=0?n:0;};
-  var occTouched=false;
-  function draw(){
-    var t=num(tot), o=num(occ);
-    var month=document.getElementById('ucMonth'), how=document.getElementById('ucHow'), setup=document.getElementById('ucSetup');
-    var go=document.getElementById('ucGo');
-    how.classList.remove('uc-err');
-    go.hidden=o>t;
-    go.href='get-started.html?plan=scale&billing=monthly&units='+t+'&occupied='+o;
-    if(o>t){ month.textContent='\u2014'; how.textContent='More units are occupied than your buildings have.';
-      how.classList.add('uc-err'); setup.textContent=''; return; }
-    if(t<=TH){
-      month.textContent=usd(MIN);
-      how.textContent='The flat Scale price, monthly or yearly. Per-unit pricing starts past '+TH+' units.';
-      setup.textContent='No setup fee.'; return;
-    }
-    var per=UNIT*o, bill=Math.max(MIN,per);
-    month.textContent=usd(bill);
-    how.textContent=per<MIN
-      ? usd(UNIT)+' \u00d7 '+o.toLocaleString('en-US')+' occupied is '+usd(per)+', so you pay the '+usd(MIN)+' minimum. Billed monthly.'
-      : usd(UNIT)+' \u00d7 '+o.toLocaleString('en-US')+' occupied units, billed monthly.';
-    var fee=STEPS.filter(function(s){return t<=s[0];})[0][1];
-    setup.innerHTML='Plus a one-time setup fee of <b>'+usd(fee)+'</b>.';
-  }
-  tot.addEventListener('input',function(){
-    rng.value=Math.min(num(tot),+rng.max);
-    if(!occTouched) occ.value=num(tot);
-    draw();
-  });
-  rng.addEventListener('input',function(){ tot.value=rng.value; if(!occTouched) occ.value=rng.value; draw(); });
-  occ.addEventListener('input',function(){ occTouched=true; draw(); });
-  draw();
-})();
-</script>
 <script>
   function setCycle(c){
     var annual = c === 'a';
