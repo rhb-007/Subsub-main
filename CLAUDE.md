@@ -13001,6 +13001,17 @@ refactor.
   rewrites the table's SQL text, and a comment before the last column made
   the rewrite invalid, so the schema comment now sits after the table.
 
+  **The pricing page has a calculator** (`#unitsCalc`), asked for as *"a place
+  to select how many active units to determine the monthly rate"*. It takes the
+  total units and the occupied count, with occupied following the total until
+  somebody types in it. It shows the month and the setup fee, and it refuses an
+  occupied count above the total. The setup step is read off the TOTAL units and
+  the price off the OCCUPIED ones, the rule the checkout follows. The page has no
+  build step, so the figures sit in data attributes as a hand copy;
+  `test:unitcalc` compares each one with `unitpricing.js` and drives the page
+  against `unitPricing()` itself. A page comment had claimed `test:sitetools`
+  already did this, and no test did.
+
   **Not verified here:** a live Stripe checkout with a `price_data` line on an
   existing product, and a live invoice item. Both are the documented shapes and
   the suite asserts them at `fetch`, but the first real per-unit checkout is
