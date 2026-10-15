@@ -7193,8 +7193,11 @@ app.get("/api/message-contacts", async (c) => {
     const seenT = new Set();
     for (const t of tenants || []) {
       if (seenT.has(t.id)) continue; seenT.add(t.id);
+      // The building rides along so the picker can group and filter by it:
+      // a building can hold a thousand tenants and a flat list cannot be read.
       out.push({ kind: "tenant", group: "Tenants", label: t.name || "Tenant",
         sub: [t.unit && `Unit ${t.unit}`, t.property_name].filter(Boolean).join(", "),
+        unit: t.unit || null, propertyId: t.property_id || null, propertyName: t.property_name || null,
         start: { kind: "tenant", partyUserId: t.id } });
     }
     const { results: crews } = await db.prepare(
@@ -7218,6 +7221,7 @@ app.get("/api/message-contacts", async (c) => {
     ).bind(viewer.accountId, ...scope.vals).all();
     for (const o of owners || []) {
       out.push({ kind: "owner", group: "Owners", label: o.name || "Owner", sub: `Owner of ${o.property_name}`,
+        propertyId: o.property_id, propertyName: o.property_name,
         start: { kind: "owner", partyUserId: o.id, propertyId: o.property_id } });
     }
     const pscope = scopeClause(viewer, "p.id");
@@ -7228,6 +7232,7 @@ app.get("/api/message-contacts", async (c) => {
     ).bind(viewer.accountId, ...pscope.vals).all();
     for (const o of ownerAccts || []) {
       out.push({ kind: "owner", group: "Owners", label: o.owner_name, sub: `Owner of ${o.name}`,
+        propertyId: o.id, propertyName: o.name,
         start: { kind: "owner", partyAccountId: o.owner_id, propertyId: o.id } });
     }
     // From the other side: the clients that hire this account's own company,

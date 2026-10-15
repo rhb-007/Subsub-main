@@ -35704,43 +35704,94 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
 
 // Who the caller may start a conversation with: their own relationships,
 // grouped, and a search box over THAT list only.
+// How many rows of one list are drawn before search takes over. A building can
+// hold a thousand tenants; drawing them all is a list nobody scrolls and a
+// modal that stalls an iPad.
+const NM_CAP = 40;
+
 function NewMessagePicker({ onPick, onClose }) {
   const [contacts, setContacts] = useState(null);
   const [q, setQ] = useState("");
+  const [who, setWho] = useState("");
+  const [prop, setProp] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(null);
   useEffect(() => {
     api.messageContacts().then((r) => setContacts(r.contacts || [])).catch((e) => setErr(messageErrText(e)));
   }, []);
-  const shown = (contacts || []).filter((c) => !q.trim()
-    || `${c.label} ${c.sub}`.toLowerCase().includes(q.trim().toLowerCase()));
-  const groups = [...new Set(shown.map((c) => c.group))];
+  const all = contacts || [];
+  const groupNames = [...new Set(all.map((c) => c.group))];
+  // The buildings anybody listed is at, for the dropdown. Only drawn when there
+  // is more than one, because a filter with one answer narrows nothing.
+  const props = [...new Map(all.filter((c) => c.propertyId).map((c) => [c.propertyId, c.propertyName || "Building"])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1]));
+  const needle = q.trim().toLowerCase();
+  const shown = all.filter((c) => (!who || c.group === who)
+    && (!prop || c.propertyId === prop)
+    && (!needle || `${c.label} ${c.sub || ""} ${c.unit ? `unit ${c.unit}` : ""}`.toLowerCase().includes(needle)));
+  // Tenants are grouped by building; everybody else by what they are.
+  const sections = [];
+  for (const g of groupNames) {
+    const rows = shown.filter((c) => c.group === g);
+    if (!rows.length) continue;
+    if (g === "Tenants") {
+      const byProp = new Map();
+      for (const c of rows) {
+        const k = c.propertyId || "";
+        if (!byProp.has(k)) byProp.set(k, { title: c.propertyName ? `Tenants · ${c.propertyName}` : "Tenants", rows: [] });
+        byProp.get(k).rows.push(c);
+      }
+      [...byProp.values()].sort((a, b) => a.title.localeCompare(b.title)).forEach((x) => sections.push(x));
+    } else sections.push({ title: g, rows });
+  }
   const choose = async (c) => {
     setBusy(c); setErr("");
     try { const r = await api.startThread(c.start); onPick(r.thread.id); }
     catch (e) { setErr(messageErrText(e)); setBusy(null); }
   };
+  const narrowed = !!(who || prop || needle);
   return (
     <Modal onClose={onClose}>
       <h3>New message</h3>
       <p className="fld-note">You can write to the people you already work with. To reach somebody new, add them first.</p>
-      {(contacts?.length || 0) > 6 && (
-        <input className="nm-search" placeholder="Search your contacts" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />
+      {all.length > 0 && (
+        <div className="nm-filters">
+          <input className="nm-search" type="search" placeholder="Search by name or unit" value={q}
+            onChange={(e) => setQ(e.target.value)} autoFocus aria-label="Search your contacts" />
+          {groupNames.length > 1 && (
+            <select className="nm-sel" value={who} onChange={(e) => setWho(e.target.value)} aria-label="Who">
+              <option value="">Everybody</option>
+              {groupNames.map((g) => <option key={g} value={g}>{g}</option>)}
+            </select>
+          )}
+          {props.length > 1 && (
+            <select className="nm-sel" value={prop} onChange={(e) => setProp(e.target.value)} aria-label="Building">
+              <option value="">All buildings</option>
+              {props.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          )}
+        </div>
       )}
       {err && <p className="err-note">{err}</p>}
       {!contacts && !err && <p className="fld-note">Loading…</p>}
       {contacts && !contacts.length && <p className="fld-note">Nobody to write to yet.</p>}
+      {contacts && contacts.length > 0 && !shown.length && (
+        <p className="fld-note">Nobody matches. {narrowed && <button className="link-btn" onClick={() => { setQ(""); setWho(""); setProp(""); }}>Clear</button>}</p>
+      )}
       <div className="nm-list">
-        {groups.map((g) => (
-          <div key={g} className="nm-group">
-            <div className="form-sec">{g}</div>
-            {shown.filter((c) => c.group === g).map((c, i) => (
-              <button key={`${g}-${i}`} className="nm-row" disabled={!!busy} onClick={() => choose(c)}>
+        {sections.map((sec) => (
+          <div key={sec.title} className="nm-group">
+            <div className="form-sec">{sec.title} <span className="nm-n">{sec.rows.length}</span></div>
+            {sec.rows.slice(0, NM_CAP).map((c, i) => (
+              <button key={`${sec.title}-${i}`} className="nm-row" disabled={!!busy} onClick={() => choose(c)}>
                 <span className="thr-av sm">{initialsOf(c.label)}</span>
                 <span className="nm-txt"><b>{c.label}</b>{c.sub && <span>{c.sub}</span>}</span>
                 <ChevronRight size={16} />
               </button>
             ))}
+            {sec.rows.length > NM_CAP && (
+              <p className="nm-more">Showing {NM_CAP} of {sec.rows.length.toLocaleString()}. Search by name or unit to find the rest.</p>
+            )}
           </div>
         ))}
       </div>
@@ -35913,13 +35964,18 @@ function UnreadMessages() {
         <span className="sec-count amber">{rows.reduce((n, t) => n + t.unread, 0)}</span></h3>
       <DashRows id="messages">
         {rows.map((t) => (
-          <div key={t.id} className="dash-row yt-row msg-row">
-            <div className="dash-row-main">
+          // THE WHOLE ROW OPENS THE CONVERSATION, not only Reply: a row that
+          // reads as a message and opens nothing where it is tapped is a
+          // missed press. Reply stays as the visible cue, drawn inside the
+          // row rather than as a second button inside a button.
+          <button key={t.id} type="button" className="dash-row yt-row msg-row" onClick={() => onOpen(t.id)}
+            aria-label={`Open the conversation with ${name(t)}`} data-thread={t.id}>
+            <span className="dash-row-main">
               <span className="yt-lede">{name(t)}{t.jobTitle ? ` · ${t.jobTitle}` : ""}</span>
               <span className="dr-title">{t.lastBody || (t.lastHasPhoto ? "Sent a photo" : "")}</span>
-            </div>
-            <button className="btn-solid" onClick={() => onOpen(t.id)}>Reply</button>
-          </div>
+            </span>
+            <span className="btn-solid msg-reply" aria-hidden="true">Reply</span>
+          </button>
         ))}
       </DashRows>
     </section>
@@ -45870,6 +45926,10 @@ iframe.dv-frame{display:block}
 @keyframes live-pulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.3);opacity:0}}
 @media (prefers-reduced-motion:reduce){.count.live-n::after{animation:none}}
 .count.live-n.ib-n{margin:0}
+button.msg-row{width:100%;font:inherit;color:inherit;text-align:left;cursor:pointer;-webkit-appearance:none;appearance:none}
+button.msg-row:hover{border-color:var(--brand)}
+button.msg-row:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+button.msg-row .dash-row-main{display:flex;flex-direction:column;min-width:0}
 .ib-row.unread .ib-time{color:#b45309;font-weight:600}
 .sec-cw{border:1px solid var(--line);border-radius:13px;padding:14px 14px 6px;background:var(--card)}
 .sec-cw.cw-need{border-color:#f0d9a8;border-left:4px solid var(--amber);background:#fffaf0}
@@ -46122,7 +46182,11 @@ button.job-insp:hover{border-color:#2f5577}
   background:var(--ink);color:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .thr-modal .thr-pane{min-height:440px;max-height:68vh;border:1px solid var(--line);border-radius:12px;overflow:hidden}
 .thr-modal-title{margin:0 40px 12px 0}
-.nm-search{width:100%;min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;margin:4px 0 10px}
+.nm-filters{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 10px}
+.nm-search{flex:1 1 220px;min-width:0;min-height:42px;padding:0 12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--card)}
+.nm-sel{flex:0 1 auto;min-height:42px;max-width:100%;padding:0 10px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--card)}
+.nm-n{font-weight:500;color:var(--ink-soft);margin-left:4px}
+.nm-more{font-size:12.5px;color:var(--ink-soft);margin:8px 6px 12px}
 .nm-list{max-height:60vh;overflow-y:auto}
 .nm-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 6px;border:0;border-bottom:1px solid var(--line);
   background:transparent;font:inherit;color:var(--ink);cursor:pointer;min-height:52px}

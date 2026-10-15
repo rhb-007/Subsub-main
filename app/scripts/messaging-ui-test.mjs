@@ -112,7 +112,12 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   }
   if (path === "/api/message-contacts") return [200, { contacts: asTenant
     ? [{ kind: "tenant", group: "Your building", label: "Sound Property Management", sub: "Your building's office", start: { kind: "tenant", partyUserId: "usr_t" } }]
-    : [{ kind: "tenant", group: "Tenants", label: "Tess Nguyen", sub: "Unit 3B, Cedar Flats", start: { kind: "tenant", partyUserId: "usr_t" } },
+    : [{ kind: "tenant", group: "Tenants", label: "Tess Nguyen", sub: "Unit 3B, Cedar Flats", unit: "3B",
+         propertyId: "prop_1", propertyName: "Cedar Flats", start: { kind: "tenant", partyUserId: "usr_t" } },
+       // A building with a thousand tenants: the case a flat scroll cannot serve.
+       ...Array.from({ length: 1000 }, (_, i) => ({ kind: "tenant", group: "Tenants", label: `Resident ${String(i + 1).padStart(4, "0")}`,
+         sub: `Unit ${i + 1}, Harbor Tower`, unit: String(i + 1), propertyId: "prop_2", propertyName: "Harbor Tower",
+         start: { kind: "tenant", partyUserId: `usr_h${i + 1}` } })),
        { kind: "crew", group: "Contractors", label: "Pacific Apartment Maintenance", sub: "", start: { kind: "crew", partyCompanyId: "cmp_p" } }] }];
   if (path === "/api/threads" && method === "POST") {
     sent.push({ path, body });
@@ -230,7 +235,13 @@ try {
     });
     t.ck("the dashboard lists the unread message", !!dash && /Tess Nguyen/.test(dash.text) && /anyone coming/.test(dash.text), JSON.stringify(dash));
     t.ck("with Reply on the row", !!dash?.reply);
-    await clickText(page, ".sec-msgs button", /^Reply$/);
+    // The whole row opens the conversation, so press the MESSAGE, not Reply.
+    const rowShape = await page.evaluate(() => {
+      const r = document.querySelector(".sec-msgs .msg-row");
+      return r ? { isButton: r.tagName === "BUTTON", nested: r.querySelectorAll("button").length } : null;
+    });
+    t.ck("the whole message row is one button, with nothing nested in it", rowShape?.isButton && rowShape.nested === 0, JSON.stringify(rowShape));
+    await page.evaluate(() => document.querySelector(".sec-msgs .msg-row .dr-title")?.click());
     await wait(900);
     let p = await pane(page);
     t.ck("Reply opens that conversation in the Inbox", p?.who?.startsWith("Tess Nguyen") && p.msgs.length === 1 && !p.msgs[0].mine, JSON.stringify(p));
@@ -250,6 +261,40 @@ try {
     await wait(700);
     const picks = await page.evaluate(() => [...document.querySelectorAll(".nm-row")].map((b) => b.innerText.replace(/\s+/g, " ").trim()));
     t.ck("New message lists the account's own people", picks.some((x) => /Tess Nguyen/.test(x)) && picks.some((x) => /Pacific/.test(x)), JSON.stringify(picks));
+    // TENANTS GROUPED BY BUILDING, a cap on what is drawn, and search that is
+    // always there -- a building can hold a thousand tenants.
+    const nm = () => page.evaluate(() => ({
+      heads: [...document.querySelectorAll(".nm-group .form-sec")].map((h) => h.innerText.replace(/\s+/g, " ").trim()),
+      rows: [...document.querySelectorAll(".nm-row")].map((b) => b.innerText.replace(/\s+/g, " ").trim()),
+      more: [...document.querySelectorAll(".nm-more")].map((m) => m.innerText.trim()),
+      search: !!document.querySelector(".nm-search"),
+      props: [...document.querySelectorAll('.nm-sel[aria-label="Building"] option')].map((o) => o.textContent),
+    }));
+    let nmv = await nm();
+    t.ck("tenants are grouped by building", nmv.heads.some((h) => /Tenants · Cedar Flats/i.test(h)) && nmv.heads.some((h) => /Tenants · Harbor Tower/i.test(h)), JSON.stringify(nmv.heads));
+    t.ck("a thousand tenants are not all drawn, and it says how to find the rest",
+      nmv.rows.filter((r) => /Resident/.test(r)).length === 40 && nmv.more.some((m) => /40 of 1,000/.test(m) && /Search/.test(m)),
+      JSON.stringify({ n: nmv.rows.length, more: nmv.more }));
+    t.ck("search is there and a building dropdown lists the buildings", nmv.search && nmv.props.includes("Harbor Tower") && nmv.props.includes("Cedar Flats"), JSON.stringify(nmv.props));
+    await typeInto(page, ".nm-search", "unit 777");
+    await wait(300);
+    nmv = await nm();
+    t.ck("searching a unit finds that one tenant out of the thousand", nmv.rows.length === 1 && /Resident 0777/.test(nmv.rows[0]), JSON.stringify(nmv.rows));
+    await typeInto(page, ".nm-search", "");
+    await page.evaluate(() => {
+      const el = document.querySelector('.nm-sel[aria-label="Building"]');
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, "prop_1");
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(300);
+    nmv = await nm();
+    t.ck("picking a building narrows the list to the people there", nmv.rows.length === 1 && /Tess Nguyen/.test(nmv.rows[0]), JSON.stringify(nmv.rows));
+    await page.evaluate(() => {
+      const el = document.querySelector('.nm-sel[aria-label="Building"]');
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, "");
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(300);
     await clickText(page, ".nm-row", /Pacific/);
     await wait(900);
     const start = sent.filter((x) => x.path === "/api/threads").at(-1);
