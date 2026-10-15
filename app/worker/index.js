@@ -160,7 +160,7 @@ import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passp
   ACCESS_KINDS as PASSPORT_ACCESS_KINDS, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
   CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
 import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_CENTS,
-  MIN_MONTHLY_CENTS } from "../shared/unitpricing.js";
+  MIN_MONTHLY_CENTS, validEstimate, pricingRows } from "../shared/unitpricing.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 
 const app = new Hono();
@@ -1108,7 +1108,23 @@ app.post("/api/signup", async (c) => {
   const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
   const subdomain = validSubdomain(b.subdomain);
   const plan = b.plan === "scale" ? "scale" : "basic";
-  const billing = b.billing === "annual" ? "annual" : "monthly";
+  let billing = b.billing === "annual" ? "annual" : "monthly";
+  // 086. The units a property manager, portfolio manager or building owner
+  // gave on the form. A kind that is not priced per unit has nothing to give,
+  // so whatever it sent is ignored rather than refused. Wrong numbers ARE
+  // refused, by name: a price quoted off one figure and billed off another is
+  // the bill nobody can explain.
+  let estimate = null;
+  if (unitPriced(ACCOUNT_KINDS.includes(b.kind) ? b.kind : "")) {
+    const v = validEstimate(b.units);
+    if (v.error) return c.json({ error: v.error }, 400);
+    estimate = v.estimate;
+  }
+  // Past 80 units Scale is monthly only. The form already says so and moves
+  // the choice; this is the same rule on the server, so a yearly signup at 500
+  // units cannot be stored and then refused at the checkout.
+  const estimatePricing = estimate ? unitPricing(b.kind, pricingRows([], estimate).rows) : null;
+  if (estimatePricing?.applies && billing === "annual") billing = "monthly";
   // Absent is fine (an older page, or a caller that does not collect them);
   // present but wrong is not, because it would store ids nothing can render.
   const trades = b.trades === undefined ? [] : validTrades(b.trades);
@@ -1269,6 +1285,22 @@ app.post("/api/signup", async (c) => {
     return c.json({ error: "signup_conflict" }, 409);
   }
 
+  // 086. Written after the account so it has something to point at, and never
+  // fails the signup: a database without the table prices them on their
+  // buildings, which is what happened before, and the reply says so.
+  let unitsRecorded = null;
+  if (estimate) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT OR REPLACE INTO portfolio_estimates (account_id, total_units, occupied_units, source)
+         VALUES (?, ?, ?, 'signup')`).bind(accountId, estimate.total, estimate.occupied).run();
+      unitsRecorded = true;
+    } catch (err) {
+      if (!missingSchema(err)) console.error("[signup] units estimate failed:", err?.message || err);
+      unitsRecorded = false;
+    }
+  }
+
   // A Scale signup gets its address started immediately; a Basic one has
   // none to start. Either way this does not hold up the response.
   if (plan === "scale") {
@@ -1287,7 +1319,8 @@ app.post("/api/signup", async (c) => {
   });
 
   await logEvent(c.env, accountId, userId, "account.created", accountId,
-    { kind, plan, subdomain, viaAuth: realAuth, referredBy: referredBy?.code || null });
+    { kind, plan, billing, subdomain, viaAuth: realAuth, referredBy: referredBy?.code || null,
+      units: estimate || undefined });
   await logActivity(c.env, accountId, userId, "account_created",
     `${personName} created this account on the ${plan === "scale" ? "Scale" : "Basic"} plan`);
 
@@ -1315,6 +1348,15 @@ app.post("/api/signup", async (c) => {
     // The person confirms by email, then signs in; this flag only tells the
     // signup page which of those two things to say.
     needsConfirmation,
+    // 086. What they will pay on Scale, from the units they gave, so the last
+    // screen can say it in the same words as the form. billing is what was
+    // stored, which past 80 units is monthly whatever was asked for.
+    billing,
+    units: estimatePricing ? {
+      recorded: unitsRecorded, applies: estimatePricing.applies,
+      monthlyCents: estimatePricing.monthlyCents, setupCents: estimatePricing.setupCents,
+      total: estimatePricing.total, occupied: estimatePricing.occupied,
+    } : null,
   }, 201);
 });
 
@@ -1766,6 +1808,9 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
       eligible: u.eligible, applies: u.applies, total: u.total, occupied: u.occupied,
       unknown: u.unknown, monthlyCents: u.monthlyCents, perUnitCents: u.perUnitCents,
       setupCents: u.setupCents, setupLabel: u.setupLabel, annualAllowed: u.annualAllowed,
+      // 086. Priced on the units given at signup rather than on buildings,
+      // which the panel has to say or the figures read as wrong.
+      fromEstimate: !!u.fromEstimate, estimate: u.estimate || null,
       threshold: UNIT_THRESHOLD, unitPriceCents: UNIT_PRICE_CENTS, minMonthlyCents: MIN_MONTHLY_CENTS,
       setupCharged: fee && fee.status !== "pending"
         ? { amountCents: fee.amount_cents, tier: fee.tier, at: fee.charged_at, status: fee.status } : null,
@@ -1969,7 +2014,25 @@ async function accountUnitPricing(env, accountId, kind) {
     ({ results: rows } = await env.DB.prepare(
       `SELECT units FROM properties WHERE account_id = ?`).bind(accountId).all());
   }
-  return unitPricing(kind, rows || []);
+  // 086. The units they gave at signup price the account until a building
+  // carries a unit count. pricingRows decides which; this only fetches.
+  const estimate = await portfolioEstimate(env, accountId);
+  const { rows: priced, fromEstimate } = pricingRows(rows || [], estimate);
+  return { ...unitPricing(kind, priced), fromEstimate, estimate: estimate || null };
+}
+
+// The units an account gave at signup, or null. A database without 086 has
+// none, which prices the account on its buildings exactly as before.
+async function portfolioEstimate(env, accountId) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT total_units, occupied_units FROM portfolio_estimates WHERE account_id = ?`)
+      .bind(accountId).first();
+    return r ? { total: r.total_units, occupied: r.occupied_units } : null;
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    return null;
+  }
 }
 
 // The per-unit line sits on the SAME Stripe product as the flat price, so the
@@ -9377,6 +9440,7 @@ export function missingSchema(err) {
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
   if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
+  if (/\bportfolio_estimates\b/i.test(m)) return "086_portfolio_estimates";
   if (/\boccupied_units\b|\baccount_setup_fees\b/i.test(m)) return "084_unit_pricing";
   if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
@@ -23861,9 +23925,19 @@ app.get("/api/platform/bootstrap", async (c) => {
   } catch (err) {
     console.warn("[platform] portfolio units unavailable:", err?.message || err);
   }
+  // 086. The units given at signup, which price an account with no building
+  // carrying a unit count -- the same rule the checkout and the sync follow.
+  const estimates = {};
+  try {
+    const { results: er } = await c.env.DB.prepare(
+      `SELECT account_id, total_units, occupied_units FROM portfolio_estimates`).all();
+    for (const r of er || []) estimates[r.account_id] = { total: r.total_units, occupied: r.occupied_units };
+  } catch (err) {
+    if (!missingSchema(err)) console.warn("[platform] portfolio estimates unavailable:", err?.message || err);
+  }
   const unitMonthly = (a) => {
     if (!unitPriced(a.kind) || a.billing === "annual") return null;
-    const u = unitPricing(a.kind, portfolios[a.id] || []);
+    const u = unitPricing(a.kind, pricingRows(portfolios[a.id] || [], estimates[a.id] || null).rows);
     return u.applies ? u.monthlyCents : null;
   };
 

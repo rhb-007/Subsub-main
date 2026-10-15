@@ -113,6 +113,28 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- priced on the units given at signup, before any building --");
+  {
+    // 086. With no building carrying a unit count, the account is priced on
+    // what it said at signup, and the panel has to say so -- otherwise "Units
+    // across your buildings 300" reads as wrong on an account with none.
+    KIND = "property_manager";
+    UNITS = { ...APPLIES, total: 300, occupied: 250, unknown: 0, monthlyCents: 31250, perUnitCents: 31250,
+      setupCents: 50000, setupLabel: "251–500 units", fromEstimate: true, estimate: { total: 300, occupied: 250 } };
+    const { ctx, page } = await visitApp(browser, { host: "sound", webPort: WEB,
+      seat: { userId: "usr_a", accountId: "acc_pm" }, viewport: { width: 1180, height: 1500 } });
+    await wait(2600);
+    await openSubscription(page);
+    const s = await billingState(page);
+    t.ck("it names the signup units rather than the buildings",
+      /Units you gave at signup\s*300/.test(s.panel) && !/Units across your buildings/.test(s.panel), s.panel);
+    t.ck("and says the price follows the buildings once they are added",
+      /no building here has a unit count/.test(s.panel) && /follows them/.test(s.panel), s.panel);
+    t.ck("the Scale card quotes the same month", /^\$312\.50\s*\/mo/.test(s.scalePrice), s.scalePrice);
+    await ctx.close();
+    UNITS = APPLIES;
+  }
+
   console.log("\n-- at 80 or fewer units: eligible, flat, yearly still offered --");
   {
     KIND = "property_manager";

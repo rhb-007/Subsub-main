@@ -184,6 +184,15 @@ legend{font:600 15px/1 Inter;padding:0;margin-bottom:13px}
 .field input[aria-invalid="true"]{border-color:#c0492f;background:#fdf7f6}
 .field input[aria-invalid="true"]:focus{border-color:#c0492f}
 .field-err{margin:7px 0 0;font:500 13.5px/1.4 Inter,sans-serif;color:#8a2f1c}
+/* 086. The units a property manager, portfolio manager or building owner
+   manages, asked on Scale so the price on this page is the price they pay. */
+.units-ask{margin:22px 0 4px;padding:18px 18px 6px;border:1.5px solid var(--rule);border-radius:12px;background:#fff}
+.units-ask h3{font:700 17px 'Bricolage Grotesque';letter-spacing:-.02em;margin:0 0 6px}
+.units-ask .ua-lede{font-size:14px;color:var(--muted);line-height:1.5;margin:0 0 14px}
+.units-quote{margin:0 0 12px;font-size:15px;line-height:1.5}
+.units-quote b{font:800 22px 'Bricolage Grotesque';letter-spacing:-.02em}
+.units-quote .uq-err{color:#8a2f1c}
+.units-quote .uq-note{display:block;margin-top:6px;font-size:13.5px;color:var(--muted)}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
 .roles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -469,6 +478,24 @@ body.nav-open{overflow:hidden}
               <span>Portfolio manager<em>You oversee many sites</em></span></label>
           </div>
         </fieldset>
+        <!-- 086. HOW MANY UNITS, ON SCALE, FOR THE THREE KINDS PRICED PER UNIT.
+             Every figure the script reads is in these data attributes, and
+             test:unitcalc compares each with app/shared/unitpricing.js -- the
+             module the checkout charges by -- so this page cannot quote a
+             price the bill does not. The same hand copy pricing.html keeps,
+             because neither page has a build step. -->
+        <div class="units-ask hide" id="unitsAsk" data-threshold="80" data-unit-cents="125"
+             data-min-cents="9900" data-setup="250:25000,500:50000,1000:100000,0:200000">
+          <h3>How many units do you manage?</h3>
+          <p class="ua-lede" id="unitsLede"></p>
+          <div class="two">
+            <div class="field"><label for="units">Units across your buildings</label>
+              <input id="units" type="number" inputmode="numeric" min="0" step="1"></div>
+            <div class="field"><label for="occupied">Occupied now <span style="font-weight:400;color:#5D6F67">(optional)</span></label>
+              <input id="occupied" type="number" inputmode="numeric" min="0" step="1"></div>
+          </div>
+          <p class="units-quote" id="unitQuote" aria-live="polite"></p>
+        </div>
         <div class="two">
           <div class="field"><label for="name">Your name</label>
             <input id="name" autocomplete="name" required></div>
@@ -777,10 +804,119 @@ body.nav-open{overflow:hidden}
     paintPlan();
   }
 
+  /* ---- 086. per-unit pricing, for the three kinds that keep buildings -----
+     Scale is the flat price up to the threshold and then a price per occupied
+     unit, monthly only, with a one-time setup fee. The form asks how many
+     units on Scale, quotes the price as they type, and sends the answer, so
+     what this page says and what the checkout charges come from one rule. */
+  var UNIT_ROLES = ['Property manager', 'Building owner', 'Commercial portfolio manager'];
+  var uBox = document.getElementById('unitsAsk');
+  var U = {
+    TH: +uBox.dataset.threshold, UNIT: +uBox.dataset.unitCents, MIN: +uBox.dataset.minCents,
+    STEPS: uBox.dataset.setup.split(',').map(function(p){
+      var a = p.split(':'); return [+a[0] || Infinity, +a[1]];
+    })
+  };
+  var unitsEl = document.getElementById('units'), occEl = document.getElementById('occupied');
+  var occTouched = false;
+  // Billing as asked for, kept so that dropping back under the threshold puts
+  // a yearly choice back rather than leaving it quietly monthly.
+  var askedBilling = billing;
+  function usd(c){
+    return '$' + (c / 100).toLocaleString('en-US',
+      {minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2});
+  }
+  function isUnitRole(){ return UNIT_ROLES.indexOf(roleValue()) !== -1; }
+  function unitsAsked(){ return plan === 'scale' && isUnitRole(); }
+  function wholeOrNull(el){
+    var v = String(el.value).trim();
+    if(v === '') return null;
+    var n = Number(v);
+    return Number.isInteger(n) && n >= 0 ? n : NaN;
+  }
+  // The answer as the server will read it: null (not given), an error, or
+  // {total, occupied, applies, month, setup}.
+  function unitAnswer(){
+    if(!unitsAsked()) return null;
+    var t = wholeOrNull(unitsEl), o = wholeOrNull(occEl);
+    if(t === null) return null;
+    if(isNaN(t)) return {error: 'units'};
+    if(o !== null && isNaN(o)) return {error: 'occupied'};
+    if(o !== null && o > t) return {error: 'over'};
+    var occ = o === null ? t : o;
+    var applies = t > U.TH;
+    var per = U.UNIT * occ;
+    return {
+      total: t, occupied: o, occ: occ, applies: applies, per: per,
+      month: applies ? Math.max(U.MIN, per) : U.MIN,
+      setup: applies ? U.STEPS.filter(function(s){ return t <= s[0]; })[0][1] : 0
+    };
+  }
+  function paintUnits(){
+    var on = unitsAsked();
+    uBox.classList.toggle('hide', !on);
+    var a = unitAnswer();
+    // Past the threshold Scale is monthly only, on the server as well as here.
+    billing = a && !a.error && a.applies ? 'monthly' : askedBilling;
+    if(!on) return;
+    document.getElementById('unitsLede').textContent =
+      'Scale is ' + usd(U.MIN) + ' a month for up to ' + U.TH + ' units. Past ' + U.TH
+      + ' it is ' + usd(U.UNIT) + ' per occupied unit a month, never less than ' + usd(U.MIN)
+      + ', billed monthly, with a one-time setup fee. Leave it blank and the price follows '
+      + 'the buildings you add.';
+    var q = document.getElementById('unitQuote');
+    if(!a){
+      q.innerHTML = 'Enter your units to see your price. Until then it is <b>' + usd(U.MIN)
+        + '</b> a month.';
+      return;
+    }
+    if(a.error){
+      q.innerHTML = '<span class="uq-err">' + (a.error === 'over'
+        ? 'More units are occupied than your buildings have.'
+        : 'Use a whole number of units.') + '</span>';
+      return;
+    }
+    if(!a.applies){
+      q.innerHTML = '<b>' + usd(U.MIN) + '</b> a month, monthly or yearly. No setup fee.';
+      return;
+    }
+    var how = a.per < U.MIN
+      ? usd(U.UNIT) + ' \u00d7 ' + a.occ.toLocaleString('en-US') + ' occupied is ' + usd(a.per)
+        + ', so you pay the ' + usd(U.MIN) + ' minimum'
+      : usd(U.UNIT) + ' \u00d7 ' + a.occ.toLocaleString('en-US') + ' occupied units';
+    q.innerHTML = '<b>' + usd(a.month) + '</b> a month (' + how + '), billed monthly. '
+      + 'Plus a one-time setup fee of <b>' + usd(a.setup) + '</b>.'
+      + (a.occupied === null ? '<span class="uq-note">With no occupied count, every unit is '
+        + 'counted as occupied.</span>' : '')
+      + (askedBilling === 'annual' ? '<span class="uq-note">Past ' + U.TH + ' units Scale is '
+        + 'billed monthly, so this replaces the yearly price you picked.</span>' : '');
+  }
+  unitsEl.addEventListener('input', function(){
+    clearFieldError(unitsEl); clearFieldError(occEl);
+    if(!occTouched) occEl.value = unitsEl.value;
+    paintPlan();
+  });
+  occEl.addEventListener('input', function(){
+    occTouched = String(occEl.value).trim() !== '';
+    clearFieldError(occEl);
+    paintPlan();
+  });
+  // Arriving from the calculator on the pricing page carries the answer in.
+  (function(){
+    var t = qs.get('units'), o = qs.get('occupied');
+    if(t && /^\d{1,6}$/.test(t)){ unitsEl.value = t; }
+    if(o && /^\d{1,6}$/.test(o)){ occEl.value = o; occTouched = true; }
+  })();
+
   function paintPlan(){
+    paintUnits();
+    var ua = unitAnswer();
     document.getElementById('planName').textContent = PLANS[plan].name;
     document.getElementById('planPrice').textContent = plan === 'scale'
-      ? SCALE_PRICE[billing] : PLANS[plan].price;
+      ? (ua && !ua.error && ua.applies
+          ? usd(ua.month) + '/mo \u00b7 ' + ua.occ.toLocaleString('en-US') + ' occupied units'
+          : SCALE_PRICE[billing])
+      : PLANS[plan].price;
     document.getElementById('invOf').textContent = plan==='basic' ? 'of 3 on Basic' : 'on Scale — no limit';
     var brandOn = PLANS[plan].branding;
     document.getElementById('brandBlock').classList.toggle('hide', !brandOn);
@@ -899,6 +1035,13 @@ body.nav-open{overflow:hidden}
     if(phoneEl && phoneEl.value.trim() && phoneDigits(phoneEl.value).length !== 10){
       bad = markField(phoneEl, 'A mobile number needs 10 digits.') || bad;
     }
+
+    // 086. The units, when they are asked. Blank is fine; wrong is not.
+    clearFieldError(unitsEl); clearFieldError(occEl);
+    var ua = unitAnswer();
+    if(ua && ua.error === 'units') bad = markField(unitsEl, 'Use a whole number of units.') || bad;
+    else if(ua && ua.error === 'occupied') bad = markField(occEl, 'Use a whole number of units.') || bad;
+    else if(ua && ua.error === 'over') bad = markField(occEl, 'More units are occupied than your buildings have.') || bad;
 
     if(bad){
       // Focus the topmost problem, not the last one found.
@@ -1278,6 +1421,12 @@ body.nav-open{overflow:hidden}
       zip: (document.getElementById('zip') || {}).value || '',
       plan: plan,
       billing: billing,
+      // 086. The units they manage, on Scale, for the kinds priced per unit.
+      // Absent otherwise. The server checks them again and stores them.
+      units: (function(){
+        var ua = unitAnswer();
+        return ua && !ua.error ? {total: ua.total, occupied: ua.occupied} : undefined;
+      })(),
       // 075. Who brought them in. A code typed here is a touch made now and
       // beats the cookie; the cookie is the last link, claim or Passport
       // they arrived through. The server decides which wins and checks both.
@@ -1408,6 +1557,14 @@ body.nav-open{overflow:hidden}
            is ever configured to confirm addresses automatically, the honest
            instruction is the reset form rather than a password that does not
            exist. */
+        /* 086. The price they will pay on Scale, said once more in the words
+           the form used, from the figures the server stored. */
+        var uq = res.body.units;
+        if(uq && uq.applies){
+          invites += ' Scale will be ' + usd(uq.monthlyCents) + ' a month, billed monthly'
+            + (uq.setupCents ? ', plus a one-time ' + usd(uq.setupCents) + ' setup fee,' : '')
+            + ' from the units you gave. Once you add your buildings, the price follows them.';
+        }
         dl.textContent = res.body.needsConfirmation
           // One thing left, and it is the only thing on the screen that
           // matters -- so it leads, rather than trailing a list of details.
@@ -1460,6 +1617,12 @@ body.nav-open{overflow:hidden}
      falls back to the default instead of writing a kind nothing renders. */
   (function(){
     var want = (qs.get('as') || '').trim().toLowerCase();
+    /* 086. The pricing calculator's link carries the units; only the three
+       kinds that keep buildings are priced per unit, so arriving with units
+       and no role opens on the commonest of them rather than on general
+       contractor, where the units would not be asked for at all. It is the
+       first thing on step 1, so a portfolio manager sees it and changes it. */
+    if(!want && /^\d{1,6}$/.test(qs.get('units') || '')) want = 'property manager';
     if(!want) return;
     var hit = null;
     Array.prototype.forEach.call(document.querySelectorAll('input[name="role"]'), function(r){

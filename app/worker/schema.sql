@@ -2536,3 +2536,14 @@ CREATE TABLE geocodes (
   source      TEXT,
   checked_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 086. The units an account told us at signup, used to price Scale per unit
+-- until a building carries a unit count. See app/shared/unitpricing.js.
+CREATE TABLE portfolio_estimates (
+  account_id     TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  total_units    INTEGER NOT NULL CHECK (total_units >= 0),
+  occupied_units INTEGER CHECK (occupied_units IS NULL
+                   OR (occupied_units >= 0 AND occupied_units <= total_units)),
+  source         TEXT NOT NULL DEFAULT 'signup',
+  created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -91,6 +91,51 @@ export function unitPricing(kind, buildings = []) {
   };
 }
 
+// 086. WHAT THEY TOLD US AT SIGNUP. A property manager signing up has no
+// buildings in SubSub yet, so without this a 500-unit portfolio would check
+// out at the flat $99 -- or worse, $990 for a whole year -- on the day it
+// joined, and the per-unit price would only arrive once somebody had typed in
+// every building. So the signup form asks for the units and the occupied
+// count, and the account is priced on that answer.
+//
+// ONLY UNTIL A BUILDING CARRIES UNITS. From the first building with a unit
+// count on it, the buildings decide, which is the rule every bill after that
+// follows. Deliberately not "until the buildings add up to it": an estimate
+// somebody over-guessed would then bill them for units they do not have, with
+// nothing on the screen they could change to stop it. The cost is the other
+// direction -- a portfolio half typed in is billed on the half -- and that one
+// favours the customer.
+export const ESTIMATE_MAX_UNITS = 100000;
+
+// The answer from the form, checked. Blank is null (they did not say, and the
+// buildings will decide); anything else must be whole numbers, with no more
+// occupied than there are units. A blank occupied count is counted as full,
+// which is the rule for a building too.
+export function validEstimate(v) {
+  if (v == null || v === "" || (typeof v === "object" && (v.total === "" || v.total == null))) {
+    return { estimate: null };
+  }
+  if (typeof v !== "object") return { error: "invalid_units" };
+  const whole = (x) => typeof x === "number" ? x : (String(x).trim() === "" ? NaN : Number(x));
+  const total = whole(v.total);
+  if (!Number.isInteger(total) || total < 0 || total > ESTIMATE_MAX_UNITS) return { error: "invalid_units" };
+  let occupied = null;
+  if (v.occupied !== undefined && v.occupied !== null && String(v.occupied).trim() !== "") {
+    occupied = whole(v.occupied);
+    if (!Number.isInteger(occupied) || occupied < 0) return { error: "invalid_units" };
+    if (occupied > total) return { error: "occupied_over_units" };
+  }
+  return { estimate: { total, occupied } };
+}
+
+// Which rows price this account: the buildings, or the signup estimate while
+// no building carries a unit count.
+export function pricingRows(buildings = [], estimate = null) {
+  const typed = portfolioUnits(buildings).total;
+  if (typed > 0 || !estimate || !(Number(estimate.total) > 0)) return { rows: buildings || [], fromEstimate: false };
+  return { rows: [{ units: estimate.total, occupiedUnits: estimate.occupied ?? "" }], fromEstimate: true };
+}
+
 const usd = (cents) => `$${(cents / 100).toLocaleString("en-US",
   { minimumFractionDigits: cents % 100 ? 2 : 0, maximumFractionDigits: 2 })}`;
 

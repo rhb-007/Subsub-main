@@ -301,6 +301,9 @@ WITH spec(j) AS (SELECT
   -- 085. Where an address is, for the Jobs and Properties maps. Until it is
   -- run the map says which file to paste and every other screen is unchanged.
   ',["m085_geocodes","col","geocodes",["address_key","lat","lng","precision","source","checked_at"]]' ||
+  -- 086. The units an account gave at signup. Until it is run signup still
+  -- works and those accounts are priced on their buildings, as before.
+  ',["m086_portfolio_estimates","col","portfolio_estimates",["account_id","total_units","occupied_units","source","created_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

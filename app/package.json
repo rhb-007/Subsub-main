@@ -20,6 +20,7 @@
     "test:map": "node --no-warnings scripts/map-test.mjs",
     "test:mapui": "node --no-warnings scripts/map-ui-test.mjs",
     "test:unitcalc": "node --no-warnings scripts/unit-calc-test.mjs",
+    "test:signupunits": "node --no-warnings scripts/signup-units-test.mjs",
     "test:feeterms": "node --no-warnings scripts/fee-terms-test.mjs",
     "test:feetermsui": "node --no-warnings scripts/fee-terms-ui-test.mjs",
     "test:agreement": "node --no-warnings scripts/agreement-test.mjs",

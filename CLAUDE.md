@@ -13019,6 +13019,50 @@ refactor.
   and count every unit as occupied, the property form says the occupied count
   was not kept, and no setup fee is ever charged.
 
+  **AND SIGNUP ASKS FOR THE UNITS, BECAUSE A NEW ACCOUNT HAS NO BUILDINGS TO
+  COUNT.** Reported as *"the pricing calculator is on the pricing page, but
+  isn't included in the signup and pricing calculation"*. A property manager
+  signing up on Scale saw *$99/mo · unlimited* in the plan pill. They could also
+  pick a whole year at $990. The checkout counted units over buildings, and a
+  brand-new account has none. So a 500-unit portfolio paid the flat price until
+  somebody had typed in every building. Migration 086
+  (`portfolio_estimates`), `validEstimate` and `pricingRows` in
+  `shared/unitpricing.js`.
+
+  - **The form asks on Scale, for the three kinds only.** It asks for units
+    across your buildings and occupied now (optional; blank counts as full, the
+    same rule as a building). It quotes the month and the setup fee as they
+    type, and the plan pill follows. Past 80 a yearly choice gives way to
+    monthly and says so; back under 80 the yearly choice returns. The figures
+    are a hand copy in data attributes, because the page has no build step, and
+    `test:signupunits` pins each one against the module.
+  - **The pricing calculator links into signup** (*Start on Scale with these
+    units*) with the units in the query string. Arriving with units and no role
+    preselects Property manager, the commonest of the three. It is the first
+    thing on step 1, so a portfolio manager or owner can see it and change it.
+  - **The server stores the answer and prices from it.** Wrong numbers are
+    refused by name (`invalid_units`, `occupied_over_units`). A general
+    contractor's units are ignored. Past 80 the server stores monthly even
+    when yearly was sent, so a yearly signup cannot be stored and then refused
+    at checkout.
+  - **The signup units price the account only until a building carries a unit
+    count**, and then the buildings decide. This is deliberately not "until the
+    buildings add up to it": an over-guessed estimate would then bill units the
+    account does not have, with nothing on screen to change it. The cost runs
+    the other way, since a portfolio half typed in is billed on the half, and
+    that favors the customer.
+  - **Every reader goes through `accountUnitPricing`**: the checkout, the
+    nightly sync, the billing read and the console's MRR. The billing panel
+    says *Units you gave at signup*, and that the price follows the buildings
+    once they are added. Without that, a figure of 300 over an account with no
+    buildings reads as wrong.
+  - **Its own table**, so the paste can be run twice. Without 086, signup still
+    works, the reply says the units were not kept, and pricing reads buildings
+    as before.
+
+  Ten mutations in `test:signupunits` and one in `test:unitpricingui` fire,
+  each on its own assertion.
+
 - **A MAP OF WHERE THE WORK IS, AND ONLY OF THE CALLER'S OWN ROWS.** Asked
   for as a general contractor's map of current jobs, with the sub on each one,
   a tooltip on hover or a tap on an iPad or phone, and then *"maps of

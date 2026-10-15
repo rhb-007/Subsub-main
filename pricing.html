@@ -360,6 +360,8 @@ body.nav-open{overflow:hidden}
 .uc-month{font-size:30px;font-weight:800;margin:0}
 .uc-month em{font-size:15px;font-weight:600;font-style:normal;opacity:.7}
 .uc-how,.uc-setup{margin:6px 0 0;line-height:1.5}
+.uc-go{margin-top:16px}
+.uc-go[hidden]{display:none}
 .uc-err{color:#b5442e;font-weight:600}
 @media (max-width:520px){.uc-fields{grid-template-columns:1fr}}
 </style>
@@ -546,6 +548,10 @@ body.nav-open{overflow:hidden}
             <p class="uc-month"><span id="ucMonth">$137.50</span> <em>/month</em></p>
             <p class="uc-how" id="ucHow">$1.25 × 110 occupied units, billed monthly.</p>
             <p class="uc-setup" id="ucSetup">Plus a one-time setup fee of <b>$250</b>.</p>
+            <!-- 086. Into signup with the answer, so the form quotes the same
+                 price and the account is billed on it from the first invoice. -->
+            <a class="btn btn-forest uc-go" id="ucGo"
+               href="get-started.html?plan=scale&amp;billing=monthly&amp;units=120&amp;occupied=110">Start on Scale with these units</a>
           </div>
         </div>
       </div>
@@ -694,7 +700,10 @@ body.nav-open{overflow:hidden}
   function draw(){
     var t=num(tot), o=num(occ);
     var month=document.getElementById('ucMonth'), how=document.getElementById('ucHow'), setup=document.getElementById('ucSetup');
+    var go=document.getElementById('ucGo');
     how.classList.remove('uc-err');
+    go.hidden=o>t;
+    go.href='get-started.html?plan=scale&billing=monthly&units='+t+'&occupied='+o;
     if(o>t){ month.textContent='\u2014'; how.textContent='More units are occupied than your buildings have.';
       how.classList.add('uc-err'); setup.textContent=''; return; }
     if(t<=TH){

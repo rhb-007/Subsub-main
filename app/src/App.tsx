@@ -21981,7 +21981,8 @@ function UnitPrice({ onLoad }) {
       {!u.applies ? (
         <>
           <p className="up-lead">
-            Your buildings hold <b>{n(u.total)}</b> unit{u.total === 1 ? "" : "s"}, so Scale is the flat
+            {u.fromEstimate ? "You told us at signup that your buildings hold" : "Your buildings hold"}
+            {" "}<b>{n(u.total)}</b> unit{u.total === 1 ? "" : "s"}, so Scale is the flat
             {" "}<b>{unitUsd(u.minMonthlyCents)} a month</b>.
           </p>
           <p className="up-rule">{terms.perUnit} {terms.setup}</p>
@@ -21989,7 +21990,7 @@ function UnitPrice({ onLoad }) {
       ) : (
         <>
           <div className="up-rows">
-            <div className="wd-row"><span>Units across your buildings</span><strong>{n(u.total)}</strong></div>
+            <div className="wd-row"><span>{u.fromEstimate ? "Units you gave at signup" : "Units across your buildings"}</span><strong>{n(u.total)}</strong></div>
             <div className="wd-row"><span>Occupied</span><strong>{n(u.occupied)}</strong></div>
             <div className="wd-row up-month"><span>Each month</span>
               <strong>{unitUsd(u.monthlyCents)}
@@ -22001,7 +22002,13 @@ function UnitPrice({ onLoad }) {
                 ? <>{unitUsd(u.setupCharged.amountCents)} <em>· charged{u.setupCharged.at ? ` ${niceDay(u.setupCharged.at)}` : ""}</em></>
                 : <>{unitUsd(u.setupCents)} <em>· {u.setupLabel}</em></>}</strong></div>
           </div>
-          {u.unknown > 0 && (
+          {u.fromEstimate && (
+            <p className="up-estimate">
+              Priced on the units you gave when you signed up, because no building here has a unit count
+              yet. Once you add your buildings in Properties, the price follows them instead.
+            </p>
+          )}
+          {u.unknown > 0 && !u.fromEstimate && (
             <p className="up-unknown">
               {u.unknown === 1 ? "One building has" : `${n(u.unknown)} buildings have`} no occupied count, so every
               unit there is counted as occupied. Add it on the building in Properties to bill only what is lived in.
@@ -44106,6 +44113,7 @@ button.mc-title:hover{text-decoration:underline}
 .unit-price .up-rows .wd-row strong em{font-style:normal;font-weight:500;color:var(--ink-soft)}
 .unit-price .up-month strong{font-size:16px}
 .unit-price .up-unknown{margin:10px 0 0;font-size:12.5px;line-height:1.45;color:var(--amber-ink, var(--ink))}
+.unit-price .up-estimate{margin:10px 0 0;font-size:12.5px;line-height:1.45;color:var(--ink-soft, var(--ink))}
 .plan-unit-bill{font-weight:600}
 .plan-card{position:relative;background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:20px;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow)}
