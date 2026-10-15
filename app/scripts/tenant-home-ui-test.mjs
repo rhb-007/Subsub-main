@@ -409,6 +409,19 @@ try {
       return card && acct ? card.bottom <= acct.top + 1 : null;
     });
     t.ck("the card sits right above My account", order === true, String(order));
+    // GRAY RUNS UP TO THE LINE. The account block used to sit at the foot of
+    // the drawer with a white gap above it and a white strip under its line.
+    const fill = await page.evaluate(() => {
+      const mgr = document.querySelector(".drawer-mgr");
+      const navBtns = [...document.querySelectorAll(".nav-drawer > button, nav > button")]
+        .filter((b) => b.getBoundingClientRect().height > 0 && !b.closest(".drawer-actions"));
+      const last = navBtns[navBtns.length - 1]?.getBoundingClientRect();
+      const m = mgr?.getBoundingClientRect();
+      return m && last ? { gap: m.top - last.bottom, bg: getComputedStyle(mgr).backgroundColor,
+        drawerBg: getComputedStyle(mgr.closest("nav") || document.body).backgroundColor } : null;
+    });
+    t.ck("the gray manager block starts right under the last menu item",
+      !!fill && Math.abs(fill.gap) <= 2 && fill.bg !== fill.drawerBg, JSON.stringify(fill));
     t.ck("and the drawer offers Pay rent, marked Soon", d.navRent.length === 1 && /soon/i.test(d.navRent[0]), JSON.stringify(d.navRent));
     t.ck("nothing in the drawer runs off the side", d.width <= 390, String(d.width));
     if (process.env.SHOT) await page.screenshot({ path: `${process.env.SHOT}/tenant-drawer.png` });

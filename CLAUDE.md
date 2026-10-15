@@ -11929,6 +11929,18 @@ refactor.
   removed. `test:handycapui` had been red since job cards became lines (it
   never opened the card) and opens them now.
 
+- **THREE LAYOUT FIXES, AND THE FIRST WAS A CLASS NAME USED TWICE.** The red
+  *flagged* chip on an inspection row is `tn-chip sos`, and `.sos` is also the
+  911 notice box, so the chip took that box's 18px padding and 18px bottom
+  margin and every flagged row was twice as tall as the rest. `.tn-chip.sos`
+  now sets its own padding, margin and border. The tenant's drawer put the
+  manager card at the foot with a white gap above it and a white strip under
+  its line; with the card present (`drawer-actions has-mgr`) the gray now runs
+  from the last menu item down. And on New inspection the Building label
+  touched the Move-in / Move-out switch, so a field label after the switch gets
+  the 14px gap fields give each other. `test:inspectionui` and
+  `test:tenanthomeui` measure all three; undoing each fix fails its check.
+
 - **A BLOCKED ROW IN THE ASSIGN WINDOW PUTS ITS REASON UNDER THE NAME.**
   Reported with the window open on *Puget Electricity / Plumbing*: the name
   drawn a word a line, the chips wrapped (*1 crews · 3 / ppl*), and the rating

@@ -216,6 +216,28 @@ try {
     t.ck(`${st}: the inspection is on the list`, !!row, JSON.stringify(row));
     if (st === "draft") {
       t.ck("draft: the row says Draft, first", row?.chips?.[0] === "Draft", JSON.stringify(row?.chips));
+      // A FLAGGED ROW IS AS THIN AS ANY OTHER. The red chip shared the class
+      // name .sos with the 911 notice and took its 18px padding and margin,
+      // so each flagged row was twice as tall as the rest.
+      const lay = await page.evaluate(() => {
+        const r = document.querySelector(".insp-row");
+        const chips = [...(r?.querySelectorAll(".tn-chip") || [])].map((c) => ({
+          t: (c.innerText || "").trim(), h: c.getBoundingClientRect().height }));
+        return { h: r?.getBoundingClientRect().height, chips };
+      });
+      const flag = lay.chips.find((c) => /flagged/.test(c.t));
+      t.ck("draft: the flagged chip is a chip, not a block", !!flag && flag.h < 30, JSON.stringify(lay.chips));
+      t.ck("draft: and the row stays thin", lay.h > 0 && lay.h < 80, String(lay.h));
+      // THE NEW INSPECTION FORM: the Building label does not touch the switch.
+      await page.evaluate(() => [...document.querySelectorAll("button")]
+        .find((b) => /^\+?\s*New inspection$/i.test((b.innerText || "").trim()))?.click());
+      await wait(600);
+      const gap = await page.evaluate(() => {
+        const seg = document.querySelector(".modal .insp-kind.seg");
+        const lab = [...document.querySelectorAll(".modal label.fld")].find((l) => /^Building/.test((l.innerText || "").trim()));
+        return seg && lab ? lab.getBoundingClientRect().top - seg.getBoundingClientRect().bottom : null;
+      });
+      t.ck("draft: the New inspection form leaves room under Move-in / Move-out", gap !== null && gap >= 10, String(gap));
     } else {
       t.ck("finished: and a finished one does not", !(row?.chips || []).includes("Draft"), JSON.stringify(row?.chips));
     }

@@ -6250,7 +6250,7 @@ export default function SubSub() {
               )}
             </button>
           ))}
-          <div className="drawer-actions">
+          <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> My account</button>
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
@@ -40855,7 +40855,9 @@ p.fld-note{margin:6px 0 0}
 .em-row{gap:10px}
 .em-row.is-911{border-color:#E7A9A4;background:#FEF7F6}
 .em-row.is-urgent{border-color:#E8CE95;background:#FEFBF3}
-.tn-chip.sos{background:#B3261E;color:#fff}
+/* Its own box, because .sos is also the 911 notice: without these the chip
+   took that box's 18px padding and bottom margin and made its row twice as tall. */
+.tn-chip.sos{background:#B3261E;color:#fff;padding:5px 10px;margin:0;border:0;border-radius:20px}
 .sos-brief{display:flex;align-items:flex-start;gap:9px;border:1px solid #E7A9A4;background:#FDECEA;
   border-radius:10px;padding:12px 14px;margin:4px 0 14px;color:#8C1D18}
 .sos-brief svg{flex:none;margin-top:2px}
@@ -41114,6 +41116,8 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-kind.seg button:hover:not(.on){background:var(--paper);color:var(--ink)}
 .insp-kind.seg button.on{background:var(--brand);color:#fff}
 .insp-kind.seg button:disabled{opacity:.6;cursor:default}
+/* A field label right under the switch gets the gap fields give each other. */
+.insp-kind.seg + .fld{margin-top:14px}
 .insp-kind.seg button:focus-visible{outline:2px solid var(--brand);outline-offset:-3px}
 .insp-suggest .chip{display:inline-flex;align-items:center;gap:5px;min-height:36px}
 /* Answering a condition word that arrived meaning nothing. The four answers
@@ -43958,6 +43962,11 @@ iframe.dv-frame{display:block}
   .drawer-actions button svg{color:var(--brand)}
   .drawer-actions button:hover{background:var(--paper)}
   .drawer-actions .drawer-out,.drawer-actions .drawer-out svg{color:var(--red)}
+  /* With the manager card in it, the gray runs from the last nav line down,
+     rather than a white gap, a line, a white strip and then the gray. The card
+     stays at the bottom, above My account. */
+  .drawer-actions.has-mgr{flex:1 0 auto;margin-top:0;padding-top:0;border-top:0}
+  .drawer-actions.has-mgr > .drawer-mgr{flex:1 0 auto;display:flex;flex-direction:column;justify-content:flex-end}
 
   
   
