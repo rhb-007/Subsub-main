@@ -6181,7 +6181,7 @@ export default function SubSub() {
               thing waiting on this person. */}
           {can("inbox") && (
             <button className={tab === "inbox" ? "on" : ""} onClick={() => openInbox()} data-nav="inbox">
-              Inbox{inbox.unread > 0 && <span className="count amber"><ActDot />{inbox.unread}</span>}
+              Inbox{inbox.unread > 0 && <LiveCount n={inbox.unread} what="unread" />}
             </button>
           )}
           {can("contractors") && (
@@ -6281,7 +6281,7 @@ export default function SubSub() {
               <button key={id} className={tab === "portal" && (id === "jobs" ? JOB_PANES.includes(pane) : pane === id) ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
                 {label}
-                {id === "jobs" && crewActCount > 0 && <span className="count amber"><ActDot />{crewActCount}</span>}
+                {id === "jobs" && crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
               </button>
             ))}
           {can("portal") && [
@@ -6307,7 +6307,7 @@ export default function SubSub() {
             <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
               {label}
-              {id === "jobs" && crewActCount > 0 && <span className="count amber"><ActDot />{crewActCount}</span>}
+              {id === "jobs" && crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
               {/* Somebody is waiting on a yes or a no. Amber for the same
                   reason a job request is: it is theirs to answer and
                   nothing moves until they do. */}
@@ -7548,6 +7548,11 @@ export default function SubSub() {
                       })}
                     </div>
 
+                    {/* MESSAGE, directly under the trades it is about. It sat
+                        at the foot of the card, under the visit block and the
+                        callbacks, and was reported as not there at all. */}
+                    {maySetAccess(role) && !j.readOnly && <JobMessages job={j} subs={subs} people={accountUsers} />}
+
                     {changeOrders.filter((c) => c.jobId === j.id).length > 0 && (
                       <div className="sc-block">
                         <div className="form-sec">Change orders</div>
@@ -7623,8 +7628,6 @@ export default function SubSub() {
                         ))}
                       </div>
                     )}
-
-                    {maySetAccess(role) && !j.readOnly && <JobMessages job={j} subs={subs} people={accountUsers} />}
 
                     {canComplete && !j.readOnly && (
                       <div className="job-footer">
@@ -32463,6 +32466,14 @@ function newestLiveVisit(visits, jobId) {
 // A small pulsing dot on anything somebody is waiting on this reader for. Still
 // for a reader who has asked for less motion; the words beside it carry the
 // meaning either way.
+// A COUNT THAT NEEDS SOMEBODY: one solid pill, and the pulse is a ring round
+// the pill itself. It used to be an amber dot inside an amber pill -- the dot
+// vanished into its own background and its ring spilled out over whatever sat
+// beside it, which on an inbox row was the time.
+function LiveCount({ n, what = "waiting", className = "" }) {
+  return <span className={`count amber live-n ${className}`} role="img" aria-label={`${n} ${what}`}>{n}</span>;
+}
+
 function ActDot({ tone = "warn", label = "Needs you" }) {
   return <span className={`act-dot act-${tone}`} role="img" aria-label={label} />;
 }
@@ -35779,7 +35790,7 @@ function InboxView({ inbox, me, openId, onRefresh, onOpenJob }) {
                 {about(t) && <span className="ib-about">{about(t)}</span>}
                 <span className="ib-last">{t.lastSide === t.side ? "You: " : ""}{t.lastBody || (t.lastHasPhoto ? "Photo" : "")}</span>
               </span>
-              {t.unread > 0 && <span className="count amber ib-n"><ActDot />{t.unread}</span>}
+              {t.unread > 0 && <LiveCount n={t.unread} what="unread" className="ib-n" />}
             </button>
           ))}
         </div>
@@ -35842,7 +35853,12 @@ function JobMessages({ job, subs = [], people = [] }) {
     parties.push({ key: `c:${a.subId}`, label: co?.company || a.company || "the contractor",
       start: { kind: "crew", partyCompanyId: a.subId, jobId: job.id } });
   }
-  if (!parties.length) return null;
+  // Nobody to write to is said rather than drawn as nothing, because a row
+  // that appears on some jobs and not others reads as missing.
+  if (!parties.length) return (
+    <p className="job-msgs jm-none"><MessageSquareText size={14} /> Message: nobody on this job yet. Name a tenant
+      or assign a contractor and you can message them from here.</p>
+  );
   const threads = (ctx?.inbox?.threads || []).filter((t) => t.jobId === job.id);
   const unreadFor = (p) => threads.filter((t) => (p.start.partyCompanyId ? t.partyCompanyId === p.start.partyCompanyId
     : t.partyUserId === p.start.partyUserId)).reduce((n, t) => n + t.unread, 0);
@@ -35851,7 +35867,7 @@ function JobMessages({ job, subs = [], people = [] }) {
       <span className="jm-lab"><MessageSquareText size={14} /> Message</span>
       {parties.map((p) => (
         <button key={p.key} className="jm-btn" onClick={() => setOpen(p)} data-msg-party={p.key}>
-          {p.label}{unreadFor(p) > 0 && <span className="count amber"><ActDot />{unreadFor(p)}</span>}
+          {p.label}{unreadFor(p) > 0 && <LiveCount n={unreadFor(p)} what="unread" />}
         </button>
       ))}
       {open && <ThreadModal start={open.start} me={ctx?.me} title={`${job.title} · ${open.label}`}
@@ -35877,7 +35893,7 @@ function MessageAboutJob({ job, kind, label, companyId = null, accountId = null,
     <>
       <button type="button" className={`${className} msg-about`} onClick={() => setOpen(true)}>
         <MessageSquareText size={14} /> {label}
-        {unread > 0 && <span className="count amber"><ActDot />{unread}</span>}
+        {unread > 0 && <LiveCount n={unread} what="unread" />}
       </button>
       {open && <ThreadModal start={start} me={ctx.me} title={job.title}
         onClose={() => { setOpen(false); ctx.refreshInbox(); }} onChange={ctx.refreshInbox} />}
@@ -45846,6 +45862,15 @@ iframe.dv-frame{display:block}
 .act-dot.act-bad::after{color:#b3261e}
 @keyframes act-pulse{0%{transform:scale(.6);opacity:.9}80%,100%{transform:scale(1.6);opacity:0}}
 @media (prefers-reduced-motion:reduce){.act-dot::after{animation:none;opacity:.35;transform:scale(1.2)}}
+.count.live-n{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:20px;height:20px;
+  padding:0 6px;margin-left:6px;border-radius:999px;font-size:11.5px;font-weight:700;line-height:1;vertical-align:middle;
+  position:relative;font-variant-numeric:tabular-nums}
+.count.live-n::after{content:"";position:absolute;inset:-3px;border-radius:999px;border:2px solid #d97706;
+  opacity:0;pointer-events:none;animation:live-pulse 1.8s ease-out infinite}
+@keyframes live-pulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.3);opacity:0}}
+@media (prefers-reduced-motion:reduce){.count.live-n::after{animation:none}}
+.count.live-n.ib-n{margin:0}
+.ib-row.unread .ib-time{color:#b45309;font-weight:600}
 .sec-cw{border:1px solid var(--line);border-radius:13px;padding:14px 14px 6px;background:var(--card)}
 .sec-cw.cw-need{border-color:#f0d9a8;border-left:4px solid var(--amber);background:#fffaf0}
 .sec-cw h3{margin-top:0}
@@ -46105,6 +46130,7 @@ button.job-insp:hover{border-color:#2f5577}
 .nm-txt{flex:1;display:flex;flex-direction:column;min-width:0}
 .nm-txt span{font-size:13px;color:var(--ink-soft)}
 .job-msgs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0 4px}
+.jm-none{font-size:12.5px;color:var(--ink-soft);gap:6px}
 .jm-lab{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:600;color:var(--ink-soft)}
 .jm-btn{display:inline-flex;align-items:center;gap:6px;min-height:36px;padding:0 12px;border:1px solid var(--line);border-radius:999px;
   background:var(--card);font:inherit;font-size:13.5px;color:var(--ink);cursor:pointer}

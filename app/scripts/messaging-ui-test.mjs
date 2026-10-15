@@ -102,7 +102,8 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
     return [201, { id: "j_new", requested: false, job: { ...JOB, id: "j_new", title: body.title, requestedBy: null },
       fromThread: body.fromThread ? { linked: true, photos: 0 } : undefined }];
   }
-  if (path === "/api/jobs") return [200, [JOB]];
+  if (path === "/api/jobs") return [200, [JOB, { ...JOB, id: "j2", title: "Gutter clean", trades: ["gutters"],
+    requestedBy: null, assignments: {}, scope: "" }]];
   if (path === "/api/threads" && method === "GET") {
     const list = asTenant
       ? THREADS.filter((x) => x.kind === "tenant").map((x) => ({ ...x, side: "party", unread: x.id === "th1" ? 0 : x.unread }))
@@ -195,6 +196,34 @@ try {
     await wait(2800);
     const nav = await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.innerText.replace(/\s+/g, " ").trim() || null);
     t.ck("the Inbox is in the menu with its unread count", nav === "Inbox1" || nav === "Inbox 1", String(nav));
+    // THE BADGE IS ONE PILL. It was an amber dot inside an amber pill: the dot
+    // vanished into its own background and its pulse ring spilled over the
+    // time beside it. One solid, rounded count, and nothing inside it.
+    const badge = await page.evaluate(() => {
+      const b = document.querySelector('[data-nav="inbox"] .count');
+      if (!b) return null;
+      const r = b.getBoundingClientRect(), cs = getComputedStyle(b);
+      return { live: b.classList.contains("live-n"), dot: !!b.querySelector(".act-dot"), h: Math.round(r.height),
+        w: Math.round(r.width), radius: parseFloat(cs.borderTopLeftRadius), bg: cs.backgroundColor };
+    });
+    t.ck("the unread badge is one rounded pill with no dot inside it",
+      !!badge && badge.live && !badge.dot && badge.h >= 18 && badge.h <= 22 && badge.w >= badge.h && badge.radius >= badge.h / 2 - 1,
+      JSON.stringify(badge));
+    // And on the row it sits clear of the time, which the old dot's ring ran into.
+    await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.click());
+    await wait(800);
+    const rowBadge = await page.evaluate(() => {
+      const row = [...document.querySelectorAll(".ib-row")].find((r) => r.classList.contains("unread"));
+      const b = row?.querySelector(".count"), tm = row?.querySelector(".ib-time");
+      if (!b || !tm) return null;
+      const br = b.getBoundingClientRect(), tr = tm.getBoundingClientRect();
+      return { live: b.classList.contains("live-n"), dot: !!b.querySelector(".act-dot"), gap: Math.round(br.left - tr.right),
+        h: Math.round(br.height) };
+    });
+    t.ck("the row's unread badge is the same pill, clear of the time",
+      !!rowBadge && rowBadge.live && !rowBadge.dot && rowBadge.gap >= 4 && rowBadge.h <= 22, JSON.stringify(rowBadge));
+    await page.evaluate(() => [...document.querySelectorAll("nav button, .tabs button, button")].find((b) => /^Dashboard/.test((b.innerText || "").trim()))?.click());
+    await wait(800);
     const dash = await page.evaluate(() => {
       const s = document.querySelector(".sec-msgs");
       return s ? { text: s.innerText, reply: !![...s.querySelectorAll("button")].find((b) => /Reply/.test(b.innerText)) } : null;
@@ -242,6 +271,16 @@ try {
     await wait(500);
     const parties = await page.evaluate(() => [...document.querySelectorAll(".job-msgs .jm-btn")].map((b) => b.innerText.trim()));
     t.ck("the job card names who to message about it", parties.some((x) => /Tess/.test(x)) && parties.some((x) => /Pacific/.test(x)), JSON.stringify(parties));
+    // WHERE it is, which is what was reported missing: under the trades, not
+    // at the foot of the card below the visit block.
+    const place = await page.evaluate(() => {
+      const card = [...document.querySelectorAll(".job-msgs")].find((m) => m.querySelector(".jm-btn"))?.closest(".job-card");
+      const row = card?.querySelector(".job-msgs"), vis = card?.querySelector(".visit-block");
+      return row && vis ? { row: row.getBoundingClientRect().top, vis: vis.getBoundingClientRect().top } : null;
+    });
+    t.ck("the Message row sits above the visit block, under the trades", !!place && place.row < place.vis, JSON.stringify(place));
+    const none = await page.evaluate(() => [...document.querySelectorAll(".jm-none")].map((n) => n.innerText.trim()));
+    t.ck("a job with nobody on it says so rather than drawing no row", none.length === 1 && /nobody on this job/.test(none[0]), JSON.stringify(none));
     await clickText(page, ".job-msgs .jm-btn", /Pacific/);
     await wait(900);
     const js = sent.filter((x) => x.path === "/api/threads").at(-1);
