@@ -22859,6 +22859,69 @@ app.get("/api/ping", (c) => c.json({ ok: true }));
 // Staff-only, and it reads across every account, which is the one thing
 // /api/platform/* exists to be allowed to do. Never reach for it to serve a
 // customer screen.
+// STAFF CAN RESEND OR CANCEL AN INVITATION NOBODY OPENED, from the window
+// that shows it. The console used to say "resending lives on that account's
+// Contractors screen", which meant signing in as the customer to press a
+// button about somebody they had invited.
+//
+// RESEND keeps the token, so the link already in their inbox works too, and
+// an EXPIRED one gets a fresh window on that same token rather than a second
+// link. Any staff: chasing somebody is support work. CANCEL revokes the link
+// and is superadmin, because it destroys a live credential and cannot be
+// undone -- the split this console uses for anything that deletes. Both are
+// audited on the account that sent the invite, so its own feed says so.
+app.post("/api/platform/invites/:id/resend", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`)
+    .bind(c.req.param("id")).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.used_at) return c.json({ error: "already_accepted" }, 409);
+  if (row.revoked_at) return c.json({ error: "revoked" }, 409);
+  if (!row.email && !row.phone) return c.json({ error: "no_contact" }, 400);
+  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(row.account_id).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+
+  const expired = new Date(row.expires_at) < new Date();
+  if (expired) {
+    const until = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
+    await c.env.DB.prepare(`UPDATE sub_invites SET expires_at = ? WHERE id = ?`).bind(until, row.id).run();
+    row.expires_at = until;
+  }
+  const sent = await deliverSubInvite(c.env, { row, account, accountId: row.account_id, userId: staff.userId });
+  if (sent.emailed || sent.texted) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(row.id).run();
+  }
+  const who = row.company_name || row.label || row.email || "the contractor";
+  await auditPlatform(c.env, staff, row.account_id, "invite_resent",
+    sent.went ? `SubSub support sent the invite to ${who} again (${sent.went})`
+      : `SubSub support tried to send the invite to ${who} again; it did not go`,
+    { inviteId: row.id, extended: expired, emailed: sent.emailed, texted: sent.texted });
+  return c.json({ ok: true, extended: expired, expiresAt: row.expires_at,
+    emailed: sent.emailed, texted: sent.texted, went: sent.went,
+    emailError: sent.emailError, textError: sent.textError });
+});
+
+app.post("/api/platform/invites/:id/cancel", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  const row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`)
+    .bind(c.req.param("id")).first();
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.used_at) return c.json({ error: "already_accepted" }, 409);
+  // Guarded on the state it moves FROM, so two presses cancel once.
+  const res = await c.env.DB.prepare(
+    `UPDATE sub_invites SET revoked_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL`).bind(row.id).run();
+  if (!res.meta?.changes) return c.json({ error: "revoked" }, 409);
+  const who = row.company_name || row.label || row.email || "the contractor";
+  await auditPlatform(c.env, staff, row.account_id, "invite_canceled",
+    `SubSub support canceled the invitation to ${who}`, { inviteId: row.id });
+  return c.json({ ok: true });
+});
+
 app.get("/api/platform/stuck-subs", async (c) => {
   const { error } = await requireStaff(c);
   if (error) return error;

@@ -131,6 +131,8 @@ const STUCK = {
 
 const web = serveApp({ dir: OUT, port: WEB });
 const impersonated = [];
+// Every resend and cancel the console posts, so a button is proved by what it sends.
+const INVITE_CALLS = [];
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/platform/impersonate/") && method === "POST") {
     impersonated.push({ path, body });
@@ -140,6 +142,11 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/platform/bootstrap") return [200, BOOT];
   if (path === "/api/platform/companies") return [200, []];
   if (path === "/api/platform/stuck-subs") return [200, STUCK];
+  const im = path.match(/^\/api\/platform\/invites\/([^/]+)\/(resend|cancel)$/);
+  if (im && method === "POST") {
+    INVITE_CALLS.push(`${im[2]}:${im[1]}`);
+    return im[2] === "resend" ? [200, { ok: true, went: "vm@modern.test", extended: false }] : [200, { ok: true }];
+  }
   if (path.startsWith("/api/platform/activity/")) return [200, []];
   if (path.startsWith("/api/platform/accounts/") && path.endsWith("/fee-terms"))
     return [200, { terms: { bps: 50, capCents: 50000, freeCents: 5_000_000 },
@@ -586,6 +593,38 @@ try {
   t.ck("saying what is outstanding and who asked", /email failed/i.test(iw?.text || "")
     && /asked by Sound Property Management/.test(iw?.text || "") && /bounced/.test(iw?.text || ""), iw?.text);
   t.ck("and no company form, because there is no company yet", iw && !iw.edit);
+  // RESEND AND CANCEL ARE ON THE INVITE ITSELF, not on another screen.
+  const btns = () => page.evaluate(() => [...document.querySelectorAll(".modal-invite .stk-acts button")]
+    .map((b) => (b.innerText || "").trim()));
+  t.ck("the invite window offers Resend invite and Cancel invitation",
+    JSON.stringify(await btns()) === JSON.stringify(["Resend invite", "Cancel invitation"]), JSON.stringify(await btns()));
+  await page.evaluate(() => [...document.querySelectorAll(".modal-invite .stk-acts button")]
+    .find((b) => /Resend/.test(b.innerText))?.click());
+  await wait(500);
+  const sentMsg = await page.evaluate(() => document.querySelector(".modal-invite .stk-done")?.innerText || "");
+  t.ck("Resend posts for that invite", INVITE_CALLS.includes("resend:inv2"), JSON.stringify(INVITE_CALLS));
+  t.ck("and says where it went", /Sent again to vm@modern\.test/.test(sentMsg), sentMsg);
+  await page.evaluate(() => [...document.querySelectorAll(".modal-invite .stk-acts button")]
+    .find((b) => /Cancel invitation/.test(b.innerText))?.click());
+  await wait(300);
+  const asking = await page.evaluate(() => document.querySelector(".modal-invite .stk-ask")?.innerText || "");
+  t.ck("Cancel asks first, and sends nothing yet",
+    /link stops working/.test(asking) && !INVITE_CALLS.some((x) => x.startsWith("cancel")), JSON.stringify({ asking, c: INVITE_CALLS }));
+  await page.evaluate(() => [...document.querySelectorAll(".modal-invite .stk-ask button")]
+    .find((b) => /Keep it/.test(b.innerText))?.click());
+  await wait(300);
+  t.ck("Keep it backs out without canceling",
+    !INVITE_CALLS.some((x) => x.startsWith("cancel")) && (await btns()).includes("Cancel invitation"), JSON.stringify(await btns()));
+  await page.evaluate(() => [...document.querySelectorAll(".modal-invite .stk-acts button")]
+    .find((b) => /Cancel invitation/.test(b.innerText))?.click());
+  await wait(300);
+  await page.evaluate(() => [...document.querySelectorAll(".modal-invite .stk-ask button")]
+    .find((b) => /Yes, cancel/.test(b.innerText))?.click());
+  await wait(500);
+  const doneMsg = await page.evaluate(() => document.querySelector(".modal-invite .stk-done")?.innerText || "");
+  t.ck("agreeing cancels that invite", INVITE_CALLS.includes("cancel:inv2"), JSON.stringify(INVITE_CALLS));
+  t.ck("and the window says so, with no buttons left", /Invitation canceled/.test(doneMsg) && (await btns()).length === 0,
+    JSON.stringify({ doneMsg, b: await btns() }));
   await page.evaluate(() => document.querySelector(".modal-invite .modal-close")?.click());
   await wait(300);
   await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row")]
@@ -594,6 +633,8 @@ try {
   const sw = await page.evaluate(() => document.querySelector(".modal-co .pfc-notjoined")?.innerText.replace(/\s+/g, " ") || null);
   t.ck("a company's own window says it has not joined, and where",
     /on the roster, no login/i.test(sw || "") && /asked by Outerhome/.test(sw || ""), sw);
+  t.ck("a roster row with no invite behind it offers no resend or cancel",
+    await page.evaluate(() => !!document.querySelector(".modal-co .pfc-notjoined") && !document.querySelector(".modal-co .stk-acts")));
   await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
   await wait(300);
 

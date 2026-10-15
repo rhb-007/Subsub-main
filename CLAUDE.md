@@ -11929,6 +11929,26 @@ refactor.
   removed. `test:handycapui` had been red since job cards became lines (it
   never opened the card) and opens them now.
 
+- **STAFF CAN RESEND OR CANCEL AN INVITATION FROM THE CONSOLE.** The invite
+  window used to say resending "lives on that account's Contractors screen",
+  which meant signing in as the customer to press a button about somebody they
+  invited. `POST /api/platform/invites/:id/resend` and `/cancel`, drawn on every
+  invitation block in Companies (the invite window and a company's own window).
+
+  **Resend keeps the token**, so the link already in their inbox works too, and
+  an expired invite gets 30 more days on that same token rather than a second
+  link. Any staff: chasing somebody is support work. **Cancel is superadmin
+  only** and asks first, because it destroys a live credential and cannot be
+  undone, the split this console uses for anything that deletes. It is guarded
+  on `revoked_at IS NULL` in the UPDATE, so two presses cancel once. Neither
+  touches an invite somebody already used. Both are audited on the account that
+  sent the invite, so that account's own feed says SubSub support did it.
+
+  A roster row with no invite behind it (somebody typed in, never invited)
+  gets no buttons: there is no link to resend. `test:platforminvite` (25) and
+  `test:consolelists` (116); letting standard staff cancel fails three, and a
+  Cancel that does not ask first fails two.
+
 - **THREE LAYOUT FIXES, AND THE FIRST WAS A CLASS NAME USED TWICE.** The red
   *flagged* chip on an inspection row is `tn-chip sos`, and `.sos` is also the
   911 notice box, so the chip took that box's 18px padding and 18px bottom

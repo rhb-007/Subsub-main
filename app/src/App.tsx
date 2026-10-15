@@ -9486,6 +9486,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // on an account shows by the next visit.
   const [stuck, setStuck] = useState(null);
   const [openInvite, setOpenInvite] = useState(null);
+  // After a resend or a cancel, so the row and its counts follow. The open
+  // window keeps the row it was opened with, which is what lets it say
+  // "canceled" rather than vanishing under the press.
+  const reloadStuck = () => api.platform.stuckSubs().then(setStuck).catch(() => {});
   useEffect(() => {
     if (screen !== "companies") return;
     let live = true;
@@ -10892,7 +10896,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   <h2>{openInvite.company || openInvite.email || "Unnamed invite"}</h2>
                   <p className="pf-sub">Invited, not joined yet. There is no company record until they open the link.</p>
                 </div>
-                <NotJoinedDetail rows={[openInvite]} />
+                <NotJoinedDetail rows={[openInvite]} isSuper={isSuper} onChanged={reloadStuck} />
               </Modal>
             )}
             {editCompanyId && (() => {
@@ -10926,7 +10930,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                         {r.notJoined.length > 0 && (
                           <div className="pfc-row pfc-notjoined">
                             <span>Not joined yet</span>
-                            <span><NotJoinedDetail rows={r.notJoined} /></span>
+                            <span><NotJoinedDetail rows={r.notJoined} isSuper={isSuper} onChanged={reloadStuck} /></span>
                           </div>
                         )}
                         <div className="pfc-row">
@@ -34976,8 +34980,42 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
 // THEIRS: a send that failed is SubSub owing somebody an email, while an
 // invite nobody has opened is a customer nudging a contractor. Same shape from
 // the outside, different jobs, so ours is tinted.
-function NotJoinedDetail({ rows }) {
+// Why a resend or a cancel did not happen, in words staff can act on.
+const inviteActErrText = (code) => ({
+  no_contact: "There is no email or phone on this invite to send it to.",
+  already_accepted: "They have already joined, so there is nothing to send.",
+  revoked: "This invitation was already canceled.",
+  forbidden: "Only a superadmin can cancel an invitation.",
+  not_found: "That invitation is no longer there. Reload the list.",
+}[code] || `That did not go through (${code || "no answer"}). Try again.`);
+
+function NotJoinedDetail({ rows, isSuper = false, onChanged }) {
   const [copied, setCopied] = useState("");
+  // Per invite: busy, the outcome line, and whether Cancel is asking first.
+  const [act, setAct] = useState({});
+  const setFor = (id, v) => setAct((m) => ({ ...m, [id]: { ...(m[id] || {}), ...v } }));
+  const resend = async (r) => {
+    setFor(r.inviteId, { busy: true, msg: "", err: "" });
+    try {
+      const out = await api.platform.resendInvite(r.inviteId);
+      setFor(r.inviteId, { busy: false,
+        msg: out.went ? `Sent again to ${out.went}${out.extended ? ". The link was expired, so it is good for another 30 days." : "."}`
+          : "", err: out.went ? "" : `It did not go: ${out.emailError || out.textError || "nothing was sent"}.` });
+      onChanged && onChanged();
+    } catch (e) {
+      setFor(r.inviteId, { busy: false, err: inviteActErrText(e?.body?.error || e?.message) });
+    }
+  };
+  const cancel = async (r) => {
+    setFor(r.inviteId, { busy: true, err: "" });
+    try {
+      await api.platform.cancelInvite(r.inviteId);
+      setFor(r.inviteId, { busy: false, asking: false, canceled: true, msg: "Invitation canceled. The link no longer works." });
+      onChanged && onChanged();
+    } catch (e) {
+      setFor(r.inviteId, { busy: false, err: inviteActErrText(e?.body?.error || e?.message) });
+    }
+  };
   const copy = async (text) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -35015,11 +35053,42 @@ function NotJoinedDetail({ rows }) {
                 </span>
               : <span className="stk-bad">No email ever attempted to this address</span>}
           </div>
+          {r.inviteId && (() => {
+            const a = act[r.inviteId] || {};
+            return (
+              <div className="stk-acts">
+                {!a.canceled && !a.asking && (
+                  <button type="button" className="btn-solid" disabled={a.busy} onClick={() => resend(r)}>
+                    <Send size={14} /> Resend invite
+                  </button>
+                )}
+                {!a.canceled && isSuper && !a.asking && (
+                  <button type="button" className="btn-ghost" disabled={a.busy}
+                    onClick={() => setFor(r.inviteId, { asking: true, msg: "", err: "" })}>
+                    <X size={14} /> Cancel invitation
+                  </button>
+                )}
+                {a.asking && (
+                  <div className="stk-ask">
+                    <span>Cancel the invitation to {r.company || r.email}? The link stops working
+                      and they would need a new invite to join.</span>
+                    <button type="button" className="btn-danger" disabled={a.busy} onClick={() => cancel(r)}>
+                      Yes, cancel it
+                    </button>
+                    <button type="button" className="btn-ghost" disabled={a.busy}
+                      onClick={() => setFor(r.inviteId, { asking: false })}>Keep it</button>
+                  </div>
+                )}
+                {a.msg && <p className="stk-done">{a.msg}</p>}
+                {a.err && <p className="stk-err" role="alert">{a.err}</p>}
+              </div>
+            );
+          })()}
         </div>
       ))}
       <p className="pf-note">
-        Resending and re-issuing live on that account&rsquo;s Contractors screen, where the
-        audit trail says who pressed them.
+        Resending sends the same link again; an expired one is renewed for another 30 days.
+        Both are recorded on the account that sent it.
       </p>
     </div>
   );
@@ -45111,6 +45180,13 @@ button.job-insp:hover{border-color:#2f5577}
 .pf-flag.is-invite{color:var(--ink-soft)}
 /* Drawn like any company row; the "invite" tag is what says there is no record yet. */
 .pf-row.pf-row-invite.ours{border-left:3px solid #c5735a}
+.stk-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.stk-acts > button{min-height:40px}
+.stk-ask{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;padding:10px 12px;
+  border-radius:10px;background:#faece7;border:1px solid #f0c8bb;font-size:13px}
+.stk-ask > span{flex:1 1 240px}
+.stk-done{margin:0;width:100%;font-size:13px;color:var(--brand);font-weight:600}
+.stk-err{margin:0;width:100%;font-size:13px;color:#b3412b;font-weight:600}
 .pfc-notjoined .stk-rows{margin-top:0}
 .pf-row-figs{display:flex;align-items:baseline;gap:14px;flex:none;font-size:12px;color:var(--ink-soft);
   font-variant-numeric:tabular-nums;white-space:nowrap}
