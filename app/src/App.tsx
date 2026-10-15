@@ -45109,7 +45109,7 @@ button.job-insp:hover{border-color:#2f5577}
   padding:2px 7px;border-radius:999px;background:#f6efdf;color:#7a5a12;white-space:nowrap}
 .pf-join.ours{background:#f5ded6;color:#8a3c22}
 .pf-flag.is-invite{color:var(--ink-soft)}
-.pf-row.pf-row-invite{border-style:dashed;background:var(--paper)}
+/* Drawn like any company row; the "invite" tag is what says there is no record yet. */
 .pf-row.pf-row-invite.ours{border-left:3px solid #c5735a}
 .pfc-notjoined .stk-rows{margin-top:0}
 .pf-row-figs{display:flex;align-items:baseline;gap:14px;flex:none;font-size:12px;color:var(--ink-soft);

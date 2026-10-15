@@ -521,7 +521,10 @@ try {
     invites: [...document.querySelectorAll(".pf-rows .pf-row-invite")].map((r) => ({
       name: r.querySelector(".pf-row-name b")?.innerText.trim(),
       tag: r.querySelector(".pf-join")?.innerText.trim(), ours: r.classList.contains("ours"),
-      h: Math.round(r.getBoundingClientRect().height), border: getComputedStyle(r).borderTopStyle })),
+      h: Math.round(r.getBoundingClientRect().height), border: getComputedStyle(r).borderTopStyle,
+      bg: getComputedStyle(r).backgroundColor, invite: r.querySelector(".pf-flag.is-invite")?.innerText.trim() })),
+    rowBg: (() => { const r = document.querySelector(".pf-rows .pf-row:not(.pf-row-invite)");
+      return r ? { bg: getComputedStyle(r).backgroundColor, border: getComputedStyle(r).borderTopStyle } : null; })(),
     skagit: [...document.querySelectorAll(".pf-rows .pf-row")].find((r) => /Skagit/.test(r.innerText))
       ?.querySelector(".pf-join")?.innerText.trim() || null,
     others: [...document.querySelectorAll(".pf-rows .pf-row:not(.pf-row-invite)")]
@@ -532,8 +535,14 @@ try {
   t.ck("an invite with no company yet is a row on Companies",
     JSON.stringify(nj.invites.map((x) => x.name).sort()) === JSON.stringify(["Enterprise Roofing", "Modern Exteriors"]),
     JSON.stringify(nj.invites));
-  t.ck("drawn differently from a company: dashed", nj.invites.length === 2 && nj.invites.every((x) => x.border === "dashed"),
-    JSON.stringify(nj.invites.map((x) => x.border)));
+  // DRAWN LIKE EVERY OTHER ROW. Dashed on gray read as disabled ("greyed
+  // out"), which they are not: they open, and each is a person to chase.
+  t.ck("drawn like a company row, not grayed out",
+    nj.invites.length === 2 && !!nj.rowBg
+      && nj.invites.every((x) => x.border === nj.rowBg.border && x.bg === nj.rowBg.bg),
+    JSON.stringify({ invites: nj.invites.map((x) => [x.border, x.bg]), row: nj.rowBg }));
+  t.ck("and the invite tag is what tells them apart", nj.invites.every((x) => x.invite === "invite"),
+    JSON.stringify(nj.invites.map((x) => x.invite)));
   t.ck("and as thin as one", nj.invites.length === 2 && nj.invites.every((x) => x.h <= 72), JSON.stringify(nj.invites.map((x) => x.h)));
   t.ck("each says it has not joined, and why",
     nj.invites.some((x) => /not joined/i.test(x.tag || "") && /waiting on them/i.test(x.tag || "")), JSON.stringify(nj.invites));
