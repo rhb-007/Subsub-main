@@ -48,11 +48,13 @@ const verified = { status: "verified", checks: {}, limits: {} };
 // Whether the contractor has granted auto-schedule.
 let AUTO = false;
 let ROSTER = "ok";
+// The reported row: a long name and three documents on file and unread.
+let NAME = "Pacific apartment maintenance";
 const reviewFor = () => ROSTER === "ok"
   ? { insurance: verified, bond: verified, contract: verified, w9: verified }
   : ROSTER === "toReview"
     // On file and unread: this account's own job.
-    ? { insurance: { status: "pending" }, bond: verified, contract: verified, w9: verified }
+    ? { insurance: { status: "pending" }, bond: { status: "pending" }, contract: { status: "pending" }, w9: verified }
     // Not uploaded: theirs.
     : { insurance: verified, contract: verified, w9: verified };
 // THE FIXTURE IS A CONTRACTOR WHO LOOKS ASSIGNABLE FROM HERE. The roster row
@@ -61,7 +63,7 @@ const reviewFor = () => ROSTER === "ok"
 // a suite driving that case could not tell a guarded patch from a hidden one.
 const SUBS = () => [{
   id: "sub_1", engagementId: "en_1", accountId: "acc_x",
-  company: "Pacific apartment maintenance", contact: "Juan Soto",
+  company: NAME, contact: "Juan Soto",
   phone: "(206)555-0100", email: "juan@pacific.test",
   city: "Seattle", state: "WA", zip: "98122", license: "PACIFI*123AB",
   licenseCheck: null,
@@ -235,8 +237,11 @@ try {
     // and a Select button, because the row read three presence flags rather
     // than what the route asks. The route then refused the press.
     ROSTER = mode;
+    // At an iPad's width, where it was reported, with the reported name.
+    NAME = mode === "toReview" ? "Puget Electricity / Plumbing" : "Pacific apartment maintenance";
     const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
-      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1340, height: 1500 } });
+      seat: { userId: "usr_r", accountId: "acc_x" },
+      viewport: mode === "toReview" ? { width: 1024, height: 1366 } : { width: 1340, height: 1500 } });
     await wait(2600);
     await page.evaluate(() => [...document.querySelectorAll("nav button")]
       .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
@@ -257,6 +262,32 @@ try {
     t.ck(`${mode}: and offers no Select the route would refuse`,
       !!row && row.buttons.length > 0 && !row.buttons.some((b) => /^Select/.test(b)), JSON.stringify(row?.buttons));
     if (mode === "toReview") {
+      // THE REPORTED LAYOUT: the review panel beside the name squeezed it to
+      // a word a line and drew over the rating. Measured, because the markup
+      // was right both times.
+      const lay = await page.evaluate(() => {
+        const r = document.querySelector(".modal .pick-row");
+        const rect = (el) => el ? el.getBoundingClientRect() : null;
+        const h4 = rect(r?.querySelector(".rec-head h4"));
+        const main = rect(r?.querySelector(".rec-main"));
+        const why = rect(r?.querySelector(".rec-why-review"));
+        const starsEl = r?.querySelector(".stars");
+        const st = rect(starsEl);
+        const hit = st ? document.elementFromPoint(st.left + st.width / 2, st.top + st.height / 2) : null;
+        const lh = h4 ? parseFloat(getComputedStyle(r.querySelector(".rec-head h4")).lineHeight) || 20 : 20;
+        const chips = [...(r?.querySelectorAll(".rec-tags > span") || [])].map((c) => c.getBoundingClientRect().height);
+        return { h4: h4 && { w: h4.width, h: h4.height }, lh, mainBottom: main?.bottom, whyTop: why?.top,
+          whyW: why?.width, rowW: rect(r)?.width, starsHit: !!(hit && starsEl.contains(hit)), chips };
+      });
+      t.ck("toReview: the name sits on one line, not a word a line",
+        !!lay.h4 && lay.h4.h < lay.lh * 1.6 && lay.h4.w > 150, JSON.stringify(lay));
+      t.ck("toReview: the rating is drawn on top, not under the panel", lay.starsHit === true, JSON.stringify(lay));
+      t.ck("toReview: the review panel is under the name block, not beside it",
+        lay.whyTop != null && lay.mainBottom != null && lay.whyTop >= lay.mainBottom - 1, JSON.stringify(lay));
+      t.ck("toReview: and it takes most of the row's width",
+        lay.whyW != null && lay.rowW != null && lay.whyW > lay.rowW * 0.75, JSON.stringify(lay));
+      t.ck("toReview: no chip wraps onto a second line",
+        lay.chips.length > 0 && lay.chips.every((h) => h < 28), JSON.stringify(lay.chips));
       t.ck("toReview: says it is waiting on YOUR review, naming the document",
         /Waiting on your review/i.test(row?.text || "") && /Certificate of insurance/i.test(row?.text || ""), row?.text);
       t.ck("toReview: the action is Review, not Request docs",

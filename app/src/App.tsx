@@ -26981,7 +26981,7 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
       ) : (
         <div className="pick-list">
           {ranked.map(({ sub, prox, docs, toReview, sentBack, notIn, day, covers, dup }, i) => (
-            <div key={sub.id} className="pick-row">
+            <div key={sub.id} className={`pick-row${docs ? "" : " is-blocked"}`}>
               <div className="rec-rank">{i + 1}</div>
               <div className="rec-main">
                 <div className="rec-head">
@@ -43081,6 +43081,18 @@ iframe.dv-frame{display:block}
 .rec-why .rec-blocked-why strong{color:var(--amber-ink);font-weight:700}
 .rec-why-review{padding:10px 12px;border-radius:10px;background:#fdf3e1;border:1px solid #f1d9a8}
 .rec-review{min-height:44px;font-size:14.5px}
+/* A BLOCKED ROW PUTS THE REASON UNDER THE NAME, NEVER BESIDE IT. Beside it,
+   the panel took most of the width and the name column was squeezed to a
+   word a line, with the rating drawn under the panel's edge. Under it, the
+   name, the rating and the chips keep the row they had, and the reason gets
+   the full width at the same left edge as the name. */
+.pick-row.is-blocked{flex-wrap:wrap}
+.pick-row.is-blocked .rec-blocked{flex:1 0 100%;max-width:none;margin-left:40px;align-items:stretch}
+.pick-row.is-blocked .rec-why{flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+.pick-row.is-blocked .rec-why .rec-blocked-why{flex:1 1 240px;text-align:left}
+.pick-row.is-blocked .rec-why .rec-send{margin-top:0}
+.rec-tags > span{white-space:nowrap}
+@media (max-width:640px){ .pick-row.is-blocked .rec-blocked{margin-left:0} }
 /* The route's refusal, inside the window where the press was made. */
 .assign-refused{display:flex;gap:10px;align-items:flex-start;margin:12px 0 4px;padding:12px 14px;
   border-radius:10px;background:#faece7;border:1px solid #f0c8bb;font-size:14px;line-height:1.45}

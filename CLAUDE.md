@@ -11929,6 +11929,20 @@ refactor.
   removed. `test:handycapui` had been red since job cards became lines (it
   never opened the card) and opens them now.
 
+- **A BLOCKED ROW IN THE ASSIGN WINDOW PUTS ITS REASON UNDER THE NAME.**
+  Reported with the window open on *Puget Electricity / Plumbing*: the name
+  drawn a word a line, the chips wrapped (*1 crews · 3 / ppl*), and the rating
+  under the edge of the amber *Waiting on your review* panel. The panel sat
+  beside the name block and took up to 340px of a ~500px row, so the name got
+  85px. A blocked row (`pick-row is-blocked`) now wraps: the name, rating and
+  chips keep the top line, and the reason takes the full width under them at
+  the name's left edge, with its button beside the sentence. Chips do not
+  wrap inside themselves. `test:assignref` measures it at 1024px with the
+  reported name and three documents to review: the name's height, the rating
+  being on top (`elementFromPoint`), the panel below the name block and most
+  of the row wide, and each chip one line. Dropping the class reproduces the
+  report and fails four; narrowing the panel and letting chips wrap fails four.
+
 - **FOLLOW-UP IS YELLOW AND FAIL IS RED.** Reported with a room marked Fail
   beside its Follow-up button: *"follow up and fail have the exact same color."*
   They were the product's `--amber` (#c8871e) and `--red` (#b5442e), which sit
