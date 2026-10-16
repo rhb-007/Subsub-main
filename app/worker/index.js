@@ -6710,6 +6710,24 @@ app.post("/api/password-help", async (c) => {
         // Logged, never returned. Whether Supabase was rate-limited is our
         // problem to see and not something the form should differentiate on.
         if (!res || !res.ok) console.warn("[pwhelp] recover failed for a known user:", res?.status);
+        // And on the console's mail log for every account they sit on. These
+        // used to leave no trace: a new customer pressed "Forgot password?"
+        // twice, Resend delivered both, and their account's log read 0 --
+        // which hid the one sign that they were trying to get in. Recorded
+        // only here, after the address is known, so the reply is unchanged.
+        const { results: seats } = await c.env.DB.prepare(
+          `SELECT DISTINCT account_id FROM memberships WHERE user_id = ?`).bind(user.id).all()
+          .catch(() => ({ results: [] }));
+        let detail = null;
+        if (res && !res.ok) {
+          const b = await res.json().catch(() => null);
+          detail = b?.msg || b?.error_description || `HTTP ${res.status}`;
+        }
+        for (const seat of seats || []) {
+          await logMail(c.env, { accountId: seat.account_id, companyId: null, to: email,
+            kind: "password_reset", subject: "Password reset (asked for on the sign-in page)",
+            result: res?.ok ? { ok: true } : { ok: false, error: "supabase", detail: detail || "unreachable" } });
+        }
       }
       return c.json({ ok: true });
     }

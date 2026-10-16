@@ -113,9 +113,15 @@ const record = async (r) => { replies.push([r.status, JSON.stringify(await r.clo
 try {
   console.log("\n-- somebody with a real login gets a reset --");
   {
-    const env = ENV(seed()); reset();
+    const db = seed(); const env = ENV(db); reset();
     await record(await ask(env, "priya@cascade.test", "https://cascadeexteriors.subsub.work"));
     ck("recover is called once", recovers.length === 1, JSON.stringify(recovers));
+    // It used to leave no trace: a customer pressed Forgot password twice,
+    // both were delivered, and their account's mail log read 0.
+    const logged = db.prepare(`SELECT account_id, kind, status FROM email_log WHERE to_email = 'priya@cascade.test'`).all();
+    ck("and it is on the console's mail log for the account they sit on",
+      logged.length === 1 && logged[0].kind === "password_reset" && logged[0].status === "sent"
+        && logged[0].account_id === "acc_pm", JSON.stringify(logged));
     ck("for their address", recovers[0]?.email === "priya@cascade.test");
     ck("returning to the branded page they asked from",
       recovers[0]?.redirect_to === "https://cascadeexteriors.subsub.work",

@@ -13189,6 +13189,14 @@ refactor.
   an account typed keep every line break** (`keepLines`), because joining two
   of their lines rewrites what they said.
 
+  **And a reset asked for on the sign-in page was never logged.** Resend
+  showed A&L's admin had pressed *Forgot password?* twice and both were
+  delivered, while the console's mail log for the account read 0, hiding the
+  one sign that a new customer was trying to get in. `POST /api/password-help`
+  now writes a `password_reset` row for every account the person sits on,
+  after the reply is decided, so the same-answer-for-every-address rule is
+  untouched. `test:pwhelp` pins it.
+
   `test:signupwelcome` (37), which calls every email composer and requires the
   logo on each. Nine mutations fire, each on its own assertion.
   And `test:referral` had been red since 084: it grepped for the old flat-price
