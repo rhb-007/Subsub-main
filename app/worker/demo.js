@@ -153,6 +153,11 @@ export async function createBooking(env, { start, name, email, timeZone, company
     const taken = r.status === 409 || /no_available_users|already booked|not available/i.test(r.text);
     return { ok: false, reason: taken ? "taken" : "upstream" };
   }
-  const uid = r.data?.data?.uid || r.data?.uid || null;
-  return { ok: true, uid };
+  const d = r.data?.data || r.data || {};
+  const uid = d.uid || null;
+  // What SubSub's own confirmation email needs. Cal answers the meeting link
+  // as meetingUrl, or as location when that is itself an address; neither is
+  // guaranteed, so a missing link means the email says the invite carries it.
+  const link = [d.meetingUrl, d.location].find((v) => /^https:\/\//.test(String(v || ""))) || null;
+  return { ok: true, uid, start: d.start || start, end: d.end || null, meetingUrl: link };
 }

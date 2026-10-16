@@ -490,6 +490,43 @@ This is an automated message from an unmonitored address. Replies aren't receive
   return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: textToHtml(text, app) };
 }
 
+// A demo booked on book-a-demo.html, in SubSub's own voice and from SubSub's
+// own address. Cal sends its confirmation as Cal, under Cal's logo; this is
+// the one the person should read, so it says the time in their own zone, the
+// link to join, and how to move it. The calendar invite itself comes from the
+// host's Google Calendar, which is already SubSub's address.
+export function demoBookedEmail({ name, start, end, timeZone, meetingUrl }) {
+  const tz = timeZone || "America/Los_Angeles";
+  const at = new Date(start);
+  let when;
+  try {
+    const day = at.toLocaleDateString("en-US", { timeZone: tz, weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    const t = (d) => d.toLocaleTimeString("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit" });
+    const zone = at.toLocaleTimeString("en-US", { timeZone: tz, timeZoneName: "short" }).split(" ").pop();
+    const fin = end ? new Date(end) : new Date(at.getTime() + 30 * 60_000);
+    when = `${day}, ${t(at)} to ${t(fin)} ${zone}`;
+  } catch {
+    when = at.toUTCString();
+  }
+  const first = String(name || "").trim().split(/\s+/)[0] || "there";
+  const join = meetingUrl
+    ? `Join on Google Meet: ${meetingUrl}`
+    : "The Google Meet link is in the calendar invite.";
+  const text = `Hi ${first},
+
+Your SubSub demo is booked.
+
+When: ${when}
+${join}
+
+A calendar invite is on its way too, so it lands on your calendar with the link in it. If you need a different time, reply to that invite or go to https://subsub.work/book-a-demo.html and pick another.
+
+Thirty minutes, on your own paperwork rather than a slide deck. Bring the vendor list you're chasing.
+
+-- The SubSub team`;
+  return { subject: `Your SubSub demo: ${when}`, text, html: textToHtml(text, meetingUrl || "https://subsub.work") };
+}
+
 // What a tenant is sent when their building manager sets them up.
 //
 // It has one job, and it is not to explain a product: somebody who has just

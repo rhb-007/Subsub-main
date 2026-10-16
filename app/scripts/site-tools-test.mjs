@@ -368,6 +368,30 @@ try {
   }
 }
 
+console.log("\n-- the demo form's labels clear the box above them --");
+{
+  // Reported as every label sitting on the box above it: the details step is
+  // a div inside the form, so the form's gap never reached its rows.
+  for (const width of [820, 390]) {
+    const { ctx, page } = await open("/book-a-demo.html", width);
+    const gaps = await page.evaluate(() => {
+      document.getElementById("stepTime")?.classList.add("hide");
+      document.getElementById("stepDetails").classList.remove("hide");
+      const out = [];
+      for (const id of ["company", "email", "phone", "role", "subs", "notes"]) {
+        const lab = document.querySelector(`label[for="${id}"]`).getBoundingClientRect();
+        const above = [...document.querySelectorAll("#stepDetails input, #stepDetails select, #stepDetails textarea, #bkChosen")]
+          .map((e) => e.getBoundingClientRect()).filter((r) => r.height > 0 && r.bottom <= lab.top + 1 && r.left < lab.right && r.right > lab.left)
+          .sort((a, b) => b.bottom - a.bottom)[0];
+        out.push({ id, gap: above ? Math.round(lab.top - above.bottom) : null });
+      }
+      return out;
+    });
+    t.ck(`at ${width}px every label clears the box above it by 16px or more`, gaps.every((g) => g.gap !== null && g.gap >= 16), JSON.stringify(gaps));
+    await ctx.close();
+  }
+}
+
 console.log("\n-- on a phone --");
   for (const path of ["/check/", "/check/wa/", "/handyman-limits/", "/handyman-limits/wa/", "/subs", "/gc"]) {
     const { ctx, page } = await open(path, 390);

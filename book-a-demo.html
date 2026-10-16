@@ -367,6 +367,12 @@ body.nav-open{overflow:hidden}
   .picked{display:flex;align-items:center;gap:10px;background:#F1F6F3;border:1.5px solid var(--forest);
     border-radius:8px;padding:13px 15px;font-size:15px;margin-top:16px}
   .picked b{font-weight:600}
+  /* The details step is a plain div inside the form, so the form's own gap
+     never reached its rows and each label sat on the box above it. */
+  #stepDetails{display:flex;flex-direction:column;gap:22px}
+  #stepDetails .bk-back{align-self:flex-start;padding-bottom:0}
+  #stepDetails .bk-chosen{margin-bottom:0}
+  #stepDetails .fine{margin-top:-12px}
   @media (max-width:1000px){.dgrid{grid-template-columns:1fr;gap:40px;padding-top:40px;padding-bottom:64px}}
 </style>
 <link rel="canonical" href="https://subsub.work/book-a-demo.html">

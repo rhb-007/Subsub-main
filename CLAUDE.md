@@ -13288,6 +13288,32 @@ refactor.
   The card's badge already says who it is for. `test:sitetools` measures it at
   700px and 1200px against the plan pill, and the old box fails all four checks.
 
+- **A BOOKED DEMO IS CONFIRMED BY SUBSUB, AND THE DEMO FORM'S LABELS CLEAR
+  THE BOX ABOVE THEM.** Reported with Cal's confirmation email on screen
+  (*"remove all of the Cal branding and email from to SubSub logo and SubSub
+  email"*) and the details step with every label touching the field above it.
+
+  **SubSub now sends its own confirmation.** `demoBookedEmail` in `mail.js`,
+  through Resend from `MAIL_FROM`, under the logo every email carries. It
+  states the time in the booker's own zone, the Meet link (from Cal's
+  `meetingUrl`, or `location` when that is an address), and how to move it.
+  It is sent after the booking and never decides the answer, so a mail that
+  does not go is logged and the booking still stands. The calendar invite
+  already comes from the host's Google Calendar, which is SubSub's address.
+
+  **Cal's own email is turned off in Cal, not here.** Cal's help says its
+  default attendee confirmation can be disabled per event type (Advanced, at
+  the bottom) only while a workflow emails attendees, and its branding and
+  sender are a paid Cal setting. Nothing in this repo can remove them. **Not
+  verified here:** Cal's site is unreachable from this environment, so the
+  exact setting is Cal's documentation, not a press.
+
+  **The labels.** `#stepDetails` is a plain div inside the form, so the form's
+  22px gap never reached its rows and each label sat on the box above it. It
+  is a flex column with the same gap now. `test:sitetools` measures each
+  label against the box above it at 820px and 390px; the old page reads 0px
+  on four of six and fails both.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

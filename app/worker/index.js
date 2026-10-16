@@ -8,7 +8,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sendEmail, welcomeEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
+import { sendEmail, welcomeEmail, demoBookedEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen, buildingNoticeEmail,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
@@ -6462,6 +6462,16 @@ app.post("/api/demo/book", async (c) => {
     if (!r.ok) return c.json({ error: r.reason === "taken" ? "slot_taken" : "unavailable" },
       r.reason === "taken" ? 409 : 502);
     console.log("[demo] booked", r.uid || "(no uid)", "for", email);
+    // SubSub's own confirmation, under SubSub's logo. It never decides the
+    // answer: the booking exists, and a mail that does not go is logged.
+    try {
+      const m = demoBookedEmail({ name, start: r.start, end: r.end, meetingUrl: r.meetingUrl,
+        timeZone: String(b.timeZone || "America/Los_Angeles") });
+      const sent = await sendEmail(c.env, { to: email, ...m });
+      if (!sent.ok) console.error("[demo] confirmation email did not go:", sent.error, sent.detail || "");
+    } catch (err) {
+      console.error("[demo] confirmation email failed:", err?.message || err);
+    }
     return c.json({ booked: true, uid: r.uid }, 201);
   } catch (err) {
     console.error("[demo] booking failed:", err?.stack || err);
