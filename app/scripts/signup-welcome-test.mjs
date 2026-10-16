@@ -174,6 +174,37 @@ try {
     t.ck("running it twice adds nothing", ev("a_basic").length === 1 && ev("a_up").length === 1);
     t.ck("and the invariant reads zero", runCheck(db).m087_inv_account_no_created === 0);
   }
+  console.log("\n-- every email wears the header, not only the welcome --");
+  {
+    const mailMod = await import("../worker/mail.js");
+    const args = { company: { company: "Bay Roofing", email: "a@b.test" }, contact: "Rae",
+      account: { name: "Acme", subdomain: "acme" }, job: { title: "Reroof", address: "1 Elm" },
+      trade: "roofing", woNumber: "WO-1", link: "https://x.test/l", kind: "insurance", name: "Rae",
+      role: "admin", firstName: "Rae", companyName: "Bay", lines: ["a"],
+      threads: [{ who: "x", about: "y", last: "z", link: "https://x.test" }], body: "hi", who: "Dana",
+      subject: "S", text: "T {link}", amount: 100, through: "2026-10-01", expiresOn: "2026-12-01",
+      daysOut: 7, count: 2, days: 30, title: "T", stage: "approved", review: {}, jobs: [],
+      accountName: "Acme", subdomain: "acme", subs: 12 };
+    const composers = Object.entries(mailMod).filter(([k, f]) => /Email$/.test(k) && k !== "sendEmail" && typeof f === "function");
+    const without = composers.filter(([, f]) => { try { return !f(args)?.html?.includes("email-logo.png"); } catch { return true; } })
+      .map(([k]) => k);
+    t.ck(`all ${composers.length} email composers carry the logo`, composers.length > 25 && without.length === 0, without.join(", "));
+
+    const wrapped = "Hi Rae,\n\nThe quick brown\nfox jumps.\n\n  WO-1\n  Trade: x\n\nOpen it here:\n  https://x\n\n- one\n- two";
+    const u = mailMod.unwrapProse(wrapped);
+    t.ck("a sentence wrapped at 80 columns is one line in the HTML", u.includes("The quick brown fox jumps."), u);
+    t.ck("indented detail rows, a link under a colon and list items keep their lines",
+      u.includes("\n  WO-1\n  Trade: x") && u.includes("here:\n  https://x") && u.includes("- one\n- two"), u);
+    // Read through a real email, not the helper: a helper that works and is
+    // never called is the bug this checks for.
+    const app = mailMod.applicationReceivedEmail({ companyName: "Bay", contact: "Rae", account: { name: "Acme", subdomain: "acme" } });
+    t.ck("and a real email's HTML is unwrapped", /the next step is uploading/.test(app.html)
+      && /the next step is\nuploading/.test(app.text), app.html.slice(0, 400));
+    const msg = mailMod.messageEmail({ firstName: "Rae", who: "Dana", body: "Gate code 1234\nDog is friendly",
+      link: "https://x.test/t", fromName: "Acme" });
+    t.ck("a person's own message keeps every line break", msg.html.includes("Gate code 1234<br>Dog is friendly"), msg.html);
+  }
+
   console.log("\n-- the logo the email points at is a real, published PNG --");
   {
     const png = readFileSync(new URL("../../email-logo.png", import.meta.url));

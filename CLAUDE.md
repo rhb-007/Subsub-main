@@ -13170,17 +13170,27 @@ refactor.
   pasted and zero after. The history line now names the plan
   (*Signed up on Scale*) and labels a downgrade and a comp in words.
 
-  **The welcome email wears SubSub's logo, and only that one.** `brandedHtml`
-  puts it on a forest band above the same body. It is `email-logo.png` on
-  subsub.work (rendered from the site's own SVG at twice its drawn size),
-  because Gmail and Outlook do not draw SVG, and the alt text is white so a
-  client that blocks images still shows *SubSub* on the band. Mail sent on an
-  account's behalf (an application, an invite, a work order) stays plain:
-  SubSub's logo across the top of a company's own message reads as a third
-  party. Its sentences are not hard-wrapped, because the HTML keeps every
-  newline and a wrap at 80 columns splits a sentence in every mail client.
+  **Every email wears SubSub's logo**, asked for after the welcome email got it
+  first: *"generally most emails should have the SubSub logo, wrapped like
+  this."* `textToHtml` in `mail.js` draws every message, so the header is in
+  that one helper and a new email gets it by being written at all; three that
+  had no HTML (`docRenewedEmail`, `docInboxEmail`, `embedNudgeEmail`) gained
+  some. The logo is `email-logo.png` on subsub.work (rendered from the site's
+  own SVG at twice its drawn size), because Gmail and Outlook do not draw SVG,
+  on a forest band with white alt text so a client that blocks images still
+  shows *SubSub*. An account's words still lead the body and its name still
+  signs it; the header says which product carried it, like the work order's
+  footer does.
 
-  `test:signupwelcome` (32). Five mutations fire, each on its own assertion.
+  **And the HTML unwraps the plain text's 80-column wraps** (`unwrapProse`),
+  because HTML keeps every newline and inside a wider card those wraps split
+  sentences in every mail client. Never an indented line, a list item, a
+  signature, or a line after a colon. **A message someone wrote and an invite
+  an account typed keep every line break** (`keepLines`), because joining two
+  of their lines rewrites what they said.
+
+  `test:signupwelcome` (37), which calls every email composer and requires the
+  logo on each. Nine mutations fire, each on its own assertion.
   And `test:referral` had been red since 084: it grepped for the old flat-price
   line that `subscriptionMonthlyCents` replaced. It reads that function now.
 

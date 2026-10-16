@@ -487,7 +487,7 @@ ${steps}
 -- The SubSub team
 
 This is an automated message from an unmonitored address. Replies aren't received.`;
-  return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: brandedHtml(text, app) };
+  return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: textToHtml(text, app) };
 }
 
 // What a tenant is sent when their building manager sets them up.
@@ -833,40 +833,65 @@ export function withInviteLink(text, link) {
 // like a different kind of message from an unedited one.
 export function customInviteEmail({ subject, text, link }) {
   const body = withInviteLink(text, link);
-  return { subject: String(subject || "").trim(), text: body, html: textToHtml(body, link) };
+  return { subject: String(subject || "").trim(), text: body, html: textToHtml(body, link, { keepLines: true }) };
 }
 
 // A plain-text message rendered as minimal HTML. Deliberately not a designed
 // template: these are operational notices, they have to survive every client,
 // and the text part stays the source of truth.
-function textToHtml(text, link) {
+// The plain-text copy of most emails is wrapped at 80 columns for mail
+// clients that show text, and HTML keeps every newline, so inside the wider
+// card those wraps split sentences in half. A prose line is joined back onto
+// the one before it, in the HTML only. Never an indented line (the detail
+// rows and links are indented on purpose), a list item, a signature, or a line
+// after one ending in a colon, which introduces what is under it.
+const STANDS_ALONE = /^(\s|[-*\u2022\u2014]|\d+[.)]\s|--)/;
+export function unwrapProse(text) {
+  const out = [];
+  for (const line of String(text).split("\n")) {
+    const prev = out.length ? out[out.length - 1] : "";
+    if (line.trim() && prev.trim() && !STANDS_ALONE.test(line) && !STANDS_ALONE.test(prev)
+      && !/:\s*$/.test(prev)) {
+      out[out.length - 1] = prev.replace(/\s+$/, "") + " " + line;
+    } else out.push(line);
+  }
+  return out.join("\n");
+}
+function bodyHtml(text, link, { keepLines = false } = {}) {
   const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const body = esc(text).replace(/\n/g, "<br>");
+  const body = esc(keepLines ? text : unwrapProse(text)).replace(/\n/g, "<br>");
   const linked = link
     ? body.replace(esc(link), `<a href="${esc(link)}" style="color:#1B4835">${esc(link)}</a>`)
     : body;
   return `<div style="font:14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#12211C;max-width:640px">${linked}</div>`;
 }
 
-// The same body under SubSub's own header, for mail sent in SubSub's voice --
-// the welcome email, today. Deliberately NOT used for mail sent on behalf of
-// an account (an application received, an invite, a work order): those are
-// the account writing to somebody, and SubSub's logo across the top of them
-// would read as a third party butting into somebody else's business.
+// Every email wears SubSub's header: the logo on a forest band above the body.
+// Asked for in so many words -- "generally most emails should have the SubSub
+// logo, wrapped like this" -- after the welcome email got it first. One helper
+// draws every message, so a new email gets the header by being written at all.
 //
 // The logo is a PNG on subsub.work rather than inline SVG, because Gmail and
-// Outlook do not draw SVG at all. It sits on a forest band so the white
-// wordmark reads, and the alt text is white for the same reason: a client
-// that blocks images shows "SubSub" on the band instead of a broken box.
-// Tables and bgcolor, because that is what every mail client agrees on.
+// Outlook do not draw SVG. It sits on a forest band so the white wordmark
+// reads, and the alt text is white for the same reason: a client that blocks
+// images shows "SubSub" on the band instead of a broken box. Tables and
+// bgcolor, because that is what every mail client agrees on.
+//
+// An account's own words still lead the body and its name still signs it;
+// the header says which product carried the message, the same as the footer
+// on a work order does.
 export const EMAIL_LOGO_URL = "https://subsub.work/email-logo.png";
-export function brandedHtml(text, link) {
-  const inner = textToHtml(text, link);
+// `keepLines` is for a message whose words are a person's rather than ours --
+// a message somebody wrote, an invite an account typed -- where every line
+// break is theirs and joining two lines would rewrite what they said.
+function textToHtml(text, link, opts) {
+  const inner = bodyHtml(text, link, opts);
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;border-collapse:collapse">`
     + `<tr><td bgcolor="#103528" style="background:#103528;padding:18px 24px;border-radius:10px 10px 0 0">`
     + `<img src="${EMAIL_LOGO_URL}" width="176" height="40" alt="SubSub" style="display:block;border:0;color:#FFFFFF;font:700 22px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">`
     + `</td></tr><tr><td style="padding:24px;border:1px solid #DDE4E0;border-top:0;border-radius:0 0 10px 10px">${inner}</td></tr></table>`;
 }
+export const brandedHtml = textToHtml;
 
 // Asking somebody to sign a lien waiver.
 //
@@ -1053,7 +1078,7 @@ The link lasts ${days} days. If you would rather not hear when their paperwork
 renews, there is a line at the bottom of that page to say so.
 
 -- sent on behalf of ${who}, through SubSub`;
-  return { subject: `${who} renewed their ${what.toLowerCase()}`, text };
+  return { subject: `${who} renewed their ${what.toLowerCase()}`, text, html: textToHtml(text, link) };
 }
 
 // Told once, when an account has enough of a roster to want it to fill itself.
@@ -1082,7 +1107,8 @@ https://${subdomain}.subsub.work/?apply=1 \u2014 worth putting in the bid
 invitations you already send.
 
 -- SubSub`;
-  return { subject: `Let contractors apply to ${accountName} from your website`, text };
+  return { subject: `Let contractors apply to ${accountName} from your website`, text,
+    html: textToHtml(text, `https://${subdomain}.subsub.work/`) };
 }
 
 // "Everything sent to you, on one page." Asked for from a pack page, delivered
@@ -1106,7 +1132,7 @@ document link is not proof you still read this mailbox, and this one opens all
 of them. It lasts ${days} days.
 
 -- SubSub`;
-  return { subject: "Everything sent to you, on one page", text };
+  return { subject: "Everything sent to you, on one page", text, html: textToHtml(text, link) };
 }
 
 // A finished move-in or move-out report, to the owner of the building.
@@ -1292,7 +1318,7 @@ Open the conversation:
 
 -- ${fromName || "SubSub"}`;
   const subject = `${who}${about ? ` · ${about}` : ""}: ${String(said).replace(/\s+/g, " ").slice(0, 60)}${said.length > 60 ? "..." : ""}`;
-  return { subject, text, html: textToHtml(text, link) };
+  return { subject, text, html: textToHtml(text, link, { keepLines: true }) };
 }
 
 // 083. A reply by email that could not be added, told to the person it came
