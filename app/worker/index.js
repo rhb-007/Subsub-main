@@ -85,13 +85,13 @@ import { ENGAGED_AS, isEngagedAs, engagedAs, isHandyman, mayEngageHandyman,
   mayCover, requiredDocsFor, needsLicense } from "../shared/engaged.js";
 import { handymanCapCheck, handymanCapText } from "../shared/handycap.js";
 import { isAccess, accessFor, needsTenantConfirm, canAskTenant,
-  accessTenant } from "../shared/access.js";
+  accessTenant, maySetAccess } from "../shared/access.js";
 import { normalizeHow, mayEditHow, visiblePeople, firstName } from "../shared/accessplan.js";
 // Aliased: `waitingOn` is already the AGREEMENT's, and two functions of one
 // name in one file is how a later edit calls the wrong one about the wrong
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
-  nextToAnswer, visitSettled, mayConfirm, tenantProposed, windowParties } from "../shared/visitparty.js";
+  nextToAnswer, visitSettled, mayConfirm, tenantProposed, windowParties, outcomeAsker } from "../shared/visitparty.js";
 // How long a proposed window is, and whether a date change has anybody to be
 // put to. Both live beside `workWhen` because the browser's propose form uses
 // the first and two copies of that arithmetic is two records of one fact.
@@ -11449,7 +11449,9 @@ app.post("/api/visits/:id/respond", async (c) => {
 // this row.
 app.post("/api/visits/:id/outcome", async (c) => {
   const auth = c.get("auth");
-  if (auth.role !== "tenant") return c.json({ error: "forbidden" }, 403);
+  // The tenant, or the hiring side when no tenant had to be in (see
+  // `outcomeAsker`). Which of the two is decided below, from the job.
+  if (auth.role !== "tenant" && !maySetAccess(auth.role)) return c.json({ error: "forbidden" }, 403);
   const b = await c.req.json().catch(() => ({}));
   if (typeof b.happened !== "boolean") return c.json({ error: "bad_outcome" }, 400);
   // The tenant this visit is about is the requester OR the tenant a manager
@@ -11458,17 +11460,28 @@ app.post("/api/visits/:id/outcome", async (c) => {
   // refused every tenant named on a job they did not raise, at the one
   // question only they can answer.
   const v = await (async () => {
-    for (const cols of [", j.access_user_id", ""]) {
+    for (const cols of [", j.access, j.access_user_id", ", j.access", ""]) {
       try {
         return await c.env.DB.prepare(
-          `SELECT v.*, j.requested_by, j.title${cols} FROM visits v JOIN jobs j ON j.id = v.job_id
+          `SELECT v.*, j.requested_by, j.title, j.account_id AS job_account_id${cols}
+             FROM visits v JOIN jobs j ON j.id = v.job_id
             WHERE v.id = ? AND v.account_id = ?`).bind(c.req.param("id"), auth.accountId).first();
       } catch (err) { if (!missingSchema(err)) throw err; }
     }
     return null;
   })();
   if (!v) return c.json({ error: "not_found" }, 404);
-  if (accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
+  // WHO WAS WAITING IN. The job's parties decide it, through the same
+  // `partiesFor` the scheduling routes read, so the question cannot go to a
+  // tenant the chain never asked -- a move-out with an empty unit -- or skip
+  // one it did.
+  const asker = outcomeAsker(await partiesFor(c.env,
+    { ...v, id: v.job_id, account_id: v.job_account_id || v.account_id }));
+  if (asker === "tenant") {
+    if (auth.role !== "tenant" || accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
+  } else if (!maySetAccess(auth.role)) {
+    return c.json({ error: "forbidden" }, 403);
+  }
   // Only a visit that was actually agreed, and only after its day. The client
   // works the window out to the minute in the reader's own timezone; the
   // check here is the coarser one on purpose, because the server has no idea
@@ -11506,9 +11519,15 @@ app.post("/api/visits/:id/outcome", async (c) => {
   if (!sent) return c.json({ error: "no_contractor" }, 409);
   const note = String(b.note || "").trim().slice(0, 500) || null;
   const status = b.happened ? "happened" : "missed";
-  await c.env.DB.prepare(
-    `UPDATE visits SET status = ?, tenant_note = ?, responded_at = ? WHERE id = ?`
-  ).bind(status, note, new Date().toISOString(), v.id).run();
+  // `tenant_note` and `responded_at` are the TENANT's, so the hiring side's
+  // answer changes the status only, and its note goes in the activity line.
+  if (asker === "tenant") {
+    await c.env.DB.prepare(
+      `UPDATE visits SET status = ?, tenant_note = ?, responded_at = ? WHERE id = ?`
+    ).bind(status, note, new Date().toISOString(), v.id).run();
+  } else {
+    await c.env.DB.prepare(`UPDATE visits SET status = ? WHERE id = ?`).bind(status, v.id).run();
+  }
   const when = visitWhen(v);
   await logActivity(c.env, auth.accountId, auth.userId,
     b.happened ? "visit_happened" : "visit_missed",

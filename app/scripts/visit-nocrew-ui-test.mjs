@@ -76,6 +76,11 @@ const JOBS = [
   job("j_came", "Kitchen tap drips", ["plumbing"], wo("plumbing", "accepted")),
   // A crew accepted and the window passed: this one is the tenant's question.
   job("j_ask", "Bathroom fan is loud", ["electrical"], wo("electrical", "accepted")),
+  // A MOVE-OUT: an empty unit, the office lets the crew in. Whether they came
+  // is the office's to say -- reported as "the tenant hasn't said yet" on a
+  // job with no tenant at all.
+  job("j_out", "Move-out work — unit 2N", ["plumbing"], wo("plumbing", "accepted", { auto: true }),
+    { requestedBy: null, access: "manager", accessEffective: "manager", date: key(-3) }),
 ];
 const T = "2026-10-01T12:00:00.000Z";
 const v = (id, jobId, status, extra = {}) => ({ id, jobId, status, date: key(-2), startTime: "10:00",
@@ -86,13 +91,22 @@ const VISITS = [
   v("v_none", "j_none", "confirmed", { parties: ["manager", "tenant"] }),
   v("v_came", "j_came", "happened", { contractorAt: T, parties: ["contractor", "manager", "tenant"] }),
   v("v_ask", "j_ask", "confirmed", { contractorAt: T, parties: ["contractor", "manager", "tenant"] }),
+  v("v_out", "j_out", "confirmed", { date: key(-3), contractorAt: T, respondedAt: null, parties: ["contractor", "manager"] }),
 ];
+const OUTCOMES = [];
 const PROP = { id: "prop_1", accountId: "acc_pm", name: "Press Apartments", address: "1620 Belmont Ave",
   city: "Seattle", state: "WA", zip: "98122", units: 60, notes: "", ownedByAnother: false,
   vendorIds: [], ownerIds: [], tenantIds: [], ownerAccountId: "acc_pm", ownedNotOperated: false, readOnly: false };
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method, sent) => {
+  const oc = path.match(/^\/api\/visits\/([^/]+)\/outcome$/);
+  if (oc && method === "POST") {
+    OUTCOMES.push({ id: oc[1], ...sent });
+    const row = VISITS.find((x) => x.id === oc[1]);
+    if (row) row.status = sent.happened ? "happened" : "missed";
+    return [200, row];
+  }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, { ...PM, user: { ...PM.user, id: SEAT.userId, role: SEAT.role } }];
   if (path === "/api/account-users") return [200, USERS];
@@ -155,6 +169,16 @@ try {
   await m.page.setViewport({ width: 1340, height: 1600 });
   await wait(400);
 
+  // THE OFFICE IS ASKED ABOUT THE MOVE-OUT, on the dashboard, and only about
+  // that one: the tenant's own report stays the tenant's.
+  const yt = await m.page.evaluate(() => [...document.querySelectorAll('[data-yt="outcome"]')].map((r) => ({
+    text: r.innerText.replace(/\s+/g, " "),
+    btns: [...r.querySelectorAll("button")].map((b) => b.innerText.trim()) })));
+  t.ck("Waiting on you asks the office whether the move-out crew came",
+    yt.length === 1 && /Move-out work/.test(yt[0].text) && /Did Pacific apartment maintenance show up\?/.test(yt[0].text)
+      && yt[0].btns.some((b) => /Yes, they showed up/.test(b)) && yt[0].btns.some((b) => /No, nobody came/.test(b)),
+    JSON.stringify(yt));
+
   console.log("\n-- the manager's job cards --");
   await nav(m.page, "^Jobs");
   await wait(1200);
@@ -192,11 +216,36 @@ try {
   t.ck("and a crewed passed visit still waits on the tenant's answer",
     ask.states?.some((s) => /hasn't said yet whether anybody showed up/.test(s)) && !ask.nobodySent,
     JSON.stringify(ask));
+  const out = await m.page.evaluate(() => {
+    const c = [...document.querySelectorAll('[data-job-id="j_out"]')].find((x) => x.querySelector(".visit-block"));
+    if (!c) return null;
+    const q = c.querySelector("[data-visit-outcome]");
+    return { text: c.querySelector(".visit-block").innerText.replace(/\s+/g, " "),
+      asks: q ? [...q.querySelectorAll("button")].map((b) => b.innerText.trim()) : null };
+  });
+  t.ck("the move-out card asks the office, not the tenant",
+    !!out?.asks && /Did the contractor show up\?/.test(out.text) && !/tenant hasn't said/i.test(out.text)
+      && out.asks.some((b) => /Yes, they showed up/.test(b)) && out.asks.some((b) => /No, nobody showed up/.test(b)),
+    JSON.stringify(out));
+  await m.page.evaluate(() => [...document.querySelectorAll('[data-job-id="j_out"] [data-visit-outcome] button')]
+    .find((b) => /Yes, they showed up/.test(b.innerText))?.click());
+  await wait(900);
+  t.ck("Yes sends the answer for that visit", OUTCOMES.length === 1 && OUTCOMES[0].id === "v_out" && OUTCOMES[0].happened === true,
+    JSON.stringify(OUTCOMES));
+  const after = await m.page.evaluate(() => {
+    const c = [...document.querySelectorAll('[data-job-id="j_out"]')].find((x) => x.querySelector(".visit-block"));
+    return c ? { text: c.querySelector(".visit-block").innerText.replace(/\s+/g, " "), asks: !!c.querySelector("[data-visit-outcome]") } : null;
+  });
+  t.ck("and the card then says it is marked, and stops asking",
+    !!after && !after.asks && /Marked: the contractor showed up/.test(after.text), JSON.stringify(after));
   t.ck("the manager's screen did not crash", m.crashes.length === 0, JSON.stringify(m.crashes));
   await m.ctx.close();
 
   console.log("\n-- the tenant --");
   SEAT = { userId: "u_ten", role: "tenant" };
+  // The move-out unanswered again, so the tenant's screen is checked on the
+  // case that matters: a passed visit the office answers, not them.
+  VISITS.find((x) => x.id === "v_out").status = "confirmed";
   const tn = await visitApp(browser, { host: "soundpm", webPort: WEB,
     seat: { userId: "u_ten", accountId: "acc_pm" }, viewport: { width: 1100, height: 2200 } });
   await wait(2800);

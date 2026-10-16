@@ -232,3 +232,17 @@ export function waitingText(visit, parties, me) {
   if (mine) return `Waiting on ${joinAnd(["you", ...others])}.`;
   return `Waiting on ${joinAnd(others)} to confirm.`;
 }
+
+// WHO SAYS WHETHER ANYBODY SHOWED UP, once a booked window has gone by.
+//
+// The person who was waiting in. That is the tenant when the tenant had to be
+// in, and otherwise the hiring side, who let the crew in themselves or did not
+// need to. It read the tenant on every job, so a move-out turnaround with no
+// tenant in the unit sat on "the tenant hasn't said yet whether anybody showed
+// up" for ever, with nobody able to answer it.
+//
+// Read off the JOB's parties, not one window's: `windowParties` drops the
+// hiring side from a window the tenant proposed, and that has nothing to do
+// with who was standing in the unit on the day.
+export const outcomeAsker = (parties) =>
+  (parties || []).includes("tenant") ? "tenant" : "manager";

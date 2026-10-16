@@ -103,7 +103,8 @@ import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/accessplan.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
-  mayAnswer as visitMayAnswer, partySaid as visitPartySaid, mayConfirm as visitMayConfirm } from "../shared/visitparty.js";
+  mayAnswer as visitMayAnswer, partySaid as visitPartySaid, mayConfirm as visitMayConfirm,
+  outcomeAsker } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -6427,6 +6428,7 @@ export default function SubSub() {
           onGoJobs={() => setTab("jobs")} onGoContractors={() => setTab("network")}
           onGoCalendar={goJobCalendar} onOpenJob={openJob}
           onAnswerVisit={maySetAccess(role) ? answerVisit : null}
+          onVisitOutcome={maySetAccess(role) ? visitOutcome : null}
           onAnswerSpan={maySetAccess(role) ? answerSpan : null}
           onEndJob={maySetAccess(role) ? setEndingJob : null}
           onNewJob={() => tryAddJob()}
@@ -7638,6 +7640,7 @@ export default function SubSub() {
                         /* 064. The hiring side's own leg, for the one case it
                            is asked: a time the crew put forward. */
                         onAnswerVisit={maySetAccess(role) ? answerVisit : null}
+                        onVisitOutcome={maySetAccess(role) ? visitOutcome : null}
                         onAssign={() => {
                           const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
                           if (slot) setAssigning({ job: j, trade: slot });
@@ -14470,6 +14473,10 @@ const jobAssignments = (job) => Object.values(job?.assignments || {});
 const someoneAccepted = (job) => jobAssignments(job).some((a) => a.status === "accepted" || a.auto);
 const someoneAsked = (job) => jobAssignments(job).some((a) => a.status !== "declined");
 
+// Whether anybody showed up is the tenant's to say only when the tenant had to
+// be in. A row from an older reply carries no parties; it keeps asking.
+const tenantAsksOutcome = (visit) => !Array.isArray(visit?.parties) || outcomeAsker(visit.parties) === "tenant";
+
 function tenantStage(job, visit) {
   if (job.withdrawnAt) return { key: "withdrawn", label: "Withdrawn", tone: "off" };
   if (job.declinedAt) return { key: "declined", label: "Not approved", tone: "off" };
@@ -15184,7 +15191,8 @@ function TenantAccess({ job, visit, compact = false }) {
 
 function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onProposeVisit, onOpen }) {
   const photos = job.photos || [];
-  const asks = stage.key === "confirm" || stage.key === "passed";
+  const tenantAsked = tenantAsksOutcome(visit);
+  const asks = stage.key === "confirm" || (stage.key === "passed" && tenantAsked);
   return (
     <div className={`tn-row ${asks ? "needs-you" : ""} ${stage.key === "withdrawn" ? "is-off" : ""}`}>
       <div className="tn-row-main">
@@ -15237,7 +15245,7 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
             not a question a tenant can answer usefully about a job nobody
             was booked for, and a yes to it reads on the manager's side as
             though the work had been done. */}
-        {stage.key === "passed" && onVisitOutcome && (
+        {stage.key === "passed" && onVisitOutcome && tenantAsked && (
           <TenantVisitOutcome visit={visit} brandName={brandName} onSay={onVisitOutcome} />
         )}
         <div className="tn-row-actions">
@@ -15364,6 +15372,34 @@ function visitOutcomeErrText(e) {
 //
 // "No" does not withdraw or reopen anything. The report was always open;
 // what is finished is the appointment.
+// The same question on the hiring side's card, for a visit no tenant had to be
+// in for -- a move-out, or a repair the office let the crew in for. Two answers,
+// and "no" is followed by the way on: proposing a new time.
+function ManagerVisitOutcome({ visit, hiresWord = "contractor", onSay }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const say = async (happened) => {
+    setBusy(happened ? "yes" : "no"); setErr("");
+    try { await onSay(visit.id, { happened }); }
+    catch (e) { console.error("[visit] outcome failed:", e); setErr(visitOutcomeErrText(e)); }
+    finally { setBusy(""); }
+  };
+  return (
+    <div className="visit-mine" data-visit-outcome="">
+      <p className="vm-lede"><Clock size={14} /> This visit has passed</p>
+      <p className="vm-when">{visitWhen(visit)}</p>
+      <p className="vm-note">Did the {hiresWord} show up?</p>
+      <VisitActs acts={[
+        { kind: "yes", label: busy === "yes" ? "Saving…" : "Yes, they showed up",
+          icon: <CheckCircle2 size={17} />, disabled: !!busy, onClick: () => say(true) },
+        { kind: "no", label: busy === "no" ? "Saving…" : "No, nobody showed up",
+          icon: <XCircle size={16} />, disabled: !!busy, onClick: () => say(false) },
+      ]} />
+      {err && <p className="billing-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 function TenantVisitOutcome({ visit, brandName, onSay }) {
   const [saying, setSaying] = useState(false);
   const [note, setNote] = useState("");
@@ -15680,7 +15716,7 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
   );
 }
 
-function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit,
+function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit, onVisitOutcome = null,
   canSetAccess = false, hiresWord = "contractor" }) {
   // 073. How the crew gets in, re-read whenever the answer or the window moves.
   const [accPlan, setAccPlan] = useJobAccess(job.id,
@@ -15696,6 +15732,8 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   const nobodySent = !crew && !!visit && (visit.status === "happened" || visit.status === "missed"
     || (visit.status === "confirmed" && visitPassed(visit)));
   const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed" || nobodySent);
+  // "Nobody showed up", answered here, is followed by the way on: a new time.
+  useEffect(() => { if (visit?.status === "missed") setOpen(true); }, [visit?.status]);
   // WHO THE TENANT IS, not just what they are called. Asked as *"who is John
   // Smith? Juan Soto is the account holder"* -- every sentence in this block
   // printed a bare name, and the tenant is the one party on a job a managing
@@ -15735,6 +15773,10 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   // panel that offers the answer, and the standalone propose button that must
   // not sit under it offering the same thing again.
   const lapsed = visit?.status === "proposed" && visitPassed(visit);
+  // WHO SAYS WHETHER ANYBODY SHOWED UP. The tenant only when the tenant had to
+  // be in; otherwise this side, which let the crew in or did not need to. A
+  // move-out with an empty unit sat on "the tenant hasn't said yet" for ever.
+  const askUs = outcomeAsker(parties) === "manager";
   const myTurn = visit?.status === "proposed" && !lapsed
     && visitMayAnswer(visit, parties, "manager") && !!onAnswerVisit;
   return (
@@ -15879,7 +15921,11 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
       )}
       {visit?.status === "confirmed" && !nobodySent && (
         visitPassed(visit)
-          ? <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has passed. {cap1(name)} hasn't said yet whether anybody showed up.</p>
+          ? (askUs
+            ? (onVisitOutcome
+              ? <ManagerVisitOutcome visit={visit} hiresWord={hiresWord} onSay={onVisitOutcome} />
+              : <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has passed. Nobody has said yet whether the {hiresWord} showed up.</p>)
+            : <p className="visit-state wait"><Clock size={14} /> <b>{visitWhen(visit)}</b> has passed. {cap1(name)} hasn't said yet whether anybody showed up.</p>)
           /* WHO agreed it, read from the parties rather than from a ternary
              that knew about two of them. The same bug as the waiting line one
              branch along: with three parties this said "the tenant and the
@@ -15894,10 +15940,14 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
           needs something doing, so it reads as a problem and springs the
           propose form open above. */}
       {visit?.status === "missed" && !nobodySent && (
-        <p className="visit-state bad"><AlertTriangle size={14} /> No vendor showed up for <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} {name} is still waiting.</p>
+        askUs
+          ? <p className="visit-state bad"><AlertTriangle size={14} /> Marked: nobody showed up for <b>{visitWhen(visit)}</b>. Propose a new time.</p>
+          : <p className="visit-state bad"><AlertTriangle size={14} /> No vendor showed up for <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."} {name} is still waiting.</p>
       )}
       {visit?.status === "happened" && !nobodySent && (
-        <p className="visit-state ok"><CheckCircle2 size={14} /> {cap1(name)} says a vendor showed up on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
+        askUs
+          ? <p className="visit-state ok"><CheckCircle2 size={14} /> Marked: the {hiresWord} showed up on <b>{visitWhen(visit)}</b>. Mark the job complete when the work is finished.</p>
+          : <p className="visit-state ok"><CheckCircle2 size={14} /> {cap1(name)} says a vendor showed up on <b>{visitWhen(visit)}</b>{visit.tenantNote ? <>: “{visit.tenantNote}”</> : "."}</p>
       )}
       {visit?.status === "declined" && (
         /* WHO said no. A decline from either side ends the window, and
@@ -17059,8 +17109,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         // the one line here that can be read and be simply wrong. It gets its
         // own group, above the rest, because it is now the thing asking
         // something of the person reading.
-        const overdue = agreed.filter((j) => visitPassed(visitOf(j.id))).sort(byWhen);
-        const scheduled = agreed.filter((j) => !visitPassed(visitOf(j.id))).sort(byWhen);
+        // And only where the tenant is the one asked. A repair the office let
+        // the crew in for is the office's to answer, so it is not put to them.
+        const askMe = (j) => visitPassed(visitOf(j.id)) && tenantAsksOutcome(visitOf(j.id));
+        const overdue = agreed.filter(askMe).sort(byWhen);
+        const scheduled = agreed.filter((j) => !askMe(j)).sort(byWhen);
         const bookedIds = new Set(agreed.map((j) => j.id));
         // WAITING ON YOU: a time put to them that they have not answered. It
         // sat in the ordinary list with a chip reading "Confirm a time", the
@@ -25417,13 +25470,18 @@ function yourTurnItems(jobs, latestVisit, today) {
     if (v && v.status === "proposed" && visitPassed(v)) out.push({ kind: "lapsed", job: j, v });
     else if (v && v.status === "proposed" && managerTurn(v, j)) out.push({ kind: "time", job: j, v });
     if (v && v.status === "declined") out.push({ kind: "declined", job: j, v });
+    // A BOOKED VISIT THAT HAS GONE BY, on a job no tenant had to be in for:
+    // whether anybody came is this side's to say, and nobody else will.
+    if (v && v.status === "confirmed" && visitPassed(v) && someoneAccepted(j) && outcomeIsOurs(v, j)) {
+      out.push({ kind: "outcome", job: j, v });
+    }
     for (const t of j.trades || []) {
       const sp = j.spans?.[t];
       if (sp?.proposal) out.push({ kind: "span", job: j, trade: t, sp });
     }
     if (!(j.trades || []).length) out.push({ kind: "notrade", job: j });
   }
-  const rank = { lapsed: 0, time: 0, declined: 1, span: 2, notrade: 3 };
+  const rank = { lapsed: 0, time: 0, outcome: 1, declined: 1, span: 2, notrade: 3 };
   return out.sort((a, b) => rank[a.kind] - rank[b.kind]);
 }
 
@@ -25440,6 +25498,14 @@ function yourTurnErrText(e) {
   return tenantVisitErrText(e);
 }
 
+// Is "did anybody show up" this side's question? The server's parties when the
+// row carries them; otherwise the same rule VisitBlock reads.
+function outcomeIsOurs(v, job) {
+  const parties = Array.isArray(v.parties) ? v.parties
+    : visitParties({ ...job, access: job.accessEffective }, { hasContractor: someoneAccepted(job) });
+  return outcomeAsker(parties) === "manager";
+}
+
 function managerTurn(v, job) {
   if (Array.isArray(v.parties)) return v.turn === "manager";
   const parties = visitParties({ ...job, access: job.accessEffective },
@@ -25448,7 +25514,7 @@ function managerTurn(v, job) {
 }
 
 function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
-  onAnswerVisit, onAnswerSpan, onOpenJob, onEndJob = null, onPeek }) {
+  onAnswerVisit, onAnswerSpan, onOpenJob, onEndJob = null, onPeek, onVisitOutcome = null }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const { kind, job, v } = item;
@@ -25492,6 +25558,16 @@ function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
     sub = note ? `“${note}”` : "Nothing is booked until a new time goes out.";
     acts = [{ kind: "yes", label: "Propose another time", icon: <Calendar size={16} />,
       onClick: () => onOpenJob?.(job.id) }];
+  } else if (kind === "outcome") {
+    lede = `Did ${crewName} show up?`;
+    when = visitWhen(v);
+    sub = "The time has passed. Say whether they came.";
+    acts = onVisitOutcome ? [
+      { kind: "yes", label: busy === "yes" ? "Saving…" : "Yes, they showed up", icon: <Check size={16} />,
+        disabled: !!busy, onClick: () => act("yes", () => onVisitOutcome(v.id, { happened: true })) },
+      { kind: "no", label: busy === "no" ? "Saving…" : "No, nobody came", icon: <XCircle size={15} />,
+        disabled: !!busy, onClick: () => act("no", () => onVisitOutcome(v.id, { happened: false })) },
+    ] : [];
   } else if (kind === "span") {
     const M = catMeta(item.trade);
     const p = item.sp.proposal;
@@ -25935,7 +26011,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
   );
 }
 
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, users = [], runsAccount = true, visits = [], unitWord = "Unit",
+function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, onVisitOutcome = null, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" },
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects, clientWork = null,
@@ -26304,6 +26380,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               <YourTurnRow key={`${it.kind}-${it.job.id}-${it.trade || it.v?.id || ""}`}
                 item={it} users={users} props={props} hiresWord={words.one}
                 onAnswerVisit={onAnswerVisit} onAnswerSpan={onAnswerSpan} onOpenJob={onOpenJob} onEndJob={onEndJob}
+                onVisitOutcome={onVisitOutcome}
                 onPeek={() => setPeek({ jobId: it.job.id, trade: it.trade || null, kind: "yt" })} />
             ))}
           </DashRows>

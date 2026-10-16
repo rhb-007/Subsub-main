@@ -59,6 +59,14 @@ INSERT INTO visits(id,job_id,account_id,date,start_time,end_time,status,proposed
   ('v_none','job_none','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20'),
   ('v_void','job_void','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20'),
   ('v_auto','job_auto','acc_pm','2026-09-23','10:00','11:00','confirmed','u_mgr','2026-09-20');
+-- A MOVE-OUT: nobody lives there, the office lets the crew in. Whether they
+-- came is the office's to say, and the tenant of the building is not asked.
+INSERT INTO jobs(id,account_id,property_id,title,trades,status,access,approved_at,created_at)
+  VALUES ('job_out','acc_pm','prop_1','Move-out work','["plumbing"]','active','manager','2026-10-01','2026-10-01');
+INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status,value_cents) VALUES
+  ('wo_out','WO-6','job_out','plumbing','cmp_pac','en_pac','accepted',40000);
+INSERT INTO visits(id,job_id,account_id,date,start_time,end_time,status,proposed_by,created_at,manager_at,contractor_at) VALUES
+  ('v_out','job_out','acc_pm','2026-10-09','15:00','16:00','confirmed','u_mgr','2026-10-05','2026-10-05','2026-10-05');
 INSERT INTO visits(id,job_id,account_id,date,start_time,end_time,status,proposed_by,created_at) VALUES
   ('v_rep','job_rep','acc_pm','2026-10-09','09:45','10:45','confirmed','u_ten','2026-10-05'),
   ('v_named','job_named','acc_pm','2026-10-09','09:45','10:45','confirmed','u_mgr','2026-10-05'),
@@ -68,7 +76,7 @@ const env = { DB: makeD1(db) };
 const say = (id, body, who) => worker.fetch(new Request(`https://api.subsub.work/api/visits/${id}/outcome`, {
   method: "POST", body: JSON.stringify(body),
   headers: { "Content-Type": "application/json", "X-User-Id": who, "X-Account-Id": "acc_pm" } }), env);
-const st = (id) => db.prepare(`SELECT status, tenant_note FROM visits WHERE id = ?`).get(id);
+const st = (id) => db.prepare(`SELECT status, tenant_note, responded_at FROM visits WHERE id = ?`).get(id);
 
 try {
   console.log("\n-- who may answer --");
@@ -80,6 +88,20 @@ try {
   db.exec(`UPDATE visits SET status = 'confirmed' WHERE id = 'v_named'`);
   r = await say("v_named", { happened: true }, "u_oth");
   ck("another tenant of the building cannot", r.status === 403 && st("v_named").status === "confirmed", String(r.status));
+
+  console.log("\n-- no tenant had to be in: the office answers --");
+  r = await say("v_out", { happened: true }, "u_ten");
+  ck("a tenant of the building is not the one asked about a move-out", r.status === 403 && st("v_out").status === "confirmed", String(r.status));
+  r = await say("v_out", { happened: true }, "u_sub");
+  ck("nor is the crew", r.status === 403 && st("v_out").status === "confirmed", String(r.status));
+  r = await say("v_out", { happened: true, note: "all good" }, "u_mgr");
+  ck("the property manager says they showed up", r.status === 200 && st("v_out").status === "happened",
+    `${r.status} ${await r.clone().text()}`);
+  ck("and the tenant's columns are left alone", st("v_out").tenant_note === null && st("v_out").responded_at === null,
+    JSON.stringify(st("v_out")));
+  db.exec(`UPDATE visits SET status = 'confirmed' WHERE id = 'v_rep'`);
+  r = await say("v_rep", { happened: true }, "u_mgr");
+  ck("but on a tenant's own report it stays the tenant's", r.status === 403 && st("v_rep").status === "confirmed", String(r.status));
 
   console.log("\n-- what is refused, by name --");
   r = await say("v_prop", { happened: true }, "u_ten");

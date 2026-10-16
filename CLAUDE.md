@@ -13218,6 +13218,35 @@ refactor.
   **Not verified:** what dropped the live request; nothing on the server
   refuses it.
 
+- **"DID THEY SHOW UP?" GOES TO WHOEVER WAS WAITING IN, AND ON A MOVE-OUT THAT
+  IS THE OFFICE.** Reported from a move-out job set to *We let them in*: the
+  card read *"has passed. The tenant hasn't said yet whether anybody showed
+  up"*, about a unit with no tenant in it, and nobody could answer. The
+  outcome route took a tenant and nobody else.
+
+  `outcomeAsker` in `shared/visitparty.js` is the rule. The answer is the
+  tenant's when the tenant is a party (they had to be in), and the hiring
+  side's otherwise. It reads the JOB's parties through `partiesFor`, not one
+  window's, because `windowParties` drops the hiring side from a time the
+  tenant proposed, and that says nothing about who stood in the unit. The
+  route refuses a tenant on a job they were not asked about, and refuses an
+  admin or pm on a tenant's own report.
+
+  **The hiring side's answer writes the status only.** `tenant_note` and
+  `responded_at` stay the tenant's, so its note goes in the activity line.
+
+  On screen, the job card asks *Did the contractor show up?* with Yes and No,
+  and No opens the propose form. The dashboard's *Waiting on you* gets an
+  `outcome` row with the same two answers. The tenant's *Did your vendor show
+  up?* section and the row's question both skip a visit they are not asked
+  about (`tenantAsksOutcome`); an older reply with no parties keeps asking.
+
+  `test:visitoutcome` (19) and `test:visitnocrew` (35). The server mutations
+  that pin the answer to either side fail 1 and 11 assertions. The card branch
+  fails 3. Dropping the tenant-section filter fails 1, and that last check only
+  became meaningful once the fixture reset the move-out to unanswered before
+  the tenant block, because an earlier press had answered it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
