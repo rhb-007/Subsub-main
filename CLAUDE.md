@@ -13356,7 +13356,16 @@ refactor.
   and his handwritten signature (`richard-braun-signature.png`, ink on
   transparent), both published from the site root. The postal address was
   taken off at his request. Logged as
-  `founder_intro`, and it never fails a signup. `test:signupwelcome` covers
+  `founder_intro`, and it never fails a signup.
+
+  **Both notes were cut by about a third so they get read**: 244 words to
+  149 for a hiring account, 175 to 114 for a subcontractor (with the new
+  referral line in it). The test holds both under 160. **The subcontractor's
+  note names one figure, the referral reward**: GCs, property managers and
+  portfolio managers they bring earn them `SUB_CASH_CENTS` each once that
+  account **starts paying**, never on signup, pointing at *Get your GCs on
+  SubSub*. It still names no plan, price or upgrade. The test allows only that
+  figure; hard-coding it or saying "signs up" fails it. `test:signupwelcome` covers
   all three branches; dropping the gate or hard-coding the noun fails it.
 
 ## Working here

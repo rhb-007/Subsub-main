@@ -12,6 +12,7 @@
 // that points the recipient back into their portal, and says so.
 
 import { footerText, footerSms } from "../shared/claim.js";
+import { SUB_CASH_CENTS } from "../shared/referral.js";
 import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
   outcomeWords } from "../shared/doccheck.js";
 // The kinds and their words come from shared/docs.js, which is the one list, for
@@ -553,44 +554,41 @@ export function founderIntroEmail({ firstName, companyName, kind }) {
   const subs = `${sub}s`;
   const texts = SMS_INCLUDED_SCALE.toLocaleString("en-US");
   const free = [
-    `Every ${sub}'s insurance, bond, W-9 and license in one place, with the expiry date live, so a lapsed certificate is caught before the job rather than after.`,
-    `A work order for each trade, sent, accepted and changed in the app, with every change order numbered.`,
-    `Crews scheduled onto jobs, with the time confirmed by whoever has to be there.`,
-    `Your ${subs} use SubSub free and keep their own documents current, so you stop chasing PDFs.`,
+    `Every ${sub}'s insurance, bond, W-9 and license in one place, with live expiry dates.`,
+    `Work orders and change orders, sent and accepted in the app.`,
+    `Your ${subs} use SubSub free and keep their own documents current.`,
   ];
   const scale = [
     `Unlimited ${subs}, users and jobs. Basic covers 3 ${subs}, 1 user and 5 jobs a month.`,
-    `Your own logo and sign-in address, yourcompany.subsub.work, on every screen and work order.`,
-    `A recruiting QR code: a ${sub} you meet on site scans it and fills in their own details.`,
-    `Lien waivers asked for and signed against each payment.`,
-    `Jobs posted straight in from your CRM, with nothing retyped.`,
-    `${texts} text messages a month for work orders and updates.`,
+    `Your own logo and address, plus a recruiting QR code for ${subs} you meet on site.`,
+    `Lien waivers against each payment, and jobs posted in from your CRM.`,
+    `${texts} text messages a month.`,
   ];
   const company = companyName || "your company";
   const text = `Hi ${firstName || "there"},
 
 I'm ${FOUNDER.name}, founder and CEO of SubSub. Thanks for setting up ${company}.
 
-I'd like to walk you through it myself. Pick a time that suits you and we'll spend 30 minutes on your own ${subs} and paperwork, not a slide deck:
+I'd like to walk you through it myself: 30 minutes on your own ${subs} and paperwork, not a slide deck.
 
 ${FOUNDER.demoUrl}
 
-What SubSub does for you on Basic, today:
+On Basic, today:
 ${free.map((l) => `  - ${l}`).join("\n")}
 
-When you're ready for more, Scale starts at $99 a month and adds:
+Scale starts at $99 a month and adds:
 ${scale.map((l) => `  - ${l}`).join("\n")}
 
-If anything isn't working the way you need, reply to this email. It comes straight to me.
+Anything not working? Reply here. It comes straight to me.
 
 ${founderSignatureText()}`;
   const inner = fP(`Hi ${fEsc(firstName || "there")},`)
     + fP(`I'm ${fEsc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${fEsc(company)}.`)
-    + fP(`I'd like to walk you through it myself. Pick a time that suits you and we'll spend 30 minutes on your own ${fEsc(subs)} and paperwork, not a slide deck.`)
+    + fP(`I'd like to walk you through it myself: 30 minutes on your own ${fEsc(subs)} and paperwork, not a slide deck.`)
     + fButton("Pick a time with me")
-    + fH("What SubSub does for you on Basic, today") + fList(free)
-    + fH("When you're ready for more, Scale starts at $99 a month and adds") + fList(scale)
-    + fP("If anything isn't working the way you need, reply to this email. It comes straight to me.");
+    + fH("On Basic, today") + fList(free)
+    + fH("Scale starts at $99 a month and adds") + fList(scale)
+    + fP("Anything not working? Reply here. It comes straight to me.");
   return { subject: founderSubject(firstName), text, html: founderHtml(inner), ...founderEnvelope() };
 }
 
@@ -598,41 +596,42 @@ ${founderSignatureText()}`;
 // they are free for good, so it names no plan, no price and no count -- the
 // rule the signup form's free line follows -- and asks rather than sells.
 // Three questions, numbered so a reply can answer "1. ..." on a phone.
+//
+// The one figure in it is the referral reward, read off SUB_CASH_CENTS so it
+// cannot promise what the ledger does not pay, and earned when the account
+// they bring STARTS PAYING, never when it signs up -- the reward is written
+// at that account's first paid invoice.
 export function founderSubEmail({ firstName, companyName }) {
   const company = companyName || "your company";
+  const cash = `$${Math.round(SUB_CASH_CENTS / 100)}`;
   const asks = [
     "Where did you hear about SubSub?",
-    "What made you sign up? What were you hoping it would fix?",
-    "What does a successful partnership with a general contractor or property manager look like to you?",
+    "What made you sign up?",
+    "What does a successful partnership with a GC or property manager look like to you?",
   ];
-  const gets = [
-    "Your compliance pack, sent as a live link rather than PDFs that go stale. When your insurance renews, everyone you sent it to sees the new one.",
-    "Your own QR code. A GC on site scans it and asks to work with you, no business card needed.",
-    "Job requests, times and work orders from every client in one place, with nothing to pay, ever.",
-  ];
+  const refer = `Know a GC, property manager or portfolio manager? Send them your link from Get your GCs on SubSub in the app. You get ${cash} for each one that starts paying for SubSub.`;
   const text = `Hi ${firstName || "there"},
 
 I'm ${FOUNDER.name}, founder and CEO of SubSub. Thanks for setting up ${company}. SubSub is free for you, for good.
 
-I'm building this for crews like yours, so I'd love to hear from you. Three quick questions, and a one-line answer to any of them helps:
+I'd love to hear from you. A one-line answer to any of these helps:
 
 ${asks.map((q, i) => `  ${i + 1}. ${q}`).join("\n")}
 
-Just reply to this email. It comes straight to me. If talking is easier, pick a time:
+Just reply to this email. It comes straight to me. Or pick a time to talk:
 
 ${FOUNDER.demoUrl}
 
-What's in it for you:
-${gets.map((l) => `  - ${l}`).join("\n")}
+${refer}
 
 ${founderSignatureText()}`;
   const inner = fP(`Hi ${fEsc(firstName || "there")},`)
     + fP(`I'm ${fEsc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${fEsc(company)}. SubSub is free for you, for good.`)
-    + fP("I'm building this for crews like yours, so I'd love to hear from you. Three quick questions, and a one-line answer to any of them helps:")
+    + fP("I'd love to hear from you. A one-line answer to any of these helps:")
     + fList(asks, "ol")
-    + fP("<b>Just reply to this email.</b> It comes straight to me. If talking is easier, pick a time:")
+    + fP("<b>Just reply to this email.</b> It comes straight to me. Or pick a time to talk:")
     + fButton("Pick a time to talk")
-    + fH("What's in it for you") + fList(gets);
+    + fP(`<b>Earn ${fEsc(cash)} per referral.</b> ${fEsc(refer)}`);
   return { subject: founderSubject(firstName), text, html: founderHtml(inner), ...founderEnvelope() };
 }
 

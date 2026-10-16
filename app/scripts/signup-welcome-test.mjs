@@ -162,7 +162,21 @@ try {
     t.ck("it asks where they heard, why they signed up and what a good partnership is",
       /Where did you hear about SubSub\?/.test(sb?.text || "") && /What made you sign up\?/.test(sb?.text || "")
       && /successful partnership/.test(sb?.text || ""));
-    t.ck("and names no plan, price or upgrade", !/Scale|Basic|\$|upgrade|\bplan\b/i.test(sb?.text || ""), sb?.text);
+    t.ck("and names no plan or upgrade", !/Scale|Basic|upgrade|\bplan\b/i.test(sb?.text || ""), sb?.text);
+    {
+      const { SUB_CASH_CENTS } = await import("../shared/referral.js");
+      const cash = `$${SUB_CASH_CENTS / 100}`;
+      const figures = (sb?.text || "").match(/\$\d[\d,.]*/g) || [];
+      t.ck("its only dollar figure is the referral reward, off the ledger's constant",
+        figures.length > 0 && figures.every((f) => f === cash), JSON.stringify(figures));
+      t.ck("the reward is for an account that starts paying, never for a signup",
+        /for each one that starts paying/.test(sb?.text || "") && !/sign(s|ed)? up\b[^.]*\$|\$[^.]*sign(s|ed)? up/i.test(sb?.text || ""));
+      t.ck("it names GCs, property managers and portfolio managers, and where the link is",
+        /GC, property manager or portfolio manager/.test(sb?.text || "") && /Get your GCs on SubSub/.test(sb?.text || ""));
+      t.ck("and the HTML carries it too", (sb?.html || "").includes(`Earn ${cash} per referral`) && (sb?.html || "").includes("starts paying"));
+    }
+    const words = (e) => (e?.text || "").split("Richard Braun\nFounder")[0].split(/\s+/).filter(Boolean).length;
+    t.ck("both notes are short enough to be read (under 160 words)", words(f) < 160 && words(sb) < 160, `${words(f)} / ${words(sb)}`);
     t.ck("and still has the signature", /Founder & CEO, SubSub/.test(sb?.text || "") && (sb?.html || "").includes("richard-braun.png"));
   }
 
