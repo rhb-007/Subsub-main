@@ -517,6 +517,7 @@ export function demoBookedEmail({ name, start, end, timeZone, meetingUrl }) {
 Your SubSub demo is booked.
 
 When: ${when}
+
 ${join}
 
 A calendar invite is on its way too, so it lands on your calendar with the link in it. If you need a different time, reply to that invite or go to https://subsub.work/book-a-demo.html and pick another.

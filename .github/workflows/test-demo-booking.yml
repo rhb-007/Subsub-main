@@ -28,6 +28,15 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # Why a confirmation lands in junk is usually one of these three records
+      # on the sending domain. Printed, never failed on.
+      - name: Mail domain records (SPF, DKIM, DMARC)
+        run: |
+          for n in subsub.work send.subsub.work resend._domainkey.subsub.work _dmarc.subsub.work; do
+            echo "== $n TXT"; dig +short TXT "$n" @1.1.1.1
+          done
+          echo "== send.subsub.work MX"; dig +short MX send.subsub.work @1.1.1.1
+          echo "== subsub.work MX"; dig +short MX subsub.work @1.1.1.1
       - name: Slots
         env:
           API: ${{ inputs.api }}
