@@ -6464,15 +6464,23 @@ app.post("/api/demo/book", async (c) => {
     console.log("[demo] booked", r.uid || "(no uid)", "for", email);
     // SubSub's own confirmation, under SubSub's logo. It never decides the
     // answer: the booking exists, and a mail that does not go is logged.
+    // Whether it went is on the reply as a fixed code (never Resend's own
+    // words), so the Test demo booking workflow can tell a send that failed
+    // from one that went to junk.
+    let confirmation = "sent";
     try {
       const m = demoBookedEmail({ name, start: r.start, end: r.end, meetingUrl: r.meetingUrl,
         timeZone: String(b.timeZone || "America/Los_Angeles") });
       const sent = await sendEmail(c.env, { to: email, ...m });
-      if (!sent.ok) console.error("[demo] confirmation email did not go:", sent.error, sent.detail || "");
+      if (!sent.ok) {
+        console.error("[demo] confirmation email did not go:", sent.error, sent.status || "", sent.detail || "");
+        confirmation = sent.error === "send_failed" ? `send_failed_${sent.status || "unknown"}` : sent.error;
+      }
     } catch (err) {
       console.error("[demo] confirmation email failed:", err?.message || err);
+      confirmation = "threw";
     }
-    return c.json({ booked: true, uid: r.uid }, 201);
+    return c.json({ booked: true, uid: r.uid, confirmation }, 201);
   } catch (err) {
     console.error("[demo] booking failed:", err?.stack || err);
     return c.json({ error: "unavailable" }, 502);

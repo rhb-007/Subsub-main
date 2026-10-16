@@ -65,4 +65,8 @@ jobs:
             -H 'content-type: application/json' -d "$body" "$API/demo/book")
           echo "HTTP $code"; cat book.json; echo
           [ "$code" = "201" ] || { echo "::error::Booking was not made (HTTP $code)"; exit 1; }
+          conf=$(jq -r '.confirmation // "not reported"' book.json)
+          echo "SubSub confirmation email: $conf"
+          [ "$conf" = "sent" ] || echo "::error::Booked, but SubSub's own confirmation email did not go ($conf)"
           echo "Booked. Check $EMAIL for SubSub's confirmation and the calendar invite, then cancel it in Cal."
+          [ "$conf" = "sent" ]
