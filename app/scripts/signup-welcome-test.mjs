@@ -89,6 +89,9 @@ try {
     t.ck("it says the confirmation email is the way in", /Confirm your signup/.test(w?.text || "") && /choose your password/.test(w?.text || ""));
     t.ck("and says what to do when that does not arrive", /Forgot password\?/.test(w?.text || "") && w.text.includes(`mcg${ip}@icloud.test`));
     t.ck("and to check Junk", /Junk/.test(w?.text || ""));
+    t.ck("the HTML carries SubSub's logo, with SubSub as its alt text",
+      (w?.html || "").includes('src="https://subsub.work/email-logo.png"') && /alt="SubSub"/.test(w?.html || ""));
+    t.ck("no sentence is broken across a line", !/under the name\n/.test(w?.text || ""));
     const log = logOf(db, r.body.accountId);
     t.ck("the welcome is on the console's mail log", log.some((l) => l.kind === "welcome" && l.status === "sent"), JSON.stringify(log));
     t.ck("and so is the confirmation, as handed to Supabase",
@@ -170,6 +173,15 @@ try {
     db.exec(M087);
     t.ck("running it twice adds nothing", ev("a_basic").length === 1 && ev("a_up").length === 1);
     t.ck("and the invariant reads zero", runCheck(db).m087_inv_account_no_created === 0);
+  }
+  console.log("\n-- the logo the email points at is a real, published PNG --");
+  {
+    const png = readFileSync(new URL("../../email-logo.png", import.meta.url));
+    t.ck("it is a PNG", png.subarray(1, 4).toString() === "PNG");
+    t.ck("at twice the size it is drawn (176x40)", png.readUInt32BE(16) === 352 && png.readUInt32BE(20) === 80,
+      `${png.readUInt32BE(16)}x${png.readUInt32BE(20)}`);
+    const ignore = readFileSync(new URL("../../.assetsignore", import.meta.url), "utf8");
+    t.ck("and the site publishes root PNGs", /^!\/\*\.png$/m.test(ignore));
   }
 } finally {
   globalThis.fetch = realFetch;

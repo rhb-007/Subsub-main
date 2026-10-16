@@ -13170,7 +13170,17 @@ refactor.
   pasted and zero after. The history line now names the plan
   (*Signed up on Scale*) and labels a downgrade and a comp in words.
 
-  `test:signupwelcome` (27). Four mutations fire, each on its own assertion.
+  **The welcome email wears SubSub's logo, and only that one.** `brandedHtml`
+  puts it on a forest band above the same body. It is `email-logo.png` on
+  subsub.work (rendered from the site's own SVG at twice its drawn size),
+  because Gmail and Outlook do not draw SVG, and the alt text is white so a
+  client that blocks images still shows *SubSub* on the band. Mail sent on an
+  account's behalf (an application, an invite, a work order) stays plain:
+  SubSub's logo across the top of a company's own message reads as a third
+  party. Its sentences are not hard-wrapped, because the HTML keeps every
+  newline and a wrap at 80 columns splits a sentence in every mail client.
+
+  `test:signupwelcome` (32). Five mutations fire, each on its own assertion.
   And `test:referral` had been red since 084: it grepped for the old flat-price
   line that `subscriptionMonthlyCents` replaced. It reads that function now.
 

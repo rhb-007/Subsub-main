@@ -464,22 +464,20 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // off, the password is one nobody was told, so it is "Forgot password?". A
 // sentence telling somebody to "sign in with your password" over an account
 // whose password nobody knows is the dead end this exists to remove.
+// Sentences are not hard-wrapped here: the HTML keeps every newline, so a
+// wrap at 80 columns breaks a sentence in half in every mail client.
 export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword }) {
   const app = "https://app.subsub.work";
   const steps = needsConfirmation
     ? `To sign in for the first time:
-  1. Open the confirmation email (it usually reads "Confirm your signup").
-     It is sent separately from this one, sometimes under the name
-     "Supabase Auth", so check Junk if you don't see it.
+  1. Open the confirmation email (it usually reads "Confirm your signup"). It is sent separately from this one, sometimes under the name "Supabase Auth", so check Junk if you don't see it.
   2. Press the link in it, then choose your password.
   3. After that, sign in any time at ${app}
 
-If it hasn't arrived in ten minutes, go to ${app}, press
-"Forgot password?" and enter ${email}. That sends a fresh link.`
+If it hasn't arrived in ten minutes, go to ${app}, press "Forgot password?" and enter ${email}. That sends a fresh link.`
     : hasPassword
       ? `Sign in any time at ${app} with ${email} and the password you chose.`
-      : `To sign in for the first time, go to ${app}, press "Forgot password?"
-and enter ${email}. You'll get a link to choose your password.`;
+      : `To sign in for the first time, go to ${app}, press "Forgot password?" and enter ${email}. You'll get a link to choose your password.`;
   const text = `Hi ${firstName || "there"},
 
 Welcome to SubSub. ${companyName} is set up on the ${planName} plan${planName === "Basic" ? ", which is free, with no card and no expiry" : ""}.
@@ -489,7 +487,7 @@ ${steps}
 -- The SubSub team
 
 This is an automated message from an unmonitored address. Replies aren't received.`;
-  return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: textToHtml(text, app) };
+  return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: brandedHtml(text, app) };
 }
 
 // What a tenant is sent when their building manager sets them up.
@@ -848,6 +846,26 @@ function textToHtml(text, link) {
     ? body.replace(esc(link), `<a href="${esc(link)}" style="color:#1B4835">${esc(link)}</a>`)
     : body;
   return `<div style="font:14px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#12211C;max-width:640px">${linked}</div>`;
+}
+
+// The same body under SubSub's own header, for mail sent in SubSub's voice --
+// the welcome email, today. Deliberately NOT used for mail sent on behalf of
+// an account (an application received, an invite, a work order): those are
+// the account writing to somebody, and SubSub's logo across the top of them
+// would read as a third party butting into somebody else's business.
+//
+// The logo is a PNG on subsub.work rather than inline SVG, because Gmail and
+// Outlook do not draw SVG at all. It sits on a forest band so the white
+// wordmark reads, and the alt text is white for the same reason: a client
+// that blocks images shows "SubSub" on the band instead of a broken box.
+// Tables and bgcolor, because that is what every mail client agrees on.
+export const EMAIL_LOGO_URL = "https://subsub.work/email-logo.png";
+export function brandedHtml(text, link) {
+  const inner = textToHtml(text, link);
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;border-collapse:collapse">`
+    + `<tr><td bgcolor="#103528" style="background:#103528;padding:18px 24px;border-radius:10px 10px 0 0">`
+    + `<img src="${EMAIL_LOGO_URL}" width="176" height="40" alt="SubSub" style="display:block;border:0;color:#FFFFFF;font:700 22px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">`
+    + `</td></tr><tr><td style="padding:24px;border:1px solid #DDE4E0;border-top:0;border-radius:0 0 10px 10px">${inner}</td></tr></table>`;
 }
 
 // Asking somebody to sign a lien waiver.
