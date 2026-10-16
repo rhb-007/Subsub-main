@@ -815,6 +815,13 @@ WITH inv(j) AS (SELECT '['
   || (',' || json_array('m085_inv_geocode_half', (SELECT COUNT(*) FROM geocodes
     WHERE (precision = 'none') <> (lat IS NULL OR lng IS NULL)
        OR (lat IS NULL) <> (lng IS NULL))))
+  -- 087. An account with no 'created' row has no start to its subscription
+  -- history and is missing from the console's signup count. Reads non-zero
+  -- until 087 is pasted and stays zero after, because the signup route and the
+  -- console's account create both write one.
+  || (',' || json_array('m087_inv_account_no_created', (SELECT COUNT(*) FROM accounts a
+    WHERE NOT EXISTS (SELECT 1 FROM subscription_events e
+                       WHERE e.account_id = a.id AND e.kind = 'created'))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

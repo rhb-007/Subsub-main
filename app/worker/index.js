@@ -8,7 +8,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sendEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
+import { sendEmail, welcomeEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen, buildingNoticeEmail,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
@@ -1323,6 +1323,29 @@ app.post("/api/signup", async (c) => {
       units: estimate || undefined });
   await logActivity(c.env, accountId, userId, "account_created",
     `${personName} created this account on the ${plan === "scale" ? "Scale" : "Basic"} plan`);
+  // The console's subscription history, signups and conversion rate all read
+  // a 'created' row, and the demo data has always carried one. No route ever
+  // wrote it, so a real Basic signup showed "No events recorded" under its own
+  // plan and the signup count read zero.
+  await recordAccountCreated(c.env, { accountId, plan, billing, source: "system" });
+
+  // What mail went, from us and from Supabase, and both on the console's log.
+  // The confirmation is Supabase's to send and SubSub never sees whether it
+  // landed, so the row says it was handed over -- the same "accepted, not
+  // delivered" the log already says of every other row. Never fails signup.
+  if (realAuth && needsConfirmation) {
+    await logMail(c.env, { accountId, companyId: null, to: email, kind: "signup_confirmation",
+      subject: "Confirm your signup (sent by Supabase)", result: { ok: true } });
+  }
+  try {
+    const welcome = welcomeEmail({ firstName: personName.split(/\s+/)[0], companyName: company, email,
+      planName: plan === "scale" ? "Scale" : "Basic", needsConfirmation, hasPassword: !!chosen });
+    const sent = await sendEmail(c.env, { to: email, ...welcome });
+    await logMail(c.env, { accountId, companyId: null, to: email, kind: "welcome",
+      subject: welcome.subject, result: sent });
+  } catch (err) {
+    console.error("[signup] welcome email failed:", err?.message || err);
+  }
 
   return c.json({
     ok: true, accountId, userId, subdomain, kind,
@@ -24266,6 +24289,7 @@ app.post("/api/platform/accounts", async (c) => {
     syncHostnameAfter(c, { id, subdomain, plan }, { reason: "platform_create" });
   }
 
+  await recordAccountCreated(c.env, { accountId: id, plan, billing, source: "platform_admin" });
   await auditPlatform(c.env, staff, id, "account_created",
     `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null });
 
@@ -25179,6 +25203,21 @@ app.post("/api/platform/users/:id/reset-password", async (c) => {
 // Record every attempt, including the failures — "did they get it?" is the
 // first thing support asks, and a send that quietly failed is worse than one
 // that visibly did.
+// The first line of an account's subscription history. Zero MRR: a Basic
+// account pays nothing and a Scale one pays from its first invoice, which the
+// Stripe webhook records as its own event. Never throws, because a signup
+// that worked must not fail over its history row.
+async function recordAccountCreated(env, { accountId, plan, billing, source }) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO subscription_events (id, account_id, at, kind, from_plan, to_plan, cycle, mrr_delta_cents, source)
+       VALUES (?, ?, ?, 'created', NULL, ?, ?, 0, ?)`
+    ).bind(uid(), accountId, new Date().toISOString(), plan, billing, source).run();
+  } catch (err) {
+    console.error("[account] created event failed:", err?.message || err);
+  }
+}
+
 async function logMail(env, { accountId, companyId, to, kind, subject, result, sentBy }) {
   try {
     await env.DB.prepare(

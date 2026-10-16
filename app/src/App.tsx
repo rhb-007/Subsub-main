@@ -10790,8 +10790,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 <div key={e.id} className="pf-line">
                   <span className="pf-date">{e.at}</span>
                   <span className="pf-line-main">
-                    {e.kind === "created" ? "Signed up on Basic"
+                    {e.kind === "created" ? `Signed up on ${PLANS[e.toPlan]?.name || "Basic"}`
                       : e.kind === "upgraded" ? `Upgraded ${e.fromPlan} → ${e.toPlan}`
+                      : e.kind === "downgraded" ? `Moved to ${PLANS[e.toPlan]?.name || "Basic"}`
+                      : e.kind === "comped" ? "Given Scale, complimentary"
                       : e.kind === "cycle" ? `Switched to ${e.cycle} billing`
                       : e.kind === "canceled" ? "Canceled" : e.kind}
                   </span>
@@ -12114,6 +12116,10 @@ const MAIL_KIND = {
   doc_request: "Document request",
   wo_issued: "Work order",
   application_received: "Application received",
+  welcome: "Welcome email",
+  // Handed to Supabase, which sends it from its own sender; SubSub never sees
+  // whether it landed, which is what "Accepted" already says.
+  signup_confirmation: "Confirm your signup (via Supabase)",
 };
 
 function MailLog({ accountId, load }) {

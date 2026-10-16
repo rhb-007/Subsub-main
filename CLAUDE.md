@@ -13135,6 +13135,45 @@ refactor.
   documented shapes, and the first real map is the test. **Pasting 085 is
   required**; until then the map names the file and nothing else changes.
 
+- **A NEW SIGNUP GETS A WELCOME EMAIL FROM US, AND ITS SUBSCRIPTION HISTORY
+  STARTS WITH A ROW.** Reported from A&L Contracting, a Basic signup, with the
+  console's account window open: *Email sent to this account: 0* and
+  *Subscription history: No events recorded*, and the customer had received
+  nothing.
+
+  **Signup sent nothing of SubSub's own.** The only mail was Supabase's
+  confirmation, from Supabase's own sender (often named *Supabase Auth*), which
+  lands in Junk on iCloud as often as not and which SubSub never sees. Our own
+  mail log stayed empty either way, so "did they get it" had no answer.
+  `welcomeEmail` in `mail.js` now goes through Resend at signup and is logged
+  (`welcome`). It says how to get in, which follows what signup did: the
+  confirmation link when Supabase is confirming, with *Forgot password?* as the
+  fallback; *Forgot password?* alone when it is not, because the form takes no
+  password and nobody knows the one Supabase was given. The hand-off to
+  Supabase is logged too (`signup_confirmation`), as handed over, which is what
+  "Accepted" already means on that log. Neither can fail a signup.
+
+  **Still the real fix, and it is a dashboard setting:** Supabase's built-in
+  sender is rate-limited and lands in Junk. Every auth email (confirmation,
+  reset, the claim code) goes through it until **Authentication → Emails →
+  SMTP Settings** points at Resend.
+
+  **The `created` event was designed and never written.** The demo data carries
+  one per account, the console's history labels it, and its Signups count and
+  conversion rate both read it, but no route inserted one, so every real
+  account read *No events recorded* and the signup count read zero.
+  `recordAccountCreated` writes it from the signup route (`source: system`) and
+  the console's account create (`platform_admin`), at zero MRR on the plan
+  chosen. Migration 087 fills in every existing account: its plan is the
+  `from_plan` of its earliest event if it has one, else its plan today, dated
+  when it was created. `m087_inv_account_no_created` reads non-zero until 087 is
+  pasted and zero after. The history line now names the plan
+  (*Signed up on Scale*) and labels a downgrade and a comp in words.
+
+  `test:signupwelcome` (27). Four mutations fire, each on its own assertion.
+  And `test:referral` had been red since 084: it grepped for the old flat-price
+  line that `subscriptionMonthlyCents` replaced. It reads that function now.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

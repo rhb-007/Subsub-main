@@ -449,6 +449,49 @@ This is an automated message from an unmonitored address. Replies aren't receive
   return { subject: `We received your application to ${who}`, text, html: textToHtml(text, null) };
 }
 
+// What somebody who signed up on the marketing site is sent, from us.
+//
+// Signing up sent nothing of SubSub's own. The only mail was Supabase's
+// confirmation, from its own sender, which SubSub cannot see and which lands
+// in Junk on an iCloud address as often as not -- so a new customer could
+// finish the form, hear nothing, and have no way to find out why, while the
+// console said "Nothing has been sent to this account yet". This one goes
+// through our own domain, is logged like every other mail, and says how to
+// get in, including what to do when the confirmation does not arrive.
+//
+// The way in follows what signup actually did, because the form no longer
+// takes a password: with confirmation on it is the confirmation link; with it
+// off, the password is one nobody was told, so it is "Forgot password?". A
+// sentence telling somebody to "sign in with your password" over an account
+// whose password nobody knows is the dead end this exists to remove.
+export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword }) {
+  const app = "https://app.subsub.work";
+  const steps = needsConfirmation
+    ? `To sign in for the first time:
+  1. Open the confirmation email (it usually reads "Confirm your signup").
+     It is sent separately from this one, sometimes under the name
+     "Supabase Auth", so check Junk if you don't see it.
+  2. Press the link in it, then choose your password.
+  3. After that, sign in any time at ${app}
+
+If it hasn't arrived in ten minutes, go to ${app}, press
+"Forgot password?" and enter ${email}. That sends a fresh link.`
+    : hasPassword
+      ? `Sign in any time at ${app} with ${email} and the password you chose.`
+      : `To sign in for the first time, go to ${app}, press "Forgot password?"
+and enter ${email}. You'll get a link to choose your password.`;
+  const text = `Hi ${firstName || "there"},
+
+Welcome to SubSub. ${companyName} is set up on the ${planName} plan${planName === "Basic" ? ", which is free, with no card and no expiry" : ""}.
+
+${steps}
+
+-- The SubSub team
+
+This is an automated message from an unmonitored address. Replies aren't received.`;
+  return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: textToHtml(text, app) };
+}
+
 // What a tenant is sent when their building manager sets them up.
 //
 // It has one job, and it is not to explain a product: somebody who has just

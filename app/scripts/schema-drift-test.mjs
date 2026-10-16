@@ -337,6 +337,10 @@ console.log("\n-- and a problem sorts to the top --");
   try {
     db.exec(`INSERT INTO accounts (id, name, subdomain, kind)
                VALUES ('a_drift', 'Drift', 'drift', 'property_manager');
+             -- 087: every account starts its history with one, or the
+             -- account itself is a second broken invariant here.
+             INSERT INTO subscription_events (id, account_id, at, kind, to_plan, cycle)
+               VALUES ('se_drift', 'a_drift', '2026-10-01', 'created', 'basic', 'monthly');
              INSERT INTO properties (id, account_id, name, owner_account_id)
                VALUES ('p_drift', 'a_drift', 'Unowned', NULL);`);
     parts = checkRows(db);

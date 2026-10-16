@@ -169,8 +169,10 @@ try {
       rewardsFor({ codeKind: "gc", referredKind: "subcontractor" }).length === 0);
     // The credit is a month of what billing charges -- read off the Worker's
     // own figure, so the two cannot drift into a credit worth more than the month.
+    // Since 084 that figure is subscriptionMonthlyCents: $82.50 for a yearly
+    // item, and the flat $99 when the item carries no per-unit price.
     ck("a month's credit is the month billing charges",
-      /monthly = cycle === "annual" \? 8250 : 9900/.test(WORKER) && monthCreditCents("annual") === SCALE_MONTH_CENTS.annual
+      /interval === "year"\) return 8250;/.test(WORKER) && /: 9900;\n\}/.test(WORKER) && monthCreditCents("annual") === SCALE_MONTH_CENTS.annual
         && monthCreditCents("monthly") === 9900);
     ck("cash is approved, then paid", rewardMove({ kind: "sub_cash", status: "pending" }, "approve").to === "approved"
       && rewardMove({ kind: "sub_cash", status: "approved" }, "pay").to === "paid");
