@@ -36025,7 +36025,10 @@ const messageErrText = (e) => {
   if (code === "not_found") return "That conversation isn't available to you.";
   if (code === IMPERSONATION_LAPSED || code === "impersonation_expired") return "This staff sign-in has run out. Sign in again from the banner.";
   if (code === "unauthenticated") return "You've been signed out. Sign in again and try once more.";
-  if (/fetch|network/i.test(String(code))) return "No connection. Check it and try again.";
+  // No status means no answer reached the page at all -- the request never
+  // got there or the reply never got back. Safari says "Load failed", Chrome
+  // "Failed to fetch"; neither is a refusal, so neither is printed as a code.
+  if (!e?.status || /fetch|network|load failed/i.test(String(code))) return "Couldn't reach SubSub just now. Check your connection and tap Try again.";
   return `That didn't go through (${code || "unknown error"}). Try again.`;
 };
 const msgTime = (iso) => {
@@ -36091,8 +36094,18 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
   const fileRef = useRef(null);
 
   const load = useCallback(async (quiet = false) => {
+    // A dropped connection is asked again once, quietly, before anybody is
+    // told: on an iPad on cellular the first request after switching tabs is
+    // the one that fails, and the second usually lands.
+    const get = () => api.getThread(threadId);
     try {
-      const d = await api.getThread(threadId);
+      let d;
+      try { d = await get(); }
+      catch (e) {
+        if (quiet || e?.status) throw e;
+        await new Promise((r) => setTimeout(r, 1200));
+        d = await get();
+      }
       setData(d); setErr("");
       if (!quiet) onChange?.();
     } catch (e) { if (!quiet) setErr(messageErrText(e)); }
@@ -36196,7 +36209,15 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
   const seed = data ? jobSeedFrom(data.messages, data.thread.side, linkedAt) : null;
   const timeNudge = cx?.job && canPropose && !closed && looksLikeTime(text);
 
-  if (err) return <div className="thr-pane"><p className="err-note">{err}</p>{onBack && <button className="btn-ghost" onClick={onBack}>Back</button>}</div>;
+  if (err) return (
+    <div className="thr-pane">
+      <p className="err-note">{err}</p>
+      <div className="thr-err-acts">
+        <button className="btn-solid" onClick={() => { setErr(""); load(); }}>Try again</button>
+        {onBack && <button className="btn-ghost" onClick={onBack}>Back</button>}
+      </div>
+    </div>
+  );
   if (!t) return <div className="thr-pane thr-loading">Loading the conversation…</div>;
 
   const otherName = counterpartLabel(t, side);
@@ -46958,6 +46979,8 @@ button.job-insp:hover{border-color:#2f5577}
   color:var(--brand-dk);display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
 .thr-av.sm{width:32px;height:32px;font-size:12px}
 .thr-pane{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
+.thr-err-acts{display:flex;gap:10px;flex-wrap:wrap;margin:4px 16px 16px}
+.thr-pane > .err-note:first-child{margin:16px 16px 8px}
 .thr-loading{padding:24px;color:var(--ink-soft)}
 .thr-head{flex:none;display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
 .thr-back{display:none;border:0;background:transparent;padding:6px;cursor:pointer;color:var(--ink)}

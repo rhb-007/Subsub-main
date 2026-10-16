@@ -13202,6 +13202,22 @@ refactor.
   And `test:referral` had been red since 084: it grepped for the old flat-price
   line that `subscriptionMonthlyCents` replaced. It reads that function now.
 
+- **A DROPPED REQUEST IS NOT A REFUSAL, AND THE CONVERSATION SAYS SO.**
+  Reported from the console with a conversation reading *"That didn't go
+  through (Load failed). Try again."* over a lone Back button. "Load failed" is
+  Safari's message when no reply reached the page at all (Chrome says "Failed
+  to fetch"); `messageErrText` only recognised the second, so Safari's words
+  were printed as though they were a server code. Any error with no status now
+  reads *Couldn't reach SubSub just now*, the thread is asked again once,
+  quietly, before anybody is told, and the error pane carries **Try again**
+  beside Back. `test:messagingui` drops the request with Puppeteer
+  interception: once (it must load) and twice (it must say so and offer Try
+  again, which then loads). Removing the retry fails two assertions; removing
+  the button fails two. The wording check cannot fail in headless Chrome,
+  whose message already matched, so it guards Safari only by construction.
+  **Not verified:** what dropped the live request; nothing on the server
+  refuses it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

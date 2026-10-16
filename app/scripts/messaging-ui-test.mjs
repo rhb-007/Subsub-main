@@ -500,6 +500,47 @@ try {
   // conversation. What is measured: the box is on screen with the page at
   // the top, the window ends at the foot of the screen, the history scrolls,
   // and the text in the box is 16px (any smaller and iPhone zooms in on tap).
+  // A DROPPED CONNECTION IS NOT A REFUSAL. Safari answers a request that never
+  // got a reply with "Load failed", and the pane printed that as though it
+  // were a code from the server, with only Back under it. It is asked again
+  // once, quietly; if that fails too it says so in words and offers Try again.
+  console.log("\n-- a dropped connection is retried, then offered again --");
+  {
+    asTenant = false; reset();
+    const { ctx, page, crashes } = await visitApp(browser, { host: "x", webPort: WEB,
+      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1100, height: 1000 } });
+    await wait(2600);
+    let drops = 1;
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (r.method() === "GET" && /\/api\/threads\/th1$/.test(r.url()) && drops > 0) { drops--; return r.abort("failed"); }
+      return r.continue();
+    });
+    await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.click());
+    await wait(700);
+    await clickText(page, ".ib-row", /Tess/);
+    await wait(2200);
+    let p1 = await pane(page);
+    t.ck("one dropped request is asked again and the conversation loads", p1?.msgs?.length === 1, JSON.stringify(p1));
+    drops = 2;
+    await clickText(page, ".ib-row", /Pacific/);
+    await wait(500);
+    await clickText(page, ".ib-row", /Tess/);
+    await wait(2200);
+    const e = await page.evaluate(() => {
+      const pn = document.querySelector(".inbox .thr-pane");
+      return pn ? { text: pn.innerText, retry: !![...pn.querySelectorAll("button")].find((b) => /Try again/.test(b.innerText)) } : null;
+    });
+    t.ck("two drops say it in words, not as a code", !!e && /Couldn't reach SubSub/.test(e.text) && !/\(.*failed.*\)/i.test(e.text), JSON.stringify(e));
+    t.ck("and offer Try again", !!e?.retry, JSON.stringify(e));
+    await clickText(page, ".inbox .thr-pane button", /Try again/);
+    await wait(1200);
+    p1 = await pane(page);
+    t.ck("Try again loads the conversation", p1?.msgs?.length === 1, JSON.stringify(p1));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- the window fits the screen, held either way --");
   for (const vp of [
     { name: "iPad upright", width: 820, height: 1180, phone: false },
