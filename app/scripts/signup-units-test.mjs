@@ -315,6 +315,24 @@ try {
     await page.close();
   }
 
+  console.log("\n-- the price sits clear of the boxes, and the panel clear of the next row --");
+  for (const vw of [1024, 390]) {
+    const { page } = await open("?plan=scale&units=750&occupied=712", vw);
+    const g = await page.evaluate(() => {
+      const ask = document.getElementById("unitsAsk").getBoundingClientRect();
+      const occ = document.getElementById("occupied").getBoundingClientRect();
+      const q = document.getElementById("unitQuote").getBoundingClientRect();
+      const qText = document.querySelector("#unitQuote b")?.getBoundingClientRect();
+      const name = document.getElementById("name").closest(".field").getBoundingClientRect();
+      return { inputToQuote: Math.round((qText?.top ?? q.top) - occ.bottom),
+        quoteToEdge: Math.round(ask.bottom - q.bottom), askToNext: Math.round(name.top - ask.bottom) };
+    });
+    t.ck(`${vw}px: the price is at least 24px under the boxes`, g.inputToQuote >= 24, JSON.stringify(g));
+    t.ck(`${vw}px: and at least 14px inside the panel's foot`, g.quoteToEdge >= 14, JSON.stringify(g));
+    t.ck(`${vw}px: and the next row starts at least 24px below the panel`, g.askToNext >= 24, JSON.stringify(g));
+    await page.close();
+  }
+
   console.log("\n-- at phone width --");
   {
     const { page } = await open("?plan=scale&units=300&occupied=250", 390);

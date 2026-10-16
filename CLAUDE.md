@@ -13035,7 +13035,9 @@ refactor.
     type, and the plan pill follows. Past 80 a yearly choice gives way to
     monthly and says so; back under 80 the yearly choice returns. The figures
     are a hand copy in data attributes, because the page has no build step, and
-    `test:signupunits` pins each one against the module.
+    `test:signupunits` pins each one against the module. The quote sits under a
+    rule, clear of the two boxes: it was drawn touching them, reported as *"too
+    close"*, and the suite now measures the gap at 1024px and 390px.
   - **The pricing page links into signup as a property manager**, the
     commonest of the three (`?as=property%20manager`). A link carrying
     `units` and no role does the same. The role is the first thing on step 1,
