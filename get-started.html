@@ -367,12 +367,13 @@ body.nav-open{overflow:hidden}
   .planpill span{font-size:13.5px;color:var(--muted)}
   .planpill a{font-size:13px;color:var(--forest-lift);font-weight:600;text-decoration:underline;
     text-underline-offset:2px;margin-left:4px}
-  /* What a subcontractor or handyman sees where the plan box is: no plan name
-     and no seat count, which is what made the old pill read as a charge. */
-  .freepill{display:inline-flex;align-items:center;gap:11px;border:1.5px solid var(--forest);
-    border-radius:8px;padding:10px 15px;background:#F1F6F3;max-width:340px}
-  .freepill b{font:800 22px 'Bricolage Grotesque';letter-spacing:-.02em;color:var(--forest)}
-  .freepill span{font-size:14px;font-weight:600;line-height:1.3;color:var(--forest)}
+  /* What a subcontractor or handyman sees where the plan box is, in the plan
+     box's own size and shape: no plan name and no seat count, which is what
+     made the old pill read as a charge. */
+  .freepill{display:inline-flex;align-items:baseline;gap:9px;border:1.5px solid var(--rule);
+    border-radius:8px;padding:11px 15px;background:#fff;white-space:nowrap}
+  .freepill b{font:700 15px 'Bricolage Grotesque';letter-spacing:-.02em}
+  .freepill span{font-size:13.5px;color:var(--muted)}
   .step{display:none}
   .step[data-on]{display:block}
   .step h2{font-size:27px;letter-spacing:-.03em}
@@ -448,7 +449,7 @@ body.nav-open{overflow:hidden}
       </div>
       <div class="freepill hide" id="subFree">
         <b>$0</b>
-        <span>Subcontractors and handymen are always free, forever.</span>
+        <span>Always free, forever</span>
       </div>
     </div>
 

@@ -13280,6 +13280,14 @@ refactor.
   `test:sitetools` pins all three; showing the line to everybody or pointing
   the button anywhere else fails its assertion.
 
+  **And it is the plan pill's twin, on the right.** The first version was a
+  larger green box with the whole sentence, so it wrapped under the heading
+  and read as a banner rather than as the answer to *what does this cost*.
+  It now reads **$0 · Always free, forever** in the plan pill's own size,
+  border and type, beside the heading where the plan sits for everybody else.
+  The card's badge already says who it is for. `test:sitetools` measures it at
+  700px and 1200px against the plan pill, and the old box fails all four checks.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

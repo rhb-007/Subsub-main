@@ -107,7 +107,7 @@ console.log("\n-- the referral snippet is one thing --");
   // the same rule the plan pill came off this flow for.
   t.ck("the subcontractor card says it is free", /<i>\$0 · Free forever<\/i>/.test(subCard), subCard);
   const free = (gs.match(/<div class="freepill[^"]*" id="subFree">([\s\S]*?)<\/div>/) || [])[1] || "";
-  t.ck("signup has a free-forever line for subcontractors and handymen", /always free, forever/.test(free) && /\$0/.test(free), free);
+  t.ck("signup has a free-forever line for subcontractors and handymen", /always free, forever/i.test(free) && /\$0/.test(free), free);
   t.ck("and it names no plan, no other price and no count", free !== "" && !/Basic|Scale|upgrade|plan|\$[1-9]|\d+ (sub|user|job)/i.test(free), free);
   t.ck("and it shows for a subcontractor in place of the plan pill",
     /pill\.classList\.toggle\('hide', sub\)/.test(gs) && /getElementById\('subFree'\);\s*if\(free\)\{ free\.classList\.toggle\('hide', !sub\)/.test(gs));
@@ -341,7 +341,34 @@ try {
     await ctx.close();
   }
 
-  console.log("\n-- on a phone --");
+  console.log("\n-- the free line wears the plan box's shape --");
+{
+  // Reported as the free line sitting under the heading in a box of its own
+  // design. It sits where the plan pill does, at the plan pill's size.
+  for (const width of [700, 1200]) {
+    const { ctx, page, crashes } = await open("/get-started.html", width);
+    const plan = await page.evaluate(() => {
+      const p = document.querySelector(".planpill");
+      const b = getComputedStyle(p.querySelector("b")), sp = getComputedStyle(p.querySelector("span"));
+      return { b: b.fontSize, span: sp.fontSize, border: getComputedStyle(p).borderColor, h: p.getBoundingClientRect().height };
+    });
+    await page.evaluate(() => { const r = document.querySelector('input[name="role"][value="Subcontractor"]'); r.checked = true; r.dispatchEvent(new Event("change", { bubbles: true })); });
+    await wait(150);
+    const free = await page.evaluate(() => {
+      const f = document.getElementById("subFree"), h1 = document.querySelector(".ob-head h1");
+      const r = f.getBoundingClientRect(), hr = h1.getBoundingClientRect(), head = document.querySelector(".ob-head").getBoundingClientRect();
+      return { shown: r.height > 0, b: getComputedStyle(f.querySelector("b")).fontSize, span: getComputedStyle(f.querySelector("span")).fontSize,
+        border: getComputedStyle(f).borderColor, h: r.height, beside: r.top < hr.bottom, right: Math.round(head.right - r.right) };
+    });
+    t.ck(`at ${width}px the free line is beside the heading, on the right`, free.shown && free.beside && free.right <= 1, JSON.stringify(free));
+    t.ck(`at ${width}px it is the plan box's size and type`, free.b === plan.b && free.span === plan.span && free.border === plan.border
+      && Math.abs(free.h - plan.h) <= 2, `${JSON.stringify(plan)} | ${JSON.stringify(free)}`);
+    t.ck(`at ${width}px nothing crashed`, crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+}
+
+console.log("\n-- on a phone --");
   for (const path of ["/check/", "/check/wa/", "/handyman-limits/", "/handyman-limits/wa/", "/subs", "/gc"]) {
     const { ctx, page } = await open(path, 390);
     const over = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
