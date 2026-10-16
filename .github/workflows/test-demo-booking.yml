@@ -1,0 +1,68 @@
+# Test the Book a demo flow against the LIVE API Worker.
+#
+#   Actions tab -> "Test demo booking" -> Run workflow. Works from a phone.
+#
+# It asks https://api.subsub.work for real slots, the same call the
+# book-a-demo page makes, and checks the response allows the page's origin.
+# If an email is given, it books the first free slot for that email. That is a
+# real Cal booking and a real confirmation email, so cancel it afterwards.
+#
+# It goes through the Worker rather than calling Cal directly, so it uses the
+# CAL_API_KEY and CAL_EVENT_TYPE_ID already set on subsub-api and needs no
+# secret of its own. A green run means the page works end to end.
+name: Test demo booking
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: "Book the first free slot for this email (leave blank to only check slots)"
+        required: false
+        default: ""
+      api:
+        description: "API base"
+        required: false
+        default: "https://api.subsub.work/api"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slots
+        env:
+          API: ${{ inputs.api }}
+        run: |
+          set -u
+          start=$(date -u -d '+1 day' +%F); end=$(date -u -d '+14 day' +%F)
+          code=$(curl -sS -o slots.json -w '%{http_code}' -H 'Origin: https://subsub.work' -D headers.txt \
+            "$API/demo/slots?start=$start&end=$end&timeZone=America/Los_Angeles")
+          echo "HTTP $code"; head -c 1500 slots.json; echo
+          grep -i '^access-control-allow-origin' headers.txt || { echo "::error::No CORS header for https://subsub.work"; exit 1; }
+          case "$code" in
+            200) ;;
+            503) echo "::error::not_configured -- CAL_API_KEY or CAL_EVENT_TYPE_ID is not set on subsub-api"; exit 1 ;;
+            502) echo "::error::Cal refused the slots call. Check the Worker log ([demo] slots failed) or run npm run cal:check"; exit 1 ;;
+            *) echo "::error::Unexpected answer"; exit 1 ;;
+          esac
+          n=$(jq '[.slots[]] | add // [] | length' slots.json)
+          echo "$n free slots in the next two weeks"
+          [ "$n" -gt 0 ] || { echo "::error::Cal answered but offered no times -- check the event's availability and connected calendar"; exit 1; }
+          jq -r '[.slots | to_entries | sort_by(.key)[] | .value[]] | .[0]' slots.json > first.txt
+          echo "First slot: $(cat first.txt)"
+
+      - name: Book
+        if: ${{ inputs.email != '' }}
+        env:
+          API: ${{ inputs.api }}
+          EMAIL: ${{ inputs.email }}
+        run: |
+          set -u
+          body=$(jq -n --arg start "$(cat first.txt)" --arg email "$EMAIL" \
+            '{start:$start, email:$email, name:"SubSub test booking", company:"SubSub (test)",
+              notes:"Automated test from the Test demo booking workflow. Safe to cancel.",
+              timeZone:"America/Los_Angeles"}')
+          code=$(curl -sS -o book.json -w '%{http_code}' -H 'Origin: https://subsub.work' \
+            -H 'content-type: application/json' -d "$body" "$API/demo/book")
+          echo "HTTP $code"; cat book.json; echo
+          [ "$code" = "201" ] || { echo "::error::Booking was not made (HTTP $code)"; exit 1; }
+          echo "Booked. Check $EMAIL for SubSub's confirmation and the calendar invite, then cancel it in Cal."
