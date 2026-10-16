@@ -377,10 +377,21 @@ body.nav-open{overflow:hidden}
     padding:3px 8px;border-radius:20px}
   .cycle button[aria-selected="true"] .cy-save{background:var(--gold);color:#20160A}
   .plan-bill{font-size:12.5px;color:var(--muted);margin-top:8px}
-  .qa{display:grid;grid-template-columns:1fr 1fr;gap:34px 44px;margin-top:44px}
+  .qa{max-width:820px;margin-top:36px;border-top:1px solid var(--rule)}
+  .qa details{border-bottom:1px solid var(--rule)}
+  .qa summary{list-style:none;cursor:pointer;display:flex;align-items:center;
+    justify-content:space-between;gap:18px;padding:18px 2px}
+  .qa summary::-webkit-details-marker{display:none}
+  .qa summary::after{content:"+";flex:none;width:28px;height:28px;border-radius:50%;
+    display:grid;place-items:center;border:1.5px solid var(--rule);color:var(--forest);
+    font:600 18px/1 Inter;transition:transform .15s}
+  .qa details[open] summary::after{content:"\2212"}
+  .qa summary:hover::after{border-color:var(--forest)}
+  .qa summary:focus-visible{outline:2px solid var(--forest);outline-offset:2px;border-radius:6px}
   .qa h3{font-size:17.5px;letter-spacing:-.02em}
-  .qa p{margin-top:8px;font-size:15.5px;color:var(--muted);line-height:1.55}
-  @media (max-width:760px){.qa{grid-template-columns:1fr;gap:28px}}
+  .qa p{margin:0 0 20px;padding-right:46px;font-size:15.5px;color:var(--muted);line-height:1.6}
+  @media (max-width:760px){.qa p{padding-right:0}}
+  .qa-cta{max-width:820px;margin-top:28px;font-size:15.5px;color:var(--muted);line-height:1.6}
 </style>
 <link rel="canonical" href="https://subsub.work/pricing.html">
 <meta name="robots" content="index,follow">
@@ -396,7 +407,7 @@ body.nav-open{overflow:hidden}
 <meta name="twitter:image" content="https://subsub.work/og-image.png">
 <meta name="twitter:title" content="Pricing — Free for 3 Subcontractors, $99/mo Unlimited | SubSub">
 <meta name="twitter:description" content="Basic is free for 3 subcontractors, 1 user and 5 jobs a month. Scale is $99/mo or $990/yr for unlimited subcontractors, users and jobs. Your subs never pay.">
-<script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "Organization", "@id": "https://subsub.work/#org", "name": "SubSub", "legalName": "SubSub, LLC", "url": "https://subsub.work/", "logo": "https://subsub.work/index.html", "email": "legal@subsub.work", "address": {"@type": "PostalAddress", "streetAddress": "4616 25th Ave NE", "addressLocality": "Seattle", "addressRegion": "WA", "postalCode": "98105", "addressCountry": "US"}}, {"@type": "SoftwareApplication", "@id": "https://subsub.work/#software", "name": "SubSub", "applicationCategory": "BusinessApplication", "operatingSystem": "Web browser", "description": "Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licenses, scheduling crews and issuing work orders.", "url": "https://subsub.work/", "publisher": {"@id": "https://subsub.work/#org"}, "offers": [{"@type": "Offer", "name": "Basic", "price": "0", "priceCurrency": "USD", "description": "Free for up to 3 subcontractors, 1 user and 5 jobs per month."}, {"@type": "Offer", "name": "Scale", "price": "99", "priceCurrency": "USD", "description": "Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]}, {"@type": "WebPage", "@id": "https://subsub.work/pricing.html", "url": "https://subsub.work/pricing.html", "name": "Pricing — Free for 3 Subcontractors, $99/mo Unlimited | SubSub", "description": "Basic is free for 3 subcontractors, 1 user and 5 jobs a month. Scale is $99/mo or $990/yr for unlimited subcontractors, users and jobs. Your subs never pay.", "isPartOf": {"@id": "https://subsub.work/#software"}, "publisher": {"@id": "https://subsub.work/#org"}}, {"@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do my subcontractors pay anything?", "acceptedAnswer": {"@type": "Answer", "text": "No. Their logins are free on both plans, and they don't count against your user seats — otherwise nobody would give them access, which is the part that makes this work."}}, {"@type": "Question", "name": "What counts as a user?", "acceptedAnswer": {"@type": "Answer", "text": "Anyone on your side: admins and project managers. Basic includes one, Scale is unlimited. Subcontractor logins are separate and always free."}}, {"@type": "Question", "name": "What happens at 4 subcontractors on Basic?", "acceptedAnswer": {"@type": "Answer", "text": "You'll be asked to upgrade at the moment you try to add the fourth. Decline and nothing changes — you keep your three and carry on."}}, {"@type": "Question", "name": "What's the annual discount?", "acceptedAnswer": {"@type": "Answer", "text": "Annual is $990 — two months free against paying monthly, so $82.50 a month effective and $198 saved a year. Billed once, and you can switch to monthly at renewal."}}, {"@type": "Question", "name": "I manage more than 80 units. What does Scale cost?", "acceptedAnswer": {"@type": "Answer", "text": "Property managers, portfolio managers and building owners pay the same $99 a month until their buildings hold more than 80 units. Past 80, Scale is $1.25 per occupied unit a month, never less than $99, billed monthly, plus a one-time setup fee: $250 for up to 250 units, $500 for 251–500, $1,000 for 501–1,000 and $2,000 above 1,000. Only occupied units count, and you enter that number on each building."}}, {"@type": "Question", "name": "Can I connect my CRM?", "acceptedAnswer": {"@type": "Answer", "text": "On Scale, yes. Scheduled jobs post straight into SubSub from JobNimbus, Zapier, Make, n8n or your own script, and arrive with their trade slots waiting to be filled — nothing to retype. See how to connect your CRM."}}, {"@type": "Question", "name": "Are change orders included?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, on every plan. Either side can raise one against an accepted work order, and it counts toward the revised value once accepted. They're not counted as jobs."}}, {"@type": "Question", "name": "What does SubSub charge to pay my subcontractors?", "acceptedAnswer": {"@type": "Answer", "text": "Nothing on the first $50,000 you send through SubSub. After that, 0.5% of each payment, and never more than $500 on any one payment. It is added to what you pay, not taken from it, so your subcontractor receives the full amount. Payments you make another way and record in SubSub, like a check, carry no fee. Paying subcontractors through SubSub is part of Scale and is coming soon."}}, {"@type": "Question", "name": "How many text messages come with Scale?", "acceptedAnswer": {"@type": "Answer", "text": "2,500 a month, shared across your account — work orders, invites and updates to tenants. If you go over, texts keep going and are charged automatically on the 1st: $50 for every 5,000 sent that month, or part of 5,000 — so 7,000 texts is $100, 12,000 is $150. You can turn text messages off at any time in Account, and emails still go out. Emergency call-outs are always texted."}}, {"@type": "Question", "name": "Can I start free and upgrade later?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, and nothing is re-entered. Your subs, documents, jobs and work orders carry straight over the moment you switch."}}, {"@type": "Question", "name": "What's the 5 jobs a month limit?", "acceptedAnswer": {"@type": "Answer", "text": "On Basic you can create five jobs per calendar month, each with as many trades and work orders as it needs. It resets on the 1st. Scale removes the cap."}}, {"@type": "Question", "name": "Why is branding only on Scale?", "acceptedAnswer": {"@type": "Answer", "text": "On Basic your subs sign in through SubSub. On Scale they sign in at yourcompany.subsub.work with your logo on the page and on every work order — it reads as your system rather than a tool you bought."}}, {"@type": "Question", "name": "Does SubSub handle lien waivers?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, on Scale. Ask for a lien waiver against each payment — partial or final, conditional or unconditional — and the payment waits until it is signed, or until you record why you paid without it. Your subcontractor signs it in SubSub; in the twelve states that set the wording in law, they sign that state's own form and upload it. Anyone they name below them, like a supply house, is asked for theirs too, and you see whether the chain is clear and through which date."}}]}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@graph": [{"@type": "Organization", "@id": "https://subsub.work/#org", "name": "SubSub", "legalName": "SubSub, LLC", "url": "https://subsub.work/", "logo": "https://subsub.work/index.html", "email": "legal@subsub.work", "address": {"@type": "PostalAddress", "streetAddress": "4616 25th Ave NE", "addressLocality": "Seattle", "addressRegion": "WA", "postalCode": "98105", "addressCountry": "US"}}, {"@type": "SoftwareApplication", "@id": "https://subsub.work/#software", "name": "SubSub", "applicationCategory": "BusinessApplication", "operatingSystem": "Web browser", "description": "Contractor management software for onboarding subcontractors, verifying insurance, bonds and state licenses, scheduling crews and issuing work orders.", "url": "https://subsub.work/", "publisher": {"@id": "https://subsub.work/#org"}, "offers": [{"@type": "Offer", "name": "Basic", "price": "0", "priceCurrency": "USD", "description": "Free for up to 3 subcontractors, 1 user and 5 jobs per month."}, {"@type": "Offer", "name": "Scale", "price": "99", "priceCurrency": "USD", "description": "Unlimited subcontractors, users and jobs, plus your own branding. $990 per year paid annually."}]}, {"@type": "WebPage", "@id": "https://subsub.work/pricing.html", "url": "https://subsub.work/pricing.html", "name": "Pricing — Free for 3 Subcontractors, $99/mo Unlimited | SubSub", "description": "Basic is free for 3 subcontractors, 1 user and 5 jobs a month. Scale is $99/mo or $990/yr for unlimited subcontractors, users and jobs. Your subs never pay.", "isPartOf": {"@id": "https://subsub.work/#software"}, "publisher": {"@id": "https://subsub.work/#org"}}, {"@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Do my subcontractors pay anything?", "acceptedAnswer": {"@type": "Answer", "text": "No. Their logins are free on both plans, and they don't count against your user seats — otherwise nobody would give them access, which is the part that makes this work."}}, {"@type": "Question", "name": "I'm a general contractor. How do I add a subcontractor I meet in person?", "acceptedAnswer": {"@type": "Answer", "text": "Show them your recruiting QR code. In SubSub, press Add, then Subcontractor, and tap They're here with you? — or open Account, then Branding, where the code sits above your application form. They scan it with their phone camera, fill in their own company details, trades and documents, and land on your roster for you to review, with nothing typed off a business card. The recruiting code is part of Scale; on Basic, invite them by email instead."}}, {"@type": "Question", "name": "What counts as a user?", "acceptedAnswer": {"@type": "Answer", "text": "Anyone on your side: admins and project managers. Basic includes one, Scale is unlimited. Subcontractor logins are separate and always free."}}, {"@type": "Question", "name": "What happens at 4 subcontractors on Basic?", "acceptedAnswer": {"@type": "Answer", "text": "You'll be asked to upgrade at the moment you try to add the fourth. Decline and nothing changes — you keep your three and carry on."}}, {"@type": "Question", "name": "What's the annual discount?", "acceptedAnswer": {"@type": "Answer", "text": "Annual is $990 — two months free against paying monthly, so $82.50 a month effective and $198 saved a year. Billed once, and you can switch to monthly at renewal."}}, {"@type": "Question", "name": "I manage more than 80 units. What does Scale cost?", "acceptedAnswer": {"@type": "Answer", "text": "Property managers, portfolio managers and building owners pay the same $99 a month until their buildings hold more than 80 units. Past 80, Scale is $1.25 per occupied unit a month, never less than $99, billed monthly, plus a one-time setup fee: $250 for up to 250 units, $500 for 251–500, $1,000 for 501–1,000 and $2,000 above 1,000. Only occupied units count, and you enter that number on each building."}}, {"@type": "Question", "name": "Can I connect my CRM?", "acceptedAnswer": {"@type": "Answer", "text": "On Scale, yes. Scheduled jobs post straight into SubSub from JobNimbus, Zapier, Make, n8n or your own script, and arrive with their trade slots waiting to be filled — nothing to retype. See how to connect your CRM."}}, {"@type": "Question", "name": "Are change orders included?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, on every plan. Either side can raise one against an accepted work order, and it counts toward the revised value once accepted. They're not counted as jobs."}}, {"@type": "Question", "name": "What does SubSub charge to pay my subcontractors?", "acceptedAnswer": {"@type": "Answer", "text": "Nothing on the first $50,000 you send through SubSub. After that, 0.5% of each payment, and never more than $500 on any one payment. It is added to what you pay, not taken from it, so your subcontractor receives the full amount. Payments you make another way and record in SubSub, like a check, carry no fee. Paying subcontractors through SubSub is part of Scale and is coming soon."}}, {"@type": "Question", "name": "How many text messages come with Scale?", "acceptedAnswer": {"@type": "Answer", "text": "2,500 a month, shared across your account — work orders, invites and updates to tenants. If you go over, texts keep going and are charged automatically on the 1st: $50 for every 5,000 sent that month, or part of 5,000 — so 7,000 texts is $100, 12,000 is $150. You can turn text messages off at any time in Account, and emails still go out. Emergency call-outs are always texted."}}, {"@type": "Question", "name": "Can I start free and upgrade later?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, and nothing is re-entered. Your subs, documents, jobs and work orders carry straight over the moment you switch."}}, {"@type": "Question", "name": "What's the 5 jobs a month limit?", "acceptedAnswer": {"@type": "Answer", "text": "On Basic you can create five jobs per calendar month, each with as many trades and work orders as it needs. It resets on the 1st. Scale removes the cap."}}, {"@type": "Question", "name": "Why is branding only on Scale?", "acceptedAnswer": {"@type": "Answer", "text": "On Basic your subs sign in through SubSub. On Scale they sign in at yourcompany.subsub.work with your logo on the page and on every work order — it reads as your system rather than a tool you bought."}}, {"@type": "Question", "name": "Does SubSub handle lien waivers?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, on Scale. Ask for a lien waiver against each payment — partial or final, conditional or unconditional — and the payment waits until it is signed, or until you record why you paid without it. Your subcontractor signs it in SubSub; in the twelve states that set the wording in law, they sign that state's own form and upload it. Anyone they name below them, like a supply house, is asked for theirs too, and you see whether the chain is clear and through which date."}}]}]}</script>
 </head>
 <body>
 
@@ -555,75 +566,64 @@ body.nav-open{overflow:hidden}
     <div class="wrap">
       <h2 class="h-md">Questions people ask before signing up.</h2>
       <div class="qa">
-        <div>
-          <h3>Do my subcontractors pay anything?</h3>
-          <p>No. Their logins are free on both plans, and they don't count against your user
-            seats — otherwise nobody would give them access, which is the part that makes this work.</p>
-        </div>
-        <div>
-          <h3>What counts as a user?</h3>
-          <p>Anyone on your side: admins and project managers. Basic includes one, Scale is
-            unlimited. Subcontractor logins are separate and always free.</p>
-        </div>
-        <div>
-          <h3>What happens at 4 subcontractors on Basic?</h3>
-          <p>You'll be asked to upgrade at the moment you try to add the fourth. Decline and
-            nothing changes — you keep your three and carry on.</p>
-        </div>
-        <div>
-          <h3>What's the annual discount?</h3>
-          <p>Annual is $990 — two months free against paying monthly, so $82.50 a month effective
-            and $198 saved a year. Billed once, and you can switch to monthly at renewal.</p>
-        </div>
-        <div>
-          <h3>I manage more than 80 units. What does Scale cost?</h3>
+        <details>
+          <summary><h3>Do my subcontractors pay anything?</h3></summary>
+          <p>No. Their logins are free on both plans, and they don't count against your user seats — otherwise nobody would give them access, which is the part that makes this work.</p>
+        </details>
+        <details>
+          <summary><h3>I'm a general contractor. How do I add a subcontractor I meet in person?</h3></summary>
+          <p>Show them your recruiting QR code. In SubSub, press <b>Add</b>, then <b>Subcontractor</b>, and tap <b>They're here with you?</b> — or open <b>Account</b>, then <b>Branding</b>, where the code sits above your application form. They scan it with their phone camera, fill in their own company details, trades and documents, and land on your roster for you to review, with nothing typed off a business card. The recruiting code is part of Scale; on Basic, invite them by email instead.</p>
+        </details>
+        <details>
+          <summary><h3>What counts as a user?</h3></summary>
+          <p>Anyone on your side: admins and project managers. Basic includes one, Scale is unlimited. Subcontractor logins are separate and always free.</p>
+        </details>
+        <details>
+          <summary><h3>What happens at 4 subcontractors on Basic?</h3></summary>
+          <p>You'll be asked to upgrade at the moment you try to add the fourth. Decline and nothing changes — you keep your three and carry on.</p>
+        </details>
+        <details>
+          <summary><h3>What's the annual discount?</h3></summary>
+          <p>Annual is $990 — two months free against paying monthly, so $82.50 a month effective and $198 saved a year. Billed once, and you can switch to monthly at renewal.</p>
+        </details>
+        <details>
+          <summary><h3>I manage more than 80 units. What does Scale cost?</h3></summary>
           <p>Property managers, portfolio managers and building owners pay the same $99 a month until their buildings hold more than 80 units. Past 80, Scale is $1.25 per occupied unit a month, never less than $99, billed monthly, plus a one-time setup fee: $250 for up to 250 units, $500 for 251–500, $1,000 for 501–1,000 and $2,000 above 1,000. Only occupied units count, and you enter that number on each building.</p>
-        </div>
-        <div>
-          <h3>Can I connect my CRM?</h3>
-          <p>On Scale, yes. Scheduled jobs post straight into SubSub from JobNimbus, Zapier,
-            Make, n8n or your own script, and arrive with their trade slots waiting to be
-            filled — nothing to retype. <a href="developers.html">See how to connect your CRM</a>.</p>
-        </div>
-        <div>
-          <h3>Are change orders included?</h3>
-          <p>Yes, on every plan. Either side can raise one against an accepted work order, and it
-            counts toward the revised value once accepted. They're not counted as jobs.</p>
-        </div>
-        <div>
-          <h3>Does SubSub handle lien waivers?</h3>
+        </details>
+        <details>
+          <summary><h3>Can I connect my CRM?</h3></summary>
+          <p>On Scale, yes. Scheduled jobs post straight into SubSub from JobNimbus, Zapier, Make, n8n or your own script, and arrive with their trade slots waiting to be filled — nothing to retype. <a href="developers.html">See how to connect your CRM</a>.</p>
+        </details>
+        <details>
+          <summary><h3>Are change orders included?</h3></summary>
+          <p>Yes, on every plan. Either side can raise one against an accepted work order, and it counts toward the revised value once accepted. They're not counted as jobs.</p>
+        </details>
+        <details>
+          <summary><h3>Does SubSub handle lien waivers?</h3></summary>
           <p>Yes, on Scale. Ask for a lien waiver against each payment — partial or final, conditional or unconditional — and the payment waits until it is signed, or until you record why you paid without it. Your subcontractor signs it in SubSub; in the twelve states that set the wording in law, they sign that state's own form and upload it. Anyone they name below them, like a supply house, is asked for theirs too, and you see whether the chain is clear and through which date.</p>
-        </div>
-        <div>
-          <h3>What does SubSub charge to pay my subcontractors?</h3>
+        </details>
+        <details>
+          <summary><h3>What does SubSub charge to pay my subcontractors?</h3></summary>
           <p>Nothing on the first $50,000 you send through SubSub. After that, 0.5% of each payment, and never more than $500 on any one payment. It is added to what you pay, not taken from it, so your subcontractor receives the full amount. Payments you make another way and record in SubSub, like a check, carry no fee. Paying subcontractors through SubSub is part of Scale and is coming soon.</p>
-        </div>
-        <div>
-          <h3>How many text messages come with Scale?</h3>
+        </details>
+        <details>
+          <summary><h3>How many text messages come with Scale?</h3></summary>
           <p>2,500 a month, shared across your account — work orders, invites and updates to tenants. If you go over, texts keep going and are charged automatically on the 1st: $50 for every 5,000 sent that month, or part of 5,000 — so 7,000 texts is $100, 12,000 is $150. You can turn text messages off at any time in Account, and emails still go out. Emergency call-outs are always texted.</p>
-        </div>
-        <div>
-          <h3>Can I start free and upgrade later?</h3>
-          <p>Yes, and nothing is re-entered. Your subs, documents, jobs and work orders carry
-            straight over the moment you switch.</p>
-        </div>
-        <div>
-          <h3>What's the 5 jobs a month limit?</h3>
-          <p>On Basic you can create five jobs per calendar month, each with as many trades and work
-            orders as it needs. It resets on the 1st. Scale removes the cap.</p>
-        </div>
-        <div>
-          <h3>Why is branding only on Scale?</h3>
-          <p>On Basic your subs sign in through SubSub. On Scale they sign in at
-            yourcompany.subsub.work with your logo on the page and on every work order — it reads as
-            your system rather than a tool you bought.</p>
-        </div>
-        <div>
-          <h3>I'd rather see it first.</h3>
-          <p>Reasonable. Book a 30-minute demo and we'll go through it with your own trades
-            and requirements rather than a canned demo.</p>
-        </div>
+        </details>
+        <details>
+          <summary><h3>Can I start free and upgrade later?</h3></summary>
+          <p>Yes, and nothing is re-entered. Your subs, documents, jobs and work orders carry straight over the moment you switch.</p>
+        </details>
+        <details>
+          <summary><h3>What's the 5 jobs a month limit?</h3></summary>
+          <p>On Basic you can create five jobs per calendar month, each with as many trades and work orders as it needs. It resets on the 1st. Scale removes the cap.</p>
+        </details>
+        <details>
+          <summary><h3>Why is branding only on Scale?</h3></summary>
+          <p>On Basic your subs sign in through SubSub. On Scale they sign in at yourcompany.subsub.work with your logo on the page and on every work order — it reads as your system rather than a tool you bought.</p>
+        </details>
       </div>
+      <p class="qa-cta">Rather see it first? Book a 30-minute demo and we'll go through it with your own trades and requirements rather than a canned demo.</p>
       <div class="cta-row">
         <a class="btn btn-forest btn-lg" href="book-a-demo.html">Book a demo</a>
       </div>

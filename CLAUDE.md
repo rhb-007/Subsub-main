@@ -13314,6 +13314,19 @@ refactor.
   label against the box above it at 820px and 390px; the old page reads 0px
   on four of six and fails both.
 
+- **THE PRICING FAQ IS THE INDEX PAGE'S LIST, AND A GC IS TOLD WHERE THE
+  RECRUITING CODE IS.** The pricing FAQ was a two-column grid with every
+  answer open, which ran most of a screen on an iPad. It is now the index
+  page's one-column `<details>` list, with the same CSS copied in because the
+  site has no shared stylesheet. *I'd rather see it first* stays a line under
+  the list, not an entry, because it is a link and not a question.
+  *I'm a general contractor. How do I add a subcontractor I meet in person?*
+  is on index, pricing and for-general-contractors, and says where the code
+  is: **Add → Subcontractor → They're here with you?**, or **Account →
+  Branding**. It also says the code is Scale. The general-contractor page's
+  FAQ CSS is in a second `<style>` block, because `chrome.mjs` copies the
+  first one into every generated page. That page has no FAQPage markup.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
