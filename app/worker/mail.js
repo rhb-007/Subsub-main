@@ -502,13 +502,14 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // It is from Richard by name and replies reach him, because the whole point
 // is a person to talk to. The demo link is SubSub's own booking page, which
 // reads Richard's real Cal calendar and keeps the booking under SubSub's name.
-// The photo is drawn only once FOUNDER.photo is set; until then the signature
-// carries initials, never a broken image.
+// The photo and the handwritten signature are PNGs on subsub.work; with no
+// photo set the signature falls back to initials, never a broken image.
 export const FOUNDER = {
   name: "Richard Braun",
   title: "Founder & CEO, SubSub",
   email: "rb@subsub.work",
-  photo: null,   // e.g. "https://subsub.work/richard-braun.png"
+  photo: "https://subsub.work/richard-braun.png",
+  signature: "https://subsub.work/richard-braun-signature.png",
   demoUrl: "https://subsub.work/book-a-demo.html?utm_source=email&utm_campaign=founder_intro",
 };
 
@@ -521,7 +522,7 @@ const fList = (items, tag = "ul") => `<${tag} style="margin:0 0 18px;padding-lef
   + items.map((l) => `<li style="margin:0 0 6px">${fEsc(l)}</li>`).join("") + `</${tag}>`;
 const fButton = (label) => `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px"><tr><td bgcolor="#E39B32" style="background:#E39B32;border-radius:8px">`
   + `<a href="${fEsc(FOUNDER.demoUrl)}" style="display:inline-block;padding:13px 22px;${FX};font-size:15px;font-weight:700;color:#103528;text-decoration:none">${fEsc(label)}</a></td></tr></table>`;
-const FOOT = "SubSub, LLC, 4616 25th Ave NE, Seattle, WA 98105. You're getting this one note because you signed up for SubSub.";
+const FOOT = "You're getting this one note because you signed up for SubSub.";
 function founderSignatureText() {
   return `${FOUNDER.name}\n${FOUNDER.title}\n${FOUNDER.email}\n\n${FOOT}`;
 }
@@ -532,6 +533,7 @@ function founderHtml(inner) {
   const sig = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 6px;border-top:1px solid #DDE4E0"><tr>`
     + `<td style="padding:16px 14px 0 0;vertical-align:top">${avatar}</td>`
     + `<td style="padding-top:16px;vertical-align:top;${FX};font-size:14px;line-height:1.5;color:#12211C">`
+    + (FOUNDER.signature ? `<img src="${fEsc(FOUNDER.signature)}" width="150" height="76" alt="" style="display:block;border:0;margin:-6px 0 2px -4px">` : "")
     + `<div style="font-size:16px;font-weight:700">${fEsc(FOUNDER.name)}</div>`
     + `<div style="color:#5D6F67">${fEsc(FOUNDER.title)}</div>`
     + `<div><a href="mailto:${fEsc(FOUNDER.email)}" style="color:#1B4835">${fEsc(FOUNDER.email)}</a> · <a href="https://subsub.work" style="color:#1B4835">subsub.work</a></div>`

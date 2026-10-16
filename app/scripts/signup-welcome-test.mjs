@@ -138,8 +138,15 @@ try {
       && (f?.html || "").includes('href="https://subsub.work/book-a-demo.html'));
     t.ck("it names Scale's benefits and the Basic limits", /Scale starts at \$99 a month/.test(f?.text || "")
       && /recruiting QR code/.test(f?.text || "") && /Basic covers 3 subcontractors, 1 user and 5 jobs/.test(f?.text || ""));
-    t.ck("it is signed, with the postal address", /Founder & CEO, SubSub/.test(f?.text || "") && /4616 25th Ave NE/.test(f?.text || ""));
-    t.ck("the signature never draws an image that is not there", !/<img[^>]+alt="Richard Braun"/.test(f?.html || "") && /RB<\/div>/.test(f?.html || ""));
+    t.ck("it is signed, with no postal address", /Founder & CEO, SubSub/.test(f?.text || "") && !/4616 25th Ave NE/.test((f?.text || "") + (f?.html || "")));
+    t.ck("the signature carries Richard's photo and handwritten signature",
+      (f?.html || "").includes('src="https://subsub.work/richard-braun.png"') && (f?.html || "").includes('src="https://subsub.work/richard-braun-signature.png"'));
+    {
+      const { readFileSync, existsSync } = await import("node:fs");
+      const ok = (n) => existsSync(new URL(`../../${n}`, import.meta.url))
+        && readFileSync(new URL(`../../${n}`, import.meta.url)).subarray(1, 4).toString() === "PNG";
+      t.ck("and both images are real PNGs the site publishes", ok("richard-braun.png") && ok("richard-braun-signature.png"));
+    }
     t.ck("it is on the mail log", logOf(db, r.body.accountId).some((l) => l.kind === "founder_intro" && l.status === "sent"));
 
     mail.length = 0; const pm = await signup(env, { kind: "property_manager" });
@@ -156,7 +163,7 @@ try {
       /Where did you hear about SubSub\?/.test(sb?.text || "") && /What made you sign up\?/.test(sb?.text || "")
       && /successful partnership/.test(sb?.text || ""));
     t.ck("and names no plan, price or upgrade", !/Scale|Basic|\$|upgrade|\bplan\b/i.test(sb?.text || ""), sb?.text);
-    t.ck("and still has the signature", /Founder & CEO, SubSub/.test(sb?.text || "") && /RB<\/div>/.test(sb?.html || ""));
+    t.ck("and still has the signature", /Founder & CEO, SubSub/.test(sb?.text || "") && (sb?.html || "").includes("richard-braun.png"));
   }
 
   console.log("\n-- mail never fails a signup --");

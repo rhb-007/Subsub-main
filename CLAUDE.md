@@ -13352,8 +13352,10 @@ refactor.
   successful partnership looks like, and asks them to reply. It names no
   plan, no price and no upgrade, the rule the signup form's free line
   follows, and the test pins that.
-  `FOUNDER.photo` is null until a photo is published; until then the
-  signature draws initials rather than a broken image. Logged as
+  The signature is Richard's photo (`richard-braun.png`, 192px, circle-cut)
+  and his handwritten signature (`richard-braun-signature.png`, ink on
+  transparent), both published from the site root. The postal address was
+  taken off at his request. Logged as
   `founder_intro`, and it never fails a signup. `test:signupwelcome` covers
   all three branches; dropping the gate or hard-coding the noun fails it.
 
