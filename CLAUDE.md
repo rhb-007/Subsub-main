@@ -13346,8 +13346,12 @@ refactor.
   asks them to book a 30-minute demo through SubSub's own booking page, then
   lists what Basic does and what Scale adds. The noun follows the account kind
   (`hiresLabelFor`). The text figure comes off `SMS_INCLUDED_SCALE`.
-  **Not to Scale**, which has already chosen. **Not to a subcontractor
-  account**, which is free for good and is never shown an upgrade.
+  **Not to Scale**, which has already chosen. **A subcontractor account gets
+  its own version** (`founderSubEmail`), asked for so the founder hears from
+  them: it asks where they heard about SubSub, why they signed up, and what a
+  successful partnership looks like, and asks them to reply. It names no
+  plan, no price and no upgrade, the rule the signup form's free line
+  follows, and the test pins that.
   `FOUNDER.photo` is null until a photo is published; until then the
   signature draws initials rather than a broken image. Logged as
   `founder_intro`, and it never fails a signup. `test:signupwelcome` covers

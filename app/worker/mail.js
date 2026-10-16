@@ -512,7 +512,41 @@ export const FOUNDER = {
   demoUrl: "https://subsub.work/book-a-demo.html?utm_source=email&utm_campaign=founder_intro",
 };
 
+// Shared by both versions of the founder's note: one look, one signature.
+const FX = "font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
+const fEsc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+const fP = (v) => `<p style="margin:0 0 14px;${FX};font-size:15px;line-height:1.6;color:#12211C">${v}</p>`;
+const fH = (v) => `<p style="margin:6px 0 8px;${FX};font-size:15px;font-weight:700;color:#103528">${v}</p>`;
+const fList = (items, tag = "ul") => `<${tag} style="margin:0 0 18px;padding-left:22px;${FX};font-size:15px;line-height:1.55;color:#12211C">`
+  + items.map((l) => `<li style="margin:0 0 6px">${fEsc(l)}</li>`).join("") + `</${tag}>`;
+const fButton = (label) => `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px"><tr><td bgcolor="#E39B32" style="background:#E39B32;border-radius:8px">`
+  + `<a href="${fEsc(FOUNDER.demoUrl)}" style="display:inline-block;padding:13px 22px;${FX};font-size:15px;font-weight:700;color:#103528;text-decoration:none">${fEsc(label)}</a></td></tr></table>`;
+const FOOT = "SubSub, LLC, 4616 25th Ave NE, Seattle, WA 98105. You're getting this one note because you signed up for SubSub.";
+function founderSignatureText() {
+  return `${FOUNDER.name}\n${FOUNDER.title}\n${FOUNDER.email}\n\n${FOOT}`;
+}
+function founderHtml(inner) {
+  const avatar = FOUNDER.photo
+    ? `<img src="${fEsc(FOUNDER.photo)}" width="64" height="64" alt="${fEsc(FOUNDER.name)}" style="display:block;width:64px;height:64px;border-radius:32px;border:0">`
+    : `<div style="width:64px;height:64px;border-radius:32px;background:#103528;color:#E39B32;${FX};font-size:22px;font-weight:700;line-height:64px;text-align:center">RB</div>`;
+  const sig = `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 6px;border-top:1px solid #DDE4E0"><tr>`
+    + `<td style="padding:16px 14px 0 0;vertical-align:top">${avatar}</td>`
+    + `<td style="padding-top:16px;vertical-align:top;${FX};font-size:14px;line-height:1.5;color:#12211C">`
+    + `<div style="font-size:16px;font-weight:700">${fEsc(FOUNDER.name)}</div>`
+    + `<div style="color:#5D6F67">${fEsc(FOUNDER.title)}</div>`
+    + `<div><a href="mailto:${fEsc(FOUNDER.email)}" style="color:#1B4835">${fEsc(FOUNDER.email)}</a> · <a href="https://subsub.work" style="color:#1B4835">subsub.work</a></div>`
+    + `</td></tr></table>`
+    + `<p style="margin:18px 0 0;${FX};font-size:12px;line-height:1.5;color:#5D6F67">${FOOT}</p>`;
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;border-collapse:collapse">`
+    + `<tr><td bgcolor="#103528" style="background:#103528;padding:18px 24px;border-radius:10px 10px 0 0">`
+    + `<img src="${EMAIL_LOGO_URL}" width="176" height="40" alt="SubSub" style="display:block;border:0;color:#FFFFFF;font:700 22px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">`
+    + `</td></tr><tr><td style="padding:24px;border:1px solid #DDE4E0;border-top:0;border-radius:0 0 10px 10px">${inner}${sig}</td></tr></table>`;
+}
+const founderSubject = (firstName) => `${firstName ? `${firstName}, a` : "A"} quick hello from SubSub's founder`;
+const founderEnvelope = () => ({ replyTo: FOUNDER.email, fromName: `${FOUNDER.name} at SubSub` });
+
 export function founderIntroEmail({ firstName, companyName, kind }) {
+  if (kind === "subcontractor") return founderSubEmail({ firstName, companyName });
   const sub = hiresLabelFor(kind);          // "subcontractor" or "contractor"
   const subs = `${sub}s`;
   const texts = SMS_INCLUDED_SCALE.toLocaleString("en-US");
@@ -547,45 +581,57 @@ ${scale.map((l) => `  - ${l}`).join("\n")}
 
 If anything isn't working the way you need, reply to this email. It comes straight to me.
 
-${FOUNDER.name}
-${FOUNDER.title}
-${FOUNDER.email}
+${founderSignatureText()}`;
+  const inner = fP(`Hi ${fEsc(firstName || "there")},`)
+    + fP(`I'm ${fEsc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${fEsc(company)}.`)
+    + fP(`I'd like to walk you through it myself. Pick a time that suits you and we'll spend 30 minutes on your own ${fEsc(subs)} and paperwork, not a slide deck.`)
+    + fButton("Pick a time with me")
+    + fH("What SubSub does for you on Basic, today") + fList(free)
+    + fH("When you're ready for more, Scale starts at $99 a month and adds") + fList(scale)
+    + fP("If anything isn't working the way you need, reply to this email. It comes straight to me.");
+  return { subject: founderSubject(firstName), text, html: founderHtml(inner), ...founderEnvelope() };
+}
 
-SubSub, LLC, 4616 25th Ave NE, Seattle, WA 98105. You're getting this one note because you signed up for SubSub.`;
+// The subcontractor's version. Same sender and signature, a different letter:
+// they are free for good, so it names no plan, no price and no count -- the
+// rule the signup form's free line follows -- and asks rather than sells.
+// Three questions, numbered so a reply can answer "1. ..." on a phone.
+export function founderSubEmail({ firstName, companyName }) {
+  const company = companyName || "your company";
+  const asks = [
+    "Where did you hear about SubSub?",
+    "What made you sign up? What were you hoping it would fix?",
+    "What does a successful partnership with a general contractor or property manager look like to you?",
+  ];
+  const gets = [
+    "Your compliance pack, sent as a live link rather than PDFs that go stale. When your insurance renews, everyone you sent it to sees the new one.",
+    "Your own QR code. A GC on site scans it and asks to work with you, no business card needed.",
+    "Job requests, times and work orders from every client in one place, with nothing to pay, ever.",
+  ];
+  const text = `Hi ${firstName || "there"},
 
-  const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-  const F = "font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
-  const p = (v) => `<p style="margin:0 0 14px;${F};font-size:15px;line-height:1.6;color:#12211C">${v}</p>`;
-  const list = (items) => `<ul style="margin:0 0 18px;padding-left:20px;${F};font-size:15px;line-height:1.55;color:#12211C">`
-    + items.map((l) => `<li style="margin:0 0 6px">${esc(l)}</li>`).join("") + `</ul>`;
-  const h = (v) => `<p style="margin:6px 0 8px;${F};font-size:15px;font-weight:700;color:#103528">${v}</p>`;
-  const avatar = FOUNDER.photo
-    ? `<img src="${esc(FOUNDER.photo)}" width="64" height="64" alt="${esc(FOUNDER.name)}" style="display:block;width:64px;height:64px;border-radius:32px;border:0">`
-    : `<div style="width:64px;height:64px;border-radius:32px;background:#103528;color:#E39B32;${F};font-size:22px;font-weight:700;line-height:64px;text-align:center">RB</div>`;
-  const inner = p(`Hi ${esc(firstName || "there")},`)
-    + p(`I'm ${esc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${esc(company)}.`)
-    + p(`I'd like to walk you through it myself. Pick a time that suits you and we'll spend 30 minutes on your own ${esc(subs)} and paperwork, not a slide deck.`)
-    + `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px"><tr><td bgcolor="#E39B32" style="background:#E39B32;border-radius:8px">`
-    + `<a href="${esc(FOUNDER.demoUrl)}" style="display:inline-block;padding:13px 22px;${F};font-size:15px;font-weight:700;color:#103528;text-decoration:none">Pick a time with me</a></td></tr></table>`
-    + h("What SubSub does for you on Basic, today") + list(free)
-    + h("When you're ready for more, Scale starts at $99 a month and adds") + list(scale)
-    + p("If anything isn't working the way you need, reply to this email. It comes straight to me.")
-    + `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 6px;border-top:1px solid #DDE4E0;padding-top:16px"><tr>`
-    + `<td style="padding:16px 14px 0 0;vertical-align:top">${avatar}</td>`
-    + `<td style="padding-top:16px;vertical-align:top;${F};font-size:14px;line-height:1.5;color:#12211C">`
-    + `<div style="font-size:16px;font-weight:700">${esc(FOUNDER.name)}</div>`
-    + `<div style="color:#5D6F67">${esc(FOUNDER.title)}</div>`
-    + `<div><a href="mailto:${esc(FOUNDER.email)}" style="color:#1B4835">${esc(FOUNDER.email)}</a> · <a href="https://subsub.work" style="color:#1B4835">subsub.work</a></div>`
-    + `</td></tr></table>`
-    + `<p style="margin:18px 0 0;${F};font-size:12px;line-height:1.5;color:#5D6F67">SubSub, LLC, 4616 25th Ave NE, Seattle, WA 98105. You're getting this one note because you signed up for SubSub.</p>`;
-  const html = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;border-collapse:collapse">`
-    + `<tr><td bgcolor="#103528" style="background:#103528;padding:18px 24px;border-radius:10px 10px 0 0">`
-    + `<img src="${EMAIL_LOGO_URL}" width="176" height="40" alt="SubSub" style="display:block;border:0;color:#FFFFFF;font:700 22px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">`
-    + `</td></tr><tr><td style="padding:24px;border:1px solid #DDE4E0;border-top:0;border-radius:0 0 10px 10px">${inner}</td></tr></table>`;
-  return {
-    subject: `${firstName ? `${firstName}, a` : "A"} quick hello from SubSub's founder`,
-    text, html, replyTo: FOUNDER.email, fromName: `${FOUNDER.name} at SubSub`,
-  };
+I'm ${FOUNDER.name}, founder and CEO of SubSub. Thanks for setting up ${company}. SubSub is free for you, for good.
+
+I'm building this for crews like yours, so I'd love to hear from you. Three quick questions, and a one-line answer to any of them helps:
+
+${asks.map((q, i) => `  ${i + 1}. ${q}`).join("\n")}
+
+Just reply to this email. It comes straight to me. If talking is easier, pick a time:
+
+${FOUNDER.demoUrl}
+
+What's in it for you:
+${gets.map((l) => `  - ${l}`).join("\n")}
+
+${founderSignatureText()}`;
+  const inner = fP(`Hi ${fEsc(firstName || "there")},`)
+    + fP(`I'm ${fEsc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${fEsc(company)}. SubSub is free for you, for good.`)
+    + fP("I'm building this for crews like yours, so I'd love to hear from you. Three quick questions, and a one-line answer to any of them helps:")
+    + fList(asks, "ol")
+    + fP("<b>Just reply to this email.</b> It comes straight to me. If talking is easier, pick a time:")
+    + fButton("Pick a time to talk")
+    + fH("What's in it for you") + fList(gets);
+  return { subject: founderSubject(firstName), text, html: founderHtml(inner), ...founderEnvelope() };
 }
 
 // A demo booked on book-a-demo.html, in SubSub's own voice and from SubSub's

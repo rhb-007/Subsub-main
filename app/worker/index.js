@@ -1346,10 +1346,10 @@ app.post("/api/signup", async (c) => {
   } catch (err) {
     console.error("[signup] welcome email failed:", err?.message || err);
   }
-  // A note from the founder, for an account that hires and chose Basic.
-  // Never to a subcontractor account, which is free for good and is never
-  // offered an upgrade. Never fails signup either.
-  if (plan !== "scale" && HIRING_KINDS.includes(kind)) {
+  // A note from the founder: to an account that hires and chose Basic, and to
+  // every subcontractor account, which gets its own version asking why they
+  // signed up and naming no plan or price. Never fails signup.
+  if (kind === "subcontractor" || (plan !== "scale" && HIRING_KINDS.includes(kind))) {
     try {
       const intro = founderIntroEmail({ firstName: personName.split(/\s+/)[0], companyName: company, kind });
       const sent = await sendEmail(c.env, { to: email, ...intro });

@@ -150,7 +150,13 @@ try {
     t.ck("a Scale signup does not get it", !intro() && mail.some((m) => /Welcome to SubSub/.test(m.subject)));
 
     mail.length = 0; await signup(env, { kind: "subcontractor" });
-    t.ck("a subcontractor account does not get it", !intro() && mail.some((m) => /Welcome to SubSub/.test(m.subject)));
+    const sb = intro();
+    t.ck("a subcontractor account gets its own version", !!sb && sb.from === "Richard Braun at SubSub <hi@subsub.work>" && sb.reply_to === "rb@subsub.work");
+    t.ck("it asks where they heard, why they signed up and what a good partnership is",
+      /Where did you hear about SubSub\?/.test(sb?.text || "") && /What made you sign up\?/.test(sb?.text || "")
+      && /successful partnership/.test(sb?.text || ""));
+    t.ck("and names no plan, price or upgrade", !/Scale|Basic|\$|upgrade|\bplan\b/i.test(sb?.text || ""), sb?.text);
+    t.ck("and still has the signature", /Founder & CEO, SubSub/.test(sb?.text || "") && /RB<\/div>/.test(sb?.html || ""));
   }
 
   console.log("\n-- mail never fails a signup --");
