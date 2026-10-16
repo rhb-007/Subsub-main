@@ -968,7 +968,7 @@ confirmation screen appears if and only if the server said one was made.
    | Variable | Value |
    |---|---|
    | `CAL_API_KEY` | the key (a **secret**, not plain text) |
-   | `CAL_EVENT_TYPE_ID` | the event type's numeric id, from its URL |
+   | `CAL_EVENT_TYPE_ID` | the event's public name as its URL field shows it, `username/slug` (for example `richard-braun-uvm0tg/subsub-demo`), or its numeric id if you have one |
 
 4. **`window.SUBSUB_API` in `book-a-demo.html`** must be the API Worker's own
    address. The marketing site is static and has no build step, so that line

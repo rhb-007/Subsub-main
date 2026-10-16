@@ -15,7 +15,7 @@
 //
 // The key is read from the environment and never printed.
 
-import { parseSlots, CAL_VERSIONS } from "../worker/demo.js";
+import { parseSlots, CAL_VERSIONS, calEvent } from "../worker/demo.js";
 
 const KEY = process.env.CAL_API_KEY;
 const EVENT = process.env.CAL_EVENT_TYPE_ID;
@@ -47,7 +47,10 @@ console.log(`\nAsking ${BASE} about event type ${EVENT}`);
 console.log(`Versions demo.js sends: slots ${CAL_VERSIONS.slots}, bookings ${CAL_VERSIONS.bookings}\n`);
 
 console.log("-- slots --");
-const s = await call(`/slots?${new URLSearchParams({ eventTypeId: String(EVENT),
+const EV = calEvent({ CAL_EVENT_TYPE_ID: EVENT });
+if (!EV) { console.error("CAL_EVENT_TYPE_ID is neither a number nor username/slug."); process.exit(2); }
+const s = await call(`/slots?${new URLSearchParams({ ...(EV.eventTypeId ? { eventTypeId: String(EV.eventTypeId) }
+  : { username: EV.username, eventTypeSlug: EV.eventTypeSlug }),
   start: day(1), end: day(14), timeZone: TZ })}`, { version: CAL_VERSIONS.slots });
 say(s.ok, `HTTP ${s.status}`);
 if (!s.ok) {
@@ -85,7 +88,7 @@ if (process.argv.includes("--book")) {
   } else {
     console.log(`\n-- bookings -- this creates a REAL booking at ${start}; cancel it afterwards`);
     const b = await call("/bookings", { method: "POST", version: CAL_VERSIONS.bookings,
-      body: { start, eventTypeId: Number(EVENT),
+      body: { start, ...EV,
         attendee: { name: "SubSub setup check", email, timeZone: TZ, language: "en" },
         metadata: { source: "cal-check" } } });
     say(b.ok, `HTTP ${b.status}`);

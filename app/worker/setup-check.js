@@ -122,7 +122,8 @@ const GROUPS = [
     vars: ["CAL_API_KEY", "CAL_EVENT_TYPE_ID"],
     matters: "Real availability and real bookings on the marketing site's demo form. "
       + "Unset, the form says booking is not switched on and offers an email address -- "
-      + "it never shows times nobody can keep, which is what it did before it had an upstream.",
+      + "it never shows times nobody can keep, which is what it did before it had an upstream. "
+      + "CAL_EVENT_TYPE_ID is the event's number or its public name, username/slug.",
   },
   {
     id: "cron", label: "Scheduled jobs",

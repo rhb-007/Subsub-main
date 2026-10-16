@@ -145,7 +145,8 @@ export const PROBES = {
     let r;
     try { r = await fetchSlots(env, { start, end, timeZone: "UTC" }); }
     catch (e) { return { error: String(e?.message || e).slice(0, 160) }; }
-    if (!r.ok) return { refused: true, ms: now() - t0, say: r.reason === "shape" ? "Cal answered in a shape SubSub does not read." : "Cal refused the request for times." };
+    if (!r.ok) return { refused: true, ms: now() - t0, say: r.reason === "shape" ? "Cal answered in a shape SubSub does not read."
+      : `Cal refused the request for times${r.detail ? `: ${r.detail}` : "."}` };
     return { ms: now() - t0, say: "Cal answered with the week's times." };
   },
 };

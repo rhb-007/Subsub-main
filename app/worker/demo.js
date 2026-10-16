@@ -34,7 +34,34 @@ const SLOTS_VERSION = "2024-09-04";
 const BOOKINGS_VERSION = "2024-08-13";
 export const CAL_VERSIONS = { slots: SLOTS_VERSION, bookings: BOOKINGS_VERSION };
 
-export const calConfigured = (env) => !!(env.CAL_API_KEY && env.CAL_EVENT_TYPE_ID);
+// Which event to book. Cal's newer screens no longer show an event type's
+// numeric id anywhere -- the address bar carries an opaque link id instead --
+// so CAL_EVENT_TYPE_ID takes either the number or the event's own public
+// name, the "username/slug" its URL field shows (a pasted
+// https://cal.com/username/slug works too). Both endpoints accept the pair in
+// place of the id. Anything else is null, which reads as not configured
+// rather than as a request Cal will refuse with words nobody sees.
+export function calEvent(env) {
+  const raw = String(env.CAL_EVENT_TYPE_ID || "").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return { eventTypeId: Number(raw) };
+  // app.cal.com is the dashboard, not an event's public page: its paths are
+  // /links/<opaque id> and /event-types/<id>, which read as username/slug.
+  if (/app\.cal\.com/i.test(raw)) {
+    const id = raw.match(/\/event-types\/(\d+)(?:[/?#]|$)/);
+    return id ? { eventTypeId: Number(id[1]) } : null;
+  }
+  const path = raw.replace(/^https?:\/\//i, "").replace(/^(www\.)?cal\.com\//i, "")
+    .replace(/[?#].*$/, "").replace(/^\/+|\/+$/g, "");
+  const m = path.match(/^([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)$/);
+  return m ? { username: m[1], eventTypeSlug: m[2] } : null;
+}
+
+export const calConfigured = (env) => !!(env.CAL_API_KEY && calEvent(env));
+
+// Cal's own sentence, for the console's Health light only -- never the
+// public page, which says something a prospect can act on.
+const calWords = (r) => String(r.data?.error?.message || r.data?.message || r.text || "").slice(0, 200);
 
 async function callCal(env, path, { method = "GET", version, body } = {}) {
   const res = await fetch(`${calBase(env)}${path}`, {
@@ -80,13 +107,16 @@ export function parseSlots(data) {
 }
 
 export async function fetchSlots(env, { start, end, timeZone }) {
+  const ev = calEvent(env);
   const q = new URLSearchParams({
-    eventTypeId: String(env.CAL_EVENT_TYPE_ID), start, end, timeZone,
+    ...(ev.eventTypeId ? { eventTypeId: String(ev.eventTypeId) }
+      : { username: ev.username, eventTypeSlug: ev.eventTypeSlug }),
+    start, end, timeZone,
   });
   const r = await callCal(env, `/slots?${q}`, { version: SLOTS_VERSION });
   if (!r.ok) {
     console.error("[demo] Cal refused the slots request:", r.status, r.text.slice(0, 400));
-    return { ok: false, reason: "upstream" };
+    return { ok: false, reason: "upstream", detail: calWords(r) };
   }
   const slots = parseSlots(r.data);
   if (!slots) {
@@ -104,7 +134,7 @@ export async function createBooking(env, { start, name, email, timeZone, company
     version: BOOKINGS_VERSION,
     body: {
       start,
-      eventTypeId: Number(env.CAL_EVENT_TYPE_ID),
+      ...calEvent(env),
       attendee: { name, email, timeZone, language: "en" },
       // Everything the form asks for travels with the booking, so whoever
       // takes the call has it in front of them instead of in a second system.

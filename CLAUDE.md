@@ -7831,6 +7831,21 @@ refactor.
   that ended earlier today. Three mutations fire: reading the job's date
   (4 assertions), a day-only test (3) and the crew's flag removed (1).
 
+- **THE CAL EVENT IS NAMED BY ITS PUBLIC NAME, BECAUSE CAL NO LONGER SHOWS
+  THE NUMBER.** Setting up Book a demo needed `CAL_EVENT_TYPE_ID`, and Cal's
+  newer dashboard puts an opaque link id in the address bar
+  (`app.cal.com/links/1cF6tyYe1K7Ae7UjkQFNQt`) that the API does not accept;
+  the numeric id is shown nowhere. `calEvent` in `worker/demo.js` takes the
+  number, `username/slug` as the event's URL field shows it, or that URL
+  pasted whole, and both endpoints send `username` + `eventTypeSlug` in place
+  of `eventTypeId`. **A dashboard address is refused rather than read as a
+  name**: `app.cal.com/links/<id>` parses as `links/<id>` otherwise, which the
+  test caught on its first run. Unreadable is not configured, so the page
+  offers email rather than a request Cal refuses. The Health light now carries
+  Cal's own words when it refuses. `test:calevent`; two mutations fire.
+  **Not verified here:** a live Cal answer to the name form, which is the
+  documented one.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
