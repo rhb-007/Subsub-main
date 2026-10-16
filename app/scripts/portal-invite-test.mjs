@@ -210,7 +210,7 @@ console.log("\n-- the link tells the form what the account already holds --");
     ck("the email asks for a password", /choose a password|Choose one here/i.test(html),
       html.slice(0, 120));
     ck("and does not promise a form they will not see",
-      !/your company details, the trades you cover/.test(html));
+      !/Add your trades and upload/.test(html));
     ck("it says their details are already in", /already added|details are in/i.test(html));
   }
 
@@ -242,7 +242,7 @@ console.log("\n-- the link tells the form what the account already holds --");
       b2.known?.company === "Thin Record Ltd" && b2.known?.contact === null,
       JSON.stringify(b2.known));
     ck("and its email is the full-application one",
-      /your company details, the trades you cover/.test(mails[0]?.html || ""));
+      /Add your trades and upload/.test(mails[0]?.html || ""));
   }
 
 console.log("\n-- and the cases it refuses --");

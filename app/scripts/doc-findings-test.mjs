@@ -207,12 +207,13 @@ console.log("\n-- the mail names the faults and the instructions --");
   ck("and the typed one for the other",
     /runs out before the job starts/.test(m.text));
   // The half that stops it reading as "start again".
-  ck("it says what was already fine",
-    /ALREADY FINE/.test(m.text) && /Primary & non-contributory/.test(m.text));
-  ck("and says they need not start again", /not need to start again/i.test(m.text));
+  // Said in one sentence rather than a list of every line that passed: the
+  // email is read on a phone and the list is in the app.
+  ck("it says everything else is fine, so they need not start again",
+    /Everything else on it is fine, so you don't need to start again/.test(m.text));
   ck("the reviewer's own note travels too", /Before Friday/.test(m.text));
   ck("it points at the portal, not at a reply", /outerhome\.subsub\.work\/documents/.test(m.text));
-  ck("and says replies are not received", /Replies aren't received/.test(m.text));
+  ck("and says replies are not received", /Replies to this address aren't read/.test(m.text));
   ck("it never says the word rejected", !/reject/i.test(m.text), (m.text.match(/reject\w*/i) || [])[0]);
   ck("and the problems come back for the screen to head the panel with",
     m.problems.length === 2, JSON.stringify(m.problems.map((p) => p.id)));
@@ -227,8 +228,9 @@ console.log("\n-- and the generic request is still the right mail when nothing w
     contact: "Dev", docReview: {}, account: ACCT });
   ck("it asks for the documents", /upload your compliance documents/i.test(m.subject));
   // Reading the shared list, which is how the two cannot name different lines.
-  ck("and its insurance checklist is the shared one",
-    /Outerhome named as additional insured on CGL/.test(m.text));
+  ck("and its insurance minimums are the shared list's required lines",
+    /Commercial General Liability \$1,000,000/.test(m.text) && !/Umbrella/.test(m.text)
+    && /Name Outerhome as additional insured/.test(m.text));
 }
 
 // ---------------------------------------------------------------------------

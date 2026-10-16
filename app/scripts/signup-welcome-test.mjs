@@ -85,8 +85,8 @@ try {
     t.ck("signs up", r.status === 201 && r.body.needsConfirmation === true, JSON.stringify(r));
     const w = mail.find((m) => /Welcome to SubSub/.test(m.subject));
     t.ck("a welcome email goes, to the address they gave", !!w && w.to?.[0] === `mcg${ip}@icloud.test`, JSON.stringify(mail.map((m) => m.subject)));
-    t.ck("it names the company and the free plan", /A&L Contracting is set up on the Basic plan, which is free/.test(w?.text || ""), w?.text);
-    t.ck("it says the confirmation email is the way in", /Confirm your signup/.test(w?.text || "") && /choose your password/.test(w?.text || ""));
+    t.ck("it names the company and the free plan", /A&L Contracting is set up on Basic \(free, no card\)/.test(w?.text || ""), w?.text);
+    t.ck("it says the confirmation email is the way in", /Confirm your signup/.test(w?.text || "") && /choose a password/.test(w?.text || ""));
     t.ck("and says what to do when that does not arrive", /Forgot password\?/.test(w?.text || "") && w.text.includes(`mcg${ip}@icloud.test`));
     t.ck("and to check Junk", /Junk/.test(w?.text || ""));
     t.ck("the HTML carries SubSub's logo, with SubSub as its alt text",
@@ -176,7 +176,7 @@ try {
       t.ck("and the HTML carries it too", (sb?.html || "").includes(`Earn ${cash} per referral`) && (sb?.html || "").includes("starts paying"));
     }
     const words = (e) => (e?.text || "").split("Richard Braun\nFounder")[0].split(/\s+/).filter(Boolean).length;
-    t.ck("both notes are short enough to be read (under 160 words)", words(f) < 160 && words(sb) < 160, `${words(f)} / ${words(sb)}`);
+    t.ck("both notes are short enough to be read (under 100 words)", words(f) < 100 && words(sb) < 100, `${words(f)} / ${words(sb)}`);
     t.ck("and still has the signature", /Founder & CEO, SubSub/.test(sb?.text || "") && (sb?.html || "").includes("richard-braun.png"));
   }
 
@@ -244,6 +244,16 @@ try {
     const without = composers.filter(([, f]) => { try { return !f(args)?.html?.includes("email-logo.png"); } catch { return true; } })
       .map(([k]) => k);
     t.ck(`all ${composers.length} email composers carry the logo`, composers.length > 25 && without.length === 0, without.join(", "));
+    // Asked for in so many words: every email short enough to read, with the
+    // important information only. Counted to the sign-off, so the signature,
+    // the footer and the founder's card do not count against it. A message a
+    // person wrote is theirs and is not ours to limit.
+    const bodyWords = (txt) => String(txt || "").split(/\n(?:--|\u2014) |\nRichard Braun\nFounder/)[0]
+      .split(/\s+/).filter(Boolean).length;
+    const long = composers.filter(([k]) => !/^(messageEmail|customInviteEmail)$/.test(k))
+      .map(([k, f]) => { try { return [k, bodyWords(f(args)?.text)]; } catch { return [k, 0]; } })
+      .filter(([, n]) => n > 100);
+    t.ck("every email is 100 words or fewer before the sign-off", long.length === 0, JSON.stringify(long));
 
     const wrapped = "Hi Rae,\n\nThe quick brown\nfox jumps.\n\n  WO-1\n  Trade: x\n\nOpen it here:\n  https://x\n\n- one\n- two";
     const u = mailMod.unwrapProse(wrapped);
@@ -253,8 +263,7 @@ try {
     // Read through a real email, not the helper: a helper that works and is
     // never called is the bug this checks for.
     const app = mailMod.applicationReceivedEmail({ companyName: "Bay", contact: "Rae", account: { name: "Acme", subdomain: "acme" } });
-    t.ck("and a real email's HTML is unwrapped", /the next step is uploading/.test(app.html)
-      && /the next step is\nuploading/.test(app.text), app.html.slice(0, 400));
+    t.ck("and a real email's HTML is unwrapped", /If they take you on, you'll be asked for/.test(app.html), app.html.slice(0, 400));
     const msg = mailMod.messageEmail({ firstName: "Rae", who: "Dana", body: "Gate code 1234\nDog is friendly",
       link: "https://x.test/t", fromName: "Acme" });
     t.ck("a person's own message keeps every line break", msg.html.includes("Gate code 1234<br>Dog is friendly"), msg.html);

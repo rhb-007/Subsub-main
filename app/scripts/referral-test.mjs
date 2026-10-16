@@ -276,7 +276,7 @@ try {
         && r[0].beneficiary_company_id === "cmp_bay", JSON.stringify(r));
     const mail = sent.mail.slice(before).find((m) => /\$100/.test(m.subject));
     ck("and the sub is told, at the company's address", mail && (mail.to === "rae@bay.test" || mail.to?.[0] === "rae@bay.test")
-      && /checked by a person/.test(mail.text), JSON.stringify(mail?.to));
+      && /We check each reward before paying it/.test(mail.text), JSON.stringify(mail?.to));
     await paid(S.env, "cus_viasub", 9900);
     ck("a second paid invoice earns nothing more", rewardsOf(S.db, viaSub).length === 1);
     const [, subs] = await json(await call(S.env, "/api/subs"));

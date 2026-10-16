@@ -13,7 +13,7 @@
 
 import { footerText, footerSms } from "../shared/claim.js";
 import { SUB_CASH_CENTS } from "../shared/referral.js";
-import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
+import { INSURANCE_LINES, BOND_MIN, problemsIn,
   outcomeWords } from "../shared/doccheck.js";
 // The kinds and their words come from shared/docs.js, which is the one list, for
 // the same reason the checklist below does: an email naming a document by a word
@@ -32,6 +32,10 @@ export { DOC_KINDS, DOC_LABELS };
 // being survivable the moment `docFindingsEmail` had to name the specific line a
 // reviewer marked wrong: two lists means an email naming a line the screen never
 // asked about.
+
+// The one line under a notification, short. Every email carried two
+// sentences about an unmonitored address; one clause says it.
+export const NOREPLY = "Replies to this address aren't read.";
 
 const money = (n) => "$" + Number(n).toLocaleString("en-US");
 
@@ -67,61 +71,37 @@ export function missingDocs(company, docReview) {
 export function docRequestEmail({ company, contact, docReview, job, trade, account }) {
   const missing = missingDocs(company, docReview);
   const who = account?.name || "our team";
+  const link = docsLink(account?.subdomain);
   const lead = job
-    ? "You've been matched to a job, but we can't release the work order until your compliance documents are on file."
-    : `Your ${who} contractor account is set up, but we can't send you work until your compliance documents are on file.`;
-
-  const jobBlock = job ? `
-THE JOB
-  ${job.title || "New job"}
-  Trade: ${trade || "—"}${job.address ? `
-  Where: ${[job.address, job.area, job.zip].filter(Boolean).join(", ")}` : ""}${job.date ? `
-  Starts: ${niceDate(job.date)}` : ""}
-` : "";
-
-  const insuranceBlock = missing.includes("insurance") ? `
-INSURANCE REQUIREMENTS
-${INSURANCE_LINES.map((l) =>
-  `  ${l.label}${l.sub ? ` (${l.sub})` : ""}: ${money(l.min)}${l.optional ? " (if applicable)" : ""}`).join("\n")}
-  Workers' compensation: WA L&I active account, as applicable
-${checkItems("insurance", who).map((a) => `  • ${a.label}`).join("\n")}
-` : "";
-
-  const bondBlock = missing.includes("bond") ? `
-BOND REQUIREMENT
-  ${money(BOND_MIN)} minimum, surety licensed in Washington
-` : "";
-
-  const w9Block = missing.includes("w9") ? `
-W-9
-  Your TIN or EIN, tax classification, and a signature in Part II.
-  We can't issue payment without it.
-` : "";
-
+    ? `You're matched to ${job.title || "a job"}${trade ? ` (${trade})` : ""}${job.date ? `, starting ${niceDate(job.date)}` : ""}. ${who} can send the work order once these are on file:`
+    : `${who} can send you work once these are on file:`;
+  // Only the limits a carrier needs to see, on one line each; the rest of the
+  // checklist is on the upload screen.
+  const ins = missing.includes("insurance")
+    ? `\nInsurance minimums: ${INSURANCE_LINES.filter((l) => !l.optional).map((l) => `${l.label} ${money(l.min)}`).join(", ")}. Name ${who} as additional insured.`
+    : "";
+  const bond = missing.includes("bond") ? `\nBond: ${money(BOND_MIN)} minimum.` : "";
   const text = `Hi ${contact || company.company},
 
 ${lead}
-${jobBlock}
-WHAT WE NEED
-${missing.map((k) => `  • ${DOC_LABELS[k]}`).join("\n")}
-${insuranceBlock}${bondBlock}${w9Block}
-UPLOAD THEM HERE
-  ${docsLink(account?.subdomain)}
 
-  Your username: ${company.email || "(no email on file)"}
+${missing.map((k) => `  - ${DOC_LABELS[k]}`).join("\n")}
+${ins}${bond}
 
-Tap the link, sign in, and upload. A photo from your phone is fine.${job ? "\n\nWe'll hold the job for you until then." : ""}
+Upload them here (a phone photo is fine):
+  ${link}
 
-— ${who}
+Sign in as ${company.email || "the email on your account"}.
 
-This is an automated message from an unmonitored address. Replies aren't received, and documents emailed back won't be filed. Please upload them at the link above.`;
+-- ${who}
 
+${NOREPLY}`;
   return {
     subject: job
       ? `Action needed: upload documents for ${job.title || "a job"}`
       : "Action needed: upload your compliance documents",
     text,
-    html: textToHtml(text, docsLink(account?.subdomain)),
+    html: textToHtml(text, link),
     missing,
   };
 }
@@ -156,58 +136,28 @@ export function docFindingsEmail({ company, contact, account, kind, review, note
   const name = DOC_LABELS[kind] || "your document";
   const inline = (DOC_LABELS[kind] || "document").toLowerCase();
   const problems = problemsIn(review, kind, who);
-  const items = checkItems(kind, who);
   const words = outcomeWords(review, kind, who);
-  // What they got right, which is the half that stops this reading as a refusal.
-  const fine = items.filter((it) => !problems.some((p) => p.id === it.id)
-    && (review?.findings?.[it.id]?.state === "ok" || review?.checks?.[it.id] === true));
-
-  const problemBlock = problems.length ? `
-WHAT NEEDS FIXING
-${problems.map((p, i) => `  ${i + 1}. ${p.label}
-     ${p.fix || "Please correct this and send it again."}`).join("\n\n")}
-` : `
-WHAT NEEDS FIXING
-  ${note ? note : "See the note below."}
-`;
-
-  const fineBlock = fine.length ? `
-WHAT IS ALREADY FINE
-${fine.map((f) => `  \u2713 ${f.label}`).join("\n")}
-` : "";
-
-  const noteBlock = note && problems.length ? `
-ALSO FROM ${who.toUpperCase()}
-  ${note}
-` : "";
-
+  const link = docsLink(account?.subdomain);
+  const n = problems.length;
+  const list = n
+    ? problems.map((p, i) => `  ${i + 1}. ${p.label}: ${p.fix || "please correct this."}`).join("\n")
+    : `  ${note || "See the note in SubSub."}`;
   const text = `Hi ${contact || company.company},
 
-${who} has read the ${inline} you sent and there ${problems.length === 1 ? "is one thing" : problems.length ? `are ${problems.length} things` : "is something"} to correct before it can be accepted. Everything else on it is fine \u2014 you do not need to start again.
-${problemBlock}${fineBlock}${noteBlock}
-WHEN YOU HAVE IT
-  Upload the corrected ${inline} here \u2014 it replaces the one on file, and
-  nothing else about your account changes.
+${who} checked your ${inline}. ${n === 1 ? "One thing needs" : n ? `${n} things need` : "Something needs"} fixing. Everything else on it is fine, so you don't need to start again.
 
-  ${docsLink(account?.subdomain)}
+${list}
+${note && n ? `\nNote from ${who}: ${note}\n` : ""}
+Upload the corrected copy here:
+  ${link}
 
-  Your username: ${company.email || "(no email on file)"}
+-- ${who}
 
-A photo from your phone is fine as long as the figures are readable.
-
-\u2014 ${who}
-
-This is an automated message from an unmonitored address. Replies aren't received, and documents emailed back won't be filed. Please upload them at the link above.`;
-
+${NOREPLY}`;
   return {
-    // Not "rejected". The subject line is what decides whether this gets opened
-    // today or next week, and one naming the document plus the number of fixes
-    // is a task where "rejected" is bad news to be avoided.
-    subject: problems.length
-      ? `${name}: ${words.headline}`
-      : `${name}: needs correcting`,
+    subject: n ? `${name}: ${words.headline}` : `${name}: needs correcting`,
     text,
-    html: textToHtml(text, docsLink(account?.subdomain)),
+    html: textToHtml(text, link),
     problems,
     kind,
   };
@@ -224,46 +174,20 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // than the feature is worth.
 export function autoScheduleRequestEmail({ company, contact, account, note }) {
   const who = account?.name || "our team";
-  // The link lands ON the switch (Job Settings, Availability tab, rung), and
-  // the path is spelled out under it, because "open your account and go to
-  // what you do" named no screen at all.
+  // The link lands ON the switch (Job Settings, Availability tab, rung).
   const autoLink = `https://${portalUrl(account?.subdomain)}/?open=auto-schedule`;
   const text = `Hi ${contact || company.company},
 
-${who} has asked whether you'd like to turn on auto-schedule for the work
-they send you.${note ? `
+${who} asked if you'd turn on auto-schedule for their jobs.${note ? `\n\nTheir note: ${note}` : ""}
 
-THEIR NOTE
-  ${note}` : ""}
+With it on, jobs from ${who} go straight onto your calendar already accepted, on days you've marked free, with no accept or decline step. It's only for ${who} and you can turn it off any time. They can't turn it on for you: do nothing and nothing changes.
 
-WHAT IT MEANS
-  Jobs ${who} assigns you are booked straight onto your calendar, already
-  accepted. No response window, and nothing for you to approve.
-
-  It cuts the back-and-forth on routine work, and it means you are not
-  losing a job because a request sat unread for an afternoon.
-
-WHAT TO KNOW BEFORE YOU SAY YES
-  • You will not get an accept or decline step on those jobs.
-  • Keep your availability and crew days current -- auto-schedule books
-    against them, so a day you are not free needs to be marked not free.
-  • It applies only to ${who}, not to anyone else you work with.
-  • You can switch it back off whenever you like, and so can they.
-
-THIS IS YOURS TO DECIDE
-  ${who} cannot turn this on for you. If you would rather keep accepting
-  each job by hand, do nothing -- that is the default and nobody is
-  notified.
-
-TO TURN IT ON
+Turn it on here (Menu > Job Settings > Availability > Auto-schedule):
   ${autoLink}
-  That link opens the switch. To find it yourself after signing in:
-  Menu > Job Settings > Availability > Auto-schedule.
 
-— ${who}
+-- ${who}
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
-
+${NOREPLY}`;
   return {
     subject: `${who}: would you like jobs booked automatically?`,
     text,
@@ -287,41 +211,25 @@ export function docExpiryEmail({ company, contact, kind, expiresOn, daysOut, acc
     contract: "signed contract", w9: "W-9" }[kind] || kind;
   const lapsed = daysOut !== null && daysOut < 0;
   const urgent = daysOut === -1;
-
+  const link = `https://${portalUrl(account?.subdomain)}/documents`;
   const lead = urgent
     ? `Your ${name} expired on ${expiresOn}, and you have work booked with ${who} after that date.`
     : lapsed || daysOut === 0
       ? `Your ${name} expires today (${expiresOn}).`
-      : `Your ${name} expires on ${expiresOn} — ${daysOut} day${daysOut === 1 ? "" : "s"} from now.`;
-
-  const jobBlock = urgent && jobs.length ? `
-WORK ALREADY BOOKED
-${jobs.map((j) => `  ${j.date || "date not set"}  ${j.title || "Job"}`).join("\n")}
-
-  These are NOT canceled. Nobody is stranding your crew over paperwork.
-  But they are not covered either, which is a problem for you as much as
-  for ${who}.
-` : "";
-
+      : `Your ${name} expires on ${expiresOn}, ${daysOut} day${daysOut === 1 ? "" : "s"} from now.`;
+  const booked = urgent && jobs.length
+    ? `\n\nBooked work (not canceled, but not covered):\n${jobs.map((j) => `  - ${j.date || "date not set"}: ${j.title || "Job"}`).join("\n")}`
+    : "";
   const text = `Hi ${contact || company.company},
 
-${lead}
-${jobBlock}
-WHAT HAPPENS IF IT LAPSES
-  ${who} cannot issue you new work orders without current cover. Work
-  already on your calendar stays on your calendar.
+${lead}${booked}
 
-WHAT TO DO
-  Upload the replacement at
-  https://${portalUrl(account?.subdomain)}/documents
+Without current cover, ${who} can't send new work orders. Upload the renewal here (a photo or PDF is fine):
+  ${link}
 
-  Your renewal certificate from your ${kind === "bond" ? "surety" : "carrier"} is all that is
-  needed. A photo or a PDF is fine.${urgent ? "\n\n  If it is already renewed and just not uploaded, that is a one-minute job\n  and worth doing now." : ""}
+-- ${who}
 
-— ${who}
-
-This is an automated message from an unmonitored address. Replies aren't received.`;
-
+${NOREPLY}`;
   return {
     subject: urgent
       ? `Action needed: your ${name} has expired and you have work booked`
@@ -329,7 +237,7 @@ This is an automated message from an unmonitored address. Replies aren't receive
         ? `Your ${name} expires today`
         : `Your ${name} expires in ${daysOut} days`,
     text,
-    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}/documents`),
+    html: textToHtml(text, link),
   };
 }
 
@@ -346,47 +254,30 @@ export function overflowPostEmail({ company, contact, account, job, trade, sever
   const who = account?.name || "A SubSub account";
   const urgent = severity === "911" || severity === "urgent";
   const where = [job?.area, job?.zip].filter(Boolean).join(" ");
+  const link = `https://${portalUrl(account?.subdomain)}`;
   const pay = split?.gross
-    ? `  Up to ${money(split.gross / 100)}${split.fee ? ` (SubSub's fee ${money(split.fee / 100)}, you clear ${money(split.net / 100)})` : ""}`
-    : "  Not stated — quote them";
-
+    ? `Up to ${money(split.gross / 100)}${split.fee ? ` (you clear ${money(split.net / 100)} after SubSub's ${money(split.fee / 100)} fee)` : ""}`
+    : "Not stated; quote them";
   const text = `Hi ${contact || company.company},
 
-${who} needs ${trade} cover${urgent ? " urgently" : ""} and has nobody on their
-own list free. You are getting this because you opted in to overflow work.
+${who} needs ${trade} help${urgent ? " urgently" : ""}. You're getting this because you opted in to overflow work.
 
-THE JOB
-  Trade: ${trade}${where ? `
-  Area: ${where}` : ""}${job?.date ? `
-  Date: ${niceDate(job.date)}` : ""}${scope ? `
-  Scope: ${String(scope).slice(0, 400)}` : ""}
+  Trade: ${trade}${where ? `\n  Area: ${where}` : ""}${job?.date ? `\n  Date: ${niceDate(job.date)}` : ""}${scope ? `\n  Scope: ${String(scope).slice(0, 200)}` : ""}
+  Pay: ${pay}
+  Closes: ${niceDate(expiresAt, true)}
 
-WHAT IT PAYS
-${pay}
+Answer with when you could go and your price. It's not a commitment until ${who} picks you and sends a work order. Not for you? Ignore this.
+  ${link}
 
-HOW LONG YOU HAVE
-  ${niceDate(expiresAt, true)}
+-- SubSub
 
-  After that the post closes. Answering is not a commitment -- ${who} still
-  chooses, and nothing goes on your calendar until they do and a work order is
-  issued.
-
-TO ANSWER
-  https://${portalUrl(account?.subdomain)}
-
-  Say when you could be there and what you would do it for. If it is not for
-  you, ignore this -- nothing happens and nothing is held against you.
-
-— SubSub
-
-This is an automated message from an unmonitored address. Replies aren't received.`;
-
+${NOREPLY}`;
   return {
     subject: urgent
       ? `${trade} needed${where ? ` in ${where}` : ""} — ${who}`
       : `Overflow work: ${trade}${where ? ` in ${where}` : ""}`,
     text,
-    html: textToHtml(text, `https://${portalUrl(account?.subdomain)}`),
+    html: textToHtml(text, link),
   };
 }
 
@@ -414,7 +305,7 @@ Open it in your portal to accept or decline:
 
 — ${who}
 
-This is an automated message from an unmonitored address. Replies aren't received.
+${NOREPLY}
 
 ${footerText(claimLink)}`;
   return {
@@ -436,19 +327,13 @@ export function applicationReceivedEmail({ companyName, contact, account }) {
   const who = account?.name || "the team";
   const text = `Hi ${contact || companyName},
 
-Thanks — ${who} has your application for ${companyName}.
+Thanks. ${who} has your application for ${companyName} and will be in touch.
 
-They'll review it and come back to you. If they take you on, the next step is
-uploading your compliance documents: a certificate of insurance, a surety bond,
-a signed subcontractor agreement and a W-9. Nothing can be assigned to you until
-all four are verified, so having them ready is the fastest route to work.
+If they take you on, you'll be asked for a certificate of insurance, a surety bond and a W-9. Having them ready is the fastest way to get work.
 
-You'll be able to upload them here once your account is opened:
-  https://${portalUrl(account?.subdomain)}
+-- ${who}
 
-— ${who}
-
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return { subject: `We received your application to ${who}`, text, html: textToHtml(text, null) };
 }
 
@@ -472,24 +357,21 @@ This is an automated message from an unmonitored address. Replies aren't receive
 export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword }) {
   const app = "https://app.subsub.work";
   const steps = needsConfirmation
-    ? `To sign in for the first time:
-  1. Open the confirmation email (it usually reads "Confirm your signup"). It is sent separately from this one, sometimes under the name "Supabase Auth", so check Junk if you don't see it.
-  2. Press the link in it, then choose your password.
-  3. After that, sign in any time at ${app}
+    ? `To sign in, open the "Confirm your signup" email (it may come from "Supabase Auth"; check Junk), press the link and choose a password.
 
-If it hasn't arrived in ten minutes, go to ${app}, press "Forgot password?" and enter ${email}. That sends a fresh link.`
+No email after ten minutes? Go to ${app}, press "Forgot password?" and enter ${email}.`
     : hasPassword
-      ? `Sign in any time at ${app} with ${email} and the password you chose.`
-      : `To sign in for the first time, go to ${app}, press "Forgot password?" and enter ${email}. You'll get a link to choose your password.`;
+      ? `Sign in any time at ${app} with ${email}.`
+      : `To sign in, go to ${app}, press "Forgot password?" and enter ${email} to choose a password.`;
   const text = `Hi ${firstName || "there"},
 
-Welcome to SubSub. ${companyName} is set up on the ${planName} plan${planName === "Basic" ? ", which is free, with no card and no expiry" : ""}.
+Welcome to SubSub. ${companyName} is set up on ${planName}${planName === "Basic" ? " (free, no card)" : ""}.
 
 ${steps}
 
 -- The SubSub team
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: textToHtml(text, app) };
 }
 
@@ -553,42 +435,29 @@ export function founderIntroEmail({ firstName, companyName, kind }) {
   const sub = hiresLabelFor(kind);          // "subcontractor" or "contractor"
   const subs = `${sub}s`;
   const texts = SMS_INCLUDED_SCALE.toLocaleString("en-US");
-  const free = [
-    `Every ${sub}'s insurance, bond, W-9 and license in one place, with live expiry dates.`,
-    `Work orders and change orders, sent and accepted in the app.`,
-    `Your ${subs} use SubSub free and keep their own documents current.`,
-  ];
   const scale = [
-    `Unlimited ${subs}, users and jobs. Basic covers 3 ${subs}, 1 user and 5 jobs a month.`,
-    `Your own logo and address, plus a recruiting QR code for ${subs} you meet on site.`,
-    `Lien waivers against each payment, and jobs posted in from your CRM.`,
-    `${texts} text messages a month.`,
+    `Unlimited ${subs}, users and jobs (Basic covers 3 ${subs}, 1 user and 5 jobs a month)`,
+    `Your logo, your own address and a recruiting QR code`,
+    `Lien waivers, jobs from your CRM and ${texts} texts a month`,
   ];
   const company = companyName || "your company";
   const text = `Hi ${firstName || "there"},
 
-I'm ${FOUNDER.name}, founder and CEO of SubSub. Thanks for setting up ${company}.
-
-I'd like to walk you through it myself: 30 minutes on your own ${subs} and paperwork, not a slide deck.
+I'm ${FOUNDER.name}, founder of SubSub. Thanks for setting up ${company}. I'd like to show you around myself: 30 minutes on your own ${subs} and paperwork.
 
 ${FOUNDER.demoUrl}
 
-On Basic, today:
-${free.map((l) => `  - ${l}`).join("\n")}
-
-Scale starts at $99 a month and adds:
+When you need more, Scale starts at $99 a month and adds:
 ${scale.map((l) => `  - ${l}`).join("\n")}
 
-Anything not working? Reply here. It comes straight to me.
+Questions? Just reply.
 
 ${founderSignatureText()}`;
   const inner = fP(`Hi ${fEsc(firstName || "there")},`)
-    + fP(`I'm ${fEsc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${fEsc(company)}.`)
-    + fP(`I'd like to walk you through it myself: 30 minutes on your own ${fEsc(subs)} and paperwork, not a slide deck.`)
+    + fP(`I'm ${fEsc(FOUNDER.name)}, founder of SubSub. Thanks for setting up ${fEsc(company)}. I'd like to show you around myself: 30 minutes on your own ${fEsc(subs)} and paperwork.`)
     + fButton("Pick a time with me")
-    + fH("On Basic, today") + fList(free)
-    + fH("Scale starts at $99 a month and adds") + fList(scale)
-    + fP("Anything not working? Reply here. It comes straight to me.");
+    + fH("When you need more, Scale starts at $99 a month and adds") + fList(scale)
+    + fP("Questions? Just reply.");
   return { subject: founderSubject(firstName), text, html: founderHtml(inner), ...founderEnvelope() };
 }
 
@@ -609,29 +478,25 @@ export function founderSubEmail({ firstName, companyName }) {
     "What made you sign up?",
     "What does a successful partnership with a GC or property manager look like to you?",
   ];
-  const refer = `Know a GC, property manager or portfolio manager? Send them your link from Get your GCs on SubSub in the app. You get ${cash} for each one that starts paying for SubSub.`;
+  const refer = `Send a GC, property manager or portfolio manager your link from Get your GCs on SubSub. You get ${cash} for each one that starts paying.`;
   const text = `Hi ${firstName || "there"},
 
-I'm ${FOUNDER.name}, founder and CEO of SubSub. Thanks for setting up ${company}. SubSub is free for you, for good.
+I'm ${FOUNDER.name}, founder of SubSub. Thanks for setting up ${company}. SubSub is free for you, for good.
 
-I'd love to hear from you. A one-line answer to any of these helps:
-
+Just reply with a line on any of these:
 ${asks.map((q, i) => `  ${i + 1}. ${q}`).join("\n")}
 
-Just reply to this email. It comes straight to me. Or pick a time to talk:
+Earn ${cash} per referral: ${refer}
 
-${FOUNDER.demoUrl}
-
-${refer}
+Rather talk? ${FOUNDER.demoUrl}
 
 ${founderSignatureText()}`;
   const inner = fP(`Hi ${fEsc(firstName || "there")},`)
-    + fP(`I'm ${fEsc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${fEsc(company)}. SubSub is free for you, for good.`)
-    + fP("I'd love to hear from you. A one-line answer to any of these helps:")
+    + fP(`I'm ${fEsc(FOUNDER.name)}, founder of SubSub. Thanks for setting up ${fEsc(company)}. SubSub is free for you, for good.`)
+    + fP("<b>Just reply</b> with a line on any of these:")
     + fList(asks, "ol")
-    + fP("<b>Just reply to this email.</b> It comes straight to me. Or pick a time to talk:")
-    + fButton("Pick a time to talk")
-    + fP(`<b>Earn ${fEsc(cash)} per referral.</b> ${fEsc(refer)}`);
+    + fP(`<b>Earn ${fEsc(cash)} per referral.</b> ${fEsc(refer)}`)
+    + fButton("Rather talk? Pick a time");
   return { subject: founderSubject(firstName), text, html: founderHtml(inner), ...founderEnvelope() };
 }
 
@@ -665,9 +530,7 @@ When: ${when}
 
 ${join}
 
-A calendar invite is on its way too, so it lands on your calendar with the link in it. If you need a different time, reply to that invite or go to https://subsub.work/book-a-demo.html and pick another.
-
-Thirty minutes, on your own paperwork rather than a slide deck. Bring the vendor list you're chasing.
+Need another time? Reply to the calendar invite or pick one at https://subsub.work/book-a-demo.html
 
 -- The SubSub team`;
   return { subject: `Your SubSub demo: ${when}`, text, html: textToHtml(text, meetingUrl || "https://subsub.work") };
@@ -703,46 +566,27 @@ export function subInviteEmail({ contact, companyName, account, link, known = fa
   const who = account?.name || "A general contractor";
   const text = known ? `Hi ${contact || "there"},
 
-${who} uses SubSub to keep subcontractor paperwork in one place, and has
-already added ${companyName || "your company"} to theirs. Your details are in --
-the only thing missing is a password of your own.
-
-Choose one here:
+${who} added ${companyName || "your company"} to SubSub, where they send work orders and keep paperwork. Your details are in; just choose a password:
   ${link}
 
-That is the whole job. Once you are in you can upload your insurance, bond,
-W-9 and signed agreement, and after ${who} has approved them you'll be sent
-work orders through SubSub and can accept or decline them from your phone.
+Then upload your insurance, bond and W-9 to start getting work orders. It's free for you.
 
-If anything ${who} typed is wrong, the same page lets you correct it.
-
-Your documents stay yours -- keep them current here and they are current for
-every contractor you work with on SubSub, not just this one.
-
-This link works once and expires in 30 days.
+The link works once and expires in 30 days.
 
 -- ${who}, through SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.` : `Hi ${contact || "there"},
+${NOREPLY}` : `Hi ${contact || "there"},
 
-${who} uses SubSub to keep subcontractor paperwork in one place, and has
-invited ${companyName || "your company"} to join theirs.
-
-Set up your account here:
+${who} invited ${companyName || "your company"} to SubSub, where they send work orders and keep paperwork. Set up your account here (a few minutes):
   ${link}
 
-It takes a few minutes: your company details, the trades you cover, and
-your insurance, bond and W-9. Once ${who} has approved them you'll be sent
-work orders through SubSub and can accept or decline them from your phone.
+Add your trades and upload your insurance, bond and W-9 to start getting work orders. It's free for you.
 
-Your documents stay yours -- keep them current here and they are current for
-every contractor you work with on SubSub, not just this one.
-
-This link works once and expires in 30 days.
+The link works once and expires in 30 days.
 
 -- ${who}, through SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: known
       ? `${who} has added ${companyName || "you"} to SubSub — choose a password`
@@ -764,31 +608,22 @@ This is an automated message from an unmonitored address. Replies aren't receive
 export function docPackEmail({ company, contact, toName, note, link, days, kinds = [] }) {
   const who = company || "A subcontractor";
   const what = kinds.length
-    ? kinds.map((k) => DOC_LABELS[k] || k).join("\n  ")
-    : "Their current paperwork";
+    ? kinds.map((k) => `  - ${DOC_LABELS[k] || k}`).join("\n")
+    : "  - Their current paperwork";
   const text = `Hi ${toName || "there"},
 
-${contact ? `${contact} at ${who}` : who} has sent you their current
-compliance paperwork${note ? `:\n\n  "${note}"` : "."}
+${contact ? `${contact} at ${who}` : who} sent you their compliance paperwork${note ? `:\n\n  "${note}"` : "."}
 
-  ${what}
+${what}
 
-Open it here:
+Open it here (no account needed):
   ${link}
 
-The page shows the carrier, the policy number, the coverage and the expiry
-date on each one, and you can download them. Nothing to sign up for.
-
-It stays current: when ${who} renews, this page shows the new certificate
-rather than the one that has lapsed. That is the part an emailed PDF cannot
-do, and it is the reason they sent it this way.
-
-This link was made for you and expires in ${days} days. ${who} can withdraw
-it at any time.
+Each document shows its carrier, coverage and expiry, and the page updates when they renew. The link expires in ${days} days.
 
 -- sent by ${who}, through SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: `${who} sent you their insurance and paperwork`,
     text,
@@ -806,29 +641,22 @@ This is an automated message from an unmonitored address. Replies aren't receive
 export function userInviteEmail({ name, account, role, invitedBy, link }) {
   const who = account?.name || "your team";
   const what = {
-    admin: "an admin, so you can change anything on the account",
-    pm: "a manager, so you can raise jobs and assign contractors",
-    owner: "a building owner, so you can see and request work at your buildings",
-    contractor: "a contractor, so you can see and answer your work orders",
-    tenant: "a resident, so you can report repairs",
-  }[role] || "a member of the account";
-  const by = invitedBy ? `${invitedBy} has` : "You have been";
+    admin: "an admin",
+    pm: "a manager",
+    owner: "a building owner",
+    contractor: "a contractor",
+    tenant: "a resident",
+  }[role] || "a member";
   const text = `Hi ${name || "there"},
 
-${by} ${invitedBy ? "added you to" : "added to"} ${who} on SubSub, as ${what}.
-
-Choose a password and you're in:
+${invitedBy ? `${invitedBy} added you` : "You've been added"} to ${who} on SubSub as ${what}. Choose a password to get in:
   ${link}
 
-SubSub is where ${who} keeps its subcontractors, their insurance and licenses,
-and the work orders that go out to them.
-
-This link works once and expires in 30 days. If you weren't expecting it, you
-can ignore it -- nothing happens until you use it.
+The link works once and expires in 30 days. Not expecting this? Ignore it.
 
 -- ${who}, through SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: `${invitedBy ? `${invitedBy} added you to` : "You've been added to"} ${who} on SubSub`,
     text,
@@ -853,20 +681,14 @@ export function tenantInviteEmail({ firstName, account, propertyName, unit, link
   const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
   const text = `Hi ${firstName || "there"},
 
-${who} has set you up to report repairs at ${place || "your building"}.
-
-Choose a password and you're in:
+${who} set you up to report repairs at ${place || "your building"}. Choose a password to get in:
   ${link}
 
-After that you can report anything that needs fixing -- a leak, no heat, a
-door that won't lock -- and see what's happening with it, without calling
-anybody. Photos of the problem help, if you have them.
-
-Only you can see what you report.
+Then report anything that needs fixing, with photos, and follow it without calling. Only you see what you report.
 
 -- ${who}
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: `${who}: report repairs at ${place || "your building"}`,
     text,
@@ -944,20 +766,15 @@ export function tenantStatusEmail({ firstName, account, title, stage, link, deta
 
 Your report "${title}" ${what}.
 
-You can see where it is, and anything else you've reported, here:
+See it here:
   ${link}
 
 -- ${who}
 
-You're getting this because you asked to be told when a report changes.
-You can switch it off under My account. This is an automated message from
-an unmonitored address. Replies aren't received.`;
+Turn these off under My account. ${NOREPLY}`;
   const subject = stage === "visit" ? `${who}: a time for "${title}" — please confirm`
     : stage === "done" ? `${who}: "${title}" is done`
     : stage === "declined" ? `${who}: "${title}" wasn't approved`
-    // 066. A subject line decides whether this is read today or next week,
-    // and "has moved" over a repair that is not happening is the one that
-    // gets left.
     : stage === "cancelled" ? `${who}: "${title}" has been canceled`
     : stage === "deferred" ? `${who}: "${title}" is on hold`
     : stage === "no_work" ? `${who}: "${title}" — nothing needed doing`
@@ -970,21 +787,19 @@ an unmonitored address. Replies aren't received.`;
 // somebody needs and a paraphrase would lose the hours.
 export function buildingNoticeEmail({ firstName, account, propertyName, title, body, endsOn, important, link }) {
   const who = account?.name || "Your building manager";
-  const until = endsOn ? `\n(This notice is up until ${endsOn}.)` : "";
+  const until = endsOn ? `\n(Up until ${endsOn}.)` : "";
   const text = `Hi ${firstName || "there"},
 
-${who} has posted a${important ? "n important" : ""} notice for ${propertyName || "your building"}:
+${important ? "Important notice" : "Notice"} from ${who} for ${propertyName || "your building"}:
 
 ${title}
 ${body ? `\n${body}\n` : ""}${until}
 
-You can see it, and anything you've reported, here:
   ${link}
 
 -- ${who}
 
-This is an automated message from an unmonitored address. Replies aren't
-received; to answer it, contact ${who} the way you usually would.`;
+${NOREPLY} To answer, contact ${who} as usual.`;
   const subject = `${important ? "Important: " : ""}${who}: ${title}`;
   return { subject, text, html: textToHtml(text, link) };
 }
@@ -1095,29 +910,27 @@ export function waiverRequestEmail({ toName, fromName, kindTitle, conditional, a
   through, job, link, uploadOnly = false, stateName = null }) {
   const who = fromName || "A customer";
   const how = uploadOnly
-    ? `${stateName || "This state"} sets the exact wording of a lien waiver, so sign
-it on ${stateName ? `${stateName}'s` : "the state's"} own form and upload the signed copy at the link.`
-    : "You can read it and sign it at the link, or decline it there with a note.";
+    ? `${stateName || "This state"} sets the wording, so sign it on ${stateName ? `${stateName}'s` : "the state's"} own form and upload it at the link.`
+    : "Read and sign it at the link, or decline with a note.";
   const text = `Hi ${toName || "there"},
 
-${who} has asked you for a lien waiver.
+${who} asked you for a lien waiver.
 
   ${kindTitle}
   Job: ${job || "—"}
   Payment: ${amount}
-  For work through: ${through}
+  Work through: ${through}
 
 ${conditional
-    ? "It is conditional: it only takes effect once you have actually received\nthe payment."
-    : "It is UNCONDITIONAL: it takes effect when you sign it, whether or not the\npayment clears. Sign it only if the money has arrived."}
+    ? "It is conditional: it only takes effect once you've received the payment."
+    : "It is UNCONDITIONAL: it takes effect when you sign, whether or not the payment clears. Sign only once the money has arrived."}
 
 ${how}
-
   ${link}
 
 -- sent by ${who}, through SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: `${who} asked you for a lien waiver — ${amount}`,
     text,
@@ -1196,25 +1009,16 @@ export function connectRequestEmail({ account, company, message, link }) {
   const who = account?.name || "A contractor";
   const text = `Hi ${company?.contact || "there"},
 
-${who} wants to work with ${company?.company || "your company"} on SubSub.
+${who} wants to work with ${company?.company || "your company"} on SubSub.${message ? `\n\nThey added: "${message}"` : ""}
 
-You are already set up, so there is nothing to fill in. Say yes and they can
-send you work orders; your profile, crews, insurance and license go with you
-exactly as they are.
-${message ? `\n${who} added: "${message}"\n` : ""}
-Answer here:
+Nothing to fill in. If you accept, they can send you work orders and see your trades, crews, availability and documents. Nothing is shared until you accept, and you can end it later.
+
+Accept or decline:
   ${link}
-
-Accepting lets ${who} see your trades, your crews, your availability and the
-compliance documents you keep on SubSub -- the same things every contractor
-you work with here can see. It does not give them anything else, and you can
-end it later.
-
-If you were not expecting this, decline it. Nothing is shared until you accept.
 
 -- ${who}, through SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: `${who} wants to work with you on SubSub`,
     text,
@@ -1268,13 +1072,7 @@ ${who} renewed their ${what.toLowerCase()}. It now runs to ${expiresOn}.
 
   ${link}
 
-You are getting this because ${contact ? `${contact} at ${who}` : who} sent you
-their paperwork through SubSub, and the page they sent expires. This is a fresh
-link to the current documents \u2014 the carrier, the policy number, the coverage
-and the expiry on each one. Nothing to sign up for.
-
-The link lasts ${days} days. If you would rather not hear when their paperwork
-renews, there is a line at the bottom of that page to say so.
+You're getting this because ${contact ? `${contact} at ${who}` : who} sent you their paperwork through SubSub. The link lasts ${days} days, and the page has a line to stop these updates.
 
 -- sent on behalf of ${who}, through SubSub`;
   return { subject: `${who} renewed their ${what.toLowerCase()}`, text, html: textToHtml(text, link) };
@@ -1288,26 +1086,14 @@ renews, there is a line at the bottom of that page to say so.
 export function embedNudgeEmail({ name, accountName, subdomain, subs }) {
   const text = `Hi ${name || "there"},
 
-You have ${subs} contractors on ${accountName} now. Here is the quickest way to
-get the next ones without chasing anybody.
+You have ${subs} contractors on ${accountName}. To get the next ones without chasing, let them apply from your website: they fill in a form and land on your Contractors screen for you to approve.
 
-There is a form you can paste onto your own website. A contractor fills it in,
-and their application arrives on your Contractors screen with their trades and
-their contact details already filled in \u2014 you say yes or no. No plugins,
-nothing to host.
-
-It is on your Contractors screen, under "Let contractors apply from your own
-website". Copy the code, paste it where you want it, done.
-
-  https://${subdomain}.subsub.work/
-
-If you would rather just link to it, the same form is hosted for you at
-https://${subdomain}.subsub.work/?apply=1 \u2014 worth putting in the bid
-invitations you already send.
+Copy the code from "Let contractors apply from your own website" on your Contractors screen, or share the hosted form:
+  https://${subdomain}.subsub.work/?apply=1
 
 -- SubSub`;
   return { subject: `Let contractors apply to ${accountName} from your website`, text,
-    html: textToHtml(text, `https://${subdomain}.subsub.work/`) };
+    html: textToHtml(text, `https://${subdomain}.subsub.work/?apply=1`) };
 }
 
 // "Everything sent to you, on one page." Asked for from a pack page, delivered
@@ -1318,17 +1104,10 @@ export function docInboxEmail({ toName, count, link, days }) {
   const many = n === 1 ? "one subcontractor has" : `${n} subcontractors have`;
   const text = `Hi ${toName || "there"},
 
-You asked to see everything sent to this address. ${many} sent you their
-compliance paperwork through SubSub:
-
+${many} sent you their compliance paperwork through SubSub. Here it all is on one page, with every expiry date:
   ${link}
 
-One page, every certificate, and the expiry on each -- including the ones that
-have already lapsed since they were sent to you. Nothing to sign up for.
-
-This link was emailed rather than shown straight away because holding one
-document link is not proof you still read this mailbox, and this one opens all
-of them. It lasts ${days} days.
+No account needed. The link lasts ${days} days.
 
 -- SubSub`;
   return { subject: "Everything sent to you, on one page", text, html: textToHtml(text, link) };
@@ -1356,20 +1135,15 @@ export function inspectionReportEmail({ firstName, account, kindLabel, propertyN
     : `All ${rooms} rooms were fine — nothing flagged.`;
   const text = `Hi ${firstName || "there"},
 
-${who} has finished the ${String(kindLabel || "").toLowerCase()} inspection of ${place || "your building"}${
-  walkedOn ? `, walked on ${walkedOn}` : ""}${tenantName ? `, for ${tenantName}` : ""}.
+${who} finished the ${String(kindLabel || "").toLowerCase()} inspection of ${place || "your building"}${
+  walkedOn ? ` on ${walkedOn}` : ""}${tenantName ? ` (${tenantName})` : ""}. ${verdict}
 
-${verdict}
-
-Read it here, room by room, with the photographs:
+Read it room by room, with photos:
   ${link}
-
-It stays on your account, so it is there the next time anybody asks what the
-place looked like on the day.
 
 -- ${who}
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: `${who}: ${kindLabel || "Inspection"} report for ${place || "your building"}`,
     text,
@@ -1387,18 +1161,14 @@ export function passportAccessRequestEmail({ company, contact, accountName, requ
   const who = accountName || "A company";
   const text = `Hi ${contact || company?.company || "there"},
 
-${who}${requesterName ? ` (${requesterName})` : ""} opened your SubSub Passport and asked to see
-your certificate of insurance and your W-9.
-${message ? `\nThey added: "${message}"\n` : ""}
-Nothing opens until you say yes. Approve or decline here:
-  ${link}
+${who}${requesterName ? ` (${requesterName})` : ""} asked to see your certificate of insurance and W-9.${message ? `\n\nThey added: "${message}"` : ""}
 
-If you approve, they can open those two files while you leave it on. You can
-take it back at any time from the same screen.
+Nothing opens until you say yes, and you can take it back any time. Approve or decline:
+  ${link}
 
 -- SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return { subject: `${who} asked to see your insurance and W-9`, text, html: textToHtml(text, link) };
 }
 
@@ -1408,24 +1178,20 @@ export function passportAccessDecisionEmail({ firstName, companyName, approved, 
   const text = approved
     ? `Hi ${firstName || "there"},
 
-${sub} approved your request. Their certificate of insurance and W-9 now
-open from their Passport while you are signed in to SubSub:
+${sub} approved your request. Their certificate of insurance and W-9 now open from their Passport while you're signed in:
   ${link}
-
-They can take this back at any time.
 
 -- SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`
+${NOREPLY}`
     : `Hi ${firstName || "there"},
 
-${sub} declined your request to see their certificate of insurance and W-9.
-Their Passport still shows what is on file and when it runs out:
+${sub} declined your request to see their certificate of insurance and W-9. Their Passport still shows what's on file:
   ${link}
 
 -- SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: approved ? `${sub} shared their insurance and W-9 with you` : `${sub} declined your document request`,
     text, html: textToHtml(text, link),
@@ -1439,24 +1205,18 @@ export function licenseExpiryEmail({ company, contact, number, expiresOn, daysOu
   const lapsed = daysOut <= 0;
   const lead = lapsed
     ? `Your contractor license ${number ? `(${number}) ` : ""}runs out today (${expiresOn}) according to ${reg}.`
-    : `Your contractor license ${number ? `(${number}) ` : ""}runs out on ${expiresOn} -- ${daysOut} day${daysOut === 1 ? "" : "s"} from now, according to ${reg}.`;
+    : `Your contractor license ${number ? `(${number}) ` : ""}runs out on ${expiresOn}, ${daysOut} day${daysOut === 1 ? "" : "s"} from now, according to ${reg}.`;
   const text = `Hi ${contact || company?.company || "there"},
 
 ${lead}
 
-WHAT HAPPENS IF IT LAPSES
-  The "SubSub Verified" badge comes off your Passport, and the GCs you work
-  with see the license as not active.
+Renew it with ${reg}. SubSub checks the register nightly, so it updates by itself; nothing to upload. If it lapses, your "SubSub Verified" badge comes off.
 
-WHAT TO DO
-  Renew it with ${reg}. SubSub checks the register every night, so once it
-  is renewed there, it shows here by itself -- nothing to upload.
-
-  Your Passport: ${link}
+Your Passport: ${link}
 
 -- SubSub
 
-This is an automated message from an unmonitored address. Replies aren't received.`;
+${NOREPLY}`;
   return {
     subject: lapsed ? "Your contractor license runs out today" : `Your contractor license runs out in ${daysOut} days`,
     text, html: textToHtml(text, link),
@@ -1474,15 +1234,12 @@ ${n === 1 ? "This is waiting on you:" : `These ${n} things are waiting on you:`}
 
 ${lines.map((l) => `  - ${l}`).join("\n")}
 
-Nothing moves until it is answered, and the people on the other side can see
-that it is waiting. Answer it here:
+Answer here:
   ${link}
 
 -- ${fromName || "SubSub"}
 
-You'll get a reminder like this for a few days while something is waiting on
-you; it stops by itself once it is answered. This is an automated message from
-an unmonitored address. Replies aren't received.`;
+These reminders stop once it's answered. ${NOREPLY}`;
   const subject = n === 1
     ? `Waiting on you: ${lines[0].replace(/\s*\(waiting \d+ days?\)\.?$/, "").slice(0, 90)}`
     : `${n} things are waiting on you`;
@@ -1549,8 +1306,7 @@ Read and reply here:
 
 -- ${fromName || "SubSub"}
 
-This is an automated message from an unmonitored address. Replies to this
-email aren't received; answer in the app instead.`;
+Replies to this email aren't read; answer in the app.`;
   const subject = threads.length === 1
     ? `New message from ${threads[0].who}`
     : `${n} new messages`;

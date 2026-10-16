@@ -474,12 +474,12 @@ try {
       const m = mailed[0];
       ck("to the company's address", m.to?.[0] === "juan@pacific.test");
       ck("with a link that opens the waiver", /app\.subsub\.work\/\?waiver=/.test(m.text));
-      ck("saying it waits for the money", /only takes effect once you have actually received/.test(m.text));
+      ck("saying it waits for the money", /only takes effect once you've received/.test(m.text));
       ck("naming the amount and the day", /\$3,800\.00/.test(m.text) && /through/.test(m.text));
       mailed.length = 0;
       const [s2] = await json(await call(env2, "POST", "/api/releases/rel_ca/waiver", { body: {} }));
       ck("a statutory state is told to use its own form",
-        s2 === 201 && /California sets the exact wording/.test(mailed[0]?.text || ""), mailed[0]?.text?.slice(0, 300));
+        s2 === 201 && /California sets the wording/.test(mailed[0]?.text || ""), mailed[0]?.text?.slice(0, 300));
     } finally { globalThis.fetch = real; }
   }
 

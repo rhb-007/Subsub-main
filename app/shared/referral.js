@@ -176,13 +176,11 @@ export function inviteEmail({ fromName, company, link }) {
     text: [
       "Hi,",
       "",
-      `${who} keeps their compliance documents on SubSub -- certificate of insurance, W-9 and license -- so the copy you have is always the current one, with the expiry date live rather than in a PDF.`,
-      "",
-      "SubSub also runs the subcontractors you already have: their documents, their availability, scheduling and work orders, in one place.",
+      `${who} keeps their insurance, W-9 and license on SubSub, so the copy you have is always current. You can run your own subs and schedule jobs there too.`,
       "",
       `Have a look: ${link}`,
       "",
-      `You're getting this because ${who} entered your address. SubSub won't email you again unless you sign up.`,
+      `${who} entered your address. SubSub won't email you again unless you sign up.`,
     ].join("\n"),
   };
 }

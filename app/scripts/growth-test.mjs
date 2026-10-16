@@ -90,7 +90,7 @@ console.log("\n-- a renewal reaches the people who were already sent it --");
   ck("it says why they are hearing from us",
     /sent you\s+their paperwork through SubSub/.test(inbox[0]?.text || ""),
     (inbox[0]?.text || "").slice(0, 200));
-  ck("and how to stop", /would rather not hear/.test(inbox[0]?.text || ""));
+  ck("and how to stop", /stop these updates/.test(inbox[0]?.text || ""));
 
   // A fresh link, because theirs is long dead.
   const fresh = db.prepare(

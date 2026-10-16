@@ -4326,10 +4326,9 @@ async function referralOnPaid(env, account, invoiceId = null) {
             if (co?.email) {
               const text = [
                 `Hi${co.contact ? " " + String(co.contact).split(" ")[0] : ""},`, "",
-                `${account.name} joined SubSub on your referral and has started paying for it.`,
-                `That earns you $100 and the ${PREFERRED_SUB} badge on your profile.`, "",
-                "The $100 is checked by a person at SubSub before it is paid, which usually takes a few days. We'll be in touch at this address about how you'd like it.", "",
-                "Thanks for spreading the word.", "The SubSub team",
+                `${account.name} started paying for SubSub on your referral. You've earned $100 and the ${PREFERRED_SUB} badge.`, "",
+                "We check each reward before paying it, usually within a few days, and will email you here about how you'd like it.", "",
+                "Thanks!", "The SubSub team",
               ].join("\n");
               const res = await sendEmail(env, { to: co.email, subject: "You earned $100 for a SubSub referral", text });
               await logMail(env, { accountId: null, companyId: code.company_id, to: co.email,

@@ -261,10 +261,10 @@ console.log("\n-- asking is the hiring side's only move, and it is honest about 
   ck("the preview builds", s === 200 && !!p.text, `${s} ${JSON.stringify(p).slice(0, 120)}`);
   ck("it goes to them", p.to === "rb@sanjuan.test", String(p.to));
   ck("it says the jobs arrive already accepted", /already\s+accepted/i.test(p.text));
-  ck("it says they lose the accept step", /will not get an accept or decline/i.test(p.text));
-  ck("it says the account cannot do it for them", /cannot turn this on for you/i.test(p.text));
+  ck("it says they lose the accept step", /no accept or decline step/i.test(p.text));
+  ck("it says the account cannot do it for them", /can't turn it on for you/i.test(p.text));
   ck("it says doing nothing is an answer", /do nothing/i.test(p.text));
-  ck("it says it is only for this account", /applies only to/i.test(p.text));
+  ck("it says it is only for this account", /only for /i.test(p.text));
   ck("it carries the note", /Cedar Park Tuesdays/.test(p.text));
   // It names the screen, not "go to what you do" -- the switch is on Job
   // Settings, Availability tab -- and links straight to it.

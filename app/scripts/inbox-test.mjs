@@ -106,8 +106,8 @@ console.log("\n-- asking for it costs an email, and names no address --");
   // otherwise leak the forwarder's address.
   ck("the answer does not say where it went",
     !JSON.stringify(out).includes("cascade"), JSON.stringify(out));
-  ck("and it says why it was emailed rather than just shown",
-    /not proof you still read this mailbox/i.test(inbox[0]?.text || ""),
+  ck("and it says how long the link lasts",
+    /The link lasts \d+ days/.test(inbox[0]?.text || ""),
     (inbox[0]?.text || "").slice(0, 60));
 
   const tok = one(db, `SELECT token FROM doc_inboxes`).token;

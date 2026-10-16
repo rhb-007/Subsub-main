@@ -98,8 +98,10 @@ console.log("\n-- the screens that print the list read it rather than restating 
     !/\* Umbrella \/ excess applies to higher-risk/.test(APP));
   // The email already drove off the flag, so making two more lines optional
   // carries into it with nothing to change -- which is the point of the flag.
-  ck("the document-request email marks every optional line from the same flag",
-    /l\.optional \? " \(if applicable\)" : ""/.test(MAIL));
+  // The email lists only the required minimums now; it still reads the flag
+  // rather than naming the optional lines by hand.
+  ck("the document-request email leaves optional lines out by the same flag",
+    /INSURANCE_LINES\.filter\(\(l\) => !l\.optional\)/.test(MAIL));
 }
 
 console.log("\n-- closing a half-finished review asks --");
@@ -154,7 +156,7 @@ console.log("\n-- sending it back to be fixed is a CTA, not hidden behind 'Rejec
     /everything\s*\n?\s*else on it is fine so they do not start again/.test(APP));
   // Which is a claim about the EMAIL, so the email has to say it.
   ck("which the email actually says",
-    /Everything else on it is fine \\u2014 you do not need to start again/.test(MAIL));
+    /Everything else on it is fine, so you don't need to start again/.test(MAIL));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
