@@ -13368,6 +13368,31 @@ refactor.
   figure; hard-coding it or saying "signs up" fails it. `test:signupwelcome` covers
   all three branches; dropping the gate or hard-coding the noun fails it.
 
+- **EVERY EMAIL IS 100 WORDS OR FEWER, AND SAYS WHO, WHAT, THE ONE ACTION AND
+  THE LINK.** Asked for as *"reduce all of our emails to easily digestible with
+  the most important information only"*. The 29 composers in `worker/mail.js`
+  ran to 2,488 words between them, much of it the reasoning behind each email
+  written out to the reader; they are 1,305 now. The founder notes are 85 and
+  91 words. The two-sentence "unmonitored address" footer is one clause,
+  `NOREPLY`.
+
+  **What was kept is what somebody has to act on**: the deadline, the amount,
+  conditional versus unconditional on a lien waiver, the insurance minimums
+  and the additional-insured line on a document request, "already accepted" on
+  auto-schedule, and that the account cannot turn it on for them. **Three
+  recorded decisions are now one sentence rather than a section**: the
+  findings email says *everything else on it is fine, so you don't need to
+  start again* instead of listing every line that passed (the list is in the
+  app); the document request lists only the required insurance lines, read
+  off `INSURANCE_LINES` by `optional`; and the pack inbox email no longer
+  explains why it was emailed. The referral invite and reward email were cut
+  the same way.
+
+  `test:signupwelcome` holds every composer to 100 words before the sign-off
+  (a person's own message and an account's own invite wording are exempt).
+  Putting the old auto-schedule email back fails it at 197 words. Eight suites
+  pinned the old wording and were moved to the new sentences, not loosened.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
