@@ -8,7 +8,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sendEmail, welcomeEmail, demoBookedEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
+import { sendEmail, welcomeEmail, founderIntroEmail, demoBookedEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen, buildingNoticeEmail,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
@@ -1345,6 +1345,19 @@ app.post("/api/signup", async (c) => {
       subject: welcome.subject, result: sent });
   } catch (err) {
     console.error("[signup] welcome email failed:", err?.message || err);
+  }
+  // A note from the founder, for an account that hires and chose Basic.
+  // Never to a subcontractor account, which is free for good and is never
+  // offered an upgrade. Never fails signup either.
+  if (plan !== "scale" && HIRING_KINDS.includes(kind)) {
+    try {
+      const intro = founderIntroEmail({ firstName: personName.split(/\s+/)[0], companyName: company, kind });
+      const sent = await sendEmail(c.env, { to: email, ...intro });
+      await logMail(c.env, { accountId, companyId: null, to: email, kind: "founder_intro",
+        subject: intro.subject, result: sent });
+    } catch (err) {
+      console.error("[signup] founder intro failed:", err?.message || err);
+    }
   }
 
   return c.json({

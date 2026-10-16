@@ -23,6 +23,8 @@ import { INSURANCE_LINES, BOND_MIN, checkItems, problemsIn,
 // `DOC_KINDS` -- a module that loads fine and fails on the first email sent.
 import { DOC_KINDS, DOC_LABELS } from "../shared/docs.js";
 import { REPLY_MARKER } from "../shared/messaging.js";
+import { hiresLabelFor } from "../shared/hires.js";
+import { SMS_INCLUDED_SCALE } from "../shared/smsquota.js";
 export { DOC_KINDS, DOC_LABELS };
 // The schedule and the checklist come from shared/doccheck.js, which is the one
 // list. They were copied here, and agreed with the app by luck -- which stopped
@@ -488,6 +490,102 @@ ${steps}
 
 This is an automated message from an unmonitored address. Replies aren't received.`;
   return { subject: `Welcome to SubSub: ${companyName} is set up`, text, html: textToHtml(text, app) };
+}
+
+// A note from the founder to a new Basic account, sent with the welcome.
+//
+// Only to an account that HIRES and chose Basic. Scale has already decided.
+// A subcontractor account is free forever and is never shown an upgrade,
+// which is the rule the signup form's free line follows; a Scale pitch to
+// somebody who will never pay for one is the upsell that rule refuses.
+//
+// It is from Richard by name and replies reach him, because the whole point
+// is a person to talk to. The demo link is SubSub's own booking page, which
+// reads Richard's real Cal calendar and keeps the booking under SubSub's name.
+// The photo is drawn only once FOUNDER.photo is set; until then the signature
+// carries initials, never a broken image.
+export const FOUNDER = {
+  name: "Richard Braun",
+  title: "Founder & CEO, SubSub",
+  email: "rb@subsub.work",
+  photo: null,   // e.g. "https://subsub.work/richard-braun.png"
+  demoUrl: "https://subsub.work/book-a-demo.html?utm_source=email&utm_campaign=founder_intro",
+};
+
+export function founderIntroEmail({ firstName, companyName, kind }) {
+  const sub = hiresLabelFor(kind);          // "subcontractor" or "contractor"
+  const subs = `${sub}s`;
+  const texts = SMS_INCLUDED_SCALE.toLocaleString("en-US");
+  const free = [
+    `Every ${sub}'s insurance, bond, W-9 and license in one place, with the expiry date live, so a lapsed certificate is caught before the job rather than after.`,
+    `A work order for each trade, sent, accepted and changed in the app, with every change order numbered.`,
+    `Crews scheduled onto jobs, with the time confirmed by whoever has to be there.`,
+    `Your ${subs} use SubSub free and keep their own documents current, so you stop chasing PDFs.`,
+  ];
+  const scale = [
+    `Unlimited ${subs}, users and jobs. Basic covers 3 ${subs}, 1 user and 5 jobs a month.`,
+    `Your own logo and sign-in address, yourcompany.subsub.work, on every screen and work order.`,
+    `A recruiting QR code: a ${sub} you meet on site scans it and fills in their own details.`,
+    `Lien waivers asked for and signed against each payment.`,
+    `Jobs posted straight in from your CRM, with nothing retyped.`,
+    `${texts} text messages a month for work orders and updates.`,
+  ];
+  const company = companyName || "your company";
+  const text = `Hi ${firstName || "there"},
+
+I'm ${FOUNDER.name}, founder and CEO of SubSub. Thanks for setting up ${company}.
+
+I'd like to walk you through it myself. Pick a time that suits you and we'll spend 30 minutes on your own ${subs} and paperwork, not a slide deck:
+
+${FOUNDER.demoUrl}
+
+What SubSub does for you on Basic, today:
+${free.map((l) => `  - ${l}`).join("\n")}
+
+When you're ready for more, Scale starts at $99 a month and adds:
+${scale.map((l) => `  - ${l}`).join("\n")}
+
+If anything isn't working the way you need, reply to this email. It comes straight to me.
+
+${FOUNDER.name}
+${FOUNDER.title}
+${FOUNDER.email}
+
+SubSub, LLC, 4616 25th Ave NE, Seattle, WA 98105. You're getting this one note because you signed up for SubSub.`;
+
+  const esc = (v) => String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const F = "font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif";
+  const p = (v) => `<p style="margin:0 0 14px;${F};font-size:15px;line-height:1.6;color:#12211C">${v}</p>`;
+  const list = (items) => `<ul style="margin:0 0 18px;padding-left:20px;${F};font-size:15px;line-height:1.55;color:#12211C">`
+    + items.map((l) => `<li style="margin:0 0 6px">${esc(l)}</li>`).join("") + `</ul>`;
+  const h = (v) => `<p style="margin:6px 0 8px;${F};font-size:15px;font-weight:700;color:#103528">${v}</p>`;
+  const avatar = FOUNDER.photo
+    ? `<img src="${esc(FOUNDER.photo)}" width="64" height="64" alt="${esc(FOUNDER.name)}" style="display:block;width:64px;height:64px;border-radius:32px;border:0">`
+    : `<div style="width:64px;height:64px;border-radius:32px;background:#103528;color:#E39B32;${F};font-size:22px;font-weight:700;line-height:64px;text-align:center">RB</div>`;
+  const inner = p(`Hi ${esc(firstName || "there")},`)
+    + p(`I'm ${esc(FOUNDER.name)}, founder and CEO of SubSub. Thanks for setting up ${esc(company)}.`)
+    + p(`I'd like to walk you through it myself. Pick a time that suits you and we'll spend 30 minutes on your own ${esc(subs)} and paperwork, not a slide deck.`)
+    + `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:4px 0 22px"><tr><td bgcolor="#E39B32" style="background:#E39B32;border-radius:8px">`
+    + `<a href="${esc(FOUNDER.demoUrl)}" style="display:inline-block;padding:13px 22px;${F};font-size:15px;font-weight:700;color:#103528;text-decoration:none">Pick a time with me</a></td></tr></table>`
+    + h("What SubSub does for you on Basic, today") + list(free)
+    + h("When you're ready for more, Scale starts at $99 a month and adds") + list(scale)
+    + p("If anything isn't working the way you need, reply to this email. It comes straight to me.")
+    + `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 6px;border-top:1px solid #DDE4E0;padding-top:16px"><tr>`
+    + `<td style="padding:16px 14px 0 0;vertical-align:top">${avatar}</td>`
+    + `<td style="padding-top:16px;vertical-align:top;${F};font-size:14px;line-height:1.5;color:#12211C">`
+    + `<div style="font-size:16px;font-weight:700">${esc(FOUNDER.name)}</div>`
+    + `<div style="color:#5D6F67">${esc(FOUNDER.title)}</div>`
+    + `<div><a href="mailto:${esc(FOUNDER.email)}" style="color:#1B4835">${esc(FOUNDER.email)}</a> · <a href="https://subsub.work" style="color:#1B4835">subsub.work</a></div>`
+    + `</td></tr></table>`
+    + `<p style="margin:18px 0 0;${F};font-size:12px;line-height:1.5;color:#5D6F67">SubSub, LLC, 4616 25th Ave NE, Seattle, WA 98105. You're getting this one note because you signed up for SubSub.</p>`;
+  const html = `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;border-collapse:collapse">`
+    + `<tr><td bgcolor="#103528" style="background:#103528;padding:18px 24px;border-radius:10px 10px 0 0">`
+    + `<img src="${EMAIL_LOGO_URL}" width="176" height="40" alt="SubSub" style="display:block;border:0;color:#FFFFFF;font:700 22px -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">`
+    + `</td></tr><tr><td style="padding:24px;border:1px solid #DDE4E0;border-top:0;border-radius:0 0 10px 10px">${inner}</td></tr></table>`;
+  return {
+    subject: `${firstName ? `${firstName}, a` : "A"} quick hello from SubSub's founder`,
+    text, html, replyTo: FOUNDER.email, fromName: `${FOUNDER.name} at SubSub`,
+  };
 }
 
 // A demo booked on book-a-demo.html, in SubSub's own voice and from SubSub's
@@ -988,13 +1086,19 @@ This is an automated message from an unmonitored address. Replies aren't receive
 // drawn by mail apps as an "N" in a circle, and a sender with no display name
 // reads as a script rather than a company, which spam filters weigh too. If
 // MAIL_FROM already names itself it is used as set.
+// The bare address out of a From line, whether or not it carries a name.
+export function mailAddress(from) {
+  const f = String(from || "").trim();
+  const m = f.match(/<([^>]+)>/);
+  return m ? m[1].trim() : f;
+}
 export function fromWithName(from, name = "SubSub") {
   const f = String(from || "").trim();
   if (!f || /<[^>]+>/.test(f)) return f;
   return `${name} <${f}>`;
 }
 
-export async function sendEmail(env, { to, subject, text, html, replyTo }) {
+export async function sendEmail(env, { to, subject, text, html, replyTo, fromName }) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM) {
     return { ok: false, error: "mail_not_configured" };
   }
@@ -1012,7 +1116,7 @@ export async function sendEmail(env, { to, subject, text, html, replyTo }) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: fromWithName(env.MAIL_FROM),
+        from: fromName ? `${fromName} <${mailAddress(env.MAIL_FROM)}>` : fromWithName(env.MAIL_FROM),
         to: [to],
         subject,
         text,

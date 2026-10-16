@@ -125,6 +125,34 @@ try {
       ev.length === 1 && ev[0].to_plan === "scale" && ev[0].cycle === "annual" && ev[0].mrr_delta_cents === 0, JSON.stringify(ev));
   }
 
+  console.log("\n-- the founder's note goes to a hiring account on Basic, and nobody else --");
+  {
+    const intro = () => mail.find((m) => /hello from SubSub's founder/.test(m.subject));
+    const db = seed(); const env = ENV(db); mail.length = 0; resendStatus = 200;
+    const r = await signup(env);
+    const f = intro();
+    t.ck("a Basic general contractor gets it", !!f, JSON.stringify(mail.map((m) => m.subject)));
+    t.ck("from Richard by name, at SubSub's address", f?.from === "Richard Braun at SubSub <hi@subsub.work>", f?.from);
+    t.ck("and replies reach him", f?.reply_to === "rb@subsub.work", f?.reply_to);
+    t.ck("it links SubSub's demo booking page", (f?.text || "").includes("https://subsub.work/book-a-demo.html")
+      && (f?.html || "").includes('href="https://subsub.work/book-a-demo.html'));
+    t.ck("it names Scale's benefits and the Basic limits", /Scale starts at \$99 a month/.test(f?.text || "")
+      && /recruiting QR code/.test(f?.text || "") && /Basic covers 3 subcontractors, 1 user and 5 jobs/.test(f?.text || ""));
+    t.ck("it is signed, with the postal address", /Founder & CEO, SubSub/.test(f?.text || "") && /4616 25th Ave NE/.test(f?.text || ""));
+    t.ck("the signature never draws an image that is not there", !/<img[^>]+alt="Richard Braun"/.test(f?.html || "") && /RB<\/div>/.test(f?.html || ""));
+    t.ck("it is on the mail log", logOf(db, r.body.accountId).some((l) => l.kind === "founder_intro" && l.status === "sent"));
+
+    mail.length = 0; const pm = await signup(env, { kind: "property_manager" });
+    t.ck("a property manager signs up", pm.status === 201, JSON.stringify(pm.body));
+    t.ck("a property manager's says contractors", /your own contractors/.test(intro()?.text || "") && !/subcontractor/.test(intro()?.text || ""), intro()?.text);
+
+    mail.length = 0; await signup(env, { plan: "scale" });
+    t.ck("a Scale signup does not get it", !intro() && mail.some((m) => /Welcome to SubSub/.test(m.subject)));
+
+    mail.length = 0; await signup(env, { kind: "subcontractor" });
+    t.ck("a subcontractor account does not get it", !intro() && mail.some((m) => /Welcome to SubSub/.test(m.subject)));
+  }
+
   console.log("\n-- mail never fails a signup --");
   {
     const db = seed(); const env = ENV(db, { mailOn: false }); mail.length = 0;

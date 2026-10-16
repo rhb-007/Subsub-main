@@ -13340,6 +13340,19 @@ refactor.
   pass for Resend; the junk filing is a new domain's reputation, not a broken
   record. **Not verified here:** a BIMI logo showing in any inbox.
 
+- **A HIRING ACCOUNT THAT CHOOSES BASIC GETS A NOTE FROM THE FOUNDER.**
+  `founderIntroEmail` in `mail.js`, sent at signup right after the welcome.
+  It is from "Richard Braun at SubSub", and replies go to rb@subsub.work. It
+  asks them to book a 30-minute demo through SubSub's own booking page, then
+  lists what Basic does and what Scale adds. The noun follows the account kind
+  (`hiresLabelFor`). The text figure comes off `SMS_INCLUDED_SCALE`.
+  **Not to Scale**, which has already chosen. **Not to a subcontractor
+  account**, which is free for good and is never shown an upgrade.
+  `FOUNDER.photo` is null until a photo is published; until then the
+  signature draws initials rather than a broken image. Logged as
+  `founder_intro`, and it never fails a signup. `test:signupwelcome` covers
+  all three branches; dropping the gate or hard-coding the noun fails it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
