@@ -984,6 +984,16 @@ This is an automated message from an unmonitored address. Replies aren't receive
 
 // Returns a result rather than throwing: a failed notification must not undo
 // the action that triggered it, and the caller decides whether to surface it.
+// The From line always carries a name. A bare notifications@subsub.work is
+// drawn by mail apps as an "N" in a circle, and a sender with no display name
+// reads as a script rather than a company, which spam filters weigh too. If
+// MAIL_FROM already names itself it is used as set.
+export function fromWithName(from, name = "SubSub") {
+  const f = String(from || "").trim();
+  if (!f || /<[^>]+>/.test(f)) return f;
+  return `${name} <${f}>`;
+}
+
 export async function sendEmail(env, { to, subject, text, html, replyTo }) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM) {
     return { ok: false, error: "mail_not_configured" };
@@ -1002,7 +1012,7 @@ export async function sendEmail(env, { to, subject, text, html, replyTo }) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: env.MAIL_FROM,
+        from: fromWithName(env.MAIL_FROM),
         to: [to],
         subject,
         text,

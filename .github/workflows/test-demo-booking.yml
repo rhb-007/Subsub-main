@@ -32,7 +32,7 @@ jobs:
       # on the sending domain. Printed, never failed on.
       - name: Mail domain records (SPF, DKIM, DMARC)
         run: |
-          for n in subsub.work send.subsub.work resend._domainkey.subsub.work _dmarc.subsub.work; do
+          for n in subsub.work send.subsub.work resend._domainkey.subsub.work _dmarc.subsub.work default._bimi.subsub.work; do
             echo "== $n TXT"; dig +short TXT "$n" @1.1.1.1
           done
           echo "== send.subsub.work MX"; dig +short MX send.subsub.work @1.1.1.1

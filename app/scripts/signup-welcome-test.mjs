@@ -217,4 +217,17 @@ try {
 } finally {
   globalThis.fetch = realFetch;
 }
+// The From line always carries a name, so a mail app draws "SubSub" rather
+// than an "N" for notifications@.
+{
+  const { fromWithName, sendEmail } = await import("../worker/mail.js");
+  const seen = [];
+  const keep = globalThis.fetch;
+  globalThis.fetch = async (u, o) => { seen.push(JSON.parse(o.body)); return new Response('{"id":"x"}'); };
+  await sendEmail({ RESEND_API_KEY: "k", MAIL_FROM: "notifications@subsub.work" }, { to: "a@b.co", subject: "s", text: "t" });
+  globalThis.fetch = keep;
+  t.ck("what Resend is sent names SubSub", seen[0]?.from === "SubSub <notifications@subsub.work>", seen[0]?.from);
+  t.ck("a bare MAIL_FROM gets SubSub's name", fromWithName("notifications@subsub.work") === "SubSub <notifications@subsub.work>");
+  t.ck("a named MAIL_FROM is used as set", fromWithName("Acme <a@b.co>") === "Acme <a@b.co>");
+}
 t.done();

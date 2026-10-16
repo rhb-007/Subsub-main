@@ -13327,6 +13327,19 @@ refactor.
   FAQ CSS is in a second `<style>` block, because `chrome.mjs` copies the
   first one into every generated page. That page has no FAQPage markup.
 
+- **EVERY EMAIL IS FROM "SUBSUB", AND THE SITE PUBLISHES A BIMI LOGO.**
+  Reported as the demo confirmation showing an "N" for its sender and landing
+  in junk. `fromWithName` in `mail.js` gives the From line SubSub's name when
+  `MAIL_FROM` is a bare address, so mail apps draw the name instead of a
+  letter. A `MAIL_FROM` that already carries a name is used as set.
+  `test:signupwelcome` reads what Resend is sent, and taking the name off
+  fails it. `bimi-logo.svg` at the site root is the mark in SVG Tiny PS
+  (square, forest background, safe inside a circle crop). It shows only once
+  `default._bimi.subsub.work` points at it, and Gmail and Apple Mail show it
+  only with a VMC or CMC certificate. The SPF, DKIM and DMARC records already
+  pass for Resend; the junk filing is a new domain's reputation, not a broken
+  record. **Not verified here:** a BIMI logo showing in any inbox.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
