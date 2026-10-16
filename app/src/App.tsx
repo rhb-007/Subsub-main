@@ -42948,16 +42948,18 @@ strong.insp-name{background:none;border:0;padding:0}
 /* In the half-width panel an iPad draws, the chip took the row's whole width
    and the title went to nothing, or the chip ran past the box. Measured
    against the box itself rather than the screen, because the box is narrow
-   on a wide screen too: under 560px of box the chip goes under the title,
-   lined up with it, and wraps its own words if it has to. */
+   on a wide screen too: under 560px of box the row stacks -- the date, the
+   title, then the chip -- all on one left edge. An indent for the chip only
+   lined up while the date and title shared a line, and in the iPad's
+   half-width panel they do not, so the chip floated mid-box. */
 .sh-late{container:shl / inline-size}
 @container shl (max-width:560px){
-  .shl-row{flex-wrap:wrap;row-gap:3px}
-  .shl-title{flex:1 1 calc(100% - 106px)}
-  .shl-state{margin-left:106px;max-width:calc(100% - 106px);white-space:normal}
-}
-@media (max-width:560px){
-  .shl-row{flex-wrap:wrap;gap:4px 10px}
+  .shl-row{flex-direction:column;align-items:flex-start;gap:4px;padding:8px 4px}
+  .shl-row + .shl-row{border-top:1px solid #ecd9b0;border-radius:0}
+  .shl-when{min-width:0}
+  .shl-title{flex:none;width:100%;white-space:normal;display:-webkit-box;
+    -webkit-line-clamp:2;-webkit-box-orient:vertical;line-height:1.35}
+  .shl-state{margin-left:0;max-width:100%;white-space:normal}
 }
 .shl-more{background:none;border:0;cursor:pointer;font:700 12px Inter,sans-serif;color:var(--amber-ink);
   padding:5px 4px;text-align:left}

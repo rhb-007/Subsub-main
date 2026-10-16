@@ -158,13 +158,22 @@ try {
       return [...box.querySelectorAll(".shl-row")].map((r) => {
         const st = r.querySelector(".shl-state").getBoundingClientRect();
         const ti = r.querySelector(".shl-title").getBoundingClientRect();
-        return { over: Math.round(st.right - edge), title: Math.round(ti.width) };
+        const wh = r.querySelector(".shl-when").getBoundingClientRect();
+        return { over: Math.round(st.right - edge), title: Math.round(ti.width),
+          stacked: ti.top >= wh.bottom - 1, chipLeft: Math.round(st.left - ti.left),
+          whenLeft: Math.round(wh.left - ti.left), narrow: box.getBoundingClientRect().width < 560 };
       });
     });
     t.ck(`at ${width}px every chip stays inside the past-due box`,
       !!fit && fit.length >= 2 && fit.every((f) => f.over <= 0), JSON.stringify(fit));
     t.ck(`at ${width}px every title keeps room to be read`,
       !!fit && fit.length >= 2 && fit.every((f) => f.title >= 90), JSON.stringify(fit));
+    // Stacked, the date, the title and the chip share one left edge. The
+    // reported screen had the chip indented to mid-box under a title that
+    // had already dropped below its date.
+    t.ck(`at ${width}px a stacked row lines the date, title and chip up on one edge`,
+      !!fit && fit.every((f) => !f.narrow || (f.stacked && Math.abs(f.chipLeft) <= 2 && Math.abs(f.whenLeft) <= 2)),
+      JSON.stringify(fit));
   }
   await m.page.setViewport({ width: 1340, height: 1600 });
   await wait(400);

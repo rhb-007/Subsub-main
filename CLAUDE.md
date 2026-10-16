@@ -13393,6 +13393,15 @@ refactor.
   Putting the old auto-schedule email back fails it at 197 words. Eight suites
   pinned the old wording and were moved to the new sentences, not loosened.
 
+- **THE PAST-DUE BOX STACKS EACH ROW ON ONE LEFT EDGE.** Reported again from
+  Outerhome's dashboard: the date on one line, the title under it, and the
+  *Date passed, nobody has accepted it* chip indented to mid-box. The narrow
+  rule gave the chip a 106px indent to line it up with the title, which only
+  works while the date and title share a line; in the iPad's half-width panel
+  they do not. Under 560px of box the row is now a column (date, title clamped
+  to two lines, chip) with a rule between rows. `test:visitnocrew` measures the
+  three left edges at five widths; the old indent fails five assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
