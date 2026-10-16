@@ -13262,6 +13262,24 @@ refactor.
   became meaningful once the fixture reset the move-out to unanswered before
   the tenant block, because an earlier press had answered it.
 
+- **A SUBCONTRACTOR OR HANDYMAN IS TOLD IT IS FREE WHERE OTHERS SEE A PLAN,
+  AND IT IS STILL NOT A PLAN.** Asked for on the signup form and the pricing
+  page. Choosing *Subcontractor or handyman* on `get-started.html` hid the plan
+  pill (deliberately, see the hire-both-ways entry) and put nothing in its
+  place, so the one question somebody about to sign up has, *what does this
+  cost me*, went unanswered. `#subFree` now takes that spot: *$0 —
+  Subcontractors and handymen are always free, forever.* The role card carries
+  a *$0 · Free forever* badge, and `pricing.html` has a strip under the two
+  plans with **Set up free — $0** into `get-started.html?as=subcontractor`.
+
+  **It names no plan, no other price and no count**, which is the rule that
+  took the pill off this flow: *Basic*, *3 subcontractors* or a seat count
+  invites *am I about to be charged for sending a certificate*. `$0` and
+  *free, forever* answer it without raising it. On the pricing page it is a
+  strip, not a third card, because a third card reads as a third plan.
+  `test:sitetools` pins all three; showing the line to everybody or pointing
+  the button anywhere else fails its assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

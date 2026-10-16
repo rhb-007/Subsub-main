@@ -139,6 +139,15 @@ nav.top a.btn-gold:hover{color:#20160A}
 
 /* ---------- pricing ---------- */
 .plans{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
+.subfree{display:flex;align-items:center;gap:22px;margin-top:22px;padding:22px 26px;
+  border:1.5px solid var(--forest);border-radius:var(--r);background:#F1F6F3}
+.subfree .sf-price{font:800 44px 'Bricolage Grotesque';letter-spacing:-.03em;color:var(--forest);line-height:1}
+.subfree .sf-copy{flex:1;min-width:0}
+.subfree h3{font-size:20px;letter-spacing:-.02em}
+.subfree p{margin-top:6px;font-size:15px;color:var(--muted)}
+.subfree .btn{flex:none}
+@media (max-width:760px){.subfree{flex-direction:column;align-items:stretch;text-align:left}
+  .subfree .btn{width:100%;justify-content:center}}
 .plan{background:var(--white);border:1.5px solid var(--rule);border-radius:var(--r);
   padding:32px;display:flex;flex-direction:column}
 .plan.lead{border-color:var(--forest);box-shadow:5px 5px 0 var(--forest)}
@@ -466,6 +475,19 @@ body.nav-open{overflow:hidden}
           <a class="btn btn-forest btn-block btn-lg" href="get-started.html?plan=scale&amp;billing=monthly" id="scaleCta">Start on Scale</a>
           <p class="fine" style="text-align:center;margin-top:12px" id="scaleFine">No card required to start setup</p>
         </div>
+      </div>
+
+      <!-- Subcontractors and handymen never pay, so their door is a line under
+           the plans rather than a third plan: a card priced at $0 beside Basic
+           would read as a cheaper tier of the same thing. -->
+      <div class="subfree" id="subFreeCta">
+        <div class="sf-price">$0</div>
+        <div class="sf-copy">
+          <h3>Subcontractor or handyman? Always free, forever.</h3>
+          <p>Keep your insurance, bond and W-9 in one live compliance pack, send it to whoever asks,
+            and see every client's jobs in one schedule. No card, no trial, nothing to upgrade.</p>
+        </div>
+        <a class="btn btn-gold btn-lg" href="get-started.html?as=subcontractor">Set up free — $0</a>
       </div>
 
       <div class="cmp-scroll">

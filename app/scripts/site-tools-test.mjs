@@ -102,6 +102,19 @@ console.log("\n-- the referral snippet is one thing --");
   t.ck("the subcontractor card is where a handyman signs up, and says so", /^Subcontractor or handyman</.test(subCard)
     && /property managers/.test(subCard) && /owners/.test(subCard), subCard);
   t.ck("and there is no handyman account kind to pick instead", !/value="Handyman"/i.test(gs));
+  // A subcontractor or handyman never pays, so where a hiring account sees its
+  // plan the form says that instead. No plan name, no price but $0, no count:
+  // the same rule the plan pill came off this flow for.
+  t.ck("the subcontractor card says it is free", /<i>\$0 · Free forever<\/i>/.test(subCard), subCard);
+  const free = (gs.match(/<div class="freepill[^"]*" id="subFree">([\s\S]*?)<\/div>/) || [])[1] || "";
+  t.ck("signup has a free-forever line for subcontractors and handymen", /always free, forever/.test(free) && /\$0/.test(free), free);
+  t.ck("and it names no plan, no other price and no count", free !== "" && !/Basic|Scale|upgrade|plan|\$[1-9]|\d+ (sub|user|job)/i.test(free), free);
+  t.ck("and it shows for a subcontractor in place of the plan pill",
+    /pill\.classList\.toggle\('hide', sub\)/.test(gs) && /getElementById\('subFree'\);\s*if\(free\)\{ free\.classList\.toggle\('hide', !sub\)/.test(gs));
+  const pr = read("pricing.html");
+  const cta = (pr.match(/<div class="subfree" id="subFreeCta">([\s\S]*?)<\/a>\s*<\/div>/) || [])[1] || "";
+  t.ck("pricing tells a subcontractor or handyman it is free, and signs them up as one",
+    /Always free, forever/.test(cta) && /\$0/.test(cta) && /href="get-started\.html\?as=subcontractor"/.test(cta), cta.slice(0, 200));
   const auds = (read("index.html").match(/<div class="auds">([\s\S]*?)<\/div>\s*<\/div>\s*<\/section>/) || [])[1] || "";
   const handyCard = (auds.match(/<a class="aud" href="([^"]+)">\s*<h3>Handymen and maintenance<\/h3>/) || [])[1];
   t.ck("the index has a card for handymen, so the grid has no empty cell", !!handyCard && (auds.match(/class="aud"/g) || []).length % 2 === 0, String(handyCard));
