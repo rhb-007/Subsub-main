@@ -29655,16 +29655,28 @@ function PassportShare({ url, name, compact = false, icons = false }) {
   );
 }
 
-// The sub's BBB rating, as BBB published it. Text only (no BBB mark), the
-// attribution BBB asks for, the day it was read, and a link to their profile.
+// The sub's BBB rating, at the foot of the Compliance pack box, under a
+// divider: reputation rather than cover, so it is not a row of the pack and
+// counts toward nothing. Text only (no BBB mark), the attribution BBB asks
+// for, the day it was read, and a link to their profile. With no current
+// reading -- the API not live yet, no profile linked, or a stale one -- the
+// grade slot holds a dash and says it is coming, and claims nothing.
 function PassportBbbCard({ bbb }) {
   return (
-    <aside className="pp-bbb" aria-label="BBB rating">
-      <span className="pp-bbb-k">BBB rating</span>
-      <b className="pp-bbb-grade">{bbb.rating === "NR" ? "Not rated" : bbb.rating}</b>
-      {bbb.accredited && <span className="pp-bbb-acc"><BadgeCheck size={14} /> BBB® Accredited Business</span>}
-      <span className="pp-bbb-src">Rating from BBB® · checked {formatExpiry(bbb.checkedOn)}</span>
-      <a className="pp-bbb-link" href={bbb.url} target="_blank" rel="noopener noreferrer">See BBB profile <ExternalLink size={13} /></a>
+    <aside className={`pp-bbb${bbb ? "" : " pp-bbb-none"}`} aria-label="BBB rating">
+      <div className="pp-bbb-main">
+        <span className="pp-bbb-k">BBB rating</span>
+        <b className="pp-bbb-grade">{bbb ? (bbb.rating === "NR" ? "Not rated" : bbb.rating) : "—"}</b>
+      </div>
+      <div className="pp-bbb-side">
+        {bbb ? (<>
+          {bbb.accredited && <span className="pp-bbb-acc"><BadgeCheck size={14} /> BBB® Accredited Business</span>}
+          <span className="pp-bbb-src">Rating from BBB® · checked {formatExpiry(bbb.checkedOn)}</span>
+          <a className="pp-bbb-link" href={bbb.url} target="_blank" rel="noopener noreferrer">See BBB profile <ExternalLink size={13} /></a>
+        </>) : (
+          <span className="pp-bbb-src">BBB® rating coming soon.</span>
+        )}
+      </div>
     </aside>
   );
 }
@@ -30063,26 +30075,20 @@ function PassportPage({ slug, seat = null }) {
               <div><dt><Shield size={14} /> Surety bond</dt><dd>{p.bond ? "On file" : "Not on file"}</dd></div>
               <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
             </dl>
+            <PassportBbbCard bbb={p.bbb} />
           </section>
           <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
         </div>
 
-        {/* Their work, and beside it what the BBB says about them -- only
-            when they linked their own profile and the reading is current.
-            Reputation rather than cover, so it is not in the compliance pack. */}
-        {(p.photos.length > 0 || p.bbb) && (
-          <div className={`pp-work${p.bbb ? " has-bbb" : ""}`}>
-            {p.photos.length > 0 && (
-              <div className="pp-photos">
-                {p.photos.map((ph) => (
-                  <button key={ph.id} className="pp-photo" onClick={() => setBig(ph)}>
-                    <img src={api.passportPhotoUrl(p.slug, ph.id)} alt={ph.caption || `Work by ${p.name}`} loading="lazy" />
-                    {ph.caption && <span>{ph.caption}</span>}
-                  </button>
-                ))}
-              </div>
-            )}
-            {p.bbb && <PassportBbbCard bbb={p.bbb} />}
+        {/* Their work. The BBB rating moved into the Compliance pack box. */}
+        {p.photos.length > 0 && (
+          <div className="pp-photos">
+            {p.photos.map((ph) => (
+              <button key={ph.id} className="pp-photo" onClick={() => setBig(ph)}>
+                <img src={api.passportPhotoUrl(p.slug, ph.id)} alt={ph.caption || `Work by ${p.name}`} loading="lazy" />
+                {ph.caption && <span>{ph.caption}</span>}
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -41435,24 +41441,25 @@ body{background:var(--paper)}
 .pp-sub{display:block;font-size:12px;font-weight:500;color:var(--ink-soft);line-height:1.45}
 .pp-sub.ok{color:var(--brand-dk);font-weight:700}
 .pp-photos{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
-.pp-work{margin-top:16px;display:flex;gap:12px;align-items:flex-start}
-.pp-work .pp-photos{margin-top:0;flex:1 1 auto;min-width:0}
-.pp-bbb{flex:0 0 220px;margin-left:auto;border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--card);
-  display:flex;flex-direction:column;gap:5px}
+/* The BBB rating sits at the foot of the Compliance pack box, under a rule,
+   so the box fills the height the Connect box beside it sets. */
+.pp-docs{display:flex;flex-direction:column}
+.pp-bbb{margin-top:auto;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:center;
+  justify-content:space-between;gap:12px 18px;flex-wrap:wrap}
+.pp-docs > .pp-facts{margin-bottom:16px}
+.pp-bbb-main{display:flex;flex-direction:column;gap:2px}
+.pp-bbb-side{display:flex;flex-direction:column;gap:4px;align-items:flex-end;text-align:right;min-width:0;flex:1 1 160px}
 .pp-bbb-k{font-size:12px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em}
-.pp-bbb-grade{font-size:34px;line-height:1.05;font-weight:800;color:var(--ink)}
+.pp-bbb-grade{font-size:40px;line-height:1.05;font-weight:800;color:var(--ink)}
+.pp-bbb-none .pp-bbb-grade{color:var(--ink-soft)}
 .pp-bbb-acc{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:700;color:var(--brand-dk)}
-.pp-bbb-src{font-size:12px;color:var(--ink-soft)}
+.pp-bbb-src{font-size:12.5px;color:var(--ink-soft)}
 .pp-bbb-link{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--brand-dk);text-decoration:none}
 .pp-bbb-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .pp-bbb-row > div{display:flex;flex-direction:column;gap:4px;min-width:0}
 .pp-bbb-url{font-size:13px;font-weight:700;overflow-wrap:anywhere;color:var(--brand-dk)}
 .pp-bbb-form{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
 .pp-bbb-form .fld{width:100%}
-@media (max-width:560px){
-  .pp-work{flex-direction:column}
-  .pp-bbb{flex:none;width:100%;margin-left:0}
-}
 .pp-photo{padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--paper);
   cursor:pointer;display:flex;flex-direction:column;text-align:left}
 .pp-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}

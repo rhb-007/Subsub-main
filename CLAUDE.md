@@ -13593,6 +13593,25 @@ refactor.
   gaps between the items, and that the slack is spread rather than left under
   the list. Both mutations (no pin, a top-packed list) fail.
 
+- **THE BBB RATING MOVED INTO THE COMPLIANCE PACK BOX, AND HOLDS A DASH UNTIL
+  THE API IS LIVE.** Asked for with the Passport on screen and "BBB A+" drawn
+  into the empty foot of the Compliance pack box, then *"just put the bbb place
+  holder there -- in the grade space for now until the api is live"*. It sits
+  at the foot of that box, under the facts and a rule (`margin-top:auto`, so it
+  takes the slack the Connect box beside it leaves), with its own *BBB rating*
+  label, and the photos row is photos alone again. **Still not part of the
+  pack**: it is not a row of the facts list, counts toward nothing and gates
+  nothing. **With no current reading the grade slot is a dash and the line says
+  *BBB® rating coming soon***, which claims nothing. That reverses the earlier
+  *no card and no empty box* rule, on request, and it is the same shape as
+  rent's *coming soon* slots: no letter, no "Accredited", no date and no link
+  is ever drawn without a fresh reading. `test:passportui` checks the card is
+  inside the box, below the facts and behind a rule, and that the placeholder
+  carries none of the grade's words. Putting a letter in the placeholder fails
+  two assertions. **Not mutation-proved:** the bottom pin. In the fixture the
+  documents box is the taller of the two, so removing `margin-top:auto`
+  changes nothing there.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

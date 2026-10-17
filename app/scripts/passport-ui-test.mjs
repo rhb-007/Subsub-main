@@ -210,14 +210,20 @@ const readPage = (page) => page.evaluate(() => {
     tel: c?.querySelector('.pp-contact a[href^="tel:"]')?.getAttribute("href") || null,
     photos: c?.querySelectorAll(".pp-photo img").length || 0,
     bbb: (() => {
-      const b = c?.querySelector(".pp-bbb"), ph = c?.querySelector(".pp-photos");
+      const b = c?.querySelector(".pp-bbb"), box = c?.querySelector(".pp-docs"), facts = c?.querySelector(".pp-docs .pp-facts");
       if (!b) return null;
-      const br = b.getBoundingClientRect(), pr = ph?.getBoundingClientRect();
+      const br = b.getBoundingClientRect(), xr = box?.getBoundingClientRect(), fr = facts?.getBoundingClientRect();
       const a = b.querySelector("a.pp-bbb-link");
       return { t: b.innerText.replace(/\s+/g, " ").trim(), href: a?.getAttribute("href") || null,
         target: a?.getAttribute("target"), rel: a?.getAttribute("rel"),
-        beside: !!pr && br.left >= pr.right - 1 && Math.abs(br.top - pr.top) < 4,
-        below: !!pr && br.top >= pr.bottom - 1, inCard: br.right <= c.getBoundingClientRect().right + 1 };
+        grade: b.querySelector(".pp-bbb-grade")?.textContent.trim() || "",
+        // Inside the Compliance pack box, under the facts, behind a rule.
+        inBox: !!box && box.contains(b), belowFacts: !!fr && br.top >= fr.bottom - 1,
+        ruled: parseFloat(getComputedStyle(b).borderTopWidth) >= 1,
+        // How far its foot sits above the box's own (padding included).
+        footGap: xr ? Math.round(xr.bottom - br.bottom) : 999,
+        inCard: br.right <= c.getBoundingClientRect().right + 1,
+        notInPhotos: !b.closest(".pp-photos") };
     })(),
     wide: document.documentElement.scrollWidth > window.innerWidth + 1,
     robots: document.querySelector('meta[name="robots"]')?.content || "",
@@ -264,7 +270,8 @@ try {
     t.ck("the BBB rating is drawn with the grade, accreditation and where it came from",
       /BBB rating/i.test(r.bbb?.t) && /A\+/.test(r.bbb.t) && /Accredited Business/.test(r.bbb.t) && /Rating from BBB/.test(r.bbb.t) && /checked Oct 15/.test(r.bbb.t), r.bbb?.t);
     t.ck("and links the sub's BBB profile in a new tab", /bbb\.org\/.*1296-1000123456$/.test(r.bbb?.href || "") && r.bbb.target === "_blank" && /noopener/.test(r.bbb.rel), JSON.stringify(r.bbb));
-    t.ck("on a phone it sits under the photos, inside the card", !!r.bbb?.below && r.bbb.inCard, JSON.stringify(r.bbb));
+    t.ck("it sits at the foot of the Compliance pack box, under the facts and a rule",
+      !!r.bbb?.inBox && r.bbb.belowFacts && r.bbb.ruled && r.bbb.notInPhotos && r.bbb.inCard, JSON.stringify(r.bbb));
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
     await page.evaluate(() => document.querySelector(".pp-head-cta")?.click());
@@ -292,7 +299,7 @@ try {
     t.ck("what connecting gives is listed, evenly spaced", r.cols?.perkGaps !== null && r.cols.perkGaps <= 2, JSON.stringify(r.cols));
     t.ck("and the slack is spread through the list, not left under it",
       !!r.cols?.perkSpread && r.cols.perkSpread.tail <= r.cols.perkSpread.between + 24, JSON.stringify(r.cols?.perkSpread));
-    t.ck("the BBB rating sits beside the photos", !!r.bbb?.beside, JSON.stringify(r.bbb));
+    t.ck("the BBB rating fills the foot of the Compliance pack box", !!r.bbb?.inBox && r.bbb.footGap <= 24, JSON.stringify(r.bbb));
     t.ck("no sideways scroll", !r.wide);
     await ctx.close();
   }
@@ -306,7 +313,9 @@ try {
     t.ck("the page is there", r.there);
     t.ck("it does not wear the badge", !r.badgeOn && !/SubSub Verified/.test(r.badge) && /Not verified yet/.test(r.badge), r.badge);
     t.ck("and still says what is and is not on file", /License not verified by SubSub/.test(r.line), r.line);
-    t.ck("with no BBB reading there is no BBB card and no empty box", r.bbb === null && !/BBB/.test(r.text), r.bbb?.t);
+    t.ck("with no BBB reading the grade slot holds a dash and says it is coming",
+      !!r.bbb?.inBox && r.bbb.grade === "—" && /coming soon/i.test(r.bbb.t) && r.bbb.href === null, r.bbb?.t);
+    t.ck("and it claims nothing", !/A\+|Accredited|checked/.test(r.bbb?.t || "x"), r.bbb?.t);
     S.verified = true; S.bbb = true;
     await ctx.close();
   }
