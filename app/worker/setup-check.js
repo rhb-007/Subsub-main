@@ -118,6 +118,13 @@ const GROUPS = [
       + "are still kept in the leads table (migration 076) and nobody is told about them.",
   },
   {
+    id: "bbb", label: "BBB rating on the Passport",
+    vars: ["BBB_API_TOKEN"],
+    matters: "The BBB rating a sub links from their Passport, read through the official BBB API "
+      + "(needs an approved registration at developer.bbb.org). Unset, a sub can still link their "
+      + "profile and no rating is drawn anywhere.",
+  },
+  {
     id: "demo", label: "Book a demo (Cal)",
     vars: ["CAL_API_KEY", "CAL_EVENT_TYPE_ID"],
     matters: "Real availability and real bookings on the marketing site's demo form. "

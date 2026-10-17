@@ -812,6 +812,8 @@ export const api = {
   },
   myPassport: () => request("/my-passport"),
   saveMyPassport: (patch) => request("/my-passport", { method: "PUT", body: JSON.stringify(patch) }),
+  linkBbb: (url) => request("/my-passport/bbb", { method: "PUT", body: JSON.stringify({ url }) }),
+  unlinkBbb: () => request("/my-passport/bbb", { method: "DELETE" }),
   uploadPassportPhoto: async (file) => uploadFile("passport-photo", await shrinkPhoto(file)),
   addPassportPhoto: (key, caption) => request("/my-passport/photos",
     { method: "POST", body: JSON.stringify({ key, caption }) }),

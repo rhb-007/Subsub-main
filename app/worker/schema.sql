@@ -2548,3 +2548,18 @@ CREATE TABLE portfolio_estimates (
   source         TEXT NOT NULL DEFAULT 'signup',
   created_at     TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 089: a sub's own BBB profile, linked from their Passport.
+CREATE TABLE IF NOT EXISTS bbb_profiles (
+  company_id      TEXT PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
+  profile_url     TEXT NOT NULL,
+  bbb_id          TEXT NOT NULL,
+  business_id     TEXT NOT NULL,
+  rating          TEXT,
+  accredited      INTEGER NOT NULL DEFAULT 0,
+  checked_at      TEXT,
+  last_failed_at  TEXT,
+  last_error      TEXT,
+  linked_at       TEXT DEFAULT CURRENT_TIMESTAMP,
+  linked_by       TEXT REFERENCES users(id)
+);

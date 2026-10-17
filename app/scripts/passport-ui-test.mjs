@@ -37,7 +37,8 @@ const t = tally();
 const SLUG = "bay-roofing-k7q2m";
 const NOT_CONNECTED = () => ({ status: "none", mayRequest: true, mayConnect: true, connectPending: false, files: [] });
 const S = { verified: true, access: NOT_CONNECTED(), kind: "general_contractor",
-  published: false, posts: [], pendingReq: true };
+  published: false, posts: [], pendingReq: true, bbb: true,
+  myBbb: { linked: false, live: true } };
 const PAGE = () => ({
   slug: SLUG, name: "Bay Roofing", city: "Tacoma", state: "WA",
   trades: [{ id: "roofing", label: "Roofing" }, { id: "gutters", label: "Gutters" }],
@@ -51,6 +52,8 @@ const PAGE = () => ({
     ? { verified: true, name: "SubSub Verified", line: "Washington L&I registration active · Insurance on file through Mar 4, 2027" }
     : { verified: false, name: null, line: "License not verified by SubSub · Insurance on file through Mar 4, 2027" },
   refCode: "K7Q2MXRB",
+  bbb: S.bbb ? { url: "https://www.bbb.org/us/wa/tacoma/profile/roofing/bay-roofing-1296-1000123456",
+    rating: "A+", accredited: true, checkedOn: "2026-10-15" } : null,
 });
 const acct = () => ({
   id: "acc_x", name: S.kind === "subcontractor" ? "Bay Roofing" : "Outerhome", subdomain: "bayroof", kind: S.kind,
@@ -60,7 +63,7 @@ const acct = () => ({
 const MINE = () => ({
   passport: { slug: SLUG, url: `https://app.subsub.work/p/${SLUG}`, published: S.published, trades: ["roofing"],
     foundedYear: 2012, about: "Residential re-roofs.", viewCount: 3 },
-  preview: PAGE(), photos: [],
+  preview: PAGE(), photos: [], bbb: S.myBbb,
   access: S.pendingReq ? [{ id: "pa1", accountId: "acc_gc", accountName: "Outerhome", requesterName: "Dana Ruiz",
     message: "For the Pine St job", status: "pending", requestedAt: "2026-10-09 10:00:00" }]
     : [{ id: "pa1", accountId: "acc_gc", accountName: "Outerhome", status: "approved", requestedAt: "2026-10-09 10:00:00" }],
@@ -85,6 +88,11 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/my-passport" && method === "PUT") {
     S.posts.push({ path, body }); if (typeof body.published === "boolean") S.published = body.published;
     return [200, { passport: MINE().passport }];
+  }
+  if (path === "/api/my-passport/bbb" && method === "PUT") {
+    S.posts.push({ path, body });
+    S.myBbb = { linked: true, live: true, url: body.url, rating: "A", accredited: false, checkedOn: "2026-10-17", shown: true, why: null };
+    return [200, { bbb: S.myBbb, checked: { ok: true, error: null } }];
   }
   if (path === "/api/my-passport/access/pa1" && method === "POST") {
     S.posts.push({ path, body }); S.pendingReq = false; return [200, { ok: true, status: "approved" }];
@@ -171,6 +179,16 @@ const readPage = (page) => page.evaluate(() => {
     contact: (c?.querySelector(".pp-contact")?.innerText || "").replace(/\s+/g, " "),
     tel: c?.querySelector('.pp-contact a[href^="tel:"]')?.getAttribute("href") || null,
     photos: c?.querySelectorAll(".pp-photo img").length || 0,
+    bbb: (() => {
+      const b = c?.querySelector(".pp-bbb"), ph = c?.querySelector(".pp-photos");
+      if (!b) return null;
+      const br = b.getBoundingClientRect(), pr = ph?.getBoundingClientRect();
+      const a = b.querySelector("a.pp-bbb-link");
+      return { t: b.innerText.replace(/\s+/g, " ").trim(), href: a?.getAttribute("href") || null,
+        target: a?.getAttribute("target"), rel: a?.getAttribute("rel"),
+        beside: !!pr && br.left >= pr.right - 1 && Math.abs(br.top - pr.top) < 4,
+        below: !!pr && br.top >= pr.bottom - 1, inCard: br.right <= c.getBoundingClientRect().right + 1 };
+    })(),
     wide: document.documentElement.scrollWidth > window.innerWidth + 1,
     robots: document.querySelector('meta[name="robots"]')?.content || "",
     text: (c?.innerText || "").replace(/\s+/g, " "),
@@ -213,6 +231,10 @@ try {
     t.ck("signed out, connecting is offered behind a sign-in", /Sign in to connect/.test(r.access) && !/Certificate of insurance/.test(r.access), r.access);
     t.ck("and a free signup credited to this sub", r.signup === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.signup);
     t.ck("photos of their work", r.photos === 1);
+    t.ck("the BBB rating is drawn with the grade, accreditation and where it came from",
+      /BBB rating/i.test(r.bbb?.t) && /A\+/.test(r.bbb.t) && /Accredited Business/.test(r.bbb.t) && /Rating from BBB/.test(r.bbb.t) && /checked Oct 15/.test(r.bbb.t), r.bbb?.t);
+    t.ck("and links the sub's BBB profile in a new tab", /bbb\.org\/.*1296-1000123456$/.test(r.bbb?.href || "") && r.bbb.target === "_blank" && /noopener/.test(r.bbb.rel), JSON.stringify(r.bbb));
+    t.ck("on a phone it sits under the photos, inside the card", !!r.bbb?.below && r.bbb.inCard, JSON.stringify(r.bbb));
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
     await page.evaluate(() => document.querySelector(".pp-head-cta")?.click());
@@ -234,20 +256,22 @@ try {
       !!r.cols?.side && r.cols.docsHold, JSON.stringify(r.cols));
     t.ck("the left box is called Compliance pack", r.cols?.docsTitle === "Compliance pack", r.cols?.docsTitle);
     t.ck("and the two boxes are the same height", !!r.cols?.even, JSON.stringify(r.cols));
+    t.ck("the BBB rating sits beside the photos", !!r.bbb?.beside, JSON.stringify(r.bbb));
     t.ck("no sideways scroll", !r.wide);
     await ctx.close();
   }
 
   console.log("\n-- not verified --");
   {
-    S.verified = false;
+    S.verified = false; S.bbb = false;
     const { ctx, page } = await visitApp(browser, { host: "app", webPort: WEB, viewport: PHONE, path: `/p/${SLUG}` });
     await wait(1800);
     const r = await readPage(page);
     t.ck("the page is there", r.there);
     t.ck("it does not wear the badge", !r.badgeOn && !/SubSub Verified/.test(r.badge) && /Not verified yet/.test(r.badge), r.badge);
     t.ck("and still says what is and is not on file", /License not verified by SubSub/.test(r.line), r.line);
-    S.verified = true;
+    t.ck("with no BBB reading there is no BBB card and no empty box", r.bbb === null && !/BBB/.test(r.text), r.bbb?.t);
+    S.verified = true; S.bbb = true;
     await ctx.close();
   }
 
@@ -353,6 +377,21 @@ try {
       && sent[0].body.action === "approve", JSON.stringify(sent));
     const after = await page.evaluate(() => (document.querySelector(".pp-edit")?.innerText || "").replace(/\s+/g, " "));
     t.ck("and then it can be stopped", /Stop sharing/.test(after), after.slice(-300));
+    const bb = await page.evaluate(() => (document.querySelector(".pp-bbb-panel")?.innerText || "").replace(/\s+/g, " "));
+    t.ck("the Passport tab offers a BBB profile link", /Your BBB profile address/.test(bb), bb);
+    before = S.posts.length;
+    await page.evaluate(() => {
+      const i = document.querySelector(".pp-bbb-form input");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, "https://www.bbb.org/us/wa/t/profile/r/bay-1296-1000123456");
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(200);
+    await page.evaluate(() => [...document.querySelectorAll(".pp-bbb-form button")].find((b) => /Link profile/.test(b.innerText))?.click());
+    await wait(900);
+    sent = S.posts.slice(before);
+    const bb2 = await page.evaluate(() => (document.querySelector(".pp-bbb-panel")?.innerText || "").replace(/\s+/g, " "));
+    t.ck("linking sends the address and then says what shows", sent.length === 1 && sent[0].path === "/api/my-passport/bbb"
+      && /1296-1000123456/.test(sent[0].body.url) && /Showing A/.test(bb2) && /Remove/.test(bb2), JSON.stringify(sent) + " " + bb2);
     t.ck("what is still blank is named", /Fill these in/.test(after) && /Photos of your work/.test(after), after.slice(0, 600));
     // My QR code, on Profile, is the Passport now.
     await page.evaluate(() => [...document.querySelectorAll("button")].find((x) => x.innerText.trim() === "Profile")?.click());

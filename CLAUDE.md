@@ -13535,6 +13535,47 @@ refactor.
   Three browser mutations fire (CTA back under the code, `align-items:start`,
   the title dropped) and one server one (a title printed with no name).
 
+- **A SUB'S BBB RATING SITS BESIDE THEIR PHOTOS ON THE PASSPORT, AND IT IS
+  NOT PART OF THE COMPLIANCE PACK.** Asked for as *"Add BBB grade (via api?)
+  check to compliance pack? Add next to the images from the passport page"*.
+  Migration 089 (`bbb_profiles`), `app/shared/bbb.js`, `app/worker/bbb.js`.
+
+  **Beside the photos, not in the pack.** A BBB grade is reputation, not
+  cover, so it is not in the compliance pack, not part of SubSub Verified, and
+  it gates nothing (assignment, payment). It is a card next to the photos of
+  their work, under them on a phone.
+
+  **The sub links their own profile, and SubSub never searches by name.** A
+  name search is fuzzy, and a grade drawn under the wrong company's name is
+  the worst thing this card could say. So the sub pastes their whole bbb.org
+  profile address on the Passport tab (`PUT /api/my-passport/bbb`). The two
+  ids the API is asked about are read off its last segment. Another host, a
+  host that only starts with bbb.org, a search page and a bare name are all
+  refused by name. Linking a different business clears the old grade, because
+  that grade was about somebody else.
+
+  **Read through the official BBB API (developer.bbb.org), never scraped.**
+  It needs an approved registration, and `BBB_API_TOKEN` switches it on. Until
+  then a linked profile is kept and the public page draws nothing.
+
+  **Nothing draws unless it is true and fresh.** BBB asks for a downloaded
+  rating to be refreshed at least every 30 days. So a reading older than
+  `BBB_STALE_DAYS` stops drawing on its own, and a nightly sweep re-reads
+  every linked profile not read that day. A failed read keeps the last good
+  grade and stamps `last_failed_at`, so an outage does not wipe it, and an old
+  grade still expires by the clock. The card carries BBB's attribution, the
+  date checked and a link to the profile. With nothing to show, there is no
+  card and no empty box. The sub's own panel says why nothing shows
+  (`bbbOwnView`): not switched on, check failed, no grade, or stale.
+
+  **Not verified here:** a live BBB answer. The search path and its two
+  parameters are what the BBB API publishes. `readBbbAnswer` accepts several
+  spellings and returns no rating rather than a guess, so the first real call
+  is the test. `test:bbb` (39) and `test:passportui`. Seven server mutations
+  fire, each on its own assertion: staleness dropped, the live gate dropped,
+  the host matched as a prefix, a failure wiping the grade, a relink keeping
+  it, the sweep re-reading, and the public page dropping it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

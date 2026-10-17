@@ -29655,6 +29655,86 @@ function PassportShare({ url, name, compact = false, icons = false }) {
   );
 }
 
+// The sub's BBB rating, as BBB published it. Text only (no BBB mark), the
+// attribution BBB asks for, the day it was read, and a link to their profile.
+function PassportBbbCard({ bbb }) {
+  return (
+    <aside className="pp-bbb" aria-label="BBB rating">
+      <span className="pp-bbb-k">BBB rating</span>
+      <b className="pp-bbb-grade">{bbb.rating === "NR" ? "Not rated" : bbb.rating}</b>
+      {bbb.accredited && <span className="pp-bbb-acc"><BadgeCheck size={14} /> BBB® Accredited Business</span>}
+      <span className="pp-bbb-src">Rating from BBB® · checked {formatExpiry(bbb.checkedOn)}</span>
+      <a className="pp-bbb-link" href={bbb.url} target="_blank" rel="noopener noreferrer">See BBB profile <ExternalLink size={13} /></a>
+    </aside>
+  );
+}
+
+// The sub's own BBB profile link on their Passport tab. A whole bbb.org
+// profile address; SubSub never searches the BBB by name.
+const BBB_ERR = {
+  not_a_bbb_profile: "That isn't a BBB business profile address. Open your profile on bbb.org and copy the address from the top of the page.",
+  empty: "Paste your BBB profile address.",
+};
+function PassportBbbPanel({ initial }) {
+  const [bbb, setBbb] = useState(initial || { linked: false, live: false });
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const link = async () => {
+    setBusy(true); setNote("");
+    try {
+      const r = await api.linkBbb(url);
+      setBbb(r.bbb); setUrl("");
+      setNote(!r.checked || r.checked.ok ? "Linked."
+        : r.checked.error === "not_found" ? "Linked, but the BBB found no business at that address. Check it's your own profile."
+        : "Linked. The BBB didn't answer just now; we'll try again tonight.");
+    } catch (e) {
+      const k = e?.body?.error;
+      setNote(BBB_ERR[k] || (e?.body?.migration ? `This needs migration ${e.body.migration} pasted first.` : "That didn't save. Try again."));
+    } finally { setBusy(false); }
+  };
+  const unlink = async () => {
+    setBusy(true); setNote("");
+    try { const r = await api.unlinkBbb(); setBbb(r.bbb); }
+    catch { setNote("That didn't save. Try again."); }
+    finally { setBusy(false); }
+  };
+  const why = bbb.linked && !bbb.shown
+    ? bbb.why === "not_live" ? "BBB ratings aren't switched on in SubSub yet. Your profile is saved and your rating will show once they are."
+      : bbb.why === "check_failed" ? "We couldn't read your rating from the BBB yet. We try again every night."
+      : bbb.why === "no_grade" ? "The BBB didn't return a rating for this profile, so nothing shows."
+      : bbb.why === "stale" ? "Your rating hasn't been re-checked in 30 days, so it's hidden until it is."
+      : "Your rating will show once the BBB has been checked."
+    : null;
+  return (
+    <div className="portal-panel settings-panel pp-bbb-panel">
+      <h4>BBB rating</h4>
+      <p className="panel-note">Link your own BBB business profile and your rating shows next to your photos. It's optional, and it shows whatever the BBB currently says.</p>
+      {bbb.linked ? (
+        <>
+          <div className="pp-bbb-row">
+            <div>
+              <a href={bbb.url} target="_blank" rel="noopener noreferrer" className="pp-bbb-url">{bbb.url}</a>
+              {bbb.shown && <span className="pp-sub ok">Showing {bbb.rating === "NR" ? "Not rated" : bbb.rating}{bbb.accredited ? " · Accredited" : ""} · checked {formatExpiry(bbb.checkedOn)}</span>}
+              {why && <span className="pp-sub">{why}</span>}
+            </div>
+            <button className="btn-ghost" disabled={busy} onClick={unlink}>Remove</button>
+          </div>
+        </>
+      ) : (
+        <div className="pp-bbb-form">
+          <label className="fld"><span>Your BBB profile address</span>
+            <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.bbb.org/us/…/profile/…" inputMode="url" />
+          </label>
+          <button className="btn-solid" disabled={busy || !url.trim()} onClick={link}>{busy ? "Linking…" : "Link profile"}</button>
+          {!bbb.live && <span className="pp-sub">BBB ratings aren't switched on yet. You can link now and it will show once they are.</span>}
+        </div>
+      )}
+      {note && <p className="panel-note" role="status">{note}</p>}
+    </div>
+  );
+}
+
 function PassportBadge({ badge }) {
   if (!badge) return null;
   return (
@@ -29970,14 +30050,22 @@ function PassportPage({ slug, seat = null }) {
           <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
         </div>
 
-        {p.photos.length > 0 && (
-          <div className="pp-photos">
-            {p.photos.map((ph) => (
-              <button key={ph.id} className="pp-photo" onClick={() => setBig(ph)}>
-                <img src={api.passportPhotoUrl(p.slug, ph.id)} alt={ph.caption || `Work by ${p.name}`} loading="lazy" />
-                {ph.caption && <span>{ph.caption}</span>}
-              </button>
-            ))}
+        {/* Their work, and beside it what the BBB says about them -- only
+            when they linked their own profile and the reading is current.
+            Reputation rather than cover, so it is not in the compliance pack. */}
+        {(p.photos.length > 0 || p.bbb) && (
+          <div className={`pp-work${p.bbb ? " has-bbb" : ""}`}>
+            {p.photos.length > 0 && (
+              <div className="pp-photos">
+                {p.photos.map((ph) => (
+                  <button key={ph.id} className="pp-photo" onClick={() => setBig(ph)}>
+                    <img src={api.passportPhotoUrl(p.slug, ph.id)} alt={ph.caption || `Work by ${p.name}`} loading="lazy" />
+                    {ph.caption && <span>{ph.caption}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+            {p.bbb && <PassportBbbCard bbb={p.bbb} />}
           </div>
         )}
       </div>
@@ -30179,6 +30267,8 @@ function PassportPanel() {
           )}
         </div>
       </div>
+
+      <PassportBbbPanel initial={d.bbb} />
 
       {decided.length > 0 && (
         <div className="portal-panel settings-panel">
@@ -41328,6 +41418,24 @@ body{background:var(--paper)}
 .pp-sub{display:block;font-size:12px;font-weight:500;color:var(--ink-soft);line-height:1.45}
 .pp-sub.ok{color:var(--brand-dk);font-weight:700}
 .pp-photos{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.pp-work{margin-top:16px;display:flex;gap:12px;align-items:flex-start}
+.pp-work .pp-photos{margin-top:0;flex:1 1 auto;min-width:0}
+.pp-bbb{flex:0 0 220px;margin-left:auto;border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--card);
+  display:flex;flex-direction:column;gap:5px}
+.pp-bbb-k{font-size:12px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em}
+.pp-bbb-grade{font-size:34px;line-height:1.05;font-weight:800;color:var(--ink)}
+.pp-bbb-acc{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:700;color:var(--brand-dk)}
+.pp-bbb-src{font-size:12px;color:var(--ink-soft)}
+.pp-bbb-link{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--brand-dk);text-decoration:none}
+.pp-bbb-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.pp-bbb-row > div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.pp-bbb-url{font-size:13px;font-weight:700;overflow-wrap:anywhere;color:var(--brand-dk)}
+.pp-bbb-form{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.pp-bbb-form .fld{width:100%}
+@media (max-width:560px){
+  .pp-work{flex-direction:column}
+  .pp-bbb{flex:none;width:100%;margin-left:0}
+}
 .pp-photo{padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--paper);
   cursor:pointer;display:flex;flex-direction:column;text-align:left}
 .pp-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}

@@ -307,6 +307,9 @@ WITH spec(j) AS (SELECT
   -- 088. The main contact's title on a Passport. Until it is run the page
   -- prints the name alone and saving a title names the file.
   ',["m088_passport_contact_title","col","passports",["contact_title"]]' ||
+  -- 089. A sub's own BBB profile on their Passport. Until it is run linking
+  -- one names the file and nothing else changes.
+  ',["m089_bbb_profiles","col","bbb_profiles",["company_id","profile_url","bbb_id","business_id","rating","accredited","checked_at","last_failed_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

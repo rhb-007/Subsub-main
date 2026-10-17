@@ -162,6 +162,8 @@ import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passp
 import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_CENTS,
   MIN_MONTHLY_CENTS, validEstimate, pricingRows } from "../shared/unitpricing.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
+import { bbbLive, fetchBbbRating } from "./bbb.js";
+import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -9589,6 +9591,7 @@ export function missingSchema(err) {
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
   if (/\bjob_trade_spans\b/i.test(m)) return "079_job_spans";
   if (/\bcontact_title\b/i.test(m)) return "088_passport_contact_title";
+  if (/\bbbb_profiles\b/i.test(m)) return "089_bbb_profiles";
   if (/\bpassport(s|_photos|_access)\b|\blicense_reminders\b|ux_passport_|ux_license_reminder/i.test(m)) return "077_passport";
   if (/\bleads\b/i.test(m)) return "076_leads";
   if (/\breferral_(codes|touches|attributions|rewards|invites)\b|ux_referral_/i.test(m)) return "075_referrals";
@@ -19513,7 +19516,7 @@ async function passportPublicShape(env, passport, { today = new Date().toISOStri
   let refCode = null;
   try { refCode = await ensureReferralCode(env, { kind: "sub", companyId: co.id }); }
   catch (err) { if (!missingSchema(err)) console.warn("[passport] no referral code:", err?.message || err); }
-  return publicPassport({
+  const shape = publicPassport({
     passport: { slug: passport.slug, trades: await passportTrades(env, passport, co.id),
       foundedYear: passport.founded_year, about: passport.about,
       contactTitle: passport.contact_title ?? null },
@@ -19524,6 +19527,60 @@ async function passportPublicShape(env, passport, { today = new Date().toISOStri
       insurance: co.insurance, w9: co.w9 },
     photos: await passportPhotos(env, co.id), docs, refCode, today,
   });
+  // The sub's BBB rating, only when they linked their own profile, the API is
+  // switched on, and the reading is inside BBB's 30-day refresh rule. A
+  // database without 089 draws no rating and loses nothing else.
+  shape.bbb = bbbPublic(await bbbProfileRow(env, co.id), { live: bbbLive(env), today });
+  return shape;
+}
+
+async function bbbProfileRow(env, companyId) {
+  try {
+    return await env.DB.prepare(`SELECT * FROM bbb_profiles WHERE company_id = ?`).bind(companyId).first();
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+// Ask the BBB API about one linked profile and store the answer. A failure
+// keeps the last good reading and stamps last_failed_at: an outage must not
+// wipe a grade, and an old grade stops drawing on its own after 30 days.
+async function refreshBbbProfile(env, row) {
+  const got = await fetchBbbRating(env, { bbbId: row.bbb_id, businessId: row.business_id });
+  if (got.ok) {
+    await env.DB.prepare(
+      `UPDATE bbb_profiles SET rating = ?, accredited = ?, checked_at = CURRENT_TIMESTAMP,
+              last_error = NULL WHERE company_id = ?`
+    ).bind(got.rating, got.accredited ? 1 : 0, row.company_id).run();
+  } else if (got.error !== "not_live") {
+    await env.DB.prepare(
+      `UPDATE bbb_profiles SET last_failed_at = CURRENT_TIMESTAMP, last_error = ? WHERE company_id = ?`
+    ).bind(got.error, row.company_id).run();
+  }
+  return got;
+}
+
+// Nightly: every linked profile not read today. BBB asks for a refresh at
+// least every 30 days; once a day keeps a changed grade from lingering.
+async function bbbSweep(env) {
+  if (!bbbLive(env)) return { skipped: "not live" };
+  let rows;
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT * FROM bbb_profiles
+        WHERE checked_at IS NULL OR date(checked_at) < date('now')
+        ORDER BY checked_at IS NOT NULL, checked_at LIMIT 500`).all());
+  } catch (err) {
+    if (missingSchema(err)) return { skipped: "not migrated" };
+    throw err;
+  }
+  let ok = 0, failed = 0;
+  for (const row of rows || []) {
+    const got = await refreshBbbProfile(env, row);
+    if (got.ok) ok++; else failed++;
+  }
+  return { ok, failed };
 }
 
 // The trades a Passport names. The sub's own pick on the Passport tab when
@@ -19565,6 +19622,7 @@ app.get("/api/my-passport", requireRole("admin", "pm", "contractor"), async (c) 
       ORDER BY CASE pa.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, pa.requested_at DESC
       LIMIT 100`).bind(who.companyId).all();
   return c.json({ passport: passportRowToJs(row), preview,
+    bbb: bbbOwnView(await bbbProfileRow(c.env, who.companyId), { live: bbbLive(c.env) }),
     photos: (await passportPhotos(c.env, who.companyId)).map((p) => ({ id: p.id, caption: p.caption || null })),
     access: (access || []).map(accessRowToJs) });
 });
@@ -19599,6 +19657,50 @@ app.put("/api/my-passport", requireRole("admin", "pm", "contractor"), async (c) 
   }
   const fresh = await ensurePassport(c.env, who.companyId);
   return c.json({ passport: passportRowToJs(fresh), preview: await passportPublicShape(c.env, fresh) });
+});
+
+// The sub's own BBB profile. A whole bbb.org profile address, never a name
+// search: the ids the API is asked about are read off it. Linking reads the
+// rating at once when the API is on, and the reply says what was read.
+app.put("/api/my-passport/bbb", requireRole("admin", "pm", "contractor"), async (c) => {
+  const { userId } = c.get("auth");
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  const b = await c.req.json().catch(() => ({}));
+  const parsed = parseBbbProfileUrl(b.url);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const prior = await bbbProfileRow(c.env, who.companyId);
+  const same = prior && prior.bbb_id === parsed.bbbId && prior.business_id === parsed.businessId;
+  if (same) {
+    await c.env.DB.prepare(`UPDATE bbb_profiles SET profile_url = ? WHERE company_id = ?`)
+      .bind(parsed.url, who.companyId).run();
+  } else {
+    // A different business: the old reading was about somebody else, so it
+    // goes with the old address.
+    await c.env.DB.prepare(
+      `INSERT INTO bbb_profiles (company_id, profile_url, bbb_id, business_id, linked_by)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(company_id) DO UPDATE SET profile_url = excluded.profile_url, bbb_id = excluded.bbb_id,
+         business_id = excluded.business_id, rating = NULL, accredited = 0, checked_at = NULL,
+         last_failed_at = NULL, last_error = NULL, linked_at = CURRENT_TIMESTAMP, linked_by = excluded.linked_by`
+    ).bind(who.companyId, parsed.url, parsed.bbbId, parsed.businessId, userId || null).run();
+  }
+  let checked = null;
+  if (bbbLive(c.env)) {
+    const rl = await rateLimit(c.env, "bbb-link", who.companyId, { limit: 10, windowMinutes: 60 });
+    if (rl.ok) checked = await refreshBbbProfile(c.env, await bbbProfileRow(c.env, who.companyId));
+  }
+  return c.json({
+    bbb: bbbOwnView(await bbbProfileRow(c.env, who.companyId), { live: bbbLive(c.env) }),
+    checked: checked ? { ok: !!checked.ok, error: checked.ok ? null : checked.error } : null,
+  });
+});
+
+app.delete("/api/my-passport/bbb", requireRole("admin", "pm", "contractor"), async (c) => {
+  const who = await passportCompany(c);
+  if (who.error) return c.json({ error: who.error }, who.error === "not_hireable" ? 409 : 403);
+  await c.env.DB.prepare(`DELETE FROM bbb_profiles WHERE company_id = ?`).bind(who.companyId).run();
+  return c.json({ bbb: bbbOwnView(null, { live: bbbLive(c.env) }) });
 });
 
 // A photograph of their work. Uploaded first through the checked
@@ -21111,6 +21213,11 @@ app.get("/api/cron/referrals", async (c) => {
 app.get("/api/cron/doc-expiry", async (c) => {
   if (c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
   return c.json(await docExpirySweep(c.env));
+});
+
+app.get("/api/cron/bbb", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await bbbSweep(c.env));
 });
 
 app.get("/api/cron/license-reminders", async (c) => {
@@ -25881,7 +25988,7 @@ export default {
          ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
-         ["unit-billing", unitBillingSweep]]
+         ["unit-billing", unitBillingSweep], ["bbb", bbbSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep]];
 
     ctx.waitUntil((async () => {
