@@ -7867,6 +7867,23 @@ refactor.
   `test:bbb` (44) and `test:passportui` (76). Hiding the card when there is no
   grade fails two assertions.
 
+- **A READER WHO CANNOT CONNECT SEES THE SAME PASSPORT, WITH CONNECT GREYED
+  OUT.** Reported with the Passport open in a seat that cannot connect: the
+  header's green *Connect with Orcas Roofing* looked pressable, and the box
+  beside the Compliance pack held one sentence over a tall empty panel. Asked
+  for as *"keep all of the same content, just grey out the ability to click on
+  the call to actions ... in the box and in the headline"*.
+
+  `usePassportConnect` returns `blocked`, the one reason this reader cannot
+  connect, read by the header and the box: not an admin or pm seat, an account
+  that does not hire, or nobody at the company able to answer. The box draws the
+  same offer anybody else sees, with the four perks, the note field and Connect
+  disabled in gray, and the reason under them. The header's button stays and is
+  disabled the same way. Signed out is not blocked, because signing in may fix
+  it. `test:passportui` (82) reads both controls, their gray, and that pressing
+  either sends nothing. The mutation putting the bare sentence back fails three
+  assertions.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

@@ -61,7 +61,7 @@ const PAGE = () => ({
 const acct = () => ({
   id: "acc_x", name: S.kind === "subcontractor" ? "Bay Roofing" : "Outerhome", subdomain: "bayroof", kind: S.kind,
   plan: "basic", billing: "monthly", useDefaultMark: true, theme: null, trades: ["roofing"], logoKey: null,
-  subscriptionStatus: "active", user: { id: "u_rb", name: "R Braun", email: "rb@x.test", role: "admin" },
+  subscriptionStatus: "active", user: { id: "u_rb", name: "R Braun", email: "rb@x.test", role: S.role || "admin" },
 });
 const MINE = () => ({
   passport: { slug: SLUG, url: `https://app.subsub.work/p/${SLUG}`, published: S.published, trades: ["roofing"],
@@ -110,7 +110,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     docs: {}, findable: false, code: "c", openToHire: true, openAnswered: true, url: null, sharesSent: 0, crews: [] }];
   if (path === "/api/my-work") return [200, { work: [] }];
   if (path === "/api/account-users") return [200, [{ id: "u_rb", name: "R Braun", email: "rb@x.test",
-    phone: null, role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
+    phone: null, role: S.role || "admin", subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
   if (["/api/jobs", "/api/subs", "/api/properties", "/api/invites", "/api/clients", "/api/visits",
     "/api/my-connect-requests", "/api/connect-requests", "/api/property-transfers", "/api/my-quotes",
     "/api/doc-shares", "/api/inspections", "/api/change-orders", "/api/tenants", "/api/agreements"].includes(path)) return [200, []];
@@ -406,6 +406,41 @@ try {
     t.ck("the header's Connect connects in one press", sent2.length === 1 && sent2[0].path.endsWith("/connect"), JSON.stringify(sent2));
     r = await readPage(page);
     t.ck("and rings the box it sends you to", await page.evaluate(() => document.querySelector(".pp-access")?.classList.contains("ring")));
+    // A reader who cannot connect sees the same offer, greyed out, with the
+    // reason under it -- not a bare sentence where the offer was.
+    S.access = { status: "none", reason: "not_a_hiring_account", mayRequest: false, mayConnect: false, connectPending: false, files: [] };
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await wait(2200);
+    const bl = await page.evaluate(() => {
+      const box = document.querySelector(".pp-access"), head = document.querySelector(".pp-head-cta");
+      const btn = [...(box?.querySelectorAll("button") || [])].find((b) => b.innerText.trim() === "Connect");
+      return { t: (box?.innerText || "").replace(/\s+/g, " "), perks: box?.querySelectorAll(".pp-perks li").length || 0,
+        btn: !!btn, btnOff: !!btn?.disabled, inputOff: !!box?.querySelector(".pp-blocked input")?.disabled,
+        btnBg: btn ? getComputedStyle(btn).backgroundColor : null,
+        head: !!head, headOff: !!head?.disabled, headT: head?.innerText.trim() || "",
+        headBg: head ? getComputedStyle(head).backgroundColor : null };
+    });
+    t.ck("a reader who cannot connect still sees the whole offer", bl.perks === 4 && /Connect with Bay Roofing/.test(bl.t) && bl.btn, JSON.stringify(bl));
+    t.ck("with the box's Connect and note greyed out", bl.btnOff && bl.inputOff && /211, 214, 209/.test(bl.btnBg || ""), JSON.stringify(bl));
+    t.ck("and the reason under it", /Only an account that hires can connect/.test(bl.t), bl.t);
+    t.ck("the header's Connect is there and greyed out too", bl.head && bl.headOff && /Connect with Bay Roofing/.test(bl.headT) && /211, 214, 209/.test(bl.headBg || ""), JSON.stringify(bl));
+    const before3 = S.posts.length;
+    await page.evaluate(() => { document.querySelector(".pp-head-cta")?.click(); [...document.querySelectorAll(".pp-access button")].find((b) => b.innerText.trim() === "Connect")?.click(); });
+    await wait(800);
+    t.ck("and pressing either sends nothing", S.posts.length === before3, JSON.stringify(S.posts.slice(before3)));
+    // The reported case: signed in, but not a seat that can connect at all.
+    S.role = "tenant"; S.access = NOT_CONNECTED();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await wait(2400);
+    const nt = await page.evaluate(() => {
+      const box = document.querySelector(".pp-access"), head = document.querySelector(".pp-head-cta");
+      const btn = [...(box?.querySelectorAll("button") || [])].find((b) => b.innerText.trim() === "Connect");
+      return { t: (box?.innerText || "").replace(/\s+/g, " "), perks: box?.querySelectorAll(".pp-perks li").length || 0,
+        btnOff: !!btn?.disabled, headOff: !!head?.disabled };
+    });
+    t.ck("a seat that cannot connect sees the offer greyed out with the reason",
+      nt.perks === 4 && nt.btnOff && nt.headOff && /Only an admin or a project manager/.test(nt.t), JSON.stringify(nt));
+    S.role = "admin";
     S.access = { status: "connected", mayRequest: false, mayConnect: false, files: [
       { kind: "insurance", fileName: "coi.pdf" }, { kind: "bond", fileName: "bond.pdf" }, { kind: "w9", fileName: "w9.pdf" },
       { kind: "contract", fileName: "signed.pdf" }],

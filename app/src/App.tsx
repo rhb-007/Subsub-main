@@ -29813,7 +29813,17 @@ function usePassportConnect(slug, seat) {
       load();
     } finally { setBusy(false); }
   };
-  return { st, seat, team, load, connect, busy, err, setErr, msg, setMsg, signIn };
+  // Why this reader cannot connect, or null when they can (or when there is
+  // nothing to connect: signed out, still loading, their own, already in). The
+  // header and the box both draw the same Connect controls greyed out with this
+  // line, rather than taking them away, so the page reads the same for everybody.
+  const blocked = !seat ? null
+    : !team ? "Only an admin or a project manager of a company that hires can connect."
+    : !st || st.status === "own" || st.status === "connected" || st.connectPending ? null
+    : st.reason === "not_a_hiring_account" ? "Only an account that hires can connect."
+    : !st.mayConnect ? "Nobody at this company can answer a request to connect yet."
+    : null;
+  return { st, seat, team, load, connect, busy, err, setErr, msg, setMsg, signIn, blocked };
 }
 
 // Top right of the header, so somebody who scanned the code on a truck can
@@ -29821,7 +29831,7 @@ function usePassportConnect(slug, seat) {
 // hiring admin connects from here, and somebody signed out goes to sign in and
 // comes back. Every other state says what is true rather than offering a press.
 function PassportHeadCta({ cx, onShow, name }) {
-  const { st, team, busy, connect, signIn } = cx;
+  const { st, team, busy, connect, signIn, blocked } = cx;
   if (st?.status === "own") return null;
   if (st?.status === "connected") {
     return <span className="pp-head-chip ok"><CheckCircle2 size={15} /> Connected</span>;
@@ -29835,14 +29845,15 @@ function PassportHeadCta({ cx, onShow, name }) {
     onShow();
   };
   return (
-    <button className="btn-solid pp-head-cta" disabled={busy || (team && !st)} onClick={press}>
+    <button className="btn-solid pp-head-cta" disabled={!!blocked || busy || (team && !st)}
+      title={blocked || undefined} onClick={press}>
       <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
     </button>
   );
 }
 
 function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
-  const { st, team, load, connect, busy, err, setErr, msg, setMsg, signIn } = cx;
+  const { st, team, load, connect, busy, err, setErr, msg, setMsg, signIn, blocked } = cx;
   const [opening, setOpening] = useState("");
   const [showAgr, setShowAgr] = useState(false);
   const boxRef = useRef(null);
@@ -29901,6 +29912,20 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
     </ul>
   );
 
+  // The same offer, with its controls greyed out and the reason under them.
+  const blockedCta = (
+    <div className="pp-acc-cta pp-blocked">
+      <label className="claim-fld">
+        <span>A note for them (optional)</span>
+        <input value="" disabled placeholder="For the Pine St job" readOnly />
+      </label>
+      <button className="btn-solid claim-btn" disabled title={blocked || undefined}>
+        <Link2 size={16} /> Connect
+      </button>
+      <p className="pp-why">{blocked}</p>
+    </div>
+  );
+
   let body;
   if (!seat) {
     body = (<>
@@ -29912,7 +29937,11 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
       </div>
     </>);
   } else if (!team) {
-    body = <p>Only an admin or a project manager of a company that hires can connect.</p>;
+    body = (<>
+      <p>Connect with {name} and their paperwork stays current on your roster.</p>
+      {perks}
+      {blockedCta}
+    </>);
   } else if (!st) {
     body = <p>Checking…</p>;
   } else if (st.status === "own") {
@@ -29940,8 +29969,6 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
         </div>
       )}
     </>);
-  } else if (st.reason === "not_a_hiring_account") {
-    body = <p>Only an account that hires can connect.</p>;
   } else {
     body = (<>
       {st.status === "approved" && (<>
@@ -29963,9 +29990,11 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
             <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
           </button>
         </div>
-      </>) : (
-        <p>Nobody at this company can answer a request to connect yet.</p>
-      )}
+      </>) : (<>
+        <p>Connect with {name} and their paperwork stays current on your roster.</p>
+        {st.status !== "approved" && perks}
+        {blockedCta}
+      </>)}
     </>);
   }
   return (
@@ -41506,6 +41535,9 @@ body{background:var(--paper)}
 .pp-perks b{display:block;font-size:14px}
 .pp-acc-cta{margin-top:auto;display:flex;flex-direction:column;gap:10px}
 .pp-acc-cta.pp-files{flex-direction:row}
+.pp-blocked .btn-solid:disabled,.pp-head-cta:disabled{background:#d3d6d1;border-color:#d3d6d1;color:#5f6862;opacity:1;box-shadow:none}
+.pp-blocked input:disabled{background:#eef0ec;color:#8a918c;cursor:not-allowed}
+.pp-why{margin:0;font-size:13px;color:var(--ink-soft)}
 .pp-access .pp-acc-cta .pp-sbtn{flex:1 1 180px;justify-content:center;min-height:48px}
 .pp-files{display:flex;flex-wrap:wrap;gap:8px}
 .pp-wait,.pp-ok{display:flex;align-items:center;gap:6px;font-weight:700}
