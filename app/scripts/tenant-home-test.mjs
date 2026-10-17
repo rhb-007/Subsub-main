@@ -256,6 +256,49 @@ console.log("\n-- emailing a notice follows each tenant's own choice --");
   ck("not asking to email sends nothing", calls.filter((x) => x.url.includes("resend.test")).length === 0 && b2.emailed === 0);
 }
 
+console.log("\n-- a notice can go to each tenant's SubSub inbox --");
+{
+  const db = seed(); const env = envOf(db, true);
+  calls.length = 0;
+  const [st, b] = await post(env, "u_admin", "acc1", { propertyId: "p1", title: "Recycling moves to Thursdays",
+    body: "Starting next week.", important: true, inbox: true });
+  ck("posted", st === 201, JSON.stringify(b));
+  const threads = db.prepare("SELECT * FROM message_threads ORDER BY party_user_id").all();
+  ck("one conversation per tenant at the building, none elsewhere",
+    JSON.stringify(threads.map((t) => t.party_user_id)) === JSON.stringify(["u_t1", "u_t3", "u_t4"]), JSON.stringify(threads.map((t) => t.party_user_id)));
+  ck("each is the tenant's general thread with the office",
+    threads.every((t) => t.kind === "tenant" && t.account_id === "acc1" && !t.job_id && t.thread_key === `acc1|tenant|u:${t.party_user_id}|general`));
+  ck("the reply counts them", b.messaged === 3, String(b.messaged));
+  const msgs = db.prepare("SELECT * FROM messages").all();
+  ck("one message each, from the office side, by the poster",
+    msgs.length === 3 && msgs.every((m) => m.author_side === "home" && m.author_user_id === "u_admin"));
+  ck("the message carries the notice and says it is important",
+    /^Important notice: Recycling moves to Thursdays\n\nStarting next week\.$/.test(msgs[0]?.body || ""), msgs[0]?.body);
+  const [, inbox] = await call(env, "u_t1", "acc1", "/threads");
+  ck("and the tenant sees it in their own inbox", JSON.stringify(inbox).includes("Recycling moves to Thursdays"), JSON.stringify(inbox).slice(0, 200));
+  const [, other] = await call(env, "u_t2", "acc1", "/threads");
+  ck("a tenant at the other building does not", !JSON.stringify(other).includes("Recycling moves"));
+  ck("an inbox-only notice is emailed like a message (to those who take email)",
+    calls.some((x) => x.url.includes("resend.test") && /tess@home/.test(x.body)));
+
+  // An existing conversation is reused, not doubled; and with email ticked too
+  // the message is not emailed a second time.
+  calls.length = 0;
+  await post(env, "u_admin", "acc1", { propertyId: "p1", title: "Water off Tuesday", email: true, inbox: true });
+  ck("the same conversations carry the next one",
+    db.prepare("SELECT COUNT(*) n FROM message_threads").get().n === 3 && db.prepare("SELECT COUNT(*) n FROM messages").get().n === 6);
+  ck("emailed once, not twice",
+    calls.filter((x) => x.url.includes("resend.test") && /tess@home/.test(x.body)).length === 1);
+
+  calls.length = 0;
+  const [, b3] = await post(env, "u_admin", "acc1", { propertyId: "p1", title: "Not to the inbox" });
+  ck("not asking sends nothing to the inbox", b3.messaged === 0 && db.prepare("SELECT COUNT(*) n FROM messages").get().n === 6);
+
+  db.exec("DROP TABLE messages");
+  const [st4, b4] = await post(env, "u_admin", "acc1", { propertyId: "p1", title: "Before 081", inbox: true });
+  ck("without 081 the notice still posts and names the file", st4 === 201 && /081/.test(b4.inboxMigration || ""), JSON.stringify(b4));
+}
+
 console.log("\n-- the weather is their building's --");
 {
   const db = seed(); const env = envOf(db);

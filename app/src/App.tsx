@@ -17940,7 +17940,7 @@ const NOTICE_ERRORS = {
 };
 function BuildingNotices({ property, startOpen = false }) {
   const [list, setList] = useState(null);
-  const [form, setForm] = useState(startOpen ? { title: "", body: "", important: false, endsOn: "", email: false } : null);
+  const [form, setForm] = useState(startOpen ? { title: "", body: "", important: false, endsOn: "", email: false, inbox: false } : null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [note, setNote] = useState("");
@@ -17954,13 +17954,17 @@ function BuildingNotices({ property, startOpen = false }) {
     setBusy(true); setErr("");
     try {
       const r = await api.postNotice({ propertyId: property.id, title: form.title, body: form.body,
-        important: form.important, endsOn: form.endsOn || null, email: form.email });
+        important: form.important, endsOn: form.endsOn || null, email: form.email, inbox: form.inbox });
       // Said rather than assumed: "posted" and "posted and emailed to 14" are
       // different things to have done, and a mail that did not go is worth
       // knowing while the panel is still open.
-      setNote(form.email
-        ? `Posted, and emailed to ${r.emailed} tenant${r.emailed === 1 ? "" : "s"}${r.notEmailed ? ` (${r.notEmailed} not emailed — no address, or they switched email off)` : ""}.`
-        : "Posted. Tenants here see it on Tenant HQ.");
+      const plural = (n) => `${n} tenant${n === 1 ? "" : "s"}`;
+      setNote(["Posted on Tenant HQ.",
+        form.email ? `Emailed to ${plural(r.emailed)}${r.notEmailed ? ` (${r.notEmailed} not emailed — no address, or they switched email off)` : ""}.` : null,
+        form.inbox ? (r.inboxMigration
+          ? `Not sent to their SubSub inboxes — messages need a database update (${r.inboxMigration}.sql).`
+          : `Sent to ${plural(r.messaged || 0)}' SubSub inbox${r.messaged === 1 ? "" : "es"}.`) : null,
+      ].filter(Boolean).join(" "));
       setForm(null);
       await load();
     } catch (e) {
@@ -17982,7 +17986,7 @@ function BuildingNotices({ property, startOpen = false }) {
         <h4><Megaphone size={14} /> Notices to tenants</h4>
         {!form && (
           <button className="btn-ghost small" onClick={() => { setNote(""); setErr("");
-            setForm({ title: "", body: "", important: false, endsOn: "", email: false }); }}>
+            setForm({ title: "", body: "", important: false, endsOn: "", email: false, inbox: false }); }}>
             <Plus size={13} /> Post a notice
           </button>
         )}
@@ -18005,7 +18009,10 @@ function BuildingNotices({ property, startOpen = false }) {
             onChange={(e) => set("important", e.target.checked)} /> Important — shown first and highlighted</label>
           <label className="pd-chk"><input type="checkbox" checked={form.email}
             onChange={(e) => set("email", e.target.checked)} /> Also email the tenants of {property.name}</label>
-          <p className="fld-note">It shows on Tenant HQ for every tenant at {property.name}. It is not texted.</p>
+          <label className="pd-chk"><input type="checkbox" checked={form.inbox}
+            onChange={(e) => set("inbox", e.target.checked)} /> Also send it to their SubSub inbox</label>
+          <p className="fld-note">It shows on Tenant HQ for every tenant at {property.name}.
+            {form.inbox ? " In their inbox it lands in their conversation with you, so they can reply." : ""} It is not texted.</p>
           {err && <p className="billing-err" role="alert">{err}</p>}
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setForm(null)} disabled={busy}>Cancel</button>
@@ -45607,6 +45614,9 @@ iframe.dv-frame{display:block}
 .pd-notices-note{margin:0;font-size:12.5px;color:#1d5740}
 .pd-notice-form{display:flex;flex-direction:column;gap:6px;background:var(--paper);border:1px solid var(--line);
   border-radius:11px;padding:12px}
+.pd-notice-form .fld{min-width:0}
+.pd-notice-form .fld input,.pd-notice-form .fld textarea{width:100%;max-width:100%;min-width:0;box-sizing:border-box}
+.pd-notice-form .fld input[type=date]{display:block;-webkit-appearance:none;appearance:none;min-height:40px}
 .pd-notice-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:7px}
 .pd-notice-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
   border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:var(--card)}

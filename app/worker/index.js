@@ -7431,14 +7431,62 @@ app.post("/api/notices", requireRole("admin", "pm"), async (c) => {
     }
     await c.env.DB.prepare(`UPDATE building_notices SET emailed = ? WHERE id = ?`).bind(emailed, id).run();
   }
+  // Sent to each tenant's SubSub inbox when asked: one message in their
+  // general conversation with the office, where they can answer it. Never
+  // fails the notice, which is already posted by now; a database without 081
+  // is said on the reply rather than assumed.
+  let messaged = 0, inboxMigration = null;
+  if (b.inbox) {
+    try { messaged = await noticeToInboxes(c, auth, propertyId, v, !!b.email); }
+    catch (err) {
+      inboxMigration = missingSchema(err);
+      if (!inboxMigration) console.warn("[notices] inbox send failed:", err?.message || err);
+    }
+  }
   await logActivity(c.env, auth.accountId, auth.userId, "notice_posted",
     `Posted a${v.important ? "n important" : ""} notice at ${property.name}: ${v.title}`);
 
   const row = await c.env.DB.prepare(
     `SELECT n.*, p.name AS property_name FROM building_notices n
        JOIN properties p ON p.id = n.property_id WHERE n.id = ?`).bind(id).first();
-  return c.json({ notice: noticeRowToJs(row), emailed, notEmailed }, 201);
+  return c.json({ notice: noticeRowToJs(row), emailed, notEmailed, messaged,
+    ...(inboxMigration ? { inboxMigration } : {}) }, 201);
 });
+
+// A notice into every tenant's inbox at one building, through the same
+// general tenant thread and the same insert a message typed in the app uses.
+// The email that comes with a message is skipped when the notice was emailed
+// already, because one notice is not two emails.
+async function noticeToInboxes(c, auth, propertyId, v, alreadyEmailed) {
+  const db = c.env.DB;
+  const { results: tenants } = await db.prepare(
+    `SELECT DISTINCT m.user_id FROM memberships m
+       JOIN membership_properties mp ON mp.membership_id = m.id
+      WHERE m.account_id = ? AND m.role = 'tenant' AND mp.property_id = ?`
+  ).bind(auth.accountId, propertyId).all();
+  const body = `${v.important ? "Important notice: " : "Notice: "}${v.title}${v.body ? `\n\n${v.body}` : ""}`;
+  let sent = 0;
+  for (const t of tenants || []) {
+    const th = { accountId: auth.accountId, kind: "tenant", partyUserId: t.user_id,
+      partyCompanyId: null, partyAccountId: null, jobId: null, propertyId };
+    const key = threadKey(th);
+    const now = new Date().toISOString();
+    await db.prepare(
+      `INSERT OR IGNORE INTO message_threads (id, thread_key, account_id, kind, party_user_id, party_company_id,
+        party_account_id, job_id, property_id, created_by, created_at, last_at)
+       VALUES (?, ?, ?, 'tenant', ?, NULL, NULL, NULL, ?, ?, ?, ?)`
+    ).bind(uid(), key, auth.accountId, t.user_id, propertyId, auth.userId, now, now).run();
+    const row = await db.prepare(`SELECT id FROM message_threads WHERE thread_key = ?`).bind(key).first();
+    const thread = await loadThread(db, row.id);
+    const message = await insertMessage(db, thread.id, auth.userId, "home", { body, photos: [] });
+    sent++;
+    if (!alreadyEmailed) {
+      const run = emailMessageNow(c.env, thread, message);
+      try { c.executionCtx.waitUntil(run); } catch { await run; }
+    }
+  }
+  return sent;
+}
 
 app.delete("/api/notices/:id", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");

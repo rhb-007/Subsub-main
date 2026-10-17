@@ -74,7 +74,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       body: body.body || null, important: !!body.important, endsOn: body.endsOn || null,
       createdAt: `${dayKey()} 10:00:00`, createdByName: "Richard Braun", emailed: body.email ? 3 : 0 };
     NOTICES = [n, ...NOTICES];
-    return [201, { notice: n, emailed: body.email ? 3 : 0, notEmailed: body.email ? 1 : 0 }];
+    return [201, { notice: n, emailed: body.email ? 3 : 0, notEmailed: body.email ? 1 : 0, messaged: body.inbox ? 4 : 0 }];
   }
   if (path === "/api/my-manager") return [200, MANAGER];
   if (path === "/api/me/contact" && method === "GET") return [200, CONTACT];
@@ -448,14 +448,24 @@ try {
     await clickText(page, ".pd-notices button", /Post a notice/);
     await wait(300);
     await typeInto(page, ".pd-notice-form input:not([type])", "Water off Tuesday 9 to 1");
+    const chks = await page.evaluate(() => [...document.querySelectorAll(".pd-notice-form .pd-chk")].map((l) => l.innerText.trim()));
+    t.ck("three options: important, email, and their SubSub inbox",
+      chks.length === 3 && /Important/.test(chks[0]) && /email/i.test(chks[1]) && /SubSub inbox/.test(chks[2]), JSON.stringify(chks));
+    const dateFits = await page.evaluate(() => {
+      const f = document.querySelector(".pd-notice-form"), d = f?.querySelector("input[type=date]");
+      if (!f || !d) return null;
+      return d.getBoundingClientRect().right <= f.getBoundingClientRect().right - 1;
+    });
+    t.ck("the date box stays inside the form", dateFits === true, String(dateFits));
     await page.evaluate(() => { document.querySelectorAll(".pd-notice-form .pd-chk input").forEach((c) => c.click()); });
     await clickText(page, ".pd-notice-form .form-actions button", /Post notice/);
     await wait(700);
     const b = sent.find((x) => x.path === "/api/notices")?.body;
     t.ck("it posts to this building", b?.propertyId === "prop_1" && b?.title === "Water off Tuesday 9 to 1", JSON.stringify(b));
-    t.ck("important and emailed, as ticked", b?.important === true && b?.email === true, JSON.stringify(b));
+    t.ck("important, emailed and to the inbox, as ticked", b?.important === true && b?.email === true && b?.inbox === true, JSON.stringify(b));
     const after = await page.evaluate(() => document.querySelector(".pd-notices")?.innerText || "");
-    t.ck("it says how many were emailed, and how many were not", /emailed to 3 tenants/.test(after) && /1 not emailed/.test(after), after);
+    t.ck("it says how many were emailed, and how many were not", /emailed to 3 tenants/i.test(after) && /1 not emailed/.test(after), after);
+    t.ck("and how many inboxes it went to", /Sent to 4 tenants' SubSub inboxes/.test(after), after);
     t.ck("and lists it, marked important", /Water off Tuesday 9 to 1/.test(after) && /Important/i.test(after), after);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
 

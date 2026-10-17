@@ -13684,6 +13684,28 @@ refactor.
   seventh mount, and `test:lightbox` says why. `test:passportui` opens the
   second of three and walks it; a one-picture viewer fails five assertions.
 
+- **A NOTICE CAN ALSO GO TO EACH TENANT'S SUBSUB INBOX.** Asked for as a third
+  option beside *Also email the tenants of …*: *"send a important message to
+  their inbox on SubSub as well"*. Ticking **Also send it to their SubSub
+  inbox** posts the notice as one message in each tenant's **general
+  conversation with the office**, found or created by the same `threadKey` and
+  written by the same `insertMessage` a typed message uses. So it lands where
+  they can reply, and unread counts and the digest work as for any message.
+  Only tenants of that building, from the office side, by the poster.
+
+  **One notice is never two emails.** A message is emailed as it always is,
+  except when *Also email* was ticked too, because the notice was already
+  emailed. It never fails the notice: without 081 the reply carries
+  `inboxMigration` and the panel names the file. The panel says how many
+  inboxes it reached. `test:tenanthome` (82) and `test:tenanthomeui` (87);
+  three mutations fire (the inbox gate, the double email, the checkbox).
+
+  **The date box in that form is held to its width** (`width:100%`,
+  `min-width:0`, no native appearance), for the overflow in the same
+  screenshot. **Not verified:** headless Chrome never overflowed, so the
+  width assertion passes either way; it is iPad Safari's date input, and the
+  first look on the iPad is the real test.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
