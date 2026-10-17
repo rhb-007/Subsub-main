@@ -29977,6 +29977,8 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
 function PassportPage({ slug, seat = null }) {
   const [p, setP] = useState(null);
   const [gone, setGone] = useState("");
+  // Which photo is open, by index into the set, so the lightbox can step
+  // through them rather than showing one picture with no way to the next.
   const [big, setBig] = useState(null);
   const [ring, setRing] = useState(0);
   const cx = usePassportConnect(slug, seat);
@@ -30093,8 +30095,8 @@ function PassportPage({ slug, seat = null }) {
         {/* Their work. The BBB rating moved into the Compliance pack box. */}
         {p.photos.length > 0 && (
           <div className="pp-photos">
-            {p.photos.map((ph) => (
-              <button key={ph.id} className="pp-photo" onClick={() => setBig(ph)}>
+            {p.photos.map((ph, i) => (
+              <button key={ph.id} className="pp-photo" onClick={() => setBig(i)}>
                 <img src={api.passportPhotoUrl(p.slug, ph.id)} alt={ph.caption || `Work by ${p.name}`} loading="lazy" />
                 {ph.caption && <span>{ph.caption}</span>}
               </button>
@@ -30103,12 +30105,14 @@ function PassportPage({ slug, seat = null }) {
         )}
       </div>
       <p className="pack-foot">A SubSub Passport. Free for subcontractors, forever. Not legal advice; confirm a license with the state.</p>
-      {big && (
-        <div className="pp-big" role="dialog" aria-label={big.caption || "Photo"} onClick={() => setBig(null)}>
-          <img src={api.passportPhotoUrl(p.slug, big.id)} alt={big.caption || ""} />
-          {big.caption && <span>{big.caption}</span>}
-          <button className="pp-big-x" aria-label="Close"><X size={22} /></button>
-        </div>
+      {big !== null && (
+        // The same lightbox every other photo set uses: previous, next, a
+        // count and the arrow keys. Passport photos are public, so the urls
+        // are the image routes themselves rather than fetched blobs.
+        <PhotoLightbox
+          photos={p.photos.map((ph) => ({ id: ph.id, name: ph.caption || `Work by ${p.name}` }))}
+          urls={Object.fromEntries(p.photos.map((ph) => [ph.id, api.passportPhotoUrl(p.slug, ph.id)]))}
+          at={big} onAt={setBig} onClose={() => setBig(null)} />
       )}
     </div>
   );
@@ -41482,12 +41486,6 @@ body{background:var(--paper)}
   cursor:pointer;display:flex;flex-direction:column;text-align:left}
 .pp-photo img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block}
 .pp-photo span{padding:6px 8px;font-size:12px;line-height:1.35;color:var(--ink)}
-.pp-big{position:fixed;inset:0;background:rgba(10,18,14,.88);z-index:200;display:flex;flex-direction:column;
-  align-items:center;justify-content:center;gap:10px;padding:16px}
-.pp-big img{max-width:100%;max-height:80vh;border-radius:8px}
-.pp-big span{color:#fff;font-size:14px}
-.pp-big-x{position:absolute;top:12px;right:12px;width:44px;height:44px;border-radius:50%;border:0;
-  background:rgba(255,255,255,.15);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .pp-access{margin-top:18px;border:2px solid var(--brand);background:#eef7f1;padding:20px;transition:box-shadow .3s}
 .pp-access h3{font-size:18px;overflow-wrap:anywhere}
 .pp-access .claim-btn{min-height:50px;font-size:15.5px}

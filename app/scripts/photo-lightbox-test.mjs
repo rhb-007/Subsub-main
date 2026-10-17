@@ -328,7 +328,11 @@ try {
     // SIX since messages: a conversation is a new PANEL too -- its photos are
     // reached by thread and message, not by job, invite or work order -- so it
     // earns its own mount, and every photo in the thread is one set.
-    t.ck("mounted wherever a set of photos is shown", uses === 6, String(uses));
+    //
+    // SEVEN since the Sub Passport: its work photos had a one-picture viewer
+    // of their own with no way to the next, and a public page reached by a
+    // slug is a new audience rather than a new grid.
+    t.ck("mounted wherever a set of photos is shown", uses === 7, String(uses));
     // ONE INSPECTION PANEL, TWO AUDIENCES. The work order's holder reads it by
     // work order and a company being ASKED to price reads it by invite,
     // pre-award, narrowed by the server to their own trade. A second copy for

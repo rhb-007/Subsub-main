@@ -47,7 +47,8 @@ const PAGE = () => ({
   contact: "Rae Bay", contactTitle: "Owner", phone: "2065550100", email: "rae@bay.test", zip: "98407", ubi: "604123456", bond: true,
   license: { number: "BAYROR*123", text: S.verified ? "Washington L&I registration active" : "License not verified by SubSub", ok: S.verified },
   insurance: { carrier: "Acme Mutual", expiresOn: "2027-03-04", text: "Insurance on file through Mar 4, 2027" },
-  w9: true, photos: [{ id: "ph1", caption: "New roof, Tacoma" }],
+  w9: true, photos: [{ id: "ph1", caption: "New roof, Tacoma" }, { id: "ph2", caption: "Gutters, Bellevue" },
+    { id: "ph3", caption: "Siding, Kent" }],
   badge: S.verified
     ? { verified: true, name: "SubSub Verified", line: "Washington L&I registration active · Insurance on file through Mar 4, 2027" }
     : { verified: false, name: null, line: "License not verified by SubSub · Insurance on file through Mar 4, 2027" },
@@ -271,7 +272,7 @@ try {
     t.ck("no Hire subcontractors box at the foot", r.cta === null && !/Hire subcontractors\?/.test(r.text), r.cta?.t);
     t.ck("signed out, connecting is offered behind a sign-in", /Sign in to connect/.test(r.access) && !/Certificate of insurance/.test(r.access), r.access);
     t.ck("and a free signup credited to this sub", r.signup === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.signup);
-    t.ck("photos of their work", r.photos === 1);
+    t.ck("photos of their work", r.photos === 3);
     t.ck("the BBB rating is drawn with the grade, accreditation and where it came from",
       /BBB rating/i.test(r.bbb?.t) && /A\+/.test(r.bbb.t) && /Accredited Business/.test(r.bbb.t) && /Rating from BBB/.test(r.bbb.t) && /checked Oct 15/.test(r.bbb.t), r.bbb?.t);
     t.ck("and links the sub's BBB profile in a new tab", /bbb\.org\/.*1296-1000123456$/.test(r.bbb?.href || "") && r.bbb.target === "_blank" && /noopener/.test(r.bbb.rel), JSON.stringify(r.bbb));
@@ -308,6 +309,34 @@ try {
     t.ck("the BBB card sits under the Compliance pack, outside it", !!r.bbb && !r.bbb.inBox && r.bbb.belowBox && r.bbb.sameCol, JSON.stringify(r.bbb));
     t.ck("and fills the column, so it ends level with the Connect box", !!r.bbb && r.bbb.colFoot <= 2, JSON.stringify(r.bbb));
     t.ck("no sideways scroll", !r.wide);
+    // The photos open as a set: previous, next and a count, not one picture
+    // with nothing to press but close.
+    const lb = () => page.evaluate(() => {
+      const b = document.querySelector(".ph-lightbox");
+      return b ? { count: (b.querySelector(".phl-count")?.innerText || "").trim(),
+        name: (b.querySelector(".phl-name")?.innerText || "").trim(),
+        arrows: b.querySelectorAll(".phl-nav").length } : null;
+    });
+    await page.evaluate(() => document.querySelectorAll(".pp-photo")[1]?.click());
+    await wait(300);
+    let l = await lb();
+    t.ck("tapping the second photo opens it as 2 of 3", l?.count === "2 of 3" && l.name === "Gutters, Bellevue", JSON.stringify(l));
+    t.ck("with a previous and a next", l?.arrows === 2, JSON.stringify(l));
+    await page.evaluate(() => document.querySelector('.ph-lightbox [aria-label="Next photo"]')?.click());
+    await wait(200);
+    l = await lb();
+    t.ck("Next moves on", l?.count === "3 of 3" && l.name === "Siding, Kent", JSON.stringify(l));
+    await page.evaluate(() => document.querySelector('.ph-lightbox [aria-label="Previous photo"]')?.click());
+    await page.evaluate(() => document.querySelector('.ph-lightbox [aria-label="Previous photo"]')?.click());
+    await wait(200);
+    l = await lb();
+    t.ck("Previous goes back", l?.count === "1 of 3" && l.name === "New roof, Tacoma", JSON.stringify(l));
+    await page.keyboard.press("ArrowLeft");
+    await wait(150);
+    t.ck("and the arrow keys walk it too, wrapping at the ends", (await lb())?.count === "3 of 3");
+    await page.keyboard.press("Escape");
+    await wait(150);
+    t.ck("Escape closes it", (await lb()) === null);
     await ctx.close();
   }
 

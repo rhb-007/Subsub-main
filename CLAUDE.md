@@ -13619,6 +13619,17 @@ refactor.
   fixture the left column is the taller of the two, so `flex:none` changes
   nothing there.
 
+- **THE PASSPORT'S PHOTOS OPEN AS A SET, WITH PREVIOUS AND NEXT.** Reported
+  with a Passport photo open full screen and arrows drawn either side of it:
+  *"need to add past and previous to the images in the passport images"*. The
+  page had its own one-picture viewer (`pp-big`), so a sub's four photos of one
+  job were four round trips through the grid. It is now the shared
+  `PhotoLightbox`: previous, next, *2 of 4*, the arrow keys, wrapping at both
+  ends, Escape to close. Passport photos are public, so its `urls` are the
+  image routes themselves. The old viewer and its CSS are deleted. That is a
+  seventh mount, and `test:lightbox` says why. `test:passportui` opens the
+  second of three and walks it; a one-picture viewer fails five assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
