@@ -114,7 +114,7 @@ const PHONE = { width: 390, height: 844 };
 const readPage = (page) => page.evaluate(() => {
   const c = document.querySelector(".pp-card");
   const cta = c?.querySelector(".pp-cta a");
-  const share = [...(c?.querySelectorAll(".pp-share a, .pp-share button") || [])];
+  const share = [...(c?.querySelectorAll(".pp-head-side .pp-share a, .pp-head-side .pp-share button") || [])];
   return {
     there: !!c, h1: c?.querySelector("h1")?.innerText || "",
     badge: c?.querySelector(".pp-badge-name")?.innerText.trim() || "",
@@ -134,7 +134,23 @@ const readPage = (page) => page.evaluate(() => {
       const y = (sel) => c?.querySelector(sel)?.getBoundingClientRect().top ?? null;
       return { box: y(".pp-access"), facts: y(".pp-facts"), photos: y(".pp-photos"), contact: y(".pp-contact") };
     })(),
-    share: share.map((x) => ({ t: x.innerText.trim(), href: x.getAttribute("href"), h: x.getBoundingClientRect().height })),
+    share: share.map((x) => ({ t: x.getAttribute("aria-label") || "", tip: x.getAttribute("title") || "", words: x.innerText.trim(),
+      href: x.getAttribute("href"), h: x.getBoundingClientRect().height })),
+    side: (() => {
+      const hd = c?.querySelector(".pp-head"), q = hd?.querySelector(".pp-head-side svg.qr"),
+        b = hd?.querySelector(".pp-head-cta, .pp-head-chip"), h = hd?.querySelector("h1");
+      if (!hd || !q || !b || !h) return null;
+      const qr = q.getBoundingClientRect(), br = b.getBoundingClientRect(), hr = hd.getBoundingClientRect();
+      return { qrRight: hr.right - qr.right < 8, qrTop: qr.top < h.getBoundingClientRect().bottom,
+        ctaBelowQr: br.top >= qr.bottom - 1, ctaRight: hr.right - br.right < 8 };
+    })(),
+    cols: (() => {
+      const d = c?.querySelector(".pp-cols > .pp-docs"), a = c?.querySelector(".pp-cols > .pp-access");
+      if (!d || !a) return null;
+      const dr = d.getBoundingClientRect(), ar = a.getBoundingClientRect();
+      return { side: dr.right <= ar.left + 1 && Math.abs(dr.top - ar.top) < 2, stacked: dr.bottom <= ar.top + 1,
+        docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts") };
+    })(),
     cta: cta ? { t: cta.innerText.trim(), href: cta.getAttribute("href") } : null,
     access: (c?.querySelector(".pp-access")?.innerText || "").replace(/\s+/g, " "),
     signup: c?.querySelector(".pp-access a")?.getAttribute("href") || null,
@@ -169,24 +185,23 @@ try {
       /BAYROR\*123/.test(r.facts) && /Acme Mutual/.test(r.facts) && /W-9 On file/.test(r.facts), r.facts);
     t.ck("the header is the company, then the SubSub logo in black and Powered by | Passport under it",
       r.powered?.t === "Powered by Passport" && r.powered.mark && r.powered.black && r.powered.below, JSON.stringify(r.powered));
-    t.ck("a Connect button at the top right of the header", r.head?.t === "Connect" && !r.head.chip && r.head.right && r.head.top,
-      JSON.stringify(r.head));
-    t.ck("the connect box is in the middle: after the contact, above the facts and the photos",
-      r.order.box > r.order.contact && r.order.box < r.order.facts && r.order.box < r.order.photos, JSON.stringify(r.order));
+    t.ck("the header's CTA names the sub", r.head?.t === "Connect with Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
+    t.ck("a QR code of its own address in the header, with the CTA under it", !!r.side && r.side.ctaBelowQr, JSON.stringify(r.side));
+    t.ck("on a phone the documents box and the connect box stack, documents first",
+      !!r.cols?.stacked && r.cols.docsHold, JSON.stringify(r.cols));
+    t.ck("the connect box is above the photos", r.order.box > r.order.contact && r.order.box < r.order.photos, JSON.stringify(r.order));
     t.ck("the business contact, with a number to call", /Rae Bay/.test(r.contact) && /rae@bay\.test/.test(r.contact)
       && r.tel === "tel:2065550100", r.contact);
     t.ck("the bond, the UBI and where they are based",
       /Surety bond On file/.test(r.facts) && /UBI 604123456/.test(r.facts) && /98407/.test(r.facts), r.facts);
     t.ck("never a file name", !/\.pdf/.test(r.text), r.text);
-    t.ck("no QR code on the page itself: the reader already has the page", !r.qr);
-    t.ck("share by text, email and copy",
+    t.ck("share by text, email and copy, as icons under the code",
       r.share.some((s) => s.t === "Text" && s.href?.startsWith("sms:?&body=") && decodeURIComponent(s.href).includes(`/p/${SLUG}`))
       && r.share.some((s) => s.t === "Email" && s.href?.startsWith("mailto:?subject="))
-      && r.share.some((s) => /Copy link/.test(s.t)), JSON.stringify(r.share));
-    t.ck("thumb-sized share buttons", r.share.length >= 3 && r.share.every((s) => s.h >= 44), JSON.stringify(r.share.map((s) => s.h)));
-    t.ck("the CTA says the words asked for", r.cta?.t === "Manage your whole sub network like this", r.cta?.t);
-    t.ck("and credits this sub through the passport channel",
-      r.cta?.href === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.cta?.href);
+      && r.share.some((s) => s.t === "Copy link"), JSON.stringify(r.share));
+    t.ck("icons only, each with its word as a tooltip",
+      r.share.length >= 3 && r.share.every((s) => s.words === "" && s.tip === s.t), JSON.stringify(r.share));
+    t.ck("no Hire subcontractors box at the foot", r.cta === null && !/Hire subcontractors\?/.test(r.text), r.cta?.t);
     t.ck("signed out, connecting is offered behind a sign-in", /Sign in to connect/.test(r.access) && !/Certificate of insurance/.test(r.access), r.access);
     t.ck("and a free signup credited to this sub", r.signup === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.signup);
     t.ck("photos of their work", r.photos === 1);
@@ -197,6 +212,19 @@ try {
     t.ck("the header's Connect signs in and remembers where to come back to",
       await page.evaluate(() => sessionStorage.getItem("ss_after_login")) === `/p/${"bay-roofing-k7q2m"}`);
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- the public page on a wide screen --");
+  {
+    const { ctx, page } = await visitApp(browser, { host: "app", webPort: WEB, viewport: { width: 1180, height: 900 }, path: `/p/${SLUG}` });
+    await wait(2000);
+    const r = await readPage(page);
+    t.ck("the code sits at the top right, level with the name", !!r.side?.qrRight && r.side.qrTop, JSON.stringify(r.side));
+    t.ck("and the CTA right under it, on the right", !!r.side?.ctaBelowQr && r.side.ctaRight, JSON.stringify(r.side));
+    t.ck("two columns: documents on the left, connect on the right, level",
+      !!r.cols?.side && r.cols.docsHold, JSON.stringify(r.cols));
+    t.ck("no sideways scroll", !r.wide);
     await ctx.close();
   }
 

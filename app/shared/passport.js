@@ -118,8 +118,11 @@ export function validPassportEdit(b = {}, thisYear = new Date().getUTCFullYear()
 // A stored year, never a stored "4 years": the count is worked out on read,
 // so it is right next year too.
 export function yearsInBusiness(foundedYear, today = new Date().toISOString().slice(0, 10)) {
+  // Number(null) and Number("") are both 0, which read as "since null ·
+  // 2026 years" on a Passport whose founding year nobody gave.
+  if (foundedYear === null || foundedYear === undefined || foundedYear === "") return null;
   const y = Number(foundedYear);
-  if (!Number.isInteger(y)) return null;
+  if (!Number.isInteger(y) || y < 1800) return null;
   const n = Number(String(today).slice(0, 4)) - y;
   return n >= 0 ? n : null;
 }

@@ -13487,6 +13487,32 @@ refactor.
   connecting, the box back at the foot) and two server ones fire, each on its
   own assertion.
 
+- **THE PASSPORT IS TWO COLUMNS UNDER A HEADER THAT CARRIES THE CODE.**
+  Reported with the page marked up: the *Hire subcontractors?* box at the foot
+  crossed out as distracting, the QR code wanted back at the top right with
+  icon-only share buttons, the Connect button naming the sub and sitting under
+  the code, and the documents and the connect box side by side.
+
+  **The header's right side is the code, four share icons and the CTA.** The
+  code is back on the page after all: it is what somebody standing at the truck
+  hands on. The icons carry their word as a tooltip and as their accessible
+  name, so nothing is lost but width. The CTA reads *Connect with <name>*.
+  The share block and the foot CTA are gone.
+
+  **Documents on the left, Connect on the right.** The badge leads the
+  documents box, because it is the verdict on what is listed under it. Under
+  760px the columns stack, documents first; under 560px the header's side
+  drops below the name.
+
+  **And "In business since null · 2026 years" was a real bug.** `Number(null)`
+  is 0, an integer, so a Passport with no founding year printed it.
+  `yearsInBusiness` refuses a blank and any year before 1800, and the test
+  removes both guards to fail.
+
+  `test:passportui` (51) measures the header and the columns at 390px and
+  1180px. Three mutations fire: labelled share buttons, one column, and the
+  CTA without the name.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

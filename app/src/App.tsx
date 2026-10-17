@@ -29617,7 +29617,7 @@ const passportCtaHref = (refCode) => (refCode
 
 const PASSPORT_AFTER_LOGIN = "ss_after_login";
 
-function PassportShare({ url, name, compact = false }) {
+function PassportShare({ url, name, compact = false, icons = false }) {
   const [copied, setCopied] = useState(false);
   const text = `${name} on SubSub: license, insurance and work in one place. ${url}`;
   const copy = async () => {
@@ -29626,6 +29626,23 @@ function PassportShare({ url, name, compact = false }) {
   };
   const share = async () => { try { await navigator.share({ title: name, text, url }); } catch { /* cancelled */ } };
   const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+  // Icons only under the code on the public page: the code is the thing, and
+  // four labelled buttons beside it outweighed it. Each carries its word as a
+  // tooltip and as its accessible name, so nothing is lost but the width.
+  if (icons) {
+    return (
+      <div className="pp-share pp-share-icons">
+        {canShare && <button className="pp-ibtn" onClick={share} title="Share" aria-label="Share"><Share2 size={16} /></button>}
+        <a className="pp-ibtn" href={`sms:?&body=${encodeURIComponent(text)}`} title="Text" aria-label="Text">
+          <MessageSquareText size={16} /></a>
+        <a className="pp-ibtn" title="Email" aria-label="Email"
+          href={`mailto:?subject=${encodeURIComponent(`${name} on SubSub`)}&body=${encodeURIComponent(text)}`}>
+          <Mail size={16} /></a>
+        <button className="pp-ibtn" onClick={copy} title={copied ? "Copied" : "Copy link"} aria-label={copied ? "Copied" : "Copy link"}>
+          {copied ? <Check size={16} /> : <Copy size={16} />}</button>
+      </div>
+    );
+  }
   return (
     <div className={`pp-share${compact ? " compact" : ""}`}>
       {canShare && <button className="btn-solid pp-sbtn" onClick={share}><Share2 size={16} /> Share</button>}
@@ -29700,7 +29717,7 @@ function usePassportConnect(slug, seat) {
 // connect without reading the page. One press where one press can do it: a
 // hiring admin connects from here, and somebody signed out goes to sign in and
 // comes back. Every other state says what is true rather than offering a press.
-function PassportHeadCta({ cx, onShow }) {
+function PassportHeadCta({ cx, onShow, name }) {
   const { st, team, busy, connect, signIn } = cx;
   if (st?.status === "own") return null;
   if (st?.status === "connected") {
@@ -29716,7 +29733,7 @@ function PassportHeadCta({ cx, onShow }) {
   };
   return (
     <button className="btn-solid pp-head-cta" disabled={busy || (team && !st)} onClick={press}>
-      <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
+      <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
     </button>
   );
 }
@@ -29900,9 +29917,15 @@ function PassportPage({ slug, seat = null }) {
             </a>
             {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
           </div>
-          <PassportHeadCta cx={cx} onShow={() => setRing((n) => n + 1)} />
+          {/* Top right: the code itself, small, so a contractor standing at the
+              truck can hand it on; the share tools as icons under it; and the
+              one press the page exists for, naming who it connects to. */}
+          <div className="pp-head-side">
+            <QrCode value={url} size={112} label={`QR code for ${p.name}'s Passport`} />
+            <PassportShare url={url} name={p.name} icons />
+            <PassportHeadCta cx={cx} name={p.name} onShow={() => setRing((n) => n + 1)} />
+          </div>
         </header>
-        <PassportBadge badge={p.badge} />
         {p.trades.length > 0 && (
           <ul className="pp-trades">{p.trades.map((t) => <li key={t.id}>{t.label}</li>)}</ul>
         )}
@@ -29918,24 +29941,29 @@ function PassportPage({ slug, seat = null }) {
           </div>
         )}
 
-        {/* The middle of the page and the loudest thing on it, because
-            connecting is what the page is for: a contractor reads the name off
-            a truck, opens this, and connects. */}
-        <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
-
-        <dl className="claim-facts pp-facts">
-          {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
-          {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
-          <div><dt><Award size={14} /> License</dt>
-            <dd>{p.license ? <>{p.license.number}<span className={`pp-sub${p.license.ok ? " ok" : ""}`}>{p.license.text}</span></>
-              : <span className="pp-sub">{p.badge?.line?.split(" · ")[0]}</span>}</dd></div>
-          <div><dt><Shield size={14} /> Insurance</dt>
-            <dd>{p.insurance ? <>{p.insurance.carrier || "Certificate on file"}<span className="pp-sub">{p.insurance.text}</span></>
-              : <span className="pp-sub">No certificate on file</span>}</dd></div>
-          {p.ubi && <div><dt><Award size={14} /> UBI</dt><dd>{p.ubi}</dd></div>}
-          <div><dt><Shield size={14} /> Surety bond</dt><dd>{p.bond ? "On file" : "Not on file"}</dd></div>
-          <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
-        </dl>
+        {/* Two columns: what is on file on the left, connecting on the right.
+            The badge leads the documents box because it is the verdict on
+            them; on a phone the columns stack in the same order. */}
+        <div className="pp-cols">
+          <section className="pp-docs" aria-label="Documents and credentials">
+            <h3><FileText size={18} /> Documents</h3>
+            <PassportBadge badge={p.badge} />
+            <dl className="claim-facts pp-facts">
+              {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
+              {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
+              <div><dt><Award size={14} /> License</dt>
+                <dd>{p.license ? <>{p.license.number}<span className={`pp-sub${p.license.ok ? " ok" : ""}`}>{p.license.text}</span></>
+                  : <span className="pp-sub">{p.badge?.line?.split(" · ")[0]}</span>}</dd></div>
+              <div><dt><Shield size={14} /> Insurance</dt>
+                <dd>{p.insurance ? <>{p.insurance.carrier || "Certificate on file"}<span className="pp-sub">{p.insurance.text}</span></>
+                  : <span className="pp-sub">No certificate on file</span>}</dd></div>
+              {p.ubi && <div><dt><Award size={14} /> UBI</dt><dd>{p.ubi}</dd></div>}
+              <div><dt><Shield size={14} /> Surety bond</dt><dd>{p.bond ? "On file" : "Not on file"}</dd></div>
+              <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
+            </dl>
+          </section>
+          <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
+        </div>
 
         {p.photos.length > 0 && (
           <div className="pp-photos">
@@ -29947,20 +29975,6 @@ function PassportPage({ slug, seat = null }) {
             ))}
           </div>
         )}
-
-        {/* No QR code on the page itself: whoever is reading it already has
-            the page, and the code was the largest thing under the connect box.
-            The way on is sending it, so the share tools stay. */}
-        <div className="pp-shareblk">
-          <b>Share this Passport</b>
-          <PassportShare url={url} name={p.name} compact />
-        </div>
-
-        <div className="pp-cta">
-          <strong>Hire subcontractors?</strong>
-          <span>Every sub's license, insurance, W-9 and availability, current and in one roster you control.</span>
-          <a className="btn-solid claim-btn" href={passportCtaHref(p.refCode)}>{PASSPORT_CTA}</a>
-        </div>
       </div>
       <p className="pack-foot">A SubSub Passport. Free for subcontractors, forever. Not legal advice; confirm a license with the state.</p>
       {big && (
@@ -41237,7 +41251,29 @@ body{background:var(--paper)}
 .pp-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .pp-head-who{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto}
 .pp-head .pack-lede{margin:2px 0 0}
-.pp-head-cta{flex:none;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px}
+.pp-card{max-width:980px}
+.pp-head-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.pp-head-side .qr{border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff}
+.pp-head-cta{flex:none;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px;
+  max-width:260px;white-space:normal;text-align:left;line-height:1.2}
+.pp-share-icons{gap:6px;justify-content:flex-end}
+.pp-ibtn{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.pp-ibtn:hover{border-color:var(--brand);color:var(--brand-dk)}
+.pp-cols{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.pp-cols > *,.pp-cols > .pp-access{min-width:0;margin-top:0}
+.pp-docs{border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--card)}
+.pp-docs h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:8px}
+.pp-docs .pp-badge{margin-top:10px}
+@media (max-width:760px){
+  .pp-cols{grid-template-columns:1fr}
+}
+@media (max-width:560px){
+  .pp-head{flex-wrap:wrap}
+  .pp-head-side{width:100%;align-items:flex-start}
+  .pp-share-icons{justify-content:flex-start}
+  .pp-head-cta{max-width:none;width:100%;justify-content:center}
+}
 .pp-head-chip{flex:none;display:inline-flex;align-items:center;gap:5px;padding:7px 11px;border-radius:999px;
   font-size:13px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
 .pp-head-chip.ok{color:var(--brand-dk);border-color:var(--brand);background:#eef7f1}

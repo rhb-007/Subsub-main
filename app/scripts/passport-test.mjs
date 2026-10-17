@@ -82,6 +82,7 @@ ck("an edit returns only the keys sent", v.ok && Object.keys(v.value).join() ===
 ck("a trade that is not one is refused", validPassportEdit({ trades: ["roofing", "lasers"] }).error === "invalid_trades");
 ck("a year in the future is refused", validPassportEdit({ foundedYear: 2099 }, 2026).error === "invalid_year");
 ck("the years are worked out on read", yearsText(2014, "2026-10-10") === "In business since 2014 · 12 years");
+ck("no founding year says nothing, never \"since null · 2026 years\"", yearsText(null, "2026-10-10") === null && yearsText("", "2026-10-10") === null && yearsText(undefined, "2026-10-10") === null);
 ck("approve and decline from pending; revoke from approved only",
   accessMove("pending", "approve").to === "approved" && accessMove("pending", "decline").to === "declined"
   && accessMove("approved", "revoke").to === "revoked" && !accessMove("declined", "approve").ok
