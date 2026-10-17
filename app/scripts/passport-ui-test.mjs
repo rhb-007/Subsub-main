@@ -157,9 +157,10 @@ const readPage = (page) => page.evaluate(() => {
         ctaUnderLede: br.top >= (hd.querySelector(".pack-lede")?.getBoundingClientRect().bottom ?? 0) - 1 };
     })(),
     cols: (() => {
-      const d = c?.querySelector(".pp-cols > .pp-docs"), a = c?.querySelector(".pp-cols > .pp-access");
+      // The left column is the Compliance pack with the BBB card under it.
+      const l = c?.querySelector(".pp-cols > .pp-left"), d = l?.querySelector(".pp-docs"), a = c?.querySelector(".pp-cols > .pp-access");
       if (!d || !a) return null;
-      const dr = d.getBoundingClientRect(), ar = a.getBoundingClientRect();
+      const dr = l.getBoundingClientRect(), ar = a.getBoundingClientRect();
       return { side: dr.right <= ar.left + 1 && Math.abs(dr.top - ar.top) < 2, stacked: dr.bottom <= ar.top + 1,
         even: Math.abs(dr.height - ar.height) < 2, dh: Math.round(dr.height), ah: Math.round(ar.height),
         docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts"),
@@ -217,11 +218,15 @@ const readPage = (page) => page.evaluate(() => {
       return { t: b.innerText.replace(/\s+/g, " ").trim(), href: a?.getAttribute("href") || null,
         target: a?.getAttribute("target"), rel: a?.getAttribute("rel"),
         grade: b.querySelector(".pp-bbb-grade")?.textContent.trim() || "",
-        // Inside the Compliance pack box, under the facts, behind a rule.
-        inBox: !!box && box.contains(b), belowFacts: !!fr && br.top >= fr.bottom - 1,
-        ruled: parseFloat(getComputedStyle(b).borderTopWidth) >= 1,
-        // How far its foot sits above the box's own (padding included).
-        footGap: xr ? Math.round(xr.bottom - br.bottom) : 999,
+        // Its own card, NOT inside the Compliance pack box: under it, in the
+        // same column, with a border of its own.
+        inBox: !!box && box.contains(b), belowBox: !!xr && br.top >= xr.bottom - 1,
+        sameCol: !!b.closest(".pp-left") && !!box?.closest(".pp-left"),
+        // The card takes the column's slack, so the left column has no empty
+        // foot beside the Connect box.
+        colFoot: b.closest(".pp-left") ? Math.round(b.closest(".pp-left").getBoundingClientRect().bottom - br.bottom) : 999,
+        ownBorder: parseFloat(getComputedStyle(b).borderTopWidth) >= 1 && parseFloat(getComputedStyle(b).borderBottomWidth) >= 1,
+        sep: /Separate from the compliance pack/i.test(b.innerText),
         inCard: br.right <= c.getBoundingClientRect().right + 1,
         notInPhotos: !b.closest(".pp-photos") };
     })(),
@@ -270,8 +275,9 @@ try {
     t.ck("the BBB rating is drawn with the grade, accreditation and where it came from",
       /BBB rating/i.test(r.bbb?.t) && /A\+/.test(r.bbb.t) && /Accredited Business/.test(r.bbb.t) && /Rating from BBB/.test(r.bbb.t) && /checked Oct 15/.test(r.bbb.t), r.bbb?.t);
     t.ck("and links the sub's BBB profile in a new tab", /bbb\.org\/.*1296-1000123456$/.test(r.bbb?.href || "") && r.bbb.target === "_blank" && /noopener/.test(r.bbb.rel), JSON.stringify(r.bbb));
-    t.ck("it sits at the foot of the Compliance pack box, under the facts and a rule",
-      !!r.bbb?.inBox && r.bbb.belowFacts && r.bbb.ruled && r.bbb.notInPhotos && r.bbb.inCard, JSON.stringify(r.bbb));
+    t.ck("it is its own card under the Compliance pack, not part of it",
+      !!r.bbb && !r.bbb.inBox && r.bbb.belowBox && r.bbb.sameCol && r.bbb.ownBorder && r.bbb.notInPhotos && r.bbb.inCard, JSON.stringify(r.bbb));
+    t.ck("and says it is separate from the pack", !!r.bbb?.sep, r.bbb?.t);
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
     await page.evaluate(() => document.querySelector(".pp-head-cta")?.click());
@@ -299,7 +305,8 @@ try {
     t.ck("what connecting gives is listed, evenly spaced", r.cols?.perkGaps !== null && r.cols.perkGaps <= 2, JSON.stringify(r.cols));
     t.ck("and the slack is spread through the list, not left under it",
       !!r.cols?.perkSpread && r.cols.perkSpread.tail <= r.cols.perkSpread.between + 24, JSON.stringify(r.cols?.perkSpread));
-    t.ck("the BBB rating fills the foot of the Compliance pack box", !!r.bbb?.inBox && r.bbb.footGap <= 24, JSON.stringify(r.bbb));
+    t.ck("the BBB card sits under the Compliance pack, outside it", !!r.bbb && !r.bbb.inBox && r.bbb.belowBox && r.bbb.sameCol, JSON.stringify(r.bbb));
+    t.ck("and fills the column, so it ends level with the Connect box", !!r.bbb && r.bbb.colFoot <= 2, JSON.stringify(r.bbb));
     t.ck("no sideways scroll", !r.wide);
     await ctx.close();
   }
@@ -314,7 +321,7 @@ try {
     t.ck("it does not wear the badge", !r.badgeOn && !/SubSub Verified/.test(r.badge) && /Not verified yet/.test(r.badge), r.badge);
     t.ck("and still says what is and is not on file", /License not verified by SubSub/.test(r.line), r.line);
     t.ck("with no BBB reading the grade slot holds a dash and says it is coming",
-      !!r.bbb?.inBox && r.bbb.grade === "—" && /coming soon/i.test(r.bbb.t) && r.bbb.href === null, r.bbb?.t);
+      !!r.bbb && !r.bbb.inBox && r.bbb.grade === "—" && /coming soon/i.test(r.bbb.t) && r.bbb.href === null, r.bbb?.t);
     t.ck("and it claims nothing", !/A\+|Accredited|checked/.test(r.bbb?.t || "x"), r.bbb?.t);
     S.verified = true; S.bbb = true;
     await ctx.close();

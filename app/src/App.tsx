@@ -29664,8 +29664,13 @@ function PassportShare({ url, name, compact = false, icons = false }) {
 function PassportBbbCard({ bbb }) {
   return (
     <aside className={`pp-bbb${bbb ? "" : " pp-bbb-none"}`} aria-label="BBB rating">
+      <div className="pp-bbb-head">
+        <span className="pp-bbb-k">Reputation</span>
+        <h3><Star size={17} /> BBB rating</h3>
+        <span className="pp-bbb-sep">Separate from the compliance pack</span>
+      </div>
+      <div className="pp-bbb-body">
       <div className="pp-bbb-main">
-        <span className="pp-bbb-k">BBB rating</span>
         <b className="pp-bbb-grade">{bbb ? (bbb.rating === "NR" ? "Not rated" : bbb.rating) : "—"}</b>
       </div>
       <div className="pp-bbb-side">
@@ -29676,6 +29681,7 @@ function PassportBbbCard({ bbb }) {
         </>) : (
           <span className="pp-bbb-src">BBB® rating coming soon.</span>
         )}
+      </div>
       </div>
     </aside>
   );
@@ -30059,6 +30065,7 @@ function PassportPage({ slug, seat = null }) {
         <div className="pp-cols">
           {/* Named what the rest of SubSub calls these four documents, and what
               a GC says when they ask for them. */}
+          <div className="pp-left">
           <section className="pp-docs" aria-label="Compliance pack">
             <h3><FileText size={18} /> Compliance pack</h3>
             <PassportBadge badge={p.badge} />
@@ -30075,8 +30082,11 @@ function PassportPage({ slug, seat = null }) {
               <div><dt><Shield size={14} /> Surety bond</dt><dd>{p.bond ? "On file" : "Not on file"}</dd></div>
               <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
             </dl>
-            <PassportBbbCard bbb={p.bbb} />
           </section>
+          {/* Its own card under the pack, not a row of it: reputation is not
+              cover, and SubSub Verified reads nothing from it. */}
+          <PassportBbbCard bbb={p.bbb} />
+          </div>
           <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
         </div>
 
@@ -41443,11 +41453,19 @@ body{background:var(--paper)}
 .pp-photos{margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
 /* The BBB rating sits at the foot of the Compliance pack box, under a rule,
    so the box fills the height the Connect box beside it sets. */
-.pp-docs{display:flex;flex-direction:column}
-.pp-bbb{margin-top:auto;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:center;
-  justify-content:space-between;gap:12px 18px;flex-wrap:wrap}
-.pp-docs > .pp-facts{margin-bottom:16px}
-.pp-bbb-main{display:flex;flex-direction:column;gap:2px}
+/* The left column is the pack and, under it, the BBB card as a card of its
+   own: a different surface, its own heading, and a line saying it is apart
+   from the pack. It takes whatever height the Connect box leaves, so the two
+   columns end level, and centers its content in it. */
+.pp-left{display:flex;flex-direction:column;gap:14px;min-width:0}
+.pp-left > .pp-docs{flex:none}
+.pp-bbb{flex:1 1 auto;border:1px dashed var(--line);border-radius:14px;padding:16px 18px;background:var(--paper);
+  display:flex;flex-direction:column;justify-content:center;gap:12px}
+.pp-bbb-head{display:flex;flex-direction:column;gap:2px}
+.pp-bbb-head h3{margin:0;font-size:16px;display:flex;align-items:center;gap:7px}
+.pp-bbb-sep{font-size:12px;color:var(--ink-soft)}
+.pp-bbb-body{display:flex;align-items:center;justify-content:space-between;gap:12px 18px;flex-wrap:wrap}
+.pp-bbb-main{display:flex;flex-direction:column}
 .pp-bbb-side{display:flex;flex-direction:column;gap:4px;align-items:flex-end;text-align:right;min-width:0;flex:1 1 160px}
 .pp-bbb-k{font-size:12px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em}
 .pp-bbb-grade{font-size:40px;line-height:1.05;font-weight:800;color:var(--ink)}
