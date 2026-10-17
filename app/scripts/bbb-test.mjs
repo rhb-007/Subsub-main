@@ -48,10 +48,12 @@ ck("of two results, the one whose businessId was asked about wins, not the first
 ck("a result for another business is not found, never drawn", readBbbAnswer({ searchResults: [{ businessId: "1", bbbRating: "F" }] }, { businessId: "2" }).error === "not_found");
 const row = { profile_url: URL_OK, rating: "A", accredited: 1, checked_at: day(-3) };
 ck("a fresh grade draws while live", bbbPublic(row, { live: true, today: TODAY })?.rating === "A");
-ck("not while the API is off", bbbPublic(row, { live: false, today: TODAY }) === null);
+ck("with the API off it is the link alone, no grade",
+  JSON.stringify(bbbPublic(row, { live: false, today: TODAY })) === JSON.stringify({ url: URL_OK, rating: null, accredited: false, checkedOn: null }));
+ck("nothing linked draws nothing", bbbPublic({ ...row, profile_url: null }, { live: true, today: TODAY }) === null && bbbPublic(null, { live: true }) === null);
 ck(`a reading ${BBB_STALE_DAYS} days old still draws`, !!bbbPublic({ ...row, checked_at: day(-BBB_STALE_DAYS) }, { live: true, today: TODAY }));
-ck("one day past that does not", bbbPublic({ ...row, checked_at: day(-BBB_STALE_DAYS - 1) }, { live: true, today: TODAY }) === null);
-ck("a stored word that is not a grade does not", bbbPublic({ ...row, rating: "great" }, { live: true, today: TODAY }) === null);
+ck("one day past that is the link alone", bbbPublic({ ...row, checked_at: day(-BBB_STALE_DAYS - 1) }, { live: true, today: TODAY })?.rating === null);
+ck("a stored word that is not a grade is the link alone", bbbPublic({ ...row, rating: "great" }, { live: true, today: TODAY })?.rating === null);
 ck("the sub's own view says why nothing shows",
   bbbOwnView({ ...row, checked_at: day(-40) }, { live: true, today: TODAY }).why === "stale"
   && bbbOwnView(row, { live: false, today: TODAY }).why === "not_live"
@@ -95,7 +97,7 @@ ck("a non-BBB address is refused by name", s === 400 && mine.error === "not_a_bb
 ck("a profile links with the API off", s === 200 && mine.bbb.linked && mine.bbb.why === "not_live" && mine.checked === null, JSON.stringify(mine));
 ck("and nothing was asked of BBB", bbbCalls.length === 0);
 let pub = await (await call(off, `/api/public/passport/${SLUG}`, { who: null })).json();
-ck("the public page draws no rating", pub.bbb === null, JSON.stringify(pub.bbb));
+ck("the public page draws the link alone, no rating", pub.bbb?.rating === null && /1296-1000123456$/.test(pub.bbb?.url || ""), JSON.stringify(pub.bbb));
 [s] = await json(await call(off, "/api/my-passport/bbb", { method: "PUT", body: { url: URL_OK }, who: "u_pm", acct: "acc_pm" }));
 ck("a property manager has no Passport to link", s === 409);
 
@@ -117,7 +119,7 @@ pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json
 ck("and the page still draws it while it is fresh", pub.bbb?.rating === "A+");
 db.prepare(`UPDATE bbb_profiles SET checked_at = ? WHERE company_id = 'cmp_bay'`).run(day(-31));
 pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json();
-ck("past 30 days it stops drawing", pub.bbb === null);
+ck("past 30 days the grade stops drawing and the link stays", pub.bbb?.rating === null && !!pub.bbb?.url, JSON.stringify(pub.bbb));
 bbbReply = () => new Response(JSON.stringify({ searchResults: [{ businessId: "1000123456", bbbRating: "B", isBBBAccredited: false }] }));
 sw = await (await call(on, "/api/cron/bbb", { who: null, headers: { Authorization: "Bearer cron" } })).json();
 pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json();

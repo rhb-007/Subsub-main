@@ -56,13 +56,17 @@ function daysBetween(fromIso, toIso) {
   return Math.round((b - a) / 86400000);
 }
 
-// What the public page draws, or null. Only a real grade, read within the
-// last BBB_STALE_DAYS, and only while the API is switched on.
+// What the public page draws, or null. A linked profile always draws, as a
+// LINK: the sub chose that exact bbb.org page, so pointing at it claims
+// nothing we have not checked, and the reader sees the grade on BBB's own site
+// where it is always current. A grade rides along only while the API is on
+// and the reading is within BBB_STALE_DAYS; anything else is the link alone.
+// Nothing linked draws nothing.
 export function bbbPublic(row, { live, today = new Date().toISOString().slice(0, 10) } = {}) {
-  if (!live || !row || !row.profile_url) return null;
+  if (!row || !row.profile_url) return null;
   const grade = normalizeGrade(row.rating);
-  if (!grade || !row.checked_at) return null;
-  if (daysBetween(row.checked_at, today) > BBB_STALE_DAYS) return null;
+  const fresh = live && grade && row.checked_at && daysBetween(row.checked_at, today) <= BBB_STALE_DAYS;
+  if (!fresh) return { url: row.profile_url, rating: null, accredited: false, checkedOn: null };
   return {
     url: row.profile_url,
     rating: grade,
@@ -71,11 +75,11 @@ export function bbbPublic(row, { live, today = new Date().toISOString().slice(0,
   };
 }
 
-// The sub's own view: what they linked, what was read, and why nothing shows
-// when nothing does -- a blank there reads as a feature that is broken.
+// The sub's own view: what they linked, whether a grade is drawn beside the
+// link, and why not when it is not. The link itself always shows once linked.
 export function bbbOwnView(row, { live, today = new Date().toISOString().slice(0, 10) } = {}) {
   if (!row || !row.profile_url) return { linked: false, live: !!live };
-  const shown = bbbPublic(row, { live, today });
+  const shown = !!bbbPublic(row, { live, today })?.rating;
   let why = null;
   if (!shown) {
     if (!live) why = "not_live";
@@ -87,7 +91,7 @@ export function bbbOwnView(row, { live, today = new Date().toISOString().slice(0
     linked: true, live: !!live, url: row.profile_url,
     rating: normalizeGrade(row.rating), accredited: !!row.accredited,
     checkedOn: row.checked_at ? String(row.checked_at).slice(0, 10) : null,
-    shown: !!shown, why,
+    shown, why,
   };
 }
 

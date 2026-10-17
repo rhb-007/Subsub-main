@@ -7846,6 +7846,27 @@ refactor.
   **Not verified here:** a live Cal answer to the name form, which is the
   documented one.
 
+- **BBB HAS NO PUBLIC API, SO THE PASSPORT LINKS TO THE SUB'S OWN BBB
+  PROFILE AND DRAWS NO GRADE.** The `api.bbb.org/v2` the card was built
+  against is BBB's partner API, granted case by case, and nobody can sign up
+  for it. The third-party services that sell BBB grades scrape bbb.org, which
+  BBB's terms prohibit. Most match by business name, and another company's
+  grade under the sub's name is the worst thing this card could show. So the
+  scrapers were refused, at the owner's choice.
+
+  `bbbPublic` now returns the profile link whenever one is linked, and the
+  card reads **BBB profile** with *See their rating and reviews on the BBB®
+  website* and a **See BBB profile** button. The reader sees the grade on
+  BBB's own site, where it is always current. A grade is drawn beside the link
+  only from a live reading under `BBB_STALE_DAYS`, so the API path still works
+  untouched if BBB ever grants access. **Nothing linked means no card**, which
+  replaces the "coming soon" dash: with no API coming, a placeholder promises
+  something that will not arrive. The sub's Passport tab says the profile
+  shows as a link and stops saying ratings are "not switched on yet".
+
+  `test:bbb` (44) and `test:passportui` (76). Hiding the card when there is no
+  grade fails two assertions.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

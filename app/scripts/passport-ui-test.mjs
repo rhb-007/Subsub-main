@@ -53,7 +53,9 @@ const PAGE = () => ({
     ? { verified: true, name: "SubSub Verified", line: "Washington L&I registration active · Insurance on file through Mar 4, 2027" }
     : { verified: false, name: null, line: "License not verified by SubSub · Insurance on file through Mar 4, 2027" },
   refCode: "K7Q2MXRB",
-  bbb: S.bbb ? { url: "https://www.bbb.org/us/wa/tacoma/profile/roofing/bay-roofing-1296-1000123456",
+  bbb: S.bbb === "link" ? { url: "https://www.bbb.org/us/wa/tacoma/profile/roofing/bay-roofing-1296-1000123456",
+    rating: null, accredited: false, checkedOn: null }
+    : S.bbb ? { url: "https://www.bbb.org/us/wa/tacoma/profile/roofing/bay-roofing-1296-1000123456",
     rating: "A+", accredited: true, checkedOn: "2026-10-15" } : null,
 });
 const acct = () => ({
@@ -342,16 +344,23 @@ try {
 
   console.log("\n-- not verified --");
   {
-    S.verified = false; S.bbb = false;
+    S.verified = false; S.bbb = "link";
     const { ctx, page } = await visitApp(browser, { host: "app", webPort: WEB, viewport: PHONE, path: `/p/${SLUG}` });
     await wait(1800);
     const r = await readPage(page);
     t.ck("the page is there", r.there);
     t.ck("it does not wear the badge", !r.badgeOn && !/SubSub Verified/.test(r.badge) && /Not verified yet/.test(r.badge), r.badge);
     t.ck("and still says what is and is not on file", /License not verified by SubSub/.test(r.line), r.line);
-    t.ck("with no BBB reading the grade slot holds a dash and says it is coming",
-      !!r.bbb && !r.bbb.inBox && r.bbb.grade === "—" && /coming soon/i.test(r.bbb.t) && r.bbb.href === null, r.bbb?.t);
-    t.ck("and it claims nothing", !/A\+|Accredited|checked/.test(r.bbb?.t || "x"), r.bbb?.t);
+    // BBB offers no public API, so a linked profile with no live reading is a
+    // LINK to bbb.org, and the card claims no grade of its own.
+    t.ck("a linked BBB profile with no reading is a link to it, in its own card",
+      !!r.bbb && !r.bbb.inBox && /BBB profile/.test(r.bbb.t) && /See BBB profile/.test(r.bbb.t)
+      && /1296-1000123456$/.test(r.bbb.href || "") && r.bbb.target === "_blank", JSON.stringify(r.bbb));
+    t.ck("and it claims no grade", r.bbb?.grade === "" && !/A\+|Accredited|checked|coming soon|—/.test(r.bbb?.t || "x"), r.bbb?.t);
+    S.bbb = false;
+    await page.reload(); await wait(1800);
+    const r2 = await readPage(page);
+    t.ck("with nothing linked there is no BBB card at all", r2.there && r2.bbb === null, JSON.stringify(r2.bbb));
     S.verified = true; S.bbb = true;
     await ctx.close();
   }

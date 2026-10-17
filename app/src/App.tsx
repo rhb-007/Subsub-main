@@ -29655,32 +29655,36 @@ function PassportShare({ url, name, compact = false, icons = false }) {
   );
 }
 
-// The sub's BBB rating, at the foot of the Compliance pack box, under a
-// divider: reputation rather than cover, so it is not a row of the pack and
-// counts toward nothing. Text only (no BBB mark), the attribution BBB asks
-// for, the day it was read, and a link to their profile. With no current
-// reading -- the API not live yet, no profile linked, or a stale one -- the
-// grade slot holds a dash and says it is coming, and claims nothing.
+// The sub's BBB profile, under the Compliance pack in a card of its own:
+// reputation rather than cover, so it counts toward nothing. BBB offers no
+// public API, so it is a LINK to the profile the sub chose -- the reader sees
+// the rating on bbb.org, where it is current -- and claims no grade here. A
+// grade is drawn beside the link only if a live, fresh reading exists. Text
+// only (no BBB mark). Nothing linked, no card.
 function PassportBbbCard({ bbb }) {
+  if (!bbb?.url) return null;
+  const graded = !!bbb.rating;
   return (
-    <aside className={`pp-bbb${bbb ? "" : " pp-bbb-none"}`} aria-label="BBB rating">
+    <aside className={`pp-bbb${graded ? "" : " pp-bbb-linkonly"}`} aria-label="BBB profile">
       <div className="pp-bbb-head">
         <span className="pp-bbb-k">Reputation</span>
-        <h3><Star size={17} /> BBB rating</h3>
+        <h3><Star size={17} /> {graded ? "BBB rating" : "BBB profile"}</h3>
         <span className="pp-bbb-sep">Separate from the compliance pack</span>
       </div>
       <div className="pp-bbb-body">
-      <div className="pp-bbb-main">
-        <b className="pp-bbb-grade">{bbb ? (bbb.rating === "NR" ? "Not rated" : bbb.rating) : "—"}</b>
-      </div>
+      {graded && (
+        <div className="pp-bbb-main">
+          <b className="pp-bbb-grade">{bbb.rating === "NR" ? "Not rated" : bbb.rating}</b>
+        </div>
+      )}
       <div className="pp-bbb-side">
-        {bbb ? (<>
+        {graded ? (<>
           {bbb.accredited && <span className="pp-bbb-acc"><BadgeCheck size={14} /> BBB® Accredited Business</span>}
           <span className="pp-bbb-src">Rating from BBB® · checked {formatExpiry(bbb.checkedOn)}</span>
-          <a className="pp-bbb-link" href={bbb.url} target="_blank" rel="noopener noreferrer">See BBB profile <ExternalLink size={13} /></a>
         </>) : (
-          <span className="pp-bbb-src">BBB® rating coming soon.</span>
+          <span className="pp-bbb-src">See their rating and reviews on the BBB® website.</span>
         )}
+        <a className="pp-bbb-link" href={bbb.url} target="_blank" rel="noopener noreferrer">See BBB profile <ExternalLink size={13} /></a>
       </div>
       </div>
     </aside>
@@ -29717,23 +29721,25 @@ function PassportBbbPanel({ initial }) {
     catch { setNote("That didn't save. Try again."); }
     finally { setBusy(false); }
   };
-  const why = bbb.linked && !bbb.shown
-    ? bbb.why === "not_live" ? "BBB ratings aren't switched on in SubSub yet. Your profile is saved and your rating will show once they are."
-      : bbb.why === "check_failed" ? "We couldn't read your rating from the BBB yet. We try again every night."
-      : bbb.why === "no_grade" ? "The BBB didn't return a rating for this profile, so nothing shows."
-      : bbb.why === "stale" ? "Your rating hasn't been re-checked in 30 days, so it's hidden until it is."
-      : "Your rating will show once the BBB has been checked."
+  // The link always shows once linked; these only explain a missing grade,
+  // and say nothing while the API is off, because nothing is coming then.
+  const why = bbb.linked && !bbb.shown && bbb.live
+    ? bbb.why === "check_failed" ? "We couldn't read your rating from the BBB yet, so your Passport shows the link only. We try again every night."
+      : bbb.why === "no_grade" ? "The BBB didn't return a rating for this profile, so your Passport shows the link only."
+      : bbb.why === "stale" ? "Your rating hasn't been re-checked in 30 days, so your Passport shows the link only until it is."
+      : null
     : null;
   return (
     <div className="portal-panel settings-panel pp-bbb-panel">
       <h4>BBB rating</h4>
-      <p className="panel-note">Link your own BBB business profile and your rating shows next to your photos. It's optional, and it shows whatever the BBB currently says.</p>
+      <p className="panel-note">Link your own BBB business profile and your Passport gets a button to it, under your compliance pack, so clients can see your rating and reviews on bbb.org. It's optional.</p>
       {bbb.linked ? (
         <>
           <div className="pp-bbb-row">
             <div>
               <a href={bbb.url} target="_blank" rel="noopener noreferrer" className="pp-bbb-url">{bbb.url}</a>
               {bbb.shown && <span className="pp-sub ok">Showing {bbb.rating === "NR" ? "Not rated" : bbb.rating}{bbb.accredited ? " · Accredited" : ""} · checked {formatExpiry(bbb.checkedOn)}</span>}
+              {!bbb.shown && <span className="pp-sub ok">Showing on your Passport as a link to this profile.</span>}
               {why && <span className="pp-sub">{why}</span>}
             </div>
             <button className="btn-ghost" disabled={busy} onClick={unlink}>Remove</button>
@@ -29745,7 +29751,6 @@ function PassportBbbPanel({ initial }) {
             <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.bbb.org/us/…/profile/…" inputMode="url" />
           </label>
           <button className="btn-solid" disabled={busy || !url.trim()} onClick={link}>{busy ? "Linking…" : "Link profile"}</button>
-          {!bbb.live && <span className="pp-sub">BBB ratings aren't switched on yet. You can link now and it will show once they are.</span>}
         </div>
       )}
       {note && <p className="panel-note" role="status">{note}</p>}
@@ -41473,10 +41478,11 @@ body{background:var(--paper)}
 .pp-bbb-side{display:flex;flex-direction:column;gap:4px;align-items:flex-end;text-align:right;min-width:0;flex:1 1 160px}
 .pp-bbb-k{font-size:12px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em}
 .pp-bbb-grade{font-size:40px;line-height:1.05;font-weight:800;color:var(--ink)}
-.pp-bbb-none .pp-bbb-grade{color:var(--ink-soft)}
 .pp-bbb-acc{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:700;color:var(--brand-dk)}
 .pp-bbb-src{font-size:12.5px;color:var(--ink-soft)}
 .pp-bbb-link{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:700;color:var(--brand-dk);text-decoration:none}
+.pp-bbb-linkonly .pp-bbb-side{align-items:flex-start;text-align:left;flex-basis:100%}
+.pp-bbb-linkonly .pp-bbb-link{margin-top:4px;padding:9px 14px;min-height:40px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
 .pp-bbb-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
 .pp-bbb-row > div{display:flex;flex-direction:column;gap:4px;min-width:0}
 .pp-bbb-url{font-size:13px;font-weight:700;overflow-wrap:anywhere;color:var(--brand-dk)}
