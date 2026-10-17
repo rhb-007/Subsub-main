@@ -163,7 +163,37 @@ const readPage = (page) => page.evaluate(() => {
       return { side: dr.right <= ar.left + 1 && Math.abs(dr.top - ar.top) < 2, stacked: dr.bottom <= ar.top + 1,
         even: Math.abs(dr.height - ar.height) < 2, dh: Math.round(dr.height), ah: Math.round(ar.height),
         docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts"),
-        docsTitle: d.querySelector("h3")?.textContent.trim() || "" };
+        docsTitle: d.querySelector("h3")?.textContent.trim() || "",
+        // The connect box is stretched to the documents' height. What it must
+        // not do is stack everything at the top over an empty half: the space
+        // under its last line, and the widest gap between two of its lines.
+        emptyBottom: (() => {
+          const kids = [...a.children].filter((k) => k.getBoundingClientRect().height > 0);
+          const last = kids[kids.length - 1];
+          return last ? Math.round(ar.bottom - last.getBoundingClientRect().bottom) : 999;
+        })(),
+        widestGap: (() => {
+          const kids = [...a.children].filter((k) => k.getBoundingClientRect().height > 0);
+          let w = 0;
+          for (let i = 1; i < kids.length; i++)
+            w = Math.max(w, kids[i].getBoundingClientRect().top - kids[i - 1].getBoundingClientRect().bottom);
+          return Math.round(w);
+        })(),
+        perkGaps: (() => {
+          const li = [...a.querySelectorAll(".pp-perks li")].map((x) => x.getBoundingClientRect());
+          const g = li.slice(1).map((r, i) => r.top - li[i].bottom);
+          return g.length ? Math.round(Math.max(...g) - Math.min(...g)) : null;
+        })(),
+        // Spread means the room under the last perk is no bigger than the
+        // room between two of them, so the slack is not all left in one band.
+        perkSpread: (() => {
+          const li = [...a.querySelectorAll(".pp-perks li")].map((x) => x.getBoundingClientRect());
+          const cta = a.querySelector(".pp-acc-cta")?.getBoundingClientRect();
+          if (li.length < 2 || !cta) return null;
+          const between = li[1].top - li[0].bottom, head = li[0].top - a.querySelector(".pp-perks").getBoundingClientRect().top;
+          return { between: Math.round(between), tail: Math.round(cta.top - li[li.length - 1].bottom), head: Math.round(head) };
+        })(),
+        ctaLast: !!a.lastElementChild?.classList.contains("pp-acc-cta") };
     })(),
     cta: cta ? { t: cta.innerText.trim(), href: cta.getAttribute("href") } : null,
     access: (c?.querySelector(".pp-access")?.innerText || "").replace(/\s+/g, " "),
@@ -256,6 +286,12 @@ try {
       !!r.cols?.side && r.cols.docsHold, JSON.stringify(r.cols));
     t.ck("the left box is called Compliance pack", r.cols?.docsTitle === "Compliance pack", r.cols?.docsTitle);
     t.ck("and the two boxes are the same height", !!r.cols?.even, JSON.stringify(r.cols));
+    t.ck("the connect box's bottom is not empty: the CTA sits at its foot",
+      !!r.cols?.ctaLast && r.cols.emptyBottom <= 30, JSON.stringify(r.cols));
+    t.ck("and nothing in it is separated by a band of empty space", (r.cols?.widestGap ?? 999) <= 80, JSON.stringify(r.cols));
+    t.ck("what connecting gives is listed, evenly spaced", r.cols?.perkGaps !== null && r.cols.perkGaps <= 2, JSON.stringify(r.cols));
+    t.ck("and the slack is spread through the list, not left under it",
+      !!r.cols?.perkSpread && r.cols.perkSpread.tail <= r.cols.perkSpread.between + 24, JSON.stringify(r.cols?.perkSpread));
     t.ck("the BBB rating sits beside the photos", !!r.bbb?.beside, JSON.stringify(r.bbb));
     t.ck("no sideways scroll", !r.wide);
     await ctx.close();

@@ -13573,13 +13573,25 @@ refactor.
   with a Bearer token; the first build had `/api/orgs/search` with no `/v2`,
   which would have 404'd every call, and the suite now pins the path.
 
-  **Not verified here:** a live BBB answer, the search's two parameter names
-  and the reply's field names. `readBbbAnswer` accepts several
-  spellings and returns no rating rather than a guess, so the first real call
-  is the test. `test:bbb` (39) and `test:passportui`. Seven server mutations
-  fire, each on its own assertion: staleness dropped, the live gate dropped,
-  the host matched as a prefix, a failure wiping the grade, a relink keeping
-  it, the sweep re-reading, and the public page dropping it.
+  **The query and reply are now read off BBB's Swagger page** (api.bbb v1):
+  the parameters are `BbbId` and `BusinessId` (the first build sent `BBBID`),
+  and the reply is `searchResults[]` with `businessId`, `bbbRating` and
+  `isBBBAccredited`. A search can answer more than one business, so
+  `readBbbAnswer` takes **the result whose `businessId` was asked about**, never
+  simply the first, and a list with no match is not found. **Not verified
+  here:** a live answer, which needs BBB to approve the registration.
+
+- **THE PASSPORT'S CONNECT BOX FILLS ITS HEIGHT: WHAT CONNECTING GIVES IN THE
+  MIDDLE, THE CTA AT THE FOOT.** Reported with the box outlined: everything sat
+  at the top and the bottom half was empty, because `.pp-cols` stretches it to
+  the Compliance pack's height beside it. It now lists four things connecting
+  gives (kept current, every document, reminders, ready for work), each a claim
+  the product already makes, spaced evenly through the slack, and the buttons
+  are pinned with `margin-top:auto`. The list shows while not yet connected,
+  signed out or in; once connected the documents fill the box instead.
+  `test:passportui` measures it at 1180px: the empty band under the CTA, equal
+  gaps between the items, and that the slack is spread rather than left under
+  the list. Both mutations (no pin, a top-packed list) fail.
 
 ## Working here
 

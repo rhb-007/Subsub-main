@@ -42,6 +42,10 @@ ck("the API answer is read in its documented spelling",
   JSON.stringify(readBbbAnswer({ SearchResults: [{ BBBRating: "a+", IsBBBAccredited: true }] })) === '{"ok":true,"rating":"A+","accredited":true}');
 ck("an answer naming neither is unreadable, never a guess", readBbbAnswer({ SearchResults: [{ Name: "x" }] }).error === "unreadable");
 ck("an empty answer is not found", readBbbAnswer({ SearchResults: [] }).error === "not_found");
+ck("Swagger's own example reads", JSON.stringify(readBbbAnswer({ totalResults: 1, searchResults: [{ businessId: "123456", bbbId: "0112", bbbRating: "A+", isBBBAccredited: false }] }, { businessId: "123456" })) === '{"ok":true,"rating":"A+","accredited":false}');
+ck("of two results, the one whose businessId was asked about wins, not the first",
+  readBbbAnswer({ searchResults: [{ businessId: "1", bbbRating: "F" }, { businessId: "2", bbbRating: "A" }] }, { businessId: "2" }).rating === "A");
+ck("a result for another business is not found, never drawn", readBbbAnswer({ searchResults: [{ businessId: "1", bbbRating: "F" }] }, { businessId: "2" }).error === "not_found");
 const row = { profile_url: URL_OK, rating: "A", accredited: 1, checked_at: day(-3) };
 ck("a fresh grade draws while live", bbbPublic(row, { live: true, today: TODAY })?.rating === "A");
 ck("not while the API is off", bbbPublic(row, { live: false, today: TODAY }) === null);
@@ -55,7 +59,7 @@ ck("the sub's own view says why nothing shows",
 
 // ---- through the Worker ----------------------------------------------------------
 const bbbCalls = [];
-let bbbReply = () => new Response(JSON.stringify({ SearchResults: [{ BBBRating: "A+", IsBBBAccredited: true }] }));
+let bbbReply = () => new Response(JSON.stringify({ totalResults: 2, searchResults: [{ businessId: "999", bbbId: "1296", bbbRating: "F", isBBBAccredited: false }, { businessId: "1000123456", bbbId: "1296", bbbRating: "A+", isBBBAccredited: true }] }));
 globalThis.fetch = async (url, init = {}) => {
   const u = String(url);
   if (u.startsWith("https://bbb.test")) { bbbCalls.push({ u, auth: init.headers?.Authorization }); return bbbReply(); }
@@ -99,7 +103,7 @@ console.log("\nwith the API on");
 [s, mine] = await json(await call(on, "/api/my-passport/bbb", { method: "PUT", body: { url: URL_OK } }));
 ck("linking reads the rating at once", s === 200 && mine.checked?.ok && mine.bbb.rating === "A+" && mine.bbb.shown, JSON.stringify(mine));
 ck("BBB is asked at /orgs/search, the path its Swagger page names", /^https:\/\/bbb\.test\/orgs\/search\?/.test(bbbCalls[0]?.u || ""), bbbCalls[0]?.u);
-ck("BBB is asked about the two ids off the address, with the token", /BBBID=1296/.test(bbbCalls[0]?.u) && /BusinessId=1000123456/.test(bbbCalls[0]?.u) && bbbCalls[0]?.auth === "Bearer tok", JSON.stringify(bbbCalls[0]));
+ck("BBB is asked about the two ids off the address, with the token", /[?&]BbbId=1296/.test(bbbCalls[0]?.u) && /BusinessId=1000123456/.test(bbbCalls[0]?.u) && bbbCalls[0]?.auth === "Bearer tok", JSON.stringify(bbbCalls[0]));
 pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json();
 ck("the public page carries the grade, the badge and the profile", pub.bbb?.rating === "A+" && pub.bbb.accredited === true && pub.bbb.url === URL_OK && pub.bbb.checkedOn === TODAY, JSON.stringify(pub.bbb));
 
@@ -114,7 +118,7 @@ ck("and the page still draws it while it is fresh", pub.bbb?.rating === "A+");
 db.prepare(`UPDATE bbb_profiles SET checked_at = ? WHERE company_id = 'cmp_bay'`).run(day(-31));
 pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json();
 ck("past 30 days it stops drawing", pub.bbb === null);
-bbbReply = () => new Response(JSON.stringify({ SearchResults: [{ BBBRating: "B", IsBBBAccredited: false }] }));
+bbbReply = () => new Response(JSON.stringify({ searchResults: [{ businessId: "1000123456", bbbRating: "B", isBBBAccredited: false }] }));
 sw = await (await call(on, "/api/cron/bbb", { who: null, headers: { Authorization: "Bearer cron" } })).json();
 pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json();
 ck("the next good read brings it back, changed", sw.ok === 1 && pub.bbb?.rating === "B" && pub.bbb.accredited === false, JSON.stringify(pub.bbb));
@@ -124,7 +128,7 @@ ck("a row read today is not asked again", bbbCalls.length === before && sw.ok ==
 ck("the cron route wants the secret", (await call(on, "/api/cron/bbb", { who: null })).status === 403);
 
 console.log("\nchanging and removing");
-bbbReply = () => new Response(JSON.stringify({ SearchResults: [] }));
+bbbReply = () => new Response(JSON.stringify({ totalResults: 0, searchResults: [] }));
 [s, mine] = await json(await call(on, "/api/my-passport/bbb", { method: "PUT",
   body: { url: "https://www.bbb.org/us/wa/tacoma/profile/roofing/other-co-1296-2000999" } }));
 const after = db.prepare(`SELECT * FROM bbb_profiles`).get();

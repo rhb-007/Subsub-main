@@ -29865,12 +29865,25 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
     </div>
   );
 
+  // What connecting gives you, one line each, so the box says it in the
+  // space beside the documents rather than in one paragraph over an empty
+  // half. Only what the product does: the four documents open once they
+  // accept, the expiry dates are live, and they are reminded before one runs out.
+  const perks = (
+    <ul className="pp-perks">
+      <li><ShieldCheck size={18} /><span><b>Kept current</b> License and insurance stay on your roster with live expiry dates.</span></li>
+      <li><FileText size={18} /><span><b>Every document</b> Insurance, bond, W-9 and your agreement open here once they accept.</span></li>
+      <li><Bell size={18} /><span><b>Reminders</b> They're reminded before a certificate or license runs out.</span></li>
+      <li><CalendarCheck size={18} /><span><b>Ready for work</b> Send them work orders and see when they're free.</span></li>
+    </ul>
+  );
+
   let body;
   if (!seat) {
     body = (<>
-      <p>Hiring {name}? Connect on SubSub and their license, insurance, W-9 and agreement stay current on
-        your roster. Once they accept, every document opens here.</p>
-      <div className="pp-files">
+      <p>Hiring {name}? Connect on SubSub and their paperwork stays current on your roster.</p>
+      {perks}
+      <div className="pp-files pp-acc-cta">
         <button className="btn-solid pp-sbtn" onClick={signIn}><Link2 size={16} /> Sign in to connect</button>
         <a className="btn-ghost pp-sbtn" href={passportCtaHref(refCode)}>New to SubSub? Sign up free</a>
       </div>
@@ -29912,17 +29925,21 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
         <p className="pp-ok"><CheckCircle2 size={15} /> They shared their certificate and W-9 with you.</p>
         {fileButtons(st.files || [])}
       </>)}
-      {st.connectPending ? (
+      {st.connectPending ? (<>
         <p className="pp-wait"><Clock size={15} /> You asked to connect. Once they accept, every document opens here.</p>
-      ) : st.mayConnect ? (<>
-        <p>Connect and every document opens here once they accept: insurance, bond, W-9 and your agreement.</p>
-        <label className="claim-fld">
-          <span>A note for them (optional)</span>
-          <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
-        </label>
-        <button className="btn-solid claim-btn" disabled={busy} onClick={connect}>
-          <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
-        </button>
+        {st.status !== "approved" && perks}
+      </>) : st.mayConnect ? (<>
+        <p>Connect with {name} and their paperwork stays current on your roster.</p>
+        {st.status !== "approved" && perks}
+        <div className="pp-acc-cta">
+          <label className="claim-fld">
+            <span>A note for them (optional)</span>
+            <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
+          </label>
+          <button className="btn-solid claim-btn" disabled={busy} onClick={connect}>
+            <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
+          </button>
+        </div>
       </>) : (
         <p>Nobody at this company can answer a request to connect yet.</p>
       )}
@@ -41450,6 +41467,17 @@ body{background:var(--paper)}
 .pp-access h3{font-size:18px;overflow-wrap:anywhere}
 .pp-access .claim-btn{min-height:50px;font-size:15.5px}
 .pp-access.ring{box-shadow:0 0 0 4px rgba(46,125,82,.35)}
+/* The box is stretched to the documents' height beside it, so the perks take
+   the middle and spread evenly, and the CTA sits at the foot. On a phone the
+   box is only as tall as its content and the same rules leave a plain gap. */
+.pp-perks{list-style:none;margin:0;padding:4px 0;flex:1 1 auto;display:flex;flex-direction:column;
+  justify-content:space-evenly;gap:12px}
+.pp-perks li{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.45;color:var(--ink)}
+.pp-perks li > svg{flex:none;margin-top:1px;color:var(--brand-dk)}
+.pp-perks b{display:block;font-size:14px}
+.pp-acc-cta{margin-top:auto;display:flex;flex-direction:column;gap:10px}
+.pp-acc-cta.pp-files{flex-direction:row}
+.pp-access .pp-acc-cta .pp-sbtn{flex:1 1 180px;justify-content:center;min-height:48px}
 .pp-files{display:flex;flex-wrap:wrap;gap:8px}
 .pp-wait,.pp-ok{display:flex;align-items:center;gap:6px;font-weight:700}
 .pp-ok{color:var(--brand-dk)!important}

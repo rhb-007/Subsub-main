@@ -96,16 +96,25 @@ export function bbbOwnView(row, { live, today = new Date().toISOString().slice(0
 // IsBBBAccredited); several spellings are accepted, and an answer that names
 // neither a grade nor accreditation is no answer -- it draws nothing rather
 // than a wrong grade. The first live call is the real test.
-export function readBbbAnswer(body) {
+export function readBbbAnswer(body, want = {}) {
   const list = Array.isArray(body) ? body
-    : Array.isArray(body?.SearchResults) ? body.SearchResults
     : Array.isArray(body?.searchResults) ? body.searchResults
+    : Array.isArray(body?.SearchResults) ? body.SearchResults
     : Array.isArray(body?.results) ? body.results
     : body && typeof body === "object" ? [body] : [];
-  const org = list[0];
-  if (!org || typeof org !== "object") return { ok: false, error: "not_found" };
-  const rating = normalizeGrade(org.BBBRating ?? org.bbbRating ?? org.Rating ?? org.rating);
-  const accRaw = org.IsBBBAccredited ?? org.isBBBAccredited ?? org.IsAccredited ?? org.accredited;
+  // A search can answer more than one business. Take the one whose
+  // businessId is the one asked about, never simply the first: a grade drawn
+  // under the wrong company's name is the worst thing this card could say.
+  // A result carrying no businessId at all is taken only when it is alone.
+  const idOf = (o) => o && (o.businessId ?? o.BusinessId);
+  const wantId = want.businessId != null ? String(want.businessId).replace(/^0+/, "") : null;
+  const orgs = list.filter((o) => o && typeof o === "object");
+  const org = wantId == null ? orgs[0]
+    : orgs.find((o) => idOf(o) != null && String(idOf(o)).replace(/^0+/, "") === wantId)
+      || (orgs.length === 1 && idOf(orgs[0]) == null ? orgs[0] : null);
+  if (!org) return { ok: false, error: "not_found" };
+  const rating = normalizeGrade(org.bbbRating ?? org.BBBRating ?? org.Rating ?? org.rating);
+  const accRaw = org.isBBBAccredited ?? org.IsBBBAccredited ?? org.IsAccredited ?? org.accredited;
   const accredited = accRaw === true || accRaw === "true" || accRaw === 1 || accRaw === "1";
   if (!rating && accRaw === undefined) return { ok: false, error: "unreadable" };
   return { ok: true, rating, accredited };
