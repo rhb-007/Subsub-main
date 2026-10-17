@@ -154,7 +154,8 @@ const readPage = (page) => page.evaluate(() => {
       const dr = d.getBoundingClientRect(), ar = a.getBoundingClientRect();
       return { side: dr.right <= ar.left + 1 && Math.abs(dr.top - ar.top) < 2, stacked: dr.bottom <= ar.top + 1,
         even: Math.abs(dr.height - ar.height) < 2, dh: Math.round(dr.height), ah: Math.round(ar.height),
-        docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts") };
+        docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts"),
+        docsTitle: d.querySelector("h3")?.textContent.trim() || "" };
     })(),
     cta: cta ? { t: cta.innerText.trim(), href: cta.getAttribute("href") } : null,
     access: (c?.querySelector(".pp-access")?.innerText || "").replace(/\s+/g, " "),
@@ -231,6 +232,7 @@ try {
     t.ck("the CTA is on the left under the name, not under the code", !!r.side?.ctaLeft && r.side.ctaUnderLede && !r.side.ctaBelowQr, JSON.stringify(r.side));
     t.ck("two columns: documents on the left, connect on the right, level",
       !!r.cols?.side && r.cols.docsHold, JSON.stringify(r.cols));
+    t.ck("the left box is called Compliance pack", r.cols?.docsTitle === "Compliance pack", r.cols?.docsTitle);
     t.ck("and the two boxes are the same height", !!r.cols?.even, JSON.stringify(r.cols));
     t.ck("no sideways scroll", !r.wide);
     await ctx.close();

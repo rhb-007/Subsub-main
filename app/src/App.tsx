@@ -29948,8 +29948,10 @@ function PassportPage({ slug, seat = null }) {
             The badge leads the documents box because it is the verdict on
             them; on a phone the columns stack in the same order. */}
         <div className="pp-cols">
-          <section className="pp-docs" aria-label="Documents and credentials">
-            <h3><FileText size={18} /> Documents</h3>
+          {/* Named what the rest of SubSub calls these four documents, and what
+              a GC says when they ask for them. */}
+          <section className="pp-docs" aria-label="Compliance pack">
+            <h3><FileText size={18} /> Compliance pack</h3>
             <PassportBadge badge={p.badge} />
             <dl className="claim-facts pp-facts">
               {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
