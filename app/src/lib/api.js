@@ -790,6 +790,15 @@ export const api = {
   passportAccess: (slug) => request(`/passport/${encodeURIComponent(slug)}/access`),
   askPassportAccess: (slug, message) => request(`/passport/${encodeURIComponent(slug)}/access`,
     { method: "POST", body: JSON.stringify({ message }) }),
+  connectFromPassport: (slug, message) => request(`/passport/${encodeURIComponent(slug)}/connect`,
+    { method: "POST", body: JSON.stringify({ message }) }),
+  publicConnectCode: (code) => request(`/public/connect/${encodeURIComponent(code)}`),
+  passportAgreementBlob: async (slug) => {
+    const res = await fetch(`${API_BASE}/passport/${encodeURIComponent(slug)}/agreement.txt`,
+      { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`agreement_${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  },
   passportFileBlob: async (slug, kind) => {
     const res = await fetch(`${API_BASE}/passport/${encodeURIComponent(slug)}/documents/${kind}/file`,
       { headers: await authHeaders() });

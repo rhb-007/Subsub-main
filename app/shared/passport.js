@@ -231,6 +231,21 @@ export function passportBadge({ state, licenseNumber, check, trades = [], insura
 // Which files an approved account may open. The bond and the agreement are not
 // on the list: the request was for the certificate and the W-9.
 export const ACCESS_KINDS = ["insurance", "w9"];
+
+// CONNECTING IS THE APPROVAL. A company that accepted a request to connect has
+// said yes to working for that account, and every hiring account already
+// reads every one of these on its roster (mayWriteCompanyDocs takes any live
+// engagement). So a connected account opens all four from the Passport too,
+// with no second yes asked for, and ending the engagement ends it.
+export const CONNECTED_KINDS = ["insurance", "bond", "w9", "contract"];
+
+// Which files this viewer may open: all four once connected, the two a request
+// covers once a request was approved, and nothing otherwise.
+export function openableKinds({ connected = false, approved = false } = {}) {
+  if (connected) return CONNECTED_KINDS;
+  if (approved) return ACCESS_KINDS;
+  return [];
+}
 export const ACCESS_STATUSES = ["pending", "approved", "declined", "revoked"];
 export const ACCESS_MESSAGE_MAX = 300;
 
@@ -251,9 +266,13 @@ export function accessMove(status, action) {
 
 // ---- what the public page carries -----------------------------------------------
 
-// Everything here is something the sub chose to publish. Not the contact's
-// name, not a phone, not an email (the page has its own share buttons), not
-// the clients they work for, not a document.
+// Everything here is something the sub chose to publish. It carries the
+// business contact -- the name, phone and email on their company profile --
+// because a Passport replaced the QR code they hand over on site and is read
+// like a business card: somebody holding it needs a way to ring them. It does
+// not carry the clients they work for, their crews' names or a document.
+// (The first version left the contact off; asked for back in so many words:
+// "make sure all of the other company information is fully filled out".)
 export function publicPassport({ passport, company, photos = [], docs = {}, refCode = null,
   today = new Date().toISOString().slice(0, 10) }) {
   const trades = (passport.trades || []).filter((t) => TRADE_IDS.has(t));
@@ -273,6 +292,13 @@ export function publicPassport({ passport, company, photos = [], docs = {}, refC
     foundedYear: passport.foundedYear ?? null,
     years: yearsText(passport.foundedYear, today),
     about: passport.about || null,
+    contact: company.contact ? String(company.contact) : null,
+    phone: company.phone ? String(company.phone) : null,
+    email: company.email ? String(company.email) : null,
+    zip: company.zip ? String(company.zip) : null,
+    // A UBI is Washington's, so it is shown only for a Washington company.
+    ubi: company.ubi && normalizeState(company.state) === "WA" ? String(company.ubi) : null,
+    bond: !!(docs.bond && docs.bond.fileName) || !!company.bond,
     license: company.license ? { number: company.license, text: badge.license.text, ok: badge.license.ok } : null,
     insurance: insOnFile
       ? { carrier: ins?.issuer || null, expiresOn: ins?.expiresOn || null, text: badge.insurance.text }
@@ -285,3 +311,23 @@ export function publicPassport({ passport, company, photos = [], docs = {}, refC
 }
 
 export const PASSPORT_CTA = "Manage your whole sub network like this";
+
+// What the sub has not filled in yet, named, in the order a GC reads the page.
+// Read by their own Passport tab, because a page with half its rows saying
+// nothing reads as a company that has not answered.
+export function passportGaps(p = {}) {
+  const out = [];
+  if (!p.contact) out.push({ key: "contact", label: "A contact name", where: "company" });
+  if (!p.phone) out.push({ key: "phone", label: "A phone number", where: "company" });
+  if (!p.email) out.push({ key: "email", label: "An email address", where: "company" });
+  if (!p.city || !p.state) out.push({ key: "city", label: "Your city and state", where: "company" });
+  if (!(p.trades || []).length) out.push({ key: "trades", label: "The trades you do", where: "passport" });
+  if (!p.area) out.push({ key: "area", label: "Where you work", where: "company" });
+  if (!p.license) out.push({ key: "license", label: "Your license number", where: "company" });
+  if (!p.insurance) out.push({ key: "insurance", label: "A certificate of insurance", where: "docs" });
+  if (!p.w9) out.push({ key: "w9", label: "A W-9", where: "docs" });
+  if (!p.foundedYear) out.push({ key: "year", label: "The year you started", where: "passport" });
+  if (!p.about) out.push({ key: "about", label: "A line about your company", where: "passport" });
+  if (!(p.photos || []).length) out.push({ key: "photos", label: "Photos of your work", where: "passport" });
+  return out;
+}

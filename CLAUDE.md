@@ -13402,6 +13402,62 @@ refactor.
   to two lines, chip) with a rule between rows. `test:visitnocrew` measures the
   three left edges at five widths; the old indent fails five assertions.
 
+- **CONNECTING IS THE PASSPORT'S APPROVAL, AND MY QR CODE IS THE PASSPORT.**
+  Asked for as *"connecting should constitute an approval"*, *"all existing QR
+  codes should be replaced with the passport QR code, so everything works the
+  same"*, a header reading *"powered by subsub | passport"* under the company
+  name, the company information filled out, and *"once a gc or manager, owner
+  connect with a sub they should be able to view and download all docs
+  including subsub agreement"*.
+
+  **A live engagement opens every document from the Passport, with no request
+  asked for.** Accepting a connect request is the sub saying yes to working for
+  that account, and every hiring account already reads all four documents on its
+  own roster (`mayWriteCompanyDocs` takes any live engagement). So the Passport
+  agreeing with that is not a widening. `passportAsker` asks connected first, and
+  `openableKinds` in `shared/passport.js` is the one rule: all four when
+  connected, the certificate and W-9 when a request was approved, nothing
+  otherwise. **Ending the engagement ends it**, because the check is
+  `status != 'ended'` (the mutation dropping that fails two assertions). The
+  agreement between the two of them rides on the access reply, drawn with
+  `AgreementDoc` and downloadable as text (`/api/passport/:slug/agreement.txt`);
+  an uploaded agreement opens as the `contract` file. The request-and-approve
+  flow stays for an account that is not connected, but the page now offers
+  **Connect**, which goes through the same `askToConnect` the lookup and the
+  scanned code use, recorded as `via = 'code'` because the Passport is the code.
+
+  **The QR code on Profile and the connect page encodes the Passport's address.**
+  An unpublished Passport shows *Publish my Passport* instead of a code, because
+  a code that opens a 404 is worse than none. **Every code already printed still
+  works**: the connect code stays underneath, a signed-in hiring account scanning
+  one gets the connect flow it always did, and somebody **not** signed in is sent
+  to the Passport (`GET /api/public/connect/:code`), where it used to be a sign-in
+  form. Only a published Passport is named; an unknown code, a malformed one and
+  an unpublished Passport are one 404.
+
+  **The page leads with the company.** The name, then SubSub's mark and *Powered
+  by SubSub | Passport*, then where they are and how long. **It now carries the
+  business contact** (name, phone, email), the ZIP, the bond, and the UBI for a
+  Washington company. This reverses 077's choice to leave the contact off: the
+  Passport is the code a sub hands over on site, read like a business card, and a
+  card with no number to ring is not one. Still not carried: their clients, crew
+  names or a document. Trades fall back to the account's own trades when the sub
+  has not picked any. The sub's own Passport tab names what is still blank
+  (`passportGaps`), named rather than counted, with where to fill each in.
+
+  **Signed out, the box offers both doors**: sign in to connect, or *New to
+  SubSub? Sign up free*, credited to the sub through their referral code. The
+  hiring side's contractor card links **Open Passport** when one is published
+  (`passportUrl` on `/api/subs`, carried by name in `hydrateAccount`).
+
+  `test:passport` (135) and `test:passportui` (41). Four server mutations fire:
+  the connected branch dropped, connected limited to two kinds, an ended
+  engagement still counting, and an unpublished Passport named to a stranger. Four browser ones too: Connect posting to the old request route, the header
+  losing its lockup, the phone dropped, and the QR going back to the connect
+  code. That last one survived at first, because the address under the code
+  read the Passport's URL straight off the reply while the squares read a
+  different value; both read `shown` now.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

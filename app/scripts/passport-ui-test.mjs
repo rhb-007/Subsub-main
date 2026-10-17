@@ -13,8 +13,12 @@
 //   THE CTA SAYS THE WORDS ASKED FOR and carries the sub's own code with the
 //   passport channel, which is what credits the sub.
 //
-//   THE FILES ARE ASKED FOR, NOT SHOWN: signed out, the page offers sign-in;
-//   a hiring admin asks and the POST goes; approved, the two files open.
+//   THE HEADER IS THE COMPANY, with SubSub's mark and "Powered by SubSub |
+//   Passport" under the name, and the business contact is on the page.
+//
+//   CONNECTING IS THE APPROVAL: signed out, the page offers sign-in and a free
+//   signup credited to the sub; a hiring admin connects and the POST goes;
+//   connected, every document and the agreement open.
 //
 //   THE SUB'S OWN SCREEN publishes, and answers a request in one press.
 //
@@ -30,13 +34,15 @@ const WEB = 5461, API = 9161;
 const t = tally();
 
 const SLUG = "bay-roofing-k7q2m";
-const S = { verified: true, access: { status: "none", mayRequest: true, files: [] }, kind: "general_contractor",
+const NOT_CONNECTED = () => ({ status: "none", mayRequest: true, mayConnect: true, connectPending: false, files: [] });
+const S = { verified: true, access: NOT_CONNECTED(), kind: "general_contractor",
   published: false, posts: [], pendingReq: true };
 const PAGE = () => ({
   slug: SLUG, name: "Bay Roofing", city: "Tacoma", state: "WA",
   trades: [{ id: "roofing", label: "Roofing" }, { id: "gutters", label: "Gutters" }],
   area: "Tacoma, Seattle", foundedYear: 2012, years: "In business since 2012 · 14 years",
   about: "Residential re-roofs, two crews.",
+  contact: "Rae Bay", phone: "2065550100", email: "rae@bay.test", zip: "98407", ubi: "604123456", bond: true,
   license: { number: "BAYROR*123", text: S.verified ? "Washington L&I registration active" : "License not verified by SubSub", ok: S.verified },
   insurance: { carrier: "Acme Mutual", expiresOn: "2027-03-04", text: "Insurance on file through Mar 4, 2027" },
   w9: true, photos: [{ id: "ph1", caption: "New roof, Tacoma" }],
@@ -64,11 +70,17 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === `/api/public/passport/${SLUG}`) return [200, PAGE()];
   if (path.startsWith("/api/public/passport/")) return [404, { error: "not_found" }];
   if (path === `/api/passport/${SLUG}/access` && method === "GET") return [200, S.access];
+  if (path === `/api/passport/${SLUG}/connect` && method === "POST") {
+    S.posts.push({ path, body }); S.access = { ...S.access, connectPending: true, mayConnect: false };
+    return [201, { id: "cr1", status: "pending" }];
+  }
   if (path === `/api/passport/${SLUG}/access` && method === "POST") {
     S.posts.push({ path, body }); S.access = { status: "pending", mayRequest: false, files: [] };
     return [201, { ok: true, status: "pending" }];
   }
   if (path === "/api/my-passport" && method === "GET") return [200, MINE()];
+  if (path === "/api/connect/code") return [200, { code: "ABCD234567", url: "https://app.subsub.work/?connect=ABCD234567",
+    passport: { slug: SLUG, url: `https://app.subsub.work/p/${SLUG}`, published: S.published } }];
   if (path === "/api/my-passport" && method === "PUT") {
     S.posts.push({ path, body }); if (typeof body.published === "boolean") S.published = body.published;
     return [200, { passport: MINE().passport }];
@@ -113,6 +125,15 @@ const readPage = (page) => page.evaluate(() => {
     share: share.map((x) => ({ t: x.innerText.trim(), href: x.getAttribute("href"), h: x.getBoundingClientRect().height })),
     cta: cta ? { t: cta.innerText.trim(), href: cta.getAttribute("href") } : null,
     access: (c?.querySelector(".pp-access")?.innerText || "").replace(/\s+/g, " "),
+    signup: c?.querySelector(".pp-access a")?.getAttribute("href") || null,
+    powered: (() => {
+      const pw = c?.querySelector(".pp-head .pp-powered"), h = c?.querySelector(".pp-head h1");
+      if (!pw || !h) return null;
+      return { t: pw.innerText.replace(/\s+/g, " ").trim(), mark: !!pw.querySelector("svg"),
+        below: pw.getBoundingClientRect().top >= h.getBoundingClientRect().bottom - 1 };
+    })(),
+    contact: (c?.querySelector(".pp-contact")?.innerText || "").replace(/\s+/g, " "),
+    tel: c?.querySelector('.pp-contact a[href^="tel:"]')?.getAttribute("href") || null,
     photos: c?.querySelectorAll(".pp-photo img").length || 0,
     wide: document.documentElement.scrollWidth > window.innerWidth + 1,
     robots: document.querySelector('meta[name="robots"]')?.content || "",
@@ -132,7 +153,13 @@ try {
     t.ck("the trades", r.trades.join() === "Roofing,Gutters", r.trades.join());
     t.ck("the license, the insurer and the W-9 as Yes",
       /BAYROR\*123/.test(r.facts) && /Acme Mutual/.test(r.facts) && /W-9 On file/.test(r.facts), r.facts);
-    t.ck("never a contact, an email or a file name", !/@|\.pdf/.test(r.text), r.text);
+    t.ck("the header is the company, then SubSub's mark and Powered by SubSub | Passport under it",
+      r.powered?.t === "Powered by SubSub | Passport" && r.powered.mark && r.powered.below, JSON.stringify(r.powered));
+    t.ck("the business contact, with a number to call", /Rae Bay/.test(r.contact) && /rae@bay\.test/.test(r.contact)
+      && r.tel === "tel:2065550100", r.contact);
+    t.ck("the bond, the UBI and where they are based",
+      /Surety bond On file/.test(r.facts) && /UBI 604123456/.test(r.facts) && /98407/.test(r.facts), r.facts);
+    t.ck("never a file name", !/\.pdf/.test(r.text), r.text);
     t.ck("a QR code of its own address", r.qr);
     t.ck("share by text, email and copy",
       r.share.some((s) => s.t === "Text" && s.href?.startsWith("sms:?&body=") && decodeURIComponent(s.href).includes(`/p/${SLUG}`))
@@ -142,7 +169,8 @@ try {
     t.ck("the CTA says the words asked for", r.cta?.t === "Manage your whole sub network like this", r.cta?.t);
     t.ck("and credits this sub through the passport channel",
       r.cta?.href === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.cta?.href);
-    t.ck("signed out, the files are offered behind a sign-in", /Sign in to ask/.test(r.access) && !/Open the certificate/.test(r.access), r.access);
+    t.ck("signed out, connecting is offered behind a sign-in", /Sign in to connect/.test(r.access) && !/Certificate of insurance/.test(r.access), r.access);
+    t.ck("and a free signup credited to this sub", r.signup === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.signup);
     t.ck("photos of their work", r.photos === 1);
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
@@ -183,24 +211,37 @@ try {
       seat: { userId: "u_rb", accountId: "acc_x" }, path: `/p/${SLUG}` });
     await wait(2400);
     let r = await readPage(page);
-    t.ck("signed in, the page offers to ask", /Ask to see the files/.test(r.access), r.access);
+    t.ck("signed in, the page offers to connect", /Connect with Bay Roofing/.test(r.access) && !/Ask to see/.test(r.access), r.access);
     await page.evaluate(() => {
       const i = document.querySelector(".pp-access input");
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, "For the Pine St job");
       i.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const before = S.posts.length;
-    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Ask to see/.test(b.innerText))?.click());
+    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Connect with/.test(b.innerText))?.click());
     await wait(900);
     const sent = S.posts.slice(before);
-    t.ck("asking posts the note", sent.length === 1 && sent[0].body.message === "For the Pine St job", JSON.stringify(sent));
+    t.ck("connecting posts to the connect route with the note",
+      sent.length === 1 && sent[0].path.endsWith("/connect") && sent[0].body.message === "For the Pine St job", JSON.stringify(sent));
     r = await readPage(page);
-    t.ck("and then says it is waiting", /waiting on their answer/.test(r.access), r.access);
-    S.access = { status: "approved", mayRequest: false, files: [{ kind: "insurance", fileName: "coi.pdf" }, { kind: "w9", fileName: "w9.pdf" }] };
+    t.ck("and then says it is waiting", /You asked to connect/.test(r.access), r.access);
+    S.access = { status: "connected", mayRequest: false, mayConnect: false, files: [
+      { kind: "insurance", fileName: "coi.pdf" }, { kind: "bond", fileName: "bond.pdf" }, { kind: "w9", fileName: "w9.pdf" },
+      { kind: "contract", fileName: "signed.pdf" }],
+      agreement: { status: "countersigned", document: { title: "SubSub Standard Subcontractor Agreement",
+        sections: [{ id: "s1", heading: "1. Parties", paragraphs: ["Outerhome and Bay Roofing."] }] } } };
     await page.reload({ waitUntil: "domcontentloaded" });
     await wait(2200);
     r = await readPage(page);
-    t.ck("approved, the two files are offered", /Open the certificate/.test(r.access) && /Open the W-9/.test(r.access), r.access);
+    t.ck("connected, every document opens with nothing asked",
+      ["Certificate of insurance", "Surety bond", "W-9", "Signed agreement"].every((w) => r.access.includes(w))
+      && /You're connected/.test(r.access) && !/Connect with/.test(r.access), r.access);
+    t.ck("and the SubSub agreement is there to read and download",
+      /SubSub Standard Subcontractor Agreement/.test(r.access) && /Read the agreement/.test(r.access) && /Download/.test(r.access), r.access);
+    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Read the agreement/.test(b.innerText))?.click());
+    await wait(400);
+    r = await readPage(page);
+    t.ck("reading it draws the document", /1\. Parties/.test(r.access) && /Outerhome and Bay Roofing/.test(r.access), r.access);
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -243,6 +284,16 @@ try {
       && sent[0].body.action === "approve", JSON.stringify(sent));
     const after = await page.evaluate(() => (document.querySelector(".pp-edit")?.innerText || "").replace(/\s+/g, " "));
     t.ck("and then it can be stopped", /Stop sharing/.test(after), after.slice(-300));
+    t.ck("what is still blank is named", /Fill these in/.test(after) && /Photos of your work/.test(after), after.slice(0, 600));
+    // My QR code, on Profile, is the Passport now.
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((x) => x.innerText.trim() === "Profile")?.click());
+    await wait(1200);
+    const qr = await page.evaluate(() => ({
+      url: document.querySelector(".cx-code-url")?.innerText || "",
+      code: document.querySelector(".cx-code-txt")?.innerText || "",
+      svg: !!document.querySelector(".cx-code svg"),
+    }));
+    t.ck("My QR code is the Passport's address", qr.svg && qr.url === `https://app.subsub.work/p/${SLUG}` && !qr.code, JSON.stringify(qr));
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

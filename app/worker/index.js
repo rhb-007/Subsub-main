@@ -157,7 +157,7 @@ import { checkView, bondView, insuranceView, licenseActive, nextStoredCheck, lic
 import { validCrews, offDays, isOffOn } from "../shared/crews.js";
 import { validSpan, spanView, busyFromSpans, spanDates, spanDaysFrom, isDayKey } from "../shared/span.js";
 import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passportBadge,
-  ACCESS_KINDS as PASSPORT_ACCESS_KINDS, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
+  ACCESS_KINDS as PASSPORT_ACCESS_KINDS, openableKinds, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
   CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
 import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_CENTS,
   MIN_MONTHLY_CENTS, validEstimate, pricingRows } from "../shared/unitpricing.js";
@@ -5353,7 +5353,14 @@ app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
     ? await c.env.DB.prepare(`SELECT * FROM companies WHERE connect_code = ?`).bind(code).first()
     : await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(String(b.companyId || "")).first();
   if (!co) return c.json({ error: "not_found" }, 404);
+  return askToConnect(c, co, { via: code ? "code" : "lookup", message });
+});
 
+// Asking a company to connect, by whichever door found it: the lookup, a
+// scanned code, or the Connect button on their Passport. One function, so the
+// three doors cannot disagree about who may ask or what the company is told.
+async function askToConnect(c, co, { via, message }) {
+  const { accountId, userId } = c.get("auth");
   // Same order as the lookup: already ours beats anything else, or a
   // contractor on our own list reads as a stranger with no account.
   const engaged = await c.env.DB.prepare(
@@ -5375,7 +5382,7 @@ app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
     await c.env.DB.prepare(
       `INSERT INTO connect_requests (id, account_id, company_id, via, requested_by, message)
        VALUES (?, ?, ?, ?, ?, ?)`
-    ).bind(id, accountId, co.id, code ? "code" : "lookup", userId, message).run();
+    ).bind(id, accountId, co.id, via, userId, message).run();
   } catch (err) {
     // The partial unique index. Asking twice is not an error worth a 500 --
     // it means somebody pressed it twice, or two people in the same office
@@ -5416,7 +5423,7 @@ app.post("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
     emailError: co.email && !mailResult?.ok ? (mailResult?.error || "send_failed") : null,
     textError: co.phone && !smsResult?.ok ? (smsResult?.error || "send_failed") : null,
   }, 201);
-});
+}
 
 // What this account has asked for and not yet had an answer to.
 app.get("/api/connect-requests", requireRole("admin", "pm"), async (c) => {
@@ -5628,7 +5635,44 @@ app.get("/api/connect/code", async (c) => {
   if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
   const code = await ensureConnectCode(c.env, companyId);
   if (!code) return c.json({ error: "not_found" }, 404);
-  return c.json({ code, url: connectUrl(code) });
+  return c.json({ code, url: connectUrl(code), passport: await passportForCode(c.env, companyId) });
+});
+
+// The Passport behind a company's QR code. MY QR CODE IS THE PASSPORT NOW: one
+// code, one page, and a hiring account scanning it connects from there. The
+// connect code stays underneath so every code already printed still opens --
+// see the public route below. A database without 077 has no Passport and the
+// screen falls back to the connect code it always drew.
+async function passportForCode(env, companyId) {
+  try {
+    const row = await ensurePassport(env, companyId);
+    return row ? { slug: row.slug, url: passportUrl(row.slug), published: !!row.published_at } : null;
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+// An old printed code, opened by somebody who is not signed in: which Passport
+// it belongs to, so the page can go there instead of to a sign-in form. A code
+// is something the company chose to hand out, and the Passport is already the
+// public page behind it -- so only a PUBLISHED one is named, and an unknown
+// code, a malformed one and an unpublished Passport all answer the same.
+app.get("/api/public/connect/:code", async (c) => {
+  const rl = await rateLimit(c.env, "connect-public", clientIp(c), { limit: 60, windowMinutes: 10 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  const code = String(c.req.param("code") || "").trim().toUpperCase();
+  if (!/^[0-9A-Z]{10}$/.test(code)) return c.json({ error: "not_found" }, 404);
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT p.slug FROM companies co JOIN passports p ON p.company_id = co.id
+        WHERE co.connect_code = ? AND p.published_at IS NOT NULL`).bind(code).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    return c.json({ slug: row.slug, url: passportUrl(row.slug) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "not_found" }, 404);
+    throw err;
+  }
 });
 
 // Rotate it. A code is a standing offer to be asked, and the whole point of
@@ -8384,6 +8428,22 @@ app.get("/api/subs", async (c) => {
       ).bind(...ids).all();
       const set = new Set((pref || []).map((r) => r.company_id));
       subs.forEach((sub) => { sub.preferredSub = set.has(sub.id); });
+    }
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
+  // Each contractor's PUBLISHED Passport, so their card can open it. The
+  // address is public by the sub's own choice; an unpublished one is not
+  // named. Carried by name in hydrateAccount, like preferredSub.
+  try {
+    const ids = subs.map((x) => x.id);
+    if (ids.length) {
+      const { results: pps } = await c.env.DB.prepare(
+        `SELECT company_id, slug FROM passports WHERE published_at IS NOT NULL
+            AND company_id IN (${ids.map(() => "?").join(",")})`
+      ).bind(...ids).all();
+      const by = new Map((pps || []).map((r) => [r.company_id, passportUrl(r.slug)]));
+      subs.forEach((sub) => { sub.passportUrl = by.get(sub.id) || null; });
     }
   } catch (err) {
     if (!missingSchema(err)) throw err;
@@ -19438,14 +19498,32 @@ async function passportPublicShape(env, passport, { today = new Date().toISOStri
   try { refCode = await ensureReferralCode(env, { kind: "sub", companyId: co.id }); }
   catch (err) { if (!missingSchema(err)) console.warn("[passport] no referral code:", err?.message || err); }
   return publicPassport({
-    passport: { slug: passport.slug, trades: parseJson(passport.trades, []),
+    passport: { slug: passport.slug, trades: await passportTrades(env, passport, co.id),
       foundedYear: passport.founded_year, about: passport.about },
-    company: { company: co.company, city: co.city, state: co.state, license: co.license,
+    company: { company: co.company, city: co.city, state: co.state, zip: co.zip, license: co.license,
+      contact: co.contact, phone: co.phone, email: co.email, ubi: co.ubi, bond: co.bond,
       licenseCheck: checkView(parseJson(co.license_check, null), co.license),
       coverage: validCoverage(parseJson(co.coverage, null)) || {},
       insurance: co.insurance, w9: co.w9 },
     photos: await passportPhotos(env, co.id), docs, refCode, today,
   });
+}
+
+// The trades a Passport names. The sub's own pick on the Passport tab when
+// they made one; otherwise the trades their own account was set up with, so a
+// page they have not edited yet still says what they do rather than nothing.
+async function passportTrades(env, passport, companyId) {
+  const own = parseJson(passport.trades, []);
+  if (Array.isArray(own) && own.length) return own;
+  try {
+    const acct = await env.DB.prepare(`SELECT trades FROM accounts WHERE company_id = ? LIMIT 1`)
+      .bind(companyId).first();
+    const t = parseJson(acct?.trades, []);
+    return Array.isArray(t) ? t : [];
+  } catch (err) {
+    if (missingSchema(err)) return [];
+    throw err;
+  }
 }
 
 const accessRowToJs = (r) => ({
@@ -19668,8 +19746,23 @@ async function passportAsker(c, slug) {
   catch (err) { if (missingSchema(err)) return { error: "migration_needed" }; throw err; }
   if (!row) return { error: "not_found" };
   if (acct?.company_id && acct.company_id === row.company_id) return { error: "own_passport", row, acct };
+  // Connected is asked first and outranks the kind: an engagement IS the
+  // relationship, and an account already on it may open what it already reads
+  // on its own roster. Live means not ended -- ending it ends the access.
+  const engaged = acct && await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM engagements WHERE account_id = ? AND company_id = ? AND status != 'ended' LIMIT 1`
+  ).bind(acct.id, row.company_id).first();
+  if (engaged) return { row, acct, connected: true };
   if (!acct || !HIRING_KINDS.includes(acct.kind)) return { error: "not_a_hiring_account", row, acct };
-  return { row, acct };
+  return { row, acct, connected: false };
+}
+
+// The current file of each kind for one company, from company_docs only.
+async function passportFiles(env, companyId, kinds) {
+  if (!kinds.length) return [];
+  const docs = await currentDocRows(env.DB, companyId).catch(() => ({}));
+  return kinds.filter((k) => docs[k]?.file_key)
+    .map((k) => ({ kind: k, fileName: docs[k].file_name, expiresOn: docs[k].expires_on || null }));
 }
 
 const liveAccess = (env, companyId, accountId) => env.DB.prepare(
@@ -19680,17 +19773,69 @@ app.get("/api/passport/:slug/access", requireRole("admin", "pm"), async (c) => {
   const who = await passportAsker(c, c.req.param("slug"));
   if (who.error === "not_found" || who.error === "migration_needed") return c.json({ error: who.error }, 404);
   if (who.error === "own_passport") return c.json({ status: "own", mayRequest: false });
-  if (who.error) return c.json({ status: "none", mayRequest: false, reason: who.error });
-  const last = await liveAccess(c.env, who.row.company_id, who.acct.id);
-  const status = last?.status || "none";
-  let files = [];
-  if (status === "approved") {
-    const docs = await currentDocRows(c.env.DB, who.row.company_id).catch(() => ({}));
-    files = PASSPORT_ACCESS_KINDS.filter((k) => docs[k]?.file_key)
-      .map((k) => ({ kind: k, fileName: docs[k].file_name, expiresOn: docs[k].expires_on || null }));
+  if (who.error) return c.json({ status: "none", mayRequest: false, mayConnect: false, reason: who.error });
+  if (who.connected) {
+    // Every document, and the agreement between the two of them if one was
+    // issued -- the SubSub form rendered, or the signed copy as a file.
+    let agreement = null;
+    try {
+      const row = await liveAgreement(c.env, who.acct.id, who.row.company_id);
+      if (row) agreement = agreementToJs(row, { document: renderStored(row) });
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    return c.json({ status: "connected", mayRequest: false, mayConnect: false,
+      companyId: who.row.company_id,
+      files: await passportFiles(c.env, who.row.company_id, openableKinds({ connected: true })), agreement });
   }
+  const last = await liveAccess(c.env, who.row.company_id, who.acct.id).catch((err) => {
+    if (missingSchema(err)) return null; throw err;
+  });
+  const status = last?.status || "none";
+  const files = await passportFiles(c.env, who.row.company_id, openableKinds({ approved: status === "approved" }));
+  // Whether they can be asked to connect at all: a company nobody answers for
+  // could never accept, so the button is not offered over it.
+  const pendingConnect = !!(await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM connect_requests WHERE account_id = ? AND company_id = ? AND status = 'pending'`
+  ).bind(who.acct.id, who.row.company_id).first());
+  const answerable = await companyHasLogin(c.env, who.row.company_id);
   return c.json({ status, requestedAt: last?.requested_at || null, decidedAt: last?.decided_at || null,
-    mayRequest: status === "none" || status === "declined" || status === "revoked", files });
+    mayRequest: status === "none" || status === "declined" || status === "revoked", files,
+    connectPending: pendingConnect, mayConnect: answerable && !pendingConnect });
+});
+
+// Connect from the Passport. The Passport is the code a sub hands over on
+// site, so this is the scanned-code door and is recorded as one.
+app.post("/api/passport/:slug/connect", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const rl = await rateLimit(c.env, "passport-connect", accountId, { limit: 30, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  const who = await passportAsker(c, c.req.param("slug"));
+  if (who.error === "not_found" || who.error === "migration_needed") return c.json({ error: "not_found" }, 404);
+  if (who.error === "own_passport") return c.json({ error: "own_company" }, 409);
+  if (who.connected) return c.json({ error: "already_engaged", companyId: who.row.company_id }, 409);
+  if (who.error) return c.json({ error: who.error }, 409);
+  const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(who.row.company_id).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const message = String(b.message || "").trim().slice(0, 500) || null;
+  return askToConnect(c, co, { via: "code", message });
+});
+
+// The agreement between this account and the sub, as text to keep. Only the
+// SubSub form has text to give; an uploaded agreement is a file and opens
+// through the file route as "contract".
+app.get("/api/passport/:slug/agreement.txt", requireRole("admin", "pm"), async (c) => {
+  const who = await passportAsker(c, c.req.param("slug"));
+  if (who.error || !who.connected) return c.json({ error: "not_found" }, 404);
+  let row = null;
+  try { row = await liveAgreement(c.env, who.acct.id, who.row.company_id); }
+  catch (err) { if (!missingSchema(err)) throw err; }
+  const doc = row && renderStored(row);
+  if (!doc || doc.unavailable) return c.json({ error: "no_agreement" }, 404);
+  return new Response(canonicalText(doc), { headers: {
+    "Content-Type": "text/plain; charset=utf-8",
+    "Content-Disposition": `attachment; filename="SubSub-agreement.txt"`,
+    "Cache-Control": "private, no-store", "X-Robots-Tag": "noindex",
+  } });
 });
 
 app.post("/api/passport/:slug/access", requireRole("admin", "pm"), async (c) => {
@@ -19733,20 +19878,29 @@ app.post("/api/passport/:slug/access", requireRole("admin", "pm"), async (c) => 
   return c.json({ ok: true, id, status: "pending" }, 201);
 });
 
-// The two files, once the sub has said yes. Pinned three ways: the access row
-// is approved for THIS account and THIS company, the kind is one the request
-// covers, and the file is the company's CURRENT row of that kind -- a
+// The files. All four for an account that is CONNECTED to the sub (a live
+// engagement, which is the sub's yes), the certificate and the W-9 for one a
+// request was approved for. Pinned three ways: the relationship is THIS
+// account's with THIS company, the kind is one that relationship covers, and the file is the company's CURRENT row of that kind -- a
 // superseded certificate drawn here would be last year's cover under this
 // year's Passport. Read from company_docs only: the fallback the roster's own
 // file route uses is scoped to the caller's own account prefix, which on
 // somebody else's company finds nothing anyway.
 app.get("/api/passport/:slug/documents/:kind/file", requireRole("admin", "pm"), async (c) => {
   const { kind } = c.req.param();
-  if (!PASSPORT_ACCESS_KINDS.includes(kind)) return c.json({ error: "not_found" }, 404);
+  if (!openableKinds({ connected: true }).includes(kind)) return c.json({ error: "not_found" }, 404);
   const who = await passportAsker(c, c.req.param("slug"));
   if (who.error) return c.json({ error: "not_found" }, 404);
-  const last = await liveAccess(c.env, who.row.company_id, who.acct.id);
-  if (last?.status !== "approved") return c.json({ error: "not_approved" }, 403);
+  let approved = false;
+  if (!who.connected) {
+    const last = await liveAccess(c.env, who.row.company_id, who.acct.id).catch((err) => {
+      if (missingSchema(err)) return null; throw err;
+    });
+    approved = last?.status === "approved";
+  }
+  if (!openableKinds({ connected: who.connected, approved }).includes(kind)) {
+    return c.json({ error: "not_approved" }, 403);
+  }
   let doc = null;
   try {
     doc = await c.env.DB.prepare(

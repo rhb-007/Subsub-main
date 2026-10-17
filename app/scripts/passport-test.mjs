@@ -7,12 +7,13 @@
 //   (Texas roofing yes, Texas plumbing no). A typed number nobody checked, a
 //   failed check, and a certificate with no date or a past one never earn it.
 //
-//   THE PUBLIC PAGE CARRIES WHAT THE SUB CHOSE TO PUBLISH, and not the
-//   contact's name, email or phone. Unpublished, unknown and malformed slugs
+//   THE PUBLIC PAGE CARRIES WHAT THE SUB CHOSE TO PUBLISH, the business
+//   contact included (it is their QR code now, read like a business card). Unpublished, unknown and malformed slugs
 //   are one 404, and every reply says noindex.
 //
-//   THE FILES OPEN ONLY FOR THE ACCOUNT THE SUB APPROVED, only the certificate
-//   and the W-9, only the current row, and stop the moment it is revoked.
+//   CONNECTING IS THE APPROVAL. A connected account opens all four documents
+//   and the agreement; ending the engagement ends it. An account that is not
+//   connected opens only what a request covers, and only once approved.
 //
 //   A LICENCE REMINDER GOES AT 30, 7 AND 0 DAYS, once each, off the register's
 //   own date.
@@ -23,7 +24,7 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { mintSlug, isSlug, slugBase, passportPathSlug, passportBadge, validPassportEdit, accessMove,
-  publicPassport, yearsText, noStateLicenseFor, PASSPORT_CTA } from "../shared/passport.js";
+  publicPassport, yearsText, noStateLicenseFor, PASSPORT_CTA, openableKinds, passportGaps } from "../shared/passport.js";
 import { addDaysIso } from "../shared/docs.js";
 
 let pass = 0, fail = 0;
@@ -90,7 +91,16 @@ const pub = publicPassport({ passport: { slug, trades: ["roofing", "nope"] },
     licenseCheck: waActive, coverage: { mode: "cities", cities: ["Tacoma"] } },
   docs: { insurance: { fileName: "coi.pdf", expiresOn: day(200), issuer: "Acme Mutual" }, w9: { fileName: "w9.pdf" } } });
 const pubText = JSON.stringify(pub);
-ck("the public shape carries no contact name, email or phone", !/Rae Bay|rae@bay|2065550100/.test(pubText), pubText);
+ck("the public shape carries the business contact", pub.contact === "Rae Bay" && pub.email === "rae@bay.test" && pub.phone === "2065550100", pubText);
+ck("a UBI only for a Washington company", publicPassport({ passport: { slug }, company: { company: "T", state: "TX", ubi: "123" } }).ubi === null
+  && publicPassport({ passport: { slug }, company: { company: "W", state: "WA", ubi: "604" } }).ubi === "604");
+ck("connecting opens all four; an approved request two; nothing otherwise",
+  openableKinds({ connected: true }).join() === "insurance,bond,w9,contract"
+  && openableKinds({ approved: true }).join() === "insurance,w9" && openableKinds({}).length === 0);
+const gapKeys = passportGaps({ name: "X" }).map((g) => g.key);
+ck("an empty Passport names every gap", ["contact", "phone", "email", "trades", "license", "insurance", "w9", "photos"].every((k) => gapKeys.includes(k)), gapKeys.join());
+ck("and a full one names none", passportGaps({ ...pub, city: "Tacoma", foundedYear: 2012, about: "x", photos: [{ id: 1 }] }).length === 0,
+  passportGaps({ ...pub, city: "Tacoma", foundedYear: 2012, about: "x", photos: [{ id: 1 }] }).map((g) => g.key).join());
 ck("and says a W-9 is on file without carrying it", pub.w9 === true && !/w9\.pdf/.test(pubText));
 ck("and names the insurer and the date", pub.insurance.carrier === "Acme Mutual" && pub.insurance.expiresOn === day(200));
 ck("and drops a trade that is not one", pub.trades.length === 1);
@@ -201,7 +211,8 @@ r = await call(env, `/api/public/passport/${SLUG}`, { who: null });
 const page = await r.json();
 ck("published, anybody holding the link reads it", r.status === 200 && page.name === "Bay Roofing");
 ck("and the reply says noindex", r.headers.get("X-Robots-Tag") === "noindex");
-ck("it carries no contact name, email or phone", !/Rae Bay|rae@bay|2065550100/.test(JSON.stringify(page)));
+ck("it carries the business contact", page.contact === "Rae Bay" && page.email === "rae@bay.test" && page.phone === "2065550100");
+ck("and says whether a bond is on file", page.bond === true);
 ck("it carries the current certificate's insurer, not the superseded one", page.insurance?.carrier === "Acme Mutual");
 ck("it says a W-9 is on file and nothing more", page.w9 === true && !/w9\.pdf/.test(JSON.stringify(page)));
 ck("the badge is earned and its line rides with it", page.badge?.verified && /Washington L&I/.test(page.badge.line));
@@ -247,19 +258,21 @@ ck("a thirteenth photo is refused", s === 409);
 
 console.log("\nasking for the files");
 const GC = { who: "u_gc", acct: "acc_gc" };
+// The asker is NOT connected: a connected account needs no request at all.
+const ASKER = { who: "u_pm", acct: "acc_pm" };
 let acc;
-[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, GC));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, ASKER));
 ck("a hiring account sees it has not asked", s === 200 && acc.status === "none" && acc.mayRequest, JSON.stringify(acc));
-r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, GC);
+r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, ASKER);
 ck("before asking, the certificate does not open", r.status === 403);
 sent.mail.length = 0;
-[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { ...GC, method: "POST", body: { message: "For the Pine St job" } }));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { ...ASKER, method: "POST", body: { message: "For the Pine St job" } }));
 ck("asking is a request", s === 201 && acc.status === "pending");
 ck("the sub is emailed, with no file attached", sent.mail.length === 1 && sent.mail[0].to?.includes?.("rae@bay.test") !== false
   && /asked to see your insurance and W-9/.test(sent.mail[0].subject) && !sent.mail[0].attachments, JSON.stringify(sent.mail[0] || {}).slice(0, 200));
-[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { ...GC, method: "POST", body: {} }));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { ...ASKER, method: "POST", body: {} }));
 ck("asking twice is one request", s === 409 && acc.error === "already_asked");
-r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, GC);
+r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, ASKER);
 ck("pending, the certificate still does not open", r.status === 403);
 [s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { who: "u_sub", acct: "acc_sub" }));
 ck("the sub's own account is told it is their own", acc.status === "own" && !acc.mayRequest);
@@ -271,8 +284,8 @@ r = await call(env, `/api/passport/${SLUG}/access`, { who: "u_juan", acct: "acc_
 ck("a contractor seat cannot ask", r.status === 403);
 
 [s, mine] = await json(await call(env, "/api/my-passport"));
-const req = mine.access?.find((a) => a.accountId === "acc_gc");
-ck("the sub sees who asked, by company and person", req?.status === "pending" && req.accountName === "Outerhome" && req.requesterName === "Dana Ruiz");
+const req = mine.access?.find((a) => a.accountId === "acc_pm");
+ck("the sub sees who asked, by company and person", req?.status === "pending" && req.accountName === "Sound PM" && req.requesterName === "Pat Pm");
 [s] = await json(await call(env, `/api/my-passport/access/${req.id}`, { method: "POST", body: { action: "revoke" } }));
 ck("a pending request cannot be revoked", s === 409);
 [s] = await json(await call(env, `/api/my-passport/access/${req.id}`, { who: "u_sub2", acct: "acc_sub2", method: "POST", body: { action: "approve" } }));
@@ -281,26 +294,26 @@ sent.mail.length = 0;
 [s, acc] = await json(await call(env, `/api/my-passport/access/${req.id}`, { method: "POST", body: { action: "approve" } }));
 ck("the sub approves", s === 200 && acc.status === "approved");
 ck("the person who asked is told", sent.mail.some((m) => /shared their insurance and W-9/.test(m.subject)));
-[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, GC));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, ASKER));
 ck("the hiring account now lists the two files", acc.status === "approved" && acc.files.map((f) => f.kind).join() === "insurance,w9", JSON.stringify(acc.files));
-r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, GC);
+r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, ASKER);
 ck("the CURRENT certificate opens", r.status === 200 && (await r.text()) === "BYTES:acc_sub/insurance/coi.pdf");
 ck("and never into a shared cache", r.headers.get("Cache-Control") === "private, no-store");
-r = await call(env, `/api/passport/${SLUG}/documents/w9/file`, GC);
+r = await call(env, `/api/passport/${SLUG}/documents/w9/file`, ASKER);
 ck("the W-9 opens", r.status === 200);
-r = await call(env, `/api/passport/${SLUG}/documents/bond/file`, GC);
-ck("the bond is not covered by the request", r.status === 404);
+r = await call(env, `/api/passport/${SLUG}/documents/bond/file`, ASKER);
+ck("the bond is not covered by the request", r.status === 403);
 r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, { who: "u_other", acct: "acc_other" });
 ck("another hiring account cannot open it on the first one's yes", r.status === 403);
 [s] = await json(await call(env, `/api/my-passport/access/${req.id}`, { method: "POST", body: { action: "decline" } }));
 ck("an approved request cannot be declined, only revoked", s === 409);
 [s] = await json(await call(env, `/api/my-passport/access/${req.id}`, { method: "POST", body: { action: "revoke" } }));
-r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, GC);
+r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, ASKER);
 ck("revoked, it stops opening", s === 200 && r.status === 403);
-[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { ...GC, method: "POST", body: {} }));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, { ...ASKER, method: "POST", body: {} }));
 ck("after a revoke a fresh request can be sent", s === 201);
 let list;
-[s, list] = await json(await call(env, "/api/passport-access", GC));
+[s, list] = await json(await call(env, "/api/passport-access", ASKER));
 ck("the hiring account lists what it asked for", s === 200 && list.length === 2 && list[0].company === "Bay Roofing");
 
 // Said rather than asserted: the answer route also guards its UPDATE on the
@@ -308,10 +321,75 @@ ck("the hiring account lists what it asked for", s === 200 && list.length === 2 
 // sequential test cannot reach that -- accessMove refuses the second press
 // before the UPDATE runs -- so deleting that half changes no outcome here.
 
+console.log("\nconnected is the approval");
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, GC));
+ck("a connected account is told it is connected", s === 200 && acc.status === "connected" && !acc.mayRequest, JSON.stringify(acc).slice(0, 200));
+ck("and lists every document on file, the bond included", acc.files.map((f) => f.kind).join() === "insurance,bond,w9", JSON.stringify(acc.files));
+r = await call(env, `/api/passport/${SLUG}/documents/bond/file`, GC);
+ck("the bond opens with no request ever made", r.status === 200 && (await r.text()) === "BYTES:acc_sub/bond/bond.pdf");
+r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, GC);
+ck("the CURRENT certificate, not the superseded one", r.status === 200 && (await r.text()) === "BYTES:acc_sub/insurance/coi.pdf");
+r = await call(env, `/api/passport/${SLUG}/agreement.txt`, GC);
+ck("with no agreement issued there is none to download", r.status === 404);
+[s] = await json(await call(env, "/api/subs/cmp_bay/agreement", { ...GC, method: "POST", body: { source: "subsub_standard" } }));
+[s2, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, GC));
+ck("an issued SubSub agreement rides with the documents", s === 200 && /SubSub Standard Subcontractor Agreement/.test(acc.agreement?.document?.title || ""),
+  `${s} ${acc.agreement?.document?.title}`);
+r = await call(env, `/api/passport/${SLUG}/agreement.txt`, GC);
+const agrText = await r.text();
+ck("and downloads as text", r.status === 200 && /SubSub Standard Subcontractor Agreement/.test(agrText)
+  && /attachment/.test(r.headers.get("Content-Disposition") || ""), agrText.slice(0, 80));
+r = await call(env, `/api/passport/${SLUG}/agreement.txt`, ASKER);
+ck("an account that is not connected cannot download it", r.status === 404);
+db.prepare(`UPDATE engagements SET status = 'ended' WHERE id = 'en_bay'`).run();
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, GC));
+ck("ending the engagement ends the access", acc.status !== "connected", acc.status);
+r = await call(env, `/api/passport/${SLUG}/documents/bond/file`, GC);
+ck("and the bond stops opening", r.status === 403);
+db.prepare(`UPDATE engagements SET status = 'active' WHERE id = 'en_bay'`).run();
+
+console.log("\nconnecting from the Passport");
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, ASKER));
+ck("an account not connected is offered Connect", acc.mayConnect === true && acc.connectPending === false, JSON.stringify(acc).slice(0, 200));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/connect`, { ...ASKER, method: "POST", body: { message: "Pine St" } }));
+ck("Connect sends a request to connect", s === 201 && acc.status === "pending", `${s} ${JSON.stringify(acc).slice(0, 120)}`);
+const cr = db.prepare(`SELECT via, message FROM connect_requests WHERE account_id = 'acc_pm' AND company_id = 'cmp_bay'`).get();
+ck("recorded as the scanned-code door, with the note", cr?.via === "code" && cr?.message === "Pine St", JSON.stringify(cr));
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/connect`, { ...ASKER, method: "POST", body: {} }));
+ck("pressing it twice is one request", s === 409 && acc.error === "already_requested");
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/access`, ASKER));
+ck("and the page then says it is waiting", acc.connectPending === true && acc.mayConnect === false);
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/connect`, { ...GC, method: "POST", body: {} }));
+ck("an account already connected is told so", s === 409 && acc.error === "already_engaged");
+[s, acc] = await json(await call(env, `/api/passport/${SLUG}/connect`, { who: "u_sub", acct: "acc_sub", method: "POST", body: {} }));
+ck("the sub cannot connect with themselves", s === 409 && acc.error === "own_company");
+r = await call(env, `/api/passport/${SLUG}/connect`, { who: "u_ten", acct: "acc_gc", method: "POST", body: {} });
+ck("a tenant seat cannot connect", r.status === 403);
+
+console.log("\nthe QR code is the Passport");
+[s, acc] = await json(await call(env, "/api/connect/code"));
+ck("My QR code carries the published Passport", s === 200 && acc.passport?.url === `https://app.subsub.work/p/${SLUG}` && acc.passport.published === true,
+  JSON.stringify(acc));
+ck("and still has its connect code underneath", /^[0-9A-Z]{10}$/.test(acc.code || ""));
+const CODE = acc.code;
+[s, acc] = await json(await call(env, `/api/public/connect/${CODE}`, { who: null }));
+ck("an old printed code names the Passport to a stranger", s === 200 && acc.slug === SLUG);
+[s] = await json(await call(env, "/api/public/connect/ZZZZZZZZZZ", { who: null }));
+ck("an unknown code is a 404", s === 404);
+[s] = await json(await call(env, "/api/public/connect/bad", { who: null }));
+ck("a malformed code is the same 404", s === 404);
+let subsList;
+[s, subsList] = await json(await call(env, "/api/subs", GC));
+ck("the roster carries the contractor's Passport", subsList.find((x) => x.id === "cmp_bay")?.passportUrl === `https://app.subsub.work/p/${SLUG}`,
+  JSON.stringify(subsList.map((x) => [x.id, x.passportUrl])));
+ck("and nothing for one with no published Passport", subsList.find((x) => x.id === "cmp_pac")?.passportUrl === null);
+
 console.log("\nunpublishing");
 await call(env, "/api/my-passport", { method: "PUT", body: { published: false } });
 r = await call(env, `/api/public/passport/${SLUG}`, { who: null });
 ck("taken down, the page is a 404 again", r.status === 404);
+r = await call(env, `/api/public/connect/${CODE}`, { who: null });
+ck("and an old printed code no longer names it", r.status === 404);
 r = await call(env, `/api/passport/${SLUG}/documents/insurance/file`, GC);
 ck("and nothing opens through it", r.status === 404);
 await call(env, "/api/my-passport", { method: "PUT", body: { published: true } });

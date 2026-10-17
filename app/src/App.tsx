@@ -119,7 +119,7 @@ import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
 import { TRADES } from "../shared/trades.js";
 import { claimPathToken, SENT_VIA, FREE_LINE, footerText } from "../shared/claim.js";
-import { passportPathSlug, PASSPORT_CTA, isSlug } from "../shared/passport.js";
+import { passportPathSlug, PASSPORT_CTA, isSlug, passportGaps } from "../shared/passport.js";
 import { inviteText, smsHref, PREFERRED_SUB, isGcKind } from "../shared/referral.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
@@ -4883,6 +4883,9 @@ export default function SubSub() {
         // companies column nor an engagements one, so both whitelists would
         // drop it -- named here by hand, the fourth field that has had to be.
         if ("preferredSub" in flat) en.preferredSub = !!flat.preferredSub;
+        // Their published Passport, read off passports and named here by hand
+        // for the same reason: neither whitelist would carry it.
+        if ("passportUrl" in flat) en.passportUrl = flat.passportUrl || null;
         // Same for what the documents say. These are read off company_docs,
         // which is neither a companies column nor an engagements one, so the
         // whitelists drop them -- and a roster whose `docs` is undefined reads
@@ -5168,6 +5171,21 @@ export default function SubSub() {
   const [resuming, setResuming] = useState(
     () => !openingApplication && !userToken && !tenantToken && !inviteToken
       && (hasStoredAuth() || (supabaseEnabled && hasStoredSession())));
+
+  // An old printed code opened by somebody who is NOT signed in. It used to
+  // land on a sign-in form, which is a dead end for a GC with no account; the
+  // code now opens the sub's Passport, where they can read it and connect or
+  // sign up. A Passport not published, or an unknown code, leaves the sign-in
+  // form as it was.
+  useEffect(() => {
+    if (!connectCode || loggedIn || resuming) return;
+    let live = true;
+    api.publicConnectCode(connectCode)
+      .then((r) => { if (live && r?.slug) window.location.replace(`/p/${r.slug}`); })
+      .catch(() => { /* not published, or unknown: the sign-in form stays */ });
+    return () => { live = false; };
+  }, [connectCode, loggedIn, resuming]);
+
 
   const resumeFromProvider = async () => {
     if (!supabaseEnabled) return;
@@ -23186,9 +23204,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   same thing something else is two names for one object. */}
               <h4>My QR code</h4>
               <p className="panel-note">
-                Show this to a general contractor and have them scan it. This is the quickest and
-                easiest way for them to get your compliance pack as well as view your schedule and
-                assign you new jobs!
+                Show this to a general contractor and have them scan it. It opens your SubSub Passport,
+                where they read your license and insurance and connect with you. Once you accept, they
+                get your compliance pack and can assign you jobs.
               </p>
               <ConnectCode />
             </div>
@@ -29098,13 +29116,36 @@ function ConnectCode() {
     finally { setBusy(""); }
   };
 
+  // MY QR CODE IS THE PASSPORT. One code, one page: a hiring account that
+  // scans it reads the license, insurance and W-9 and connects from there, so
+  // every code a sub hands out does the same thing. The connect code stays
+  // underneath -- an old printed one still opens, and goes to the Passport --
+  // and is what this draws on a database without 077.
+  const pp = code?.passport || null;
+  const shown = pp?.published ? { code: code.code, url: pp.url } : code;
+  const publish = async () => {
+    setBusy("publish"); setErr("");
+    try { await api.saveMyPassport({ published: true }); setCode(await api.myConnectCode()); }
+    catch { setErr("That didn't publish. Try again."); }
+    finally { setBusy(""); }
+  };
+
   const copy = async () => {
-    try { await navigator.clipboard.writeText(code.url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    try { await navigator.clipboard.writeText(shown.url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
     catch { setCopied(false); setErr("This browser wouldn't let us copy. The code is above — read it out."); }
   };
 
   if (err && !code) return <p className="cov-hint" role="alert">{err}</p>;
   if (!code) return <p className="cov-hint">Loading…</p>;
+  if (pp && !pp.published) return (
+    <div className="cx-code-pub">
+      <p className="cov-hint">Your code opens your SubSub Passport: your license, insurance, trades and work in one
+        page, where a GC can connect with you. Publish it and the code is ready to scan.</p>
+      <button className="btn-solid" disabled={!!busy} onClick={publish}>
+        <Globe size={14} /> {busy === "publish" ? "Publishing…" : "Publish my Passport"}</button>
+      {err && <p className="cov-hint" role="alert">{err}</p>}
+    </div>
+  );
   return (
     <>
       <div className="cx-code">
@@ -29112,19 +29153,24 @@ function ConnectCode() {
             that touching it now makes it big enough to actually scan. */}
         <button className="qrp-tap" onClick={() => setFull(true)}
           title="Make it big enough to scan" aria-label="Show the code full screen">
-          <QrCode value={code.url} label={`Connect code ${code.code}`} />
+          <QrCode value={shown.url} label={pp?.published ? "QR code for your Passport" : `Connect code ${code.code}`} />
           <span className="qrp-tap-hint"><Maximize2 size={12} /> Tap to scan</span>
         </button>
-        {full && <QrFull code={code} onClose={() => setFull(false)} />}
+        {full && <QrFull code={shown} onClose={() => setFull(false)} />}
         <div className="cx-code-side">
           {/* The code in words as well as in squares: a camera that will
               not focus is the normal case, not the exception. */}
-          <span className="cx-code-txt">{code.code}</span>
+          {/* The address in words reads the SAME value the squares encode, so
+              the two cannot drift apart. */}
+          {shown.url !== code.url
+            ? <span className="cx-code-url">{shown.url}</span>
+            : <span className="cx-code-txt">{code.code}</span>}
           {/* The camera not focusing is the normal case, not the
               exception, so there is a way through without one: send
               them the link and it opens the same thing. */}
-          <span className="cov-hint">Camera not cooperating? Send them this link instead —
-            it opens the same request on their side.</span>
+          <span className="cov-hint">{pp?.published
+            ? "It opens your Passport. A GC can read your documents and connect with you from there. Camera not cooperating? Send them the link."
+            : "Camera not cooperating? Send them this link instead — it opens the same request on their side."}</span>
           <div className="cx-code-acts">
             <button className="pick" onClick={copy}>
               <Copy size={13} /> {copied ? "Copied" : "Copy link"}
@@ -29604,15 +29650,23 @@ function PassportBadge({ badge }) {
   );
 }
 
-// Asking for, and then opening, the certificate and the W-9. Only a signed-in
-// admin or project manager of an account that hires can ask; everybody else
-// is told how, and a sub looking at their own page is told it is theirs.
-function PassportAccessBox({ slug, seat }) {
+// What a hiring account does from a Passport. CONNECTING IS THE APPROVAL: an
+// account the sub has accepted is on their roster already, so it opens every
+// document and the agreement between them from here with nothing further
+// asked. Before that the one move is Connect -- the same request a scanned QR
+// code makes, because the Passport IS the code now. Somebody with no account
+// is offered both doors: sign in, or sign up free, credited to this sub.
+const PASSPORT_FILE_OPEN = {
+  insurance: "Certificate of insurance", bond: "Surety bond",
+  w9: "W-9", contract: "Signed agreement (file)",
+};
+function PassportConnectBox({ slug, seat, refCode, name }) {
   const [st, setSt] = useState(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [opening, setOpening] = useState("");
+  const [showAgr, setShowAgr] = useState(false);
   const team = seat && (seat.role === "admin" || seat.role === "pm");
   const load = useCallback(() => {
     if (!team) return;
@@ -29624,13 +29678,15 @@ function PassportAccessBox({ slug, seat }) {
     try { sessionStorage.setItem(PASSPORT_AFTER_LOGIN, `/p/${slug}`); } catch { /* private window */ }
     window.location.assign("/");
   };
-  const ask = async () => {
+  const connect = async () => {
     setBusy(true); setErr("");
-    try { await api.askPassportAccess(slug, msg.trim()); setMsg(""); load(); }
+    try { await api.connectFromPassport(slug, msg.trim()); setMsg(""); load(); }
     catch (e) {
       const k = e?.body?.error;
-      setErr(k === "already_asked" ? "You've already asked. It is waiting on their answer."
-        : k === "not_a_hiring_account" ? "Only an account that hires subcontractors can ask for these."
+      setErr(k === "already_requested" ? "You've already asked. It is waiting on their answer."
+        : k === "already_engaged" ? "You're already connected."
+        : k === "no_account" ? "Nobody at this company can answer a request yet."
+        : k === "not_a_hiring_account" ? "Only an account that hires can connect."
         : k === "slow_down" ? "Too many requests just now. Try again in an hour."
         : "That didn't send. Try again in a moment.");
       load();
@@ -29642,57 +29698,98 @@ function PassportAccessBox({ slug, seat }) {
       const f = await api.passportFileBlob(slug, kind);
       window.open(f.url, "_blank", "noopener");
     } catch (e) {
-      setErr(String(e?.message) === "not_approved" ? "They've taken that back. Ask again if you still need it."
+      setErr(String(e?.message) === "not_approved" ? "You're no longer connected, so that won't open."
         : String(e?.message) === "no_file" ? "That file isn't on SubSub any more." : "That didn't open. Try again.");
       load();
     } finally { setOpening(""); }
   };
+  const downloadAgreement = async () => {
+    setOpening("agreement"); setErr("");
+    try {
+      const url = await api.passportAgreementBlob(slug);
+      const a = document.createElement("a");
+      a.href = url; a.download = "SubSub-agreement.txt"; a.target = "_blank"; a.rel = "noopener";
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch { setErr("The agreement didn't download. Try again."); }
+    finally { setOpening(""); }
+  };
+
+  const fileButtons = (files) => (
+    <div className="pp-files">
+      {files.map((f) => (
+        <button key={f.kind} className="btn-ghost pp-sbtn" disabled={!!opening} onClick={() => open(f.kind)}>
+          <FileText size={16} /> {opening === f.kind ? "Opening…" : PASSPORT_FILE_OPEN[f.kind] || f.kind}
+        </button>
+      ))}
+    </div>
+  );
 
   let body;
   if (!seat) {
     body = (<>
-      <p>Hiring this sub? Sign in to SubSub and ask them to share their certificate of insurance and W-9. Nothing opens until they say yes.</p>
-      <button className="btn-solid claim-btn" onClick={signIn}>Sign in to ask</button>
+      <p>Hiring {name}? Connect on SubSub and their license, insurance, W-9 and agreement stay current on
+        your roster. Once they accept, every document opens here.</p>
+      <div className="pp-files">
+        <button className="btn-solid pp-sbtn" onClick={signIn}><Link2 size={16} /> Sign in to connect</button>
+        <a className="btn-ghost pp-sbtn" href={passportCtaHref(refCode)}>New to SubSub? Sign up free</a>
+      </div>
     </>);
   } else if (!team) {
-    body = <p>Only an admin or a project manager of a company that hires subcontractors can ask for these files.</p>;
+    body = <p>Only an admin or a project manager of a company that hires can connect.</p>;
   } else if (!st) {
     body = <p>Checking…</p>;
   } else if (st.status === "own") {
-    body = <p>This is your own Passport. Requests to see your files arrive in Account → Passport.</p>;
-  } else if (st.reason === "not_a_hiring_account") {
-    body = <p>Only an account that hires subcontractors can ask for these files.</p>;
-  } else if (st.status === "pending") {
-    body = <p className="pp-wait"><Clock size={15} /> You asked. It is waiting on their answer, and we'll email you when they reply.</p>;
-  } else if (st.status === "approved") {
+    body = <p>This is your own Passport. Companies that connect with you can open your documents from here.</p>;
+  } else if (st.status === "connected") {
+    const files = st.files || [];
+    const agr = st.agreement;
     body = (<>
-      <p className="pp-ok"><CheckCircle2 size={15} /> They shared these with you. They can take it back at any time.</p>
-      {(st.files || []).length === 0 && <p>Nothing is on file to open right now.</p>}
-      <div className="pp-files">
-        {(st.files || []).map((f) => (
-          <button key={f.kind} className="btn-ghost pp-sbtn" disabled={!!opening} onClick={() => open(f.kind)}>
-            <FileText size={16} /> {opening === f.kind ? "Opening…" : f.kind === "w9" ? "Open the W-9" : "Open the certificate"}
-          </button>
-        ))}
-      </div>
+      <p className="pp-ok"><CheckCircle2 size={15} /> You're connected. Every document is yours to open.</p>
+      {files.length === 0 && !agr?.document && <p>Nothing is on file to open right now.</p>}
+      {fileButtons(files)}
+      {agr?.document && (
+        <div className="pp-agr">
+          <div>
+            <b>{agr.document.title || "SubSub Standard Subcontractor Agreement"}</b>
+            <span className="pp-sub">{agreementStateText(agr) || "Issued"}</span>
+          </div>
+          <div className="pp-files">
+            <button className="btn-ghost pp-sbtn" onClick={() => setShowAgr((v) => !v)}>
+              <FileText size={16} /> {showAgr ? "Hide the agreement" : "Read the agreement"}</button>
+            <button className="btn-ghost pp-sbtn" disabled={!!opening} onClick={downloadAgreement}>
+              <Download size={16} /> {opening === "agreement" ? "Downloading…" : "Download"}</button>
+          </div>
+          {showAgr && <AgreementDoc document={agr.document} />}
+        </div>
+      )}
     </>);
+  } else if (st.reason === "not_a_hiring_account") {
+    body = <p>Only an account that hires can connect.</p>;
   } else {
     body = (<>
-      {st.status === "declined" && <p>They declined your last request. You can ask again.</p>}
-      {st.status === "revoked" && <p>They stopped sharing these with you. You can ask again.</p>}
-      <p>Ask them to share their certificate of insurance and W-9. Nothing opens until they say yes.</p>
-      <label className="claim-fld">
-        <span>A note for them (optional)</span>
-        <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
-      </label>
-      <button className="btn-solid claim-btn" disabled={busy} onClick={ask}>
-        {busy ? "Sending…" : "Ask to see the files"}
-      </button>
+      {st.status === "approved" && (<>
+        <p className="pp-ok"><CheckCircle2 size={15} /> They shared their certificate and W-9 with you.</p>
+        {fileButtons(st.files || [])}
+      </>)}
+      {st.connectPending ? (
+        <p className="pp-wait"><Clock size={15} /> You asked to connect. Once they accept, every document opens here.</p>
+      ) : st.mayConnect ? (<>
+        <p>Connect and every document opens here once they accept: insurance, bond, W-9 and your agreement.</p>
+        <label className="claim-fld">
+          <span>A note for them (optional)</span>
+          <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
+        </label>
+        <button className="btn-solid claim-btn" disabled={busy} onClick={connect}>
+          <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
+        </button>
+      </>) : (
+        <p>Nobody at this company can answer a request to connect yet.</p>
+      )}
     </>);
   }
   return (
     <div className="claim-box pp-access">
-      <h3><FileText size={18} /> Certificate and W-9</h3>
+      <h3><Link2 size={18} /> Connect</h3>
       {body}
       {err && <p className="claim-err" role="alert">{err}</p>}
     </div>
@@ -29736,16 +29833,37 @@ function PassportPage({ slug, seat = null }) {
   return (
     <div className="pack-page pp-page">
       <div className="pack-card pp-card">
-        <span className="pack-kicker">SubSub Passport</span>
-        <h1>{p.name}</h1>
-        {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
+        {/* The company first and largest, and under it whose page this is:
+            SubSub's mark and "Powered by SubSub | Passport". It used to open
+            with a small kicker reading "SubSub Passport" over the name, which
+            read as a heading about us rather than about them. */}
+        <header className="pp-head">
+          <h1>{p.name}</h1>
+          <a className="pp-powered" href="https://subsub.work/" target="_blank" rel="noopener"
+            aria-label="Powered by SubSub Passport — visit subsub.work">
+            <SubSubMark height={18} />
+            <span>Powered by <b>SubSub</b></span><span className="pp-pipe" aria-hidden="true">|</span><span>Passport</span>
+          </a>
+          {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
+        </header>
         <PassportBadge badge={p.badge} />
         {p.trades.length > 0 && (
           <ul className="pp-trades">{p.trades.map((t) => <li key={t.id}>{t.label}</li>)}</ul>
         )}
         {p.about && <p className="pp-about">{p.about}</p>}
 
+        {(p.contact || p.phone || p.email) && (
+          <div className="pp-contact">
+            {p.contact && <b>{p.contact}</b>}
+            <div className="pp-files">
+              {p.phone && <a className="btn-ghost pp-sbtn" href={`tel:${p.phone}`}><Phone size={16} /> {p.phone}</a>}
+              {p.email && <a className="btn-ghost pp-sbtn" href={`mailto:${p.email}`}><Mail size={16} /> {p.email}</a>}
+            </div>
+          </div>
+        )}
+
         <dl className="claim-facts pp-facts">
+          {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
           {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
           <div><dt><Award size={14} /> License</dt>
             <dd>{p.license ? <>{p.license.number}<span className={`pp-sub${p.license.ok ? " ok" : ""}`}>{p.license.text}</span></>
@@ -29753,6 +29871,8 @@ function PassportPage({ slug, seat = null }) {
           <div><dt><Shield size={14} /> Insurance</dt>
             <dd>{p.insurance ? <>{p.insurance.carrier || "Certificate on file"}<span className="pp-sub">{p.insurance.text}</span></>
               : <span className="pp-sub">No certificate on file</span>}</dd></div>
+          {p.ubi && <div><dt><Award size={14} /> UBI</dt><dd>{p.ubi}</dd></div>}
+          <div><dt><Shield size={14} /> Surety bond</dt><dd>{p.bond ? "On file" : "Not on file"}</dd></div>
           <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
         </dl>
 
@@ -29767,7 +29887,7 @@ function PassportPage({ slug, seat = null }) {
           </div>
         )}
 
-        <PassportAccessBox slug={p.slug} seat={seat} />
+        <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} />
 
         <div className="pp-qrrow">
           <QrCode value={url} size={132} label={`QR code for ${p.name}'s Passport`} />
@@ -29871,7 +29991,8 @@ function PassportPanel() {
       <div className="portal-panel settings-panel">
         <h4>Your SubSub Passport</h4>
         <p className="panel-note">One page with your license, insurance, trades and photos of your work. Hand it to a GC
-          on site instead of emailing PDFs. Your certificate and W-9 never show publicly: a GC asks, and you decide.</p>
+          on site instead of emailing PDFs. It is also your QR code. Your documents never show publicly: a company you
+          connect with opens them from here, and nobody else can.</p>
         <PassportBadge badge={d.preview?.badge} />
         <div className="pp-qrrow">
           <QrCode value={pp.url} size={132} label="QR code for your Passport" />
@@ -29893,6 +30014,21 @@ function PassportPanel() {
           )}
         </div>
         {note && <p className="pp-note" role="status">{note}</p>}
+        {(() => {
+          // Named, not counted: "4 gaps" does not say which four. Each row of
+          // a Passport left blank reads as a company that has not answered.
+          const gaps = passportGaps({ ...(d.preview || {}), trades: f.trades.length ? f.trades : d.preview?.trades,
+            foundedYear: f.foundedYear || d.preview?.foundedYear, about: f.about || d.preview?.about,
+            photos: d.photos });
+          if (!gaps.length) return null;
+          const where = { company: "Account → Company", docs: "Compliance pack", passport: "below" };
+          return (
+            <div className="pp-gaps">
+              <b>Fill these in so your Passport says everything</b>
+              <ul>{gaps.map((g) => <li key={g.key}>{g.label} <span className="pp-sub">({where[g.where]})</span></li>)}</ul>
+            </div>
+          );
+        })()}
       </div>
 
       {pending.length > 0 && (
@@ -38932,6 +39068,12 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         <div className="detail-contact">
           <a href={`tel:${sub.phone}`}><Phone size={14} /> {sub.phone}</a>
           <a href={`mailto:${sub.email}`}><Mail size={14} /> {sub.email}</a>
+          {/* Their Passport, once they have published one. Connected is the
+              approval, so every document opens there as well as here. */}
+          {sub.passportUrl && (
+            <a className="sd-passport" href={sub.passportUrl} target="_blank" rel="noopener noreferrer">
+              <ShieldCheck size={14} /> Open Passport</a>
+          )}
         </div>
         {(sub.city || sub.zip) && (
           <p className="detail-addr"><MapPin size={13} /> {[sub.city, sub.state, sub.zip].filter(Boolean).join(", ")}</p>
@@ -41033,7 +41175,22 @@ body{background:var(--paper)}
    Opened from a QR code on a job site, so it is laid out for a phone first:
    one column, 48px controls, and the badge's own line under it in words. */
 .pp-page{justify-content:flex-start;padding-top:24px}
-.pp-card h1{font-size:26px;line-height:1.15;overflow-wrap:anywhere}
+.pp-card h1{font-size:26px;line-height:1.15;overflow-wrap:anywhere;margin:0}
+.pp-head{display:flex;flex-direction:column;gap:6px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.pp-head .pack-lede{margin:2px 0 0}
+.pp-powered{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;font-size:12.5px;
+  color:var(--ink-soft);text-decoration:none;font-weight:600}
+.pp-powered b{color:var(--ink);font-weight:800}
+.pp-pipe{color:var(--line-dk, #c9d1cc)}
+.pp-contact{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+.pp-contact > b{font-size:15px}
+.pp-gaps{margin-top:14px;padding:12px 14px;border-radius:12px;border:1px dashed var(--line);background:var(--paper)}
+.pp-gaps ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px;font-size:13px}
+.pp-gaps .pp-sub{display:inline}
+.cx-code-url{font-size:13px;font-weight:700;overflow-wrap:anywhere}
+.cx-code-pub{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.pp-agr{margin-top:12px;padding-top:12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.pp-agr > div:first-child{display:flex;flex-direction:column;gap:2px}
 .pp-badge{margin-top:14px;padding:12px 14px;border-radius:12px;border:1px solid var(--line);
   background:var(--paper);display:flex;flex-direction:column;gap:4px}
 .pp-badge.on{border-color:var(--brand);background:#eef7f1}
