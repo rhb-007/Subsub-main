@@ -1,0 +1,11 @@
+-- 088. The main contact's title on a Passport: "Jason Stanton, Owner".
+--
+-- ONE STATEMENT, and it is ALTER TABLE ADD COLUMN, which cannot be run twice:
+-- if CHECK.sql already reads m088_passport_contact_title as ok, do not paste
+-- it again.
+--
+-- On passports rather than companies, because it is something the sub says on
+-- the page they hand out, edited on their Passport tab beside the About. Until
+-- it is run the page prints the name alone and saving a title answers
+-- migration_needed naming this file.
+ALTER TABLE passports ADD COLUMN contact_title TEXT;

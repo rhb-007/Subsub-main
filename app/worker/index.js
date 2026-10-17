@@ -9588,6 +9588,7 @@ export function missingSchema(err) {
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
   if (/\bjob_trade_spans\b/i.test(m)) return "079_job_spans";
+  if (/\bcontact_title\b/i.test(m)) return "088_passport_contact_title";
   if (/\bpassport(s|_photos|_access)\b|\blicense_reminders\b|ux_passport_|ux_license_reminder/i.test(m)) return "077_passport";
   if (/\bleads\b/i.test(m)) return "076_leads";
   if (/\breferral_(codes|touches|attributions|rewards|invites)\b|ux_referral_/i.test(m)) return "075_referrals";
@@ -19440,6 +19441,7 @@ const passportRowToJs = (r) => ({
   trades: parseJson(r.trades, []),
   foundedYear: r.founded_year ?? null,
   about: r.about || null,
+  contactTitle: r.contact_title || null,
   viewCount: r.view_count || 0,
   lastViewedAt: r.last_viewed_at || null,
 });
@@ -19513,7 +19515,8 @@ async function passportPublicShape(env, passport, { today = new Date().toISOStri
   catch (err) { if (!missingSchema(err)) console.warn("[passport] no referral code:", err?.message || err); }
   return publicPassport({
     passport: { slug: passport.slug, trades: await passportTrades(env, passport, co.id),
-      foundedYear: passport.founded_year, about: passport.about },
+      foundedYear: passport.founded_year, about: passport.about,
+      contactTitle: passport.contact_title ?? null },
     company: { company: co.company, city: co.city, state: co.state, zip: co.zip, license: co.license,
       contact: co.contact, phone: co.phone, email: co.email, ubi: co.ubi, bond: co.bond,
       licenseCheck: checkView(parseJson(co.license_check, null), co.license),
@@ -19578,6 +19581,10 @@ app.put("/api/my-passport", requireRole("admin", "pm", "contractor"), async (c) 
   if ("trades" in v.value) { sets.push("trades = ?"); binds.push(JSON.stringify(v.value.trades)); }
   if ("foundedYear" in v.value) { sets.push("founded_year = ?"); binds.push(v.value.foundedYear); }
   if ("about" in v.value) { sets.push("about = ?"); binds.push(v.value.about); }
+  // 088's column. Without it the UPDATE throws and app.onError names the
+  // migration; the screen sends the title only when it changed, so an
+  // ordinary save never touches the column.
+  if ("contactTitle" in v.value) { sets.push("contact_title = ?"); binds.push(v.value.contactTitle); }
   // Publishing is a word the sub says, never a side effect of saving. Only a
   // real boolean moves it, so a body that merely omits it changes nothing.
   if (b.published === true && !row.published_at) sets.push("published_at = CURRENT_TIMESTAMP");

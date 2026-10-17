@@ -87,6 +87,8 @@ export const FOUNDED_MIN = 1900;
 
 // Returns { ok, value } or { ok:false, error }. Only the keys sent are
 // checked and returned, so a save of the trades does not wipe the note.
+export const CONTACT_TITLE_MAX = 60;
+
 export function validPassportEdit(b = {}, thisYear = new Date().getUTCFullYear()) {
   const out = {};
   if ("trades" in b) {
@@ -111,6 +113,13 @@ export function validPassportEdit(b = {}, thisYear = new Date().getUTCFullYear()
     const a = String(b.about ?? "").trim();
     if (a.length > ABOUT_MAX) return { ok: false, error: "about_too_long", max: ABOUT_MAX };
     out.about = a || null;
+  }
+  // The main contact's title -- "Owner", "Project manager" -- printed after
+  // their name on the page. Short, because it sits on one line beside a name.
+  if ("contactTitle" in b) {
+    const t = String(b.contactTitle ?? "").replace(/\s+/g, " ").trim();
+    if (t.length > CONTACT_TITLE_MAX) return { ok: false, error: "title_too_long", max: CONTACT_TITLE_MAX };
+    out.contactTitle = t || null;
   }
   return { ok: true, value: out };
 }
@@ -296,6 +305,8 @@ export function publicPassport({ passport, company, photos = [], docs = {}, refC
     years: yearsText(passport.foundedYear, today),
     about: passport.about || null,
     contact: company.contact ? String(company.contact) : null,
+    // A title with no name beside it says nothing, so it rides only with one.
+    contactTitle: company.contact && passport.contactTitle ? String(passport.contactTitle) : null,
     phone: company.phone ? String(company.phone) : null,
     email: company.email ? String(company.email) : null,
     zip: company.zip ? String(company.zip) : null,

@@ -29916,14 +29916,17 @@ function PassportPage({ slug, seat = null }) {
               <b className="pp-pass">Passport</b>
             </a>
             {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
+            {/* The one press the page exists for sits under the name it
+                connects to, on the left where the eye already is. Under the QR
+                code it made the right column the tallest thing in the header
+                and pushed everything below it down the page. */}
+            <PassportHeadCta cx={cx} name={p.name} onShow={() => setRing((n) => n + 1)} />
           </div>
           {/* Top right: the code itself, small, so a contractor standing at the
-              truck can hand it on; the share tools as icons under it; and the
-              one press the page exists for, naming who it connects to. */}
+              truck can hand it on, and the share tools as icons under it. */}
           <div className="pp-head-side">
-            <QrCode value={url} size={112} label={`QR code for ${p.name}'s Passport`} />
+            <QrCode value={url} size={104} label={`QR code for ${p.name}'s Passport`} />
             <PassportShare url={url} name={p.name} icons />
-            <PassportHeadCta cx={cx} name={p.name} onShow={() => setRing((n) => n + 1)} />
           </div>
         </header>
         {p.trades.length > 0 && (
@@ -29933,7 +29936,7 @@ function PassportPage({ slug, seat = null }) {
 
         {(p.contact || p.phone || p.email) && (
           <div className="pp-contact">
-            {p.contact && <b>{p.contact}</b>}
+            {p.contact && <b>{p.contact}{p.contactTitle && <span className="pp-ctitle">, {p.contactTitle}</span>}</b>}
             <div className="pp-files">
               {p.phone && <a className="btn-ghost pp-sbtn" href={`tel:${p.phone}`}><Phone size={16} /> {p.phone}</a>}
               {p.email && <a className="btn-ghost pp-sbtn" href={`mailto:${p.email}`}><Mail size={16} /> {p.email}</a>}
@@ -30008,7 +30011,8 @@ function PassportPanel() {
   const [note, setNote] = useState("");
   const load = useCallback(() => api.myPassport().then((r) => {
     setD(r); setErr("");
-    setF({ trades: r.passport.trades || [], foundedYear: r.passport.foundedYear ?? "", about: r.passport.about || "" });
+    setF({ trades: r.passport.trades || [], foundedYear: r.passport.foundedYear ?? "", about: r.passport.about || "",
+      contactTitle: r.passport.contactTitle || "" });
   }).catch((e) => setErr(e?.body?.migration || e?.body?.error === "migration_needed"
     ? `The Passport is not switched on yet. Migration ${e?.body?.migration || "077_passport"} needs pasting.`
     : e?.body?.error === "not_hireable" ? "Only a company that can be hired has a Passport."
@@ -30019,19 +30023,26 @@ function PassportPanel() {
   if (!d || !f) return <div className="portal-panel"><p className="panel-note">Loading your Passport…</p></div>;
   const pp = d.passport;
   const dirty = JSON.stringify(f.trades) !== JSON.stringify(pp.trades || [])
-    || String(f.foundedYear ?? "") !== String(pp.foundedYear ?? "") || (f.about || "") !== (pp.about || "");
+    || String(f.foundedYear ?? "") !== String(pp.foundedYear ?? "") || (f.about || "") !== (pp.about || "")
+    || (f.contactTitle || "").trim() !== (pp.contactTitle || "");
 
   const save = async (extra = {}) => {
     setBusy("save"); setNote("");
     try {
       await api.saveMyPassport({ trades: f.trades, foundedYear: f.foundedYear === "" ? null : Number(f.foundedYear),
-        about: f.about, ...extra });
+        about: f.about,
+        // Sent only when it changed, so a database without 088 still saves
+        // the trades and the about and refuses the title by name.
+        ...((f.contactTitle || "").trim() !== (pp.contactTitle || "") ? { contactTitle: f.contactTitle } : {}),
+        ...extra });
       await load();
       setNote(extra.published === true ? "Published. Anybody with the link can see it now."
         : extra.published === false ? "Taken down. The link shows nothing until you publish again." : "Saved.");
     } catch (e) {
       const k = e?.body?.error;
       setNote(k === "invalid_year" ? "That year doesn't look right." : k === "about_too_long" ? "That note is too long."
+        : k === "title_too_long" ? "Keep the title under 60 characters."
+        : e?.body?.migration ? `The title needs migration ${e.body.migration} pasted first.`
         : "That didn't save. Try again.");
     } finally { setBusy(""); }
   };
@@ -30134,6 +30145,11 @@ function PassportPanel() {
         <label className="fld"><span>Year you started</span>
           <input inputMode="numeric" maxLength={4} value={f.foundedYear}
             onChange={(e) => setF({ ...f, foundedYear: e.target.value.replace(/\D/g, "") })} placeholder="2014" />
+        </label>
+        <label className="fld"><span>Your title (optional)</span>
+          <input maxLength={60} value={f.contactTitle} onChange={(e) => setF({ ...f, contactTitle: e.target.value })}
+            placeholder="Owner" />
+          <small className="fld-note">Printed after {d.preview?.contact || "the contact name on your company profile"} on the page.</small>
         </label>
         <label className="fld"><span>About your company (optional)</span>
           <textarea rows={3} maxLength={600} value={f.about} onChange={(e) => setF({ ...f, about: e.target.value })}
@@ -41246,7 +41262,7 @@ body{background:var(--paper)}
 /* ---- 077. The Sub Passport ---------------------------------------------------
    Opened from a QR code on a job site, so it is laid out for a phone first:
    one column, 48px controls, and the badge's own line under it in words. */
-.pp-page{justify-content:flex-start;padding-top:24px}
+.pp-page{justify-content:flex-start;padding-top:12px}
 .pp-card h1{font-size:26px;line-height:1.15;overflow-wrap:anywhere;margin:0}
 .pp-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .pp-head-who{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto}
@@ -41254,13 +41270,16 @@ body{background:var(--paper)}
 .pp-card{max-width:980px}
 .pp-head-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
 .pp-head-side .qr{border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff}
-.pp-head-cta{flex:none;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px;
-  max-width:260px;white-space:normal;text-align:left;line-height:1.2}
+.pp-head-cta{flex:none;align-self:flex-start;margin-top:6px;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px;
+  max-width:100%;white-space:normal;text-align:left;line-height:1.2}
+.pp-head-who > .pp-head-chip{align-self:flex-start;margin-top:6px}
 .pp-share-icons{gap:6px;justify-content:flex-end}
 .pp-ibtn{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);
   color:var(--ink);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
 .pp-ibtn:hover{border-color:var(--brand);color:var(--brand-dk)}
-.pp-cols{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+/* Stretch, so the two boxes end on one line: a connect box shorter than the
+   documents beside it read as a box that had not finished drawing. */
+.pp-cols{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:stretch}
 .pp-cols > *,.pp-cols > .pp-access{min-width:0;margin-top:0}
 .pp-docs{border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--card)}
 .pp-docs h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:8px}
@@ -41272,7 +41291,7 @@ body{background:var(--paper)}
   .pp-head{flex-wrap:wrap}
   .pp-head-side{width:100%;align-items:flex-start}
   .pp-share-icons{justify-content:flex-start}
-  .pp-head-cta{max-width:none;width:100%;justify-content:center}
+  .pp-head-cta{width:100%;justify-content:center}
 }
 .pp-head-chip{flex:none;display:inline-flex;align-items:center;gap:5px;padding:7px 11px;border-radius:999px;
   font-size:13px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
@@ -41285,6 +41304,7 @@ body{background:var(--paper)}
 .pp-shareblk{margin-top:18px;display:flex;flex-direction:column;gap:8px}
 .pp-contact{margin-top:14px;display:flex;flex-direction:column;gap:8px}
 .pp-contact > b{font-size:15px}
+.pp-ctitle{font-weight:500;color:var(--ink-soft)}
 .pp-gaps{margin-top:14px;padding:12px 14px;border-radius:12px;border:1px dashed var(--line);background:var(--paper)}
 .pp-gaps ul{margin:6px 0 0;padding-left:18px;display:flex;flex-direction:column;gap:3px;font-size:13px}
 .pp-gaps .pp-sub{display:inline}

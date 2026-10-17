@@ -304,6 +304,9 @@ WITH spec(j) AS (SELECT
   -- 086. The units an account gave at signup. Until it is run signup still
   -- works and those accounts are priced on their buildings, as before.
   ',["m086_portfolio_estimates","col","portfolio_estimates",["account_id","total_units","occupied_units","source","created_at"]]' ||
+  -- 088. The main contact's title on a Passport. Until it is run the page
+  -- prints the name alone and saving a title names the file.
+  ',["m088_passport_contact_title","col","passports",["contact_title"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

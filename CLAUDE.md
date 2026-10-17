@@ -13513,6 +13513,28 @@ refactor.
   1180px. Three mutations fire: labelled share buttons, one column, and the
   CTA without the name.
 
+- **THE PASSPORT'S CONNECT SITS UNDER THE NAME, THE CONTACT HAS A TITLE, AND
+  THE TWO BOXES END ON ONE LINE.** Asked for with the Orcas Roofing page on
+  screen: move *Connect with Orcas* left, bring the header up, add the main
+  contact's title, and even the connect box with the documents beside it.
+
+  **The CTA is in the left column, under the name and the lede**, where the
+  eye already is. Under the QR code it made the right side the tallest thing in
+  the header and pushed the divider, and everything below it, down the page.
+  The code (now 104px) and the share icons keep the top right.
+
+  **The title is `passports.contact_title`** (migration 088), set on the sub's
+  Passport tab and printed *Jason Stanton, Owner*. It is on the Passport rather
+  than the company row because it is something said on the page they hand out.
+  A title with no name beside it is not printed. Over 60 characters is refused
+  by name. The screen sends it only when it changed, so a database without 088
+  still saves the trades and the about and names the file for the title.
+
+  **`.pp-cols` stretches**, so the connect box is the documents box's height.
+
+  Three browser mutations fire (CTA back under the code, `align-items:start`,
+  the title dropped) and one server one (a title printed with no name).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

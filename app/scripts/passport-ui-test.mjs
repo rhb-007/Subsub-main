@@ -43,7 +43,7 @@ const PAGE = () => ({
   trades: [{ id: "roofing", label: "Roofing" }, { id: "gutters", label: "Gutters" }],
   area: "Tacoma, Seattle", foundedYear: 2012, years: "In business since 2012 · 14 years",
   about: "Residential re-roofs, two crews.",
-  contact: "Rae Bay", phone: "2065550100", email: "rae@bay.test", zip: "98407", ubi: "604123456", bond: true,
+  contact: "Rae Bay", contactTitle: "Owner", phone: "2065550100", email: "rae@bay.test", zip: "98407", ubi: "604123456", bond: true,
   license: { number: "BAYROR*123", text: S.verified ? "Washington L&I registration active" : "License not verified by SubSub", ok: S.verified },
   insurance: { carrier: "Acme Mutual", expiresOn: "2027-03-04", text: "Insurance on file through Mar 4, 2027" },
   w9: true, photos: [{ id: "ph1", caption: "New roof, Tacoma" }],
@@ -142,13 +142,18 @@ const readPage = (page) => page.evaluate(() => {
       if (!hd || !q || !b || !h) return null;
       const qr = q.getBoundingClientRect(), br = b.getBoundingClientRect(), hr = hd.getBoundingClientRect();
       return { qrRight: hr.right - qr.right < 8, qrTop: qr.top < h.getBoundingClientRect().bottom,
-        ctaBelowQr: br.top >= qr.bottom - 1, ctaRight: hr.right - br.right < 8 };
+        ctaBelowQr: br.top >= qr.bottom - 1, ctaRight: hr.right - br.right < 8,
+        // On the left under the name and the lede, inside the who column.
+        ctaLeft: !!b.closest(".pp-head-who") && Math.abs(br.left - h.getBoundingClientRect().left) < 2
+          && (br.right < qr.left || qr.top >= br.bottom - 1),
+        ctaUnderLede: br.top >= (hd.querySelector(".pack-lede")?.getBoundingClientRect().bottom ?? 0) - 1 };
     })(),
     cols: (() => {
       const d = c?.querySelector(".pp-cols > .pp-docs"), a = c?.querySelector(".pp-cols > .pp-access");
       if (!d || !a) return null;
       const dr = d.getBoundingClientRect(), ar = a.getBoundingClientRect();
       return { side: dr.right <= ar.left + 1 && Math.abs(dr.top - ar.top) < 2, stacked: dr.bottom <= ar.top + 1,
+        even: Math.abs(dr.height - ar.height) < 2, dh: Math.round(dr.height), ah: Math.round(ar.height),
         docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts") };
     })(),
     cta: cta ? { t: cta.innerText.trim(), href: cta.getAttribute("href") } : null,
@@ -186,10 +191,12 @@ try {
     t.ck("the header is the company, then the SubSub logo in black and Powered by | Passport under it",
       r.powered?.t === "Powered by Passport" && r.powered.mark && r.powered.black && r.powered.below, JSON.stringify(r.powered));
     t.ck("the header's CTA names the sub", r.head?.t === "Connect with Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
-    t.ck("a QR code of its own address in the header, with the CTA under it", !!r.side && r.side.ctaBelowQr, JSON.stringify(r.side));
+    t.ck("a QR code of its own address in the header", !!r.qr && !!r.side, JSON.stringify(r.side));
+    t.ck("the CTA is on the left, under the name and the lede", !!r.side?.ctaUnderLede && !!r.side.ctaLeft, JSON.stringify(r.side));
     t.ck("on a phone the documents box and the connect box stack, documents first",
       !!r.cols?.stacked && r.cols.docsHold, JSON.stringify(r.cols));
     t.ck("the connect box is above the photos", r.order.box > r.order.contact && r.order.box < r.order.photos, JSON.stringify(r.order));
+    t.ck("the main contact with their title", /Rae Bay, Owner/.test(r.contact), r.contact);
     t.ck("the business contact, with a number to call", /Rae Bay/.test(r.contact) && /rae@bay\.test/.test(r.contact)
       && r.tel === "tel:2065550100", r.contact);
     t.ck("the bond, the UBI and where they are based",
@@ -221,9 +228,10 @@ try {
     await wait(2000);
     const r = await readPage(page);
     t.ck("the code sits at the top right, level with the name", !!r.side?.qrRight && r.side.qrTop, JSON.stringify(r.side));
-    t.ck("and the CTA right under it, on the right", !!r.side?.ctaBelowQr && r.side.ctaRight, JSON.stringify(r.side));
+    t.ck("the CTA is on the left under the name, not under the code", !!r.side?.ctaLeft && r.side.ctaUnderLede && !r.side.ctaBelowQr, JSON.stringify(r.side));
     t.ck("two columns: documents on the left, connect on the right, level",
       !!r.cols?.side && r.cols.docsHold, JSON.stringify(r.cols));
+    t.ck("and the two boxes are the same height", !!r.cols?.even, JSON.stringify(r.cols));
     t.ck("no sideways scroll", !r.wide);
     await ctx.close();
   }

@@ -2299,6 +2299,7 @@ CREATE TABLE IF NOT EXISTS passports (
   trades         TEXT NOT NULL DEFAULT '[]',
   founded_year   INTEGER,
   about          TEXT,
+  contact_title  TEXT,
   view_count     INTEGER NOT NULL DEFAULT 0,
   last_viewed_at TEXT,
   created_at     TEXT DEFAULT CURRENT_TIMESTAMP,

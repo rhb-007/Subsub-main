@@ -93,6 +93,14 @@ const pub = publicPassport({ passport: { slug, trades: ["roofing", "nope"] },
   docs: { insurance: { fileName: "coi.pdf", expiresOn: day(200), issuer: "Acme Mutual" }, w9: { fileName: "w9.pdf" } } });
 const pubText = JSON.stringify(pub);
 ck("the public shape carries the business contact", pub.contact === "Rae Bay" && pub.email === "rae@bay.test" && pub.phone === "2065550100", pubText);
+v = validPassportEdit({ contactTitle: "  Owner   and   estimator " }, 2026);
+ck("a title is tidied and kept", v.ok && v.value.contactTitle === "Owner and estimator", JSON.stringify(v));
+ck("a blank title is cleared, not stored as empty", validPassportEdit({ contactTitle: "  " }).value.contactTitle === null);
+ck("a title past 60 characters is refused by name", validPassportEdit({ contactTitle: "x".repeat(61) }).error === "title_too_long");
+ck("the title rides after the contact's name", publicPassport({ passport: { slug, contactTitle: "Owner" },
+  company: { company: "T", contact: "Rae Bay" } }).contactTitle === "Owner");
+ck("and with no name it is not printed alone", publicPassport({ passport: { slug, contactTitle: "Owner" },
+  company: { company: "T" } }).contactTitle === null);
 ck("a UBI only for a Washington company", publicPassport({ passport: { slug }, company: { company: "T", state: "TX", ubi: "123" } }).ubi === null
   && publicPassport({ passport: { slug }, company: { company: "W", state: "WA", ubi: "604" } }).ubi === "604");
 ck("connecting opens all four; an approved request two; nothing otherwise",
@@ -212,6 +220,11 @@ ck("saving the note does not publish", s === 200 && mine.passport.published === 
 ck("and does not wipe the trades", JSON.stringify(mine.passport.trades) === '["roofing","gutters"]');
 [s] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { trades: ["roofing", "lasers"] } }));
 ck("a trade that is not one is refused", s === 400);
+ck("no title set reads as none", mine.passport.contactTitle === null);
+[s, mine] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { contactTitle: "Owner" } }));
+ck("the sub sets their title", s === 200 && mine.passport.contactTitle === "Owner" && mine.preview.contactTitle === "Owner", JSON.stringify(mine?.passport));
+[s] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { contactTitle: "x".repeat(61) } }));
+ck("a long title is refused", s === 400);
 [s, mine] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { published: true, foundedYear: 2012 } }));
 ck("publishing is a word the sub says", s === 200 && mine.passport.published === true);
 r = await call(env, `/api/public/passport/${SLUG}`, { who: null });
@@ -219,6 +232,7 @@ const page = await r.json();
 ck("published, anybody holding the link reads it", r.status === 200 && page.name === "Bay Roofing");
 ck("and the reply says noindex", r.headers.get("X-Robots-Tag") === "noindex");
 ck("it carries the business contact", page.contact === "Rae Bay" && page.email === "rae@bay.test" && page.phone === "2065550100");
+ck("and the public page prints the title", page.contactTitle === "Owner");
 ck("and says whether a bond is on file", page.bond === true);
 ck("it carries the current certificate's insurer, not the superseded one", page.insurance?.carrier === "Acme Mutual");
 ck("it says a W-9 is on file and nothing more", page.w9 === true && !/w9\.pdf/.test(JSON.stringify(page)));
