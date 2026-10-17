@@ -98,6 +98,7 @@ ck("a property manager has no Passport to link", s === 409);
 console.log("\nwith the API on");
 [s, mine] = await json(await call(on, "/api/my-passport/bbb", { method: "PUT", body: { url: URL_OK } }));
 ck("linking reads the rating at once", s === 200 && mine.checked?.ok && mine.bbb.rating === "A+" && mine.bbb.shown, JSON.stringify(mine));
+ck("BBB is asked at /orgs/search, the path its Swagger page names", /^https:\/\/bbb\.test\/orgs\/search\?/.test(bbbCalls[0]?.u || ""), bbbCalls[0]?.u);
 ck("BBB is asked about the two ids off the address, with the token", /BBBID=1296/.test(bbbCalls[0]?.u) && /BusinessId=1000123456/.test(bbbCalls[0]?.u) && bbbCalls[0]?.auth === "Bearer tok", JSON.stringify(bbbCalls[0]));
 pub = await (await call(on, `/api/public/passport/${SLUG}`, { who: null })).json();
 ck("the public page carries the grade, the badge and the profile", pub.bbb?.rating === "A+" && pub.bbb.accredited === true && pub.bbb.url === URL_OK && pub.bbb.checkedOn === TODAY, JSON.stringify(pub.bbb));

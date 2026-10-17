@@ -2,15 +2,16 @@
 // approved registration at developer.bbb.org; until then nothing here runs and
 // the Passport draws no rating.
 //
-// NOT VERIFIED against a live answer: the path and the parameter names are
-// the organization search the BBB API publishes (BBBID + BusinessId), and the
-// reply is read by readBbbAnswer, which accepts several spellings and draws
-// nothing rather than a guess. BBB_API_BASE overrides the host for the tests,
+// The server (https://api.bbb.org/v2) and the path (GET /orgs/search, Bearer
+// token) are read off BBB's own Swagger page. NOT VERIFIED: the two query
+// parameter names and the reply's field names, which the page lists but which
+// were not readable from here. The reply is read by readBbbAnswer, which
+// accepts several spellings and draws nothing rather than a guess. BBB_API_BASE overrides the host for the tests,
 // the way ANTHROPIC_API_BASE does.
 
 import { readBbbAnswer } from "../shared/bbb.js";
 
-const API = "https://api.bbb.org";
+const API = "https://api.bbb.org/v2";
 
 export function bbbLive(env) {
   return !!(env && env.BBB_API_TOKEN && String(env.BBB_API_TOKEN).trim());
@@ -22,7 +23,7 @@ export async function fetchBbbRating(env, { bbbId, businessId }) {
   const q = new URLSearchParams({ BBBID: String(bbbId), BusinessId: String(businessId) });
   let res;
   try {
-    res = await fetch(`${base}/api/orgs/search?${q}`, {
+    res = await fetch(`${base}/orgs/search?${q}`, {
       method: "GET",
       headers: { Authorization: `Bearer ${String(env.BBB_API_TOKEN).trim()}`, Accept: "application/json" },
     });

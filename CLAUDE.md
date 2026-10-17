@@ -13568,8 +13568,13 @@ refactor.
   card and no empty box. The sub's own panel says why nothing shows
   (`bbbOwnView`): not switched on, check failed, no grade, or stale.
 
-  **Not verified here:** a live BBB answer. The search path and its two
-  parameters are what the BBB API publishes. `readBbbAnswer` accepts several
+  **BBB has no self-serve signup**: access is approved by BBB. Its Swagger
+  page names the server, `https://api.bbb.org/v2`, and `GET /orgs/search`
+  with a Bearer token; the first build had `/api/orgs/search` with no `/v2`,
+  which would have 404'd every call, and the suite now pins the path.
+
+  **Not verified here:** a live BBB answer, the search's two parameter names
+  and the reply's field names. `readBbbAnswer` accepts several
   spellings and returns no rating rather than a guess, so the first real call
   is the test. `test:bbb` (39) and `test:passportui`. Seven server mutations
   fire, each on its own assertion: staleness dropped, the live gate dropped,
