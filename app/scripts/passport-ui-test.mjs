@@ -13,8 +13,9 @@
 //   THE CTA SAYS THE WORDS ASKED FOR and carries the sub's own code with the
 //   passport channel, which is what credits the sub.
 //
-//   THE HEADER IS THE COMPANY, with SubSub's mark and "Powered by SubSub |
-//   Passport" under the name, and the business contact is on the page.
+//   THE HEADER IS THE COMPANY, with the SubSub logo in black and "Powered by
+//   | Passport" under the name, a Connect button at its top right, and the
+//   connect box in the middle of the page. No QR code on the page itself.
 //
 //   CONNECTING IS THE APPROVAL: signed out, the page offers sign-in and a free
 //   signup credited to the sub; a hiring admin connects and the POST goes;
@@ -121,7 +122,18 @@ const readPage = (page) => page.evaluate(() => {
     line: c?.querySelector(".pp-badge-line")?.innerText || "",
     trades: [...(c?.querySelectorAll(".pp-trades li") || [])].map((l) => l.innerText),
     facts: (c?.querySelector(".pp-facts")?.innerText || "").replace(/\s+/g, " "),
-    qr: !!c?.querySelector(".pp-qrrow svg.qr"),
+    qr: !!c?.querySelector("svg.qr"),
+    head: (() => {
+      const hd = c?.querySelector(".pp-head"), b = hd?.querySelector(".pp-head-cta, .pp-head-chip"), h = hd?.querySelector("h1");
+      if (!b || !h) return null;
+      const r = b.getBoundingClientRect(), hr = hd.getBoundingClientRect();
+      return { t: b.innerText.trim(), chip: b.classList.contains("pp-head-chip"),
+        right: hr.right - r.right < 4, top: r.top < h.getBoundingClientRect().bottom };
+    })(),
+    order: (() => {
+      const y = (sel) => c?.querySelector(sel)?.getBoundingClientRect().top ?? null;
+      return { box: y(".pp-access"), facts: y(".pp-facts"), photos: y(".pp-photos"), contact: y(".pp-contact") };
+    })(),
     share: share.map((x) => ({ t: x.innerText.trim(), href: x.getAttribute("href"), h: x.getBoundingClientRect().height })),
     cta: cta ? { t: cta.innerText.trim(), href: cta.getAttribute("href") } : null,
     access: (c?.querySelector(".pp-access")?.innerText || "").replace(/\s+/g, " "),
@@ -129,7 +141,9 @@ const readPage = (page) => page.evaluate(() => {
     powered: (() => {
       const pw = c?.querySelector(".pp-head .pp-powered"), h = c?.querySelector(".pp-head h1");
       if (!pw || !h) return null;
-      return { t: pw.innerText.replace(/\s+/g, " ").trim(), mark: !!pw.querySelector("svg"),
+      const logo = pw.querySelector("svg.ss-logo");
+      return { t: pw.innerText.replace(/\s+/g, " ").trim(), mark: !!logo && logo.querySelectorAll("path").length > 3,
+        black: logo ? getComputedStyle(logo).color === "rgb(17, 17, 17)" : false,
         below: pw.getBoundingClientRect().top >= h.getBoundingClientRect().bottom - 1 };
     })(),
     contact: (c?.querySelector(".pp-contact")?.innerText || "").replace(/\s+/g, " "),
@@ -153,14 +167,18 @@ try {
     t.ck("the trades", r.trades.join() === "Roofing,Gutters", r.trades.join());
     t.ck("the license, the insurer and the W-9 as Yes",
       /BAYROR\*123/.test(r.facts) && /Acme Mutual/.test(r.facts) && /W-9 On file/.test(r.facts), r.facts);
-    t.ck("the header is the company, then SubSub's mark and Powered by SubSub | Passport under it",
-      r.powered?.t === "Powered by SubSub | Passport" && r.powered.mark && r.powered.below, JSON.stringify(r.powered));
+    t.ck("the header is the company, then the SubSub logo in black and Powered by | Passport under it",
+      r.powered?.t === "Powered by Passport" && r.powered.mark && r.powered.black && r.powered.below, JSON.stringify(r.powered));
+    t.ck("a Connect button at the top right of the header", r.head?.t === "Connect" && !r.head.chip && r.head.right && r.head.top,
+      JSON.stringify(r.head));
+    t.ck("the connect box is in the middle: after the contact, above the facts and the photos",
+      r.order.box > r.order.contact && r.order.box < r.order.facts && r.order.box < r.order.photos, JSON.stringify(r.order));
     t.ck("the business contact, with a number to call", /Rae Bay/.test(r.contact) && /rae@bay\.test/.test(r.contact)
       && r.tel === "tel:2065550100", r.contact);
     t.ck("the bond, the UBI and where they are based",
       /Surety bond On file/.test(r.facts) && /UBI 604123456/.test(r.facts) && /98407/.test(r.facts), r.facts);
     t.ck("never a file name", !/\.pdf/.test(r.text), r.text);
-    t.ck("a QR code of its own address", r.qr);
+    t.ck("no QR code on the page itself: the reader already has the page", !r.qr);
     t.ck("share by text, email and copy",
       r.share.some((s) => s.t === "Text" && s.href?.startsWith("sms:?&body=") && decodeURIComponent(s.href).includes(`/p/${SLUG}`))
       && r.share.some((s) => s.t === "Email" && s.href?.startsWith("mailto:?subject="))
@@ -174,9 +192,9 @@ try {
     t.ck("photos of their work", r.photos === 1);
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
-    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Sign in/.test(b.innerText))?.click());
+    await page.evaluate(() => document.querySelector(".pp-head-cta")?.click());
     await wait(800);
-    t.ck("signing in remembers where to come back to",
+    t.ck("the header's Connect signs in and remembers where to come back to",
       await page.evaluate(() => sessionStorage.getItem("ss_after_login")) === `/p/${"bay-roofing-k7q2m"}`);
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
@@ -218,13 +236,24 @@ try {
       i.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const before = S.posts.length;
-    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Connect with/.test(b.innerText))?.click());
+    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => b.innerText.trim() === "Connect")?.click());
     await wait(900);
     const sent = S.posts.slice(before);
     t.ck("connecting posts to the connect route with the note",
       sent.length === 1 && sent[0].path.endsWith("/connect") && sent[0].body.message === "For the Pine St job", JSON.stringify(sent));
     r = await readPage(page);
     t.ck("and then says it is waiting", /You asked to connect/.test(r.access), r.access);
+    t.ck("and the header says Requested rather than Connect", r.head?.chip && r.head.t === "Requested", JSON.stringify(r.head));
+    S.access = NOT_CONNECTED();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await wait(2200);
+    const before2 = S.posts.length;
+    await page.evaluate(() => document.querySelector(".pp-head-cta")?.click());
+    await wait(1200);
+    const sent2 = S.posts.slice(before2);
+    t.ck("the header's Connect connects in one press", sent2.length === 1 && sent2[0].path.endsWith("/connect"), JSON.stringify(sent2));
+    r = await readPage(page);
+    t.ck("and rings the box it sends you to", await page.evaluate(() => document.querySelector(".pp-access")?.classList.contains("ring")));
     S.access = { status: "connected", mayRequest: false, mayConnect: false, files: [
       { kind: "insurance", fileName: "coi.pdf" }, { kind: "bond", fileName: "bond.pdf" }, { kind: "w9", fileName: "w9.pdf" },
       { kind: "contract", fileName: "signed.pdf" }],
@@ -235,7 +264,9 @@ try {
     r = await readPage(page);
     t.ck("connected, every document opens with nothing asked",
       ["Certificate of insurance", "Surety bond", "W-9", "Signed agreement"].every((w) => r.access.includes(w))
-      && /You're connected/.test(r.access) && !/Connect with/.test(r.access), r.access);
+      && /You're connected/.test(r.access) && !/Connect with/.test(r.access)
+      && !/\bConnect\b(?! ?ed)/.test(r.access.replace(/Connected/g, "")), r.access);
+    t.ck("connected, the header says so instead of offering Connect", r.head?.chip && r.head.t === "Connected", JSON.stringify(r.head));
     t.ck("and the SubSub agreement is there to read and download",
       /SubSub Standard Subcontractor Agreement/.test(r.access) && /Read the agreement/.test(r.access) && /Download/.test(r.access), r.access);
     await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Read the agreement/.test(b.innerText))?.click());

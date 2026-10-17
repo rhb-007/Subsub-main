@@ -116,6 +116,23 @@ try {
     supaConfirms = true;
   }
 
+  console.log("\n-- a company that can be hired has a published Passport from its first minute --");
+  {
+    const db = seed(); const env = ENV(db);
+    const pp = (acc) => db.prepare(`SELECT p.slug, p.published_at FROM passports p JOIN accounts a ON a.company_id = p.company_id WHERE a.id = ?`).get(acc);
+    for (const kind of ["subcontractor", "general_contractor"]) {
+      const r = await signup(env, { kind, email: `pp-${kind}@x.test` });
+      const row = pp(r.body.accountId);
+      t.ck(`a ${kind} signup makes the Passport`, r.status === 201 && /^[a-z0-9-]+-[a-z2-9]{5}$/.test(row?.slug || ""), JSON.stringify(row));
+      t.ck(`and it is published, not waiting on a press`, !!row?.published_at, JSON.stringify(row));
+      const pub = await worker.fetch(new Request(`https://api.subsub.work/api/public/passport/${row?.slug}`), env);
+      t.ck(`so the public page answers at once`, pub.status === 200, String(pub.status));
+    }
+    const r = await signup(env, { kind: "property_manager", email: "pp-pm@x.test" });
+    t.ck("a property manager, which nobody hires, gets none",
+      r.status === 201 && db.prepare(`SELECT COUNT(*) n FROM passports`).get().n === 2);
+  }
+
   console.log("\n-- a Scale signup's history starts on Scale --");
   {
     const db = seed(); const env = ENV(db);

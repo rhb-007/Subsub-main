@@ -13458,6 +13458,35 @@ refactor.
   read the Passport's URL straight off the reply while the squares read a
   different value; both read `shown` now.
 
+- **A PASSPORT EXISTS AND IS PUBLISHED FROM SIGNUP, AND THE PAGE LEADS WITH
+  CONNECT.** Asked for as *"automatically create a passport for the sub - not
+  waiting for them to publish"*, *"what's the point of having a QR code on the
+  passport page itself"*, a Connect call to action at the top right and a
+  prominent one in the middle, and the real SubSub logo in black.
+
+  **`ensurePassport` publishes on mint**, and signup and the console's account
+  create both call it for a hireable kind, best effort, so the code on a truck
+  opens on day one. **Only a mint publishes**: a Passport somebody took down
+  stays down when opened again, and `test:passport` pins that. A property
+  manager, which nobody hires, gets none.
+
+  **The page has no QR code of its own**, because whoever is reading it already
+  has the page; the share buttons stay. The sub's own Passport tab keeps its
+  code, because that is where it is printed from.
+
+  **Connect is in the header and in the middle.** The connect state moved into
+  `usePassportConnect` on the page, so the header and the box read one answer.
+  Signed out, the header's Connect signs in and comes back; a hiring admin
+  connects in one press, and the box is scrolled to and rung. Pending reads
+  *Requested* and connected reads *Connected*, never a button. The box sits
+  after the contact and before the facts, brand-edged.
+
+  **The lockup is `SubSubLogo` in mono black** with *Powered by* before it and
+  *Passport* after a rule, not the mark beside the word typed in the page's
+  font. Four browser mutations (the QR back, the mark back, the header not
+  connecting, the box back at the foot) and two server ones fire, each on its
+  own assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -29660,20 +29660,21 @@ const PASSPORT_FILE_OPEN = {
   insurance: "Certificate of insurance", bond: "Surety bond",
   w9: "W-9", contract: "Signed agreement (file)",
 };
-function PassportConnectBox({ slug, seat, refCode, name }) {
+// The connect state lives on the page, not in the box, because two places
+// read it: the box in the middle of the page and the button in the header. Two
+// fetches of one answer is how a header says "Connect" over a box that says
+// "You're connected".
+function usePassportConnect(slug, seat) {
   const [st, setSt] = useState(null);
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [opening, setOpening] = useState("");
-  const [showAgr, setShowAgr] = useState(false);
-  const team = seat && (seat.role === "admin" || seat.role === "pm");
+  const team = !!(seat && (seat.role === "admin" || seat.role === "pm"));
   const load = useCallback(() => {
     if (!team) return;
     api.passportAccess(slug).then(setSt).catch(() => setSt({ status: "unknown" }));
   }, [slug, team]);
   useEffect(() => { load(); }, [load]);
-
   const signIn = () => {
     try { sessionStorage.setItem(PASSPORT_AFTER_LOGIN, `/p/${slug}`); } catch { /* private window */ }
     window.location.assign("/");
@@ -29692,6 +29693,49 @@ function PassportConnectBox({ slug, seat, refCode, name }) {
       load();
     } finally { setBusy(false); }
   };
+  return { st, seat, team, load, connect, busy, err, setErr, msg, setMsg, signIn };
+}
+
+// Top right of the header, so somebody who scanned the code on a truck can
+// connect without reading the page. One press where one press can do it: a
+// hiring admin connects from here, and somebody signed out goes to sign in and
+// comes back. Every other state says what is true rather than offering a press.
+function PassportHeadCta({ cx, onShow }) {
+  const { st, team, busy, connect, signIn } = cx;
+  if (st?.status === "own") return null;
+  if (st?.status === "connected") {
+    return <span className="pp-head-chip ok"><CheckCircle2 size={15} /> Connected</span>;
+  }
+  if (st?.connectPending) {
+    return <span className="pp-head-chip"><Clock size={15} /> Requested</span>;
+  }
+  const press = async () => {
+    if (!cx.seat) { signIn(); return; }
+    if (team && st?.mayConnect) await connect();
+    onShow();
+  };
+  return (
+    <button className="btn-solid pp-head-cta" disabled={busy || (team && !st)} onClick={press}>
+      <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
+    </button>
+  );
+}
+
+function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
+  const { st, team, load, connect, busy, err, setErr, msg, setMsg, signIn } = cx;
+  const [opening, setOpening] = useState("");
+  const [showAgr, setShowAgr] = useState(false);
+  const boxRef = useRef(null);
+  // Pointing is scrolling AND ringing: the header button lands here, and a box
+  // that only scrolled into view has not said "this is where you connect".
+  useEffect(() => {
+    if (!ring || !boxRef.current) return;
+    boxRef.current.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    boxRef.current.classList.remove("ring");
+    void boxRef.current.offsetWidth;
+    boxRef.current.classList.add("ring");
+  }, [ring]);
+
   const open = async (kind) => {
     setOpening(kind); setErr("");
     try {
@@ -29780,7 +29824,7 @@ function PassportConnectBox({ slug, seat, refCode, name }) {
           <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
         </label>
         <button className="btn-solid claim-btn" disabled={busy} onClick={connect}>
-          <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
+          <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
         </button>
       </>) : (
         <p>Nobody at this company can answer a request to connect yet.</p>
@@ -29788,8 +29832,10 @@ function PassportConnectBox({ slug, seat, refCode, name }) {
     </>);
   }
   return (
-    <div className="claim-box pp-access">
-      <h3><Link2 size={18} /> Connect</h3>
+    <div className="claim-box pp-access" id="pp-connect" ref={boxRef}>
+      <h3>{st?.status === "connected"
+        ? <><CheckCircle2 size={20} /> Connected with {name}</>
+        : <><Link2 size={20} /> Connect with {name}</>}</h3>
       {body}
       {err && <p className="claim-err" role="alert">{err}</p>}
     </div>
@@ -29800,6 +29846,8 @@ function PassportPage({ slug, seat = null }) {
   const [p, setP] = useState(null);
   const [gone, setGone] = useState("");
   const [big, setBig] = useState(null);
+  const [ring, setRing] = useState(0);
+  const cx = usePassportConnect(slug, seat);
   useEffect(() => {
     let live = true;
     api.publicPassport(slug).then((r) => { if (live) setP(r); })
@@ -29838,13 +29886,21 @@ function PassportPage({ slug, seat = null }) {
             with a small kicker reading "SubSub Passport" over the name, which
             read as a heading about us rather than about them. */}
         <header className="pp-head">
-          <h1>{p.name}</h1>
-          <a className="pp-powered" href="https://subsub.work/" target="_blank" rel="noopener"
-            aria-label="Powered by SubSub Passport — visit subsub.work">
-            <SubSubMark height={18} />
-            <span>Powered by <b>SubSub</b></span><span className="pp-pipe" aria-hidden="true">|</span><span>Passport</span>
-          </a>
-          {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
+          <div className="pp-head-who">
+            <h1>{p.name}</h1>
+            {/* The real lockup, mark and wordmark, in black, then the product
+                name set to match it -- not the mark beside the word typed in
+                the page's own font, which read as a caption rather than a logo. */}
+            <a className="pp-powered" href="https://subsub.work/" target="_blank" rel="noopener"
+              aria-label="Powered by SubSub Passport — visit subsub.work">
+              <span>Powered by</span>
+              <SubSubLogo height={15} mono />
+              <span className="pp-pipe" aria-hidden="true" />
+              <b className="pp-pass">Passport</b>
+            </a>
+            {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
+          </div>
+          <PassportHeadCta cx={cx} onShow={() => setRing((n) => n + 1)} />
         </header>
         <PassportBadge badge={p.badge} />
         {p.trades.length > 0 && (
@@ -29861,6 +29917,11 @@ function PassportPage({ slug, seat = null }) {
             </div>
           </div>
         )}
+
+        {/* The middle of the page and the loudest thing on it, because
+            connecting is what the page is for: a contractor reads the name off
+            a truck, opens this, and connects. */}
+        <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
 
         <dl className="claim-facts pp-facts">
           {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
@@ -29887,15 +29948,12 @@ function PassportPage({ slug, seat = null }) {
           </div>
         )}
 
-        <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} />
-
-        <div className="pp-qrrow">
-          <QrCode value={url} size={132} label={`QR code for ${p.name}'s Passport`} />
-          <div>
-            <b>Share this Passport</b>
-            <span className="pp-sub">Scan it, or send it on.</span>
-            <PassportShare url={url} name={p.name} compact />
-          </div>
+        {/* No QR code on the page itself: whoever is reading it already has
+            the page, and the code was the largest thing under the connect box.
+            The way on is sending it, so the share tools stay. */}
+        <div className="pp-shareblk">
+          <b>Share this Passport</b>
+          <PassportShare url={url} name={p.name} compact />
         </div>
 
         <div className="pp-cta">
@@ -41176,12 +41234,19 @@ body{background:var(--paper)}
    one column, 48px controls, and the badge's own line under it in words. */
 .pp-page{justify-content:flex-start;padding-top:24px}
 .pp-card h1{font-size:26px;line-height:1.15;overflow-wrap:anywhere;margin:0}
-.pp-head{display:flex;flex-direction:column;gap:6px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.pp-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.pp-head-who{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto}
 .pp-head .pack-lede{margin:2px 0 0}
-.pp-powered{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;font-size:12.5px;
-  color:var(--ink-soft);text-decoration:none;font-weight:600}
-.pp-powered b{color:var(--ink);font-weight:800}
-.pp-pipe{color:var(--line-dk, #c9d1cc)}
+.pp-head-cta{flex:none;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px}
+.pp-head-chip{flex:none;display:inline-flex;align-items:center;gap:5px;padding:7px 11px;border-radius:999px;
+  font-size:13px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
+.pp-head-chip.ok{color:var(--brand-dk);border-color:var(--brand);background:#eef7f1}
+.pp-powered{display:inline-flex;align-items:center;gap:7px;align-self:flex-start;font-size:12px;
+  color:#111;text-decoration:none;font-weight:600}
+.pp-powered .ss-logo{color:#111}
+.pp-pipe{width:1px;height:15px;background:#111}
+.pp-pass{font-family:Inter,sans-serif;font-weight:800;font-size:15px;letter-spacing:-.02em;color:#111;line-height:1}
+.pp-shareblk{margin-top:18px;display:flex;flex-direction:column;gap:8px}
 .pp-contact{margin-top:14px;display:flex;flex-direction:column;gap:8px}
 .pp-contact > b{font-size:15px}
 .pp-gaps{margin-top:14px;padding:12px 14px;border-radius:12px;border:1px dashed var(--line);background:var(--paper)}
@@ -41215,7 +41280,10 @@ body{background:var(--paper)}
 .pp-big span{color:#fff;font-size:14px}
 .pp-big-x{position:absolute;top:12px;right:12px;width:44px;height:44px;border-radius:50%;border:0;
   background:rgba(255,255,255,.15);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer}
-.pp-access{margin-top:18px}
+.pp-access{margin-top:18px;border:2px solid var(--brand);background:#eef7f1;padding:20px;transition:box-shadow .3s}
+.pp-access h3{font-size:18px;overflow-wrap:anywhere}
+.pp-access .claim-btn{min-height:50px;font-size:15.5px}
+.pp-access.ring{box-shadow:0 0 0 4px rgba(46,125,82,.35)}
 .pp-files{display:flex;flex-wrap:wrap;gap:8px}
 .pp-wait,.pp-ok{display:flex;align-items:center;gap:6px;font-weight:700}
 .pp-ok{color:var(--brand-dk)!important}

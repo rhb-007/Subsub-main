@@ -1329,6 +1329,15 @@ app.post("/api/signup", async (c) => {
   // plan and the signup count read zero.
   await recordAccountCreated(c.env, { accountId, plan, billing, source: "system" });
 
+  // A company that can be hired has a Passport from its first minute, so the
+  // code on the truck opens on day one. Best effort: a database without 077,
+  // or a mint that fails, must never cost somebody their account -- the tab
+  // makes the row the first time it is opened anyway.
+  if (hireable) {
+    try { await ensurePassport(c.env, ownCompanyId(accountId)); }
+    catch (err) { console.warn("signup: passport not made", err?.message || err); }
+  }
+
   // What mail went, from us and from Supabase, and both on the console's log.
   // The confirmation is Supabase's to send and SubSub never sees whether it
   // landed, so the row says it was handed over -- the same "accepted, not
@@ -19461,7 +19470,12 @@ async function ensurePassport(env, companyId) {
   for (let i = 0; i < 6; i++) {
     const slug = mintSlug(co?.company, crypto.getRandomValues(new Uint8Array(8)));
     try {
-      await env.DB.prepare(`INSERT INTO passports (company_id, slug, trades) VALUES (?, ?, ?)`)
+      // Published from the moment it exists. Waiting for somebody to find a
+      // Publish button was the bottleneck: the code on the truck pointed at a
+      // page nobody could open. Taking it down is still one press, and a row
+      // somebody did take down stays down, because only a mint publishes.
+      await env.DB.prepare(
+        `INSERT INTO passports (company_id, slug, trades, published_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP)`)
         .bind(companyId, slug, trades).run();
       return await read();
     } catch (err) {
@@ -24478,7 +24492,12 @@ app.post("/api/platform/accounts", async (c) => {
   // exist, and nobody can ask to work with them -- and CHECK.sql counts them
   // in m031_hireable_without. ensureAccountCompany would get there eventually, but
   // only once somebody opened a screen that happened to need it.
-  await ensureAccountCompany(c.env, id);
+  const ownCo = await ensureAccountCompany(c.env, id);
+  // And its Passport, published, for the reason signup makes one.
+  if (ownCo) {
+    try { await ensurePassport(c.env, ownCo); }
+    catch (err) { console.warn("console create: passport not made", err?.message || err); }
+  }
 
   let ownerId = null;
   let ownerInvite = { invited: false, reason: "no_email" };

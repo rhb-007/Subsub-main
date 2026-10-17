@@ -185,7 +185,9 @@ console.log("\nthe sub's own page");
 let [s, mine] = await json(await call(env, "/api/my-passport"));
 ck("the sub's admin opens their Passport", s === 200 && isSlug(mine.passport?.slug), JSON.stringify(mine).slice(0, 200));
 const SLUG = mine.passport.slug;
-ck("it is made private", mine.passport.published === false);
+// Published from the moment it is made: waiting on a Publish press was the
+// bottleneck. Taking it down is still the sub's word, tested below.
+ck("it is made published", mine.passport.published === true);
 ck("its trades start from what clients engage them for", JSON.stringify(mine.passport.trades) === '["roofing","gutters"]', JSON.stringify(mine.passport.trades));
 ck("the preview carries the badge", mine.preview?.badge?.verified === true, mine.preview?.badge?.line);
 let [s2, again] = await json(await call(env, "/api/my-passport"));
@@ -198,8 +200,12 @@ ck("a property manager has no Passport to open", s === 409);
 ck("a tenant is refused", s === 403);
 
 console.log("\nthe public page");
+[s, mine] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { published: false } }));
+ck("taking it down is one word", s === 200 && mine.passport.published === false);
 let r = await call(env, `/api/public/passport/${SLUG}`, { who: null });
 ck("unpublished, it is a 404", r.status === 404);
+[s2, again] = await json(await call(env, "/api/my-passport"));
+ck("and a Passport somebody took down stays down when opened again", s2 === 200 && again.passport.published === false);
 [s, mine] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { about: "Roofs and gutters." } }));
 ck("saving the note does not publish", s === 200 && mine.passport.published === false);
 ck("and does not wipe the trades", JSON.stringify(mine.passport.trades) === '["roofing","gutters"]');
@@ -378,6 +384,9 @@ ck("an old printed code names the Passport to a stranger", s === 200 && acc.slug
 ck("an unknown code is a 404", s === 404);
 [s] = await json(await call(env, "/api/public/connect/bad", { who: null }));
 ck("a malformed code is the same 404", s === 404);
+// Pacific's own seat opened its Passport above, which now publishes it, so it
+// is taken down here: the case under test is a company with none published.
+db.prepare(`UPDATE passports SET published_at = NULL WHERE company_id = 'cmp_pac'`).run();
 let subsList;
 [s, subsList] = await json(await call(env, "/api/subs", GC));
 ck("the roster carries the contractor's Passport", subsList.find((x) => x.id === "cmp_bay")?.passportUrl === `https://app.subsub.work/p/${SLUG}`,
