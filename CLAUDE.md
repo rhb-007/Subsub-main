@@ -7884,6 +7884,22 @@ refactor.
   either sends nothing. The mutation putting the bare sentence back fails three
   assertions.
 
+- **THE CONSOLE'S SIGN-IN BUTTONS HAD NO STYLES, BECAUSE THE CSS WAS WRITTEN
+  UNDER OTHER NAMES.** Reported with the console's sign-in card on screen:
+  *Continue with Google* and *Use a password instead* were drawn side by side,
+  touching, at two heights, in the browser's own gray chrome. The markup uses
+  `sa-btn`, `sa-google`, `sa-alt` and `sa-note`, while the stylesheet had rules
+  for `sa-google-btn` and `sa-google-note`. Nothing matched, so nothing applied.
+  This is the same failure as the `.chip.on` rule that did not exist: the markup
+  is right, and no static check can see a rule missing from another file.
+
+  The rules now use the markup's names. Google is a full-width white button,
+  48px tall. The password option is a quiet outlined button at the same width
+  and height, stacked under it. The password form's *Sign in* is solid amber,
+  and its fields are drawn for the dark card. `test:consolesignin` measures the
+  buttons at 1024px and 390px. Taking the CSS out fails ten of its twelve
+  assertions.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

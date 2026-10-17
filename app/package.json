@@ -184,6 +184,7 @@
     "test:wo-number": "node scripts/wo-number-test.mjs",
     "test:suppliers": "node scripts/supplier-test.mjs",
     "test:google": "node scripts/google-signin-test.mjs",
+    "test:consolesignin": "node --no-warnings scripts/console-signin-ui-test.mjs",
     "test:bookdemo": "node scripts/book-demo-test.mjs",
     "test:calevent": "node scripts/cal-event-test.mjs",
     "cal:check": "node scripts/cal-check.mjs",

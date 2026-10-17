@@ -46779,12 +46779,27 @@ iframe.dv-frame{display:block}
 .sa-brand{display:flex;align-items:center;gap:10px;margin-bottom:22px;color:#fff}
 .sa-card h1{font-size:23px;letter-spacing:-.03em;margin:0}
 .sa-lede{font-size:13.5px;color:rgba(255,255,255,.6);margin:6px 0 20px;line-height:1.5}
-.sa-google-btn{display:flex;align-items:center;justify-content:center;gap:12px;width:100%;
-  background:#fff;color:#1f1f1f;border:1px solid rgba(255,255,255,.9);border-radius:9px;
-  padding:13px;font:600 15px Inter,sans-serif;cursor:pointer;margin-top:4px}
-.sa-google-btn:hover{background:#f5f5f5}
-.sa-google-btn:disabled{opacity:.7;cursor:default}
-.sa-google-note{font-size:12px;color:rgba(255,255,255,.5);margin-top:12px;line-height:1.5}
+/* The markup is sa-btn / sa-google / sa-alt / sa-note; the rules were once
+   written as sa-google-btn and sa-google-note, so the buttons drew with the
+   browser's own chrome, touching, at two heights. Names now match. */
+.sa-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:48px;
+  background:var(--amber);color:#1a140a;border:1px solid var(--amber);border-radius:10px;
+  padding:0 16px;font:700 15px Inter,sans-serif;cursor:pointer;margin-top:6px}
+.sa-btn:hover{filter:brightness(1.06)}
+.sa-btn:disabled{opacity:.6;cursor:default;filter:none}
+.sa-btn.sa-google{background:#fff;color:#1f1f1f;border-color:#fff;font-weight:600}
+.sa-btn.sa-google:hover{background:#f2f2f2;filter:none}
+.sa-btn svg{flex:none}
+.sa-alt{display:block;width:100%;min-height:48px;margin-top:10px;background:transparent;
+  border:1px solid rgba(255,255,255,.18);border-radius:10px;color:rgba(255,255,255,.8);
+  font:600 14px Inter,sans-serif;cursor:pointer}
+.sa-alt:hover{border-color:rgba(255,255,255,.35);color:#fff}
+.sa-card form{margin-top:18px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1)}
+.sa-note{font-size:12.5px;color:rgba(255,255,255,.55);margin:0 0 14px;line-height:1.5}
+.sa-card .wl-fld{color:rgba(255,255,255,.85)}
+.sa-card .wl-fld input{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.18);color:#fff}
+.sa-card .wl-fld input:focus{outline:2px solid var(--amber)}
+.sa-card .wl-err{color:#f0a48f}
 .sa-staff{margin-top:22px;padding-top:18px;border-top:1px solid rgba(255,255,255,.1)}
 .sa-staff .ld-label{color:rgba(255,255,255,.5)}
 .sa-staff .ld-row{background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.12)}
