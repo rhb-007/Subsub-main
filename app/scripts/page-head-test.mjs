@@ -143,7 +143,6 @@ try {
       // they ask for the four documents.
       ["Compliance pack", /^Compliance pack$/],
       ["Uniforms", /^Uniforms$/],
-      ["Connect", /^Connect$/],
     ]) {
       const there = await nav(page, tab);
       ck(`${tab}: the pane is there`, there === true);

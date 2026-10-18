@@ -288,7 +288,8 @@
     "test:propdetaillinks": "node --no-warnings scripts/property-detail-links-ui-test.mjs",
     "test:consolegmv": "node --no-warnings scripts/console-gmv-ui-test.mjs",
     "test:messaging": "node --no-warnings scripts/messaging-test.mjs",
-    "test:messagingui": "node --no-warnings scripts/messaging-ui-test.mjs"
+    "test:messagingui": "node --no-warnings scripts/messaging-ui-test.mjs",
+    "test:passportconnect": "node scripts/passport-connect-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

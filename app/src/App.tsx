@@ -6334,7 +6334,10 @@ export default function SubSub() {
                here. Same trap as a panel headed "Your code" under a menu
                entry reading "My QR code". */
             ["crews", "My Crews"], ["docs", "Compliance pack"], ["passport", "Passport"], ["uniforms", "Uniforms"],
-            ["connect", "Connect"],
+            /* Connect was an entry of its own: who has asked to work with you,
+               plus a code to scan. The Passport carries the code now and is
+               the page a GC connects from, so the two were one page under two
+               names. The requests are on Passport, above the page itself. */
             /* 075. Where a sub brings the GCs they work for onto SubSub. */
             ["refer", "Get your GCs on SubSub"],
           ].map(([id, label]) => (
@@ -6345,7 +6348,7 @@ export default function SubSub() {
               {/* Somebody is waiting on a yes or a no. Amber for the same
                   reason a job request is: it is theirs to answer and
                   nothing moves until they do. */}
-              {id === "connect" && incomingConnects.length > 0 && (
+              {id === "passport" && incomingConnects.length > 0 && (
                 <span className="count amber">{incomingConnects.length}</span>
               )}
               {id === "docs" && mySub && !docsComplete(mySub) && (
@@ -29484,35 +29487,27 @@ function ConnectRequests({ requests, onRespond, onReload, emptyNote }) {
   );
 }
 
-function ConnectPane({ requests, onRespond, onReload }) {
+// Who has asked to work with you, drawn at the top of the Passport. It was a
+// page of its own (Connect) with the old connect code under it; the Passport's
+// QR replaced that code, and every code already printed still works.
+function ConnectAsks({ requests, onRespond, onReload }) {
   const pending = requests.filter((r) => r.status === "pending");
   const past = requests.filter((r) => r.status !== "pending").slice(0, 10);
+  if (!pending.length && !past.length) return null;
 
   return (
-    <div className="pane">
-      <PageHead title="Connect"
-        sub={pending.length
-          ? `${pending.length} waiting on your answer`
-          : "Your code, and who has asked to work with you"} />
-
-      <section className="dash-sec">
-        <h3><Users size={15} /> Asking to work with you
-          {pending.length > 0 && <span className="sec-count">{pending.length}</span>}</h3>
-        <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload} />
-      </section>
-
-      <section className="dash-sec">
-        <h3><QrCodeIcon size={15} /> Your code</h3>
-        <p className="cov-hint">
-          Show this to a contractor and have them scan it. They can ask to work with
-          you without you spelling out an email address — you still decide, here.
-        </p>
-        <ConnectCode />
-      </section>
+    <div className="connect-asks">
+      {pending.length > 0 && (
+        <section className="dash-sec">
+          <h3><Users size={15} /> Asking to work with you
+            <span className="sec-count">{pending.length}</span></h3>
+          <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload} />
+        </section>
+      )}
 
       {past.length > 0 && (
-        <section className="dash-sec">
-          <h3><Clock size={15} /> Answered</h3>
+        <details className="dash-sec cx-past">
+          <summary><Clock size={15} /> Answered ({past.length})</summary>
           {past.map((r) => (
             <div key={r.id} className="cx-req spent">
               <div className="cx-main">
@@ -29524,7 +29519,7 @@ function ConnectPane({ requests, onRespond, onReload }) {
               </div>
             </div>
           ))}
-        </section>
+        </details>
       )}
     </div>
   );
@@ -31987,9 +31982,6 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
       )}
       {pane === "crews" && <MyCrews crews={sub.crews || []} onSave={onSetCrews} saveErr={crewSaveErr} />}
 
-      {pane === "connect" && (
-        <ConnectPane requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
-      )}
 
       {pane === "refer" && <ReferScreen fromName={me?.name} />}
 
@@ -32089,9 +32081,13 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
       )}
 
 
-      {pane === "passport" && (
+      {(pane === "passport" || pane === "connect") && (
         <>
-          <PageHead title="Passport" sub="The page you hand to a GC" />
+          <PageHead title="Passport"
+            sub={connectRequests.some((r) => r.status === "pending")
+              ? `${connectRequests.filter((r) => r.status === "pending").length} waiting on your answer`
+              : "The page you hand to a GC"} />
+          <ConnectAsks requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
           <PassportPanel />
         </>
       )}
@@ -41343,6 +41339,8 @@ body{background:var(--paper)}
 .cx-req{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;
   border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin-top:9px;background:var(--card)}
 .cx-req.spent{opacity:.6}
+.connect-asks{margin-bottom:18px}
+.cx-past>summary{display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:700;font-size:14px;min-height:40px}
 .cx-main{min-width:0;display:flex;flex-direction:column;gap:3px;flex:1 1 260px}
 .cx-main b{font-size:14.5px}
 /* ---- sending your own paperwork, and the page it lands on ---- */

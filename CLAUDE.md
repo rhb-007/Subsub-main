@@ -13879,6 +13879,20 @@ refactor.
   the points fails two; the UI mutations (no fixed layer, a watermark that
   takes presses, no HQ marker, no Escape) each fail their own.
 
+- **CONNECT IS PART OF THE PASSPORT, NOT A SECOND NAV ENTRY.** Reported with
+  the drawer open and both entries circled: *"Redundant to have passport and
+  connect in the nav, pages are essentially same."* Connect held who has asked
+  to work with you and the old connect code. The Passport already carries the
+  QR code a GC scans and is where a GC connects from, so the two were one page
+  under two names. The Connect entry is gone. **`ConnectAsks` sits at the top
+  of the Passport**: pending requests with Accept and Decline, and past answers
+  folded away. It draws nothing when nobody has asked. The amber count moved to
+  the Passport entry, and the page head says how many are waiting. The old
+  connect code is no longer drawn on this page, and every printed one still
+  works, as the Passport entry records. A stray `pane = "connect"` lands on the
+  Passport. `test:passportconnect` (11); putting the entry back and taking the
+  requests off fails five.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
