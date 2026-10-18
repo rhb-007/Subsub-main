@@ -658,7 +658,7 @@ console.log("\n-- the CHECK.sql invariants, against real rows --");
 
   // THE PAGE SENDS SOMEBODY TO A PANEL BY NAME. A heading renamed since is a
   // set of directions that dead-ends on the reader's own screen.
-  const named = (docs.match(/My account → Profile → (Inspections[^<]+)</) || [])[1];
+  const named = (docs.match(/My account → Integrations → (Inspections[^<]+)</) || [])[1];
   ck("the docs name the panel to answer words on", !!named, String(named));
   ck("and that heading exists in the app",
     !!named && app.includes(`<h4>${named.trim()}</h4>`), String(named));

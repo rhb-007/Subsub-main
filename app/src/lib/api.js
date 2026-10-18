@@ -293,6 +293,24 @@ export const api = {
     return { url: URL.createObjectURL(blob), type: blob.type || "", size: blob.size };
   },
 
+  // A job's measurement document. Uploaded through the checked kind, which
+  // answers the error by name (not_a_document, too_big) rather than a bare
+  // status, so the form can say which file and why.
+  uploadMeasurementDoc: (file) =>
+    putFile(`/uploads/measurement-doc/${encodeURIComponent(file.name)}`, file),
+  // Its bytes, by position on the job, as a blob URL: the route needs an
+  // Authorization header, which no link or frame can carry.
+  measurementBlob: async (jobId, index) => {
+    const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}/measurements/${index}`,
+      { headers: await authHeaders() });
+    if (!res.ok) {
+      let code = `measure_${res.status}`;
+      try { code = (await res.json())?.error || code; } catch { /* not json */ }
+      throw new Error(code);
+    }
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || "", size: blob.size };
+  },
   listJobs: () => request("/jobs"),
   listAllBookings: () => request("/jobs/all-bookings"),
   createJob: (job) => request("/jobs", { method: "POST", body: JSON.stringify(job) }),
@@ -618,6 +636,11 @@ export const api = {
   // The keys an account's CRM authenticates with. `create` is the only call
   // that ever returns a token, because nothing stored could answer a read --
   // what is in the database is a SHA-256 of it.
+  // Account -> Integrations: what runs on the account's own credentials, and
+  // the switch for each. The switch is enforced where every token is read.
+  integrations: () => request("/integrations"),
+  setIntegration: (id, enabled) => request(`/integrations/${encodeURIComponent(id)}`,
+    { method: "PUT", body: JSON.stringify({ enabled }) }),
   apiTokens: () => request("/api-tokens"),
   createApiToken: (name) => request("/api-tokens", { method: "POST", body: JSON.stringify({ name }) }),
   revokeApiToken: (id) => request(`/api-tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),

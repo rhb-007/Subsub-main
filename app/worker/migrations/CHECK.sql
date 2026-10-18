@@ -310,6 +310,9 @@ WITH spec(j) AS (SELECT
   -- 089. A sub's own BBB profile on their Passport. Until it is run linking
   -- one names the file and nothing else changes.
   ',["m089_bbb_profiles","col","bbb_profiles",["company_id","profile_url","bbb_id","business_id","rating","accredited","checked_at","last_failed_at"]]' ||
+  -- 090. Integration switches in Account. Until it is run every integration
+  -- reads as on and pressing a switch names the file.
+  ',["m090_account_integrations","col","account_integrations",["account_id","provider","enabled","updated_at","updated_by"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

@@ -2563,3 +2563,13 @@ CREATE TABLE IF NOT EXISTS bbb_profiles (
   linked_at       TEXT DEFAULT CURRENT_TIMESTAMP,
   linked_by       TEXT REFERENCES users(id)
 );
+
+-- 090: which of its own integrations an account has switched off. No row is on.
+CREATE TABLE IF NOT EXISTS account_integrations (
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider    TEXT NOT NULL,
+  enabled     INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+  updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_by  TEXT REFERENCES users(id),
+  PRIMARY KEY (account_id, provider)
+);

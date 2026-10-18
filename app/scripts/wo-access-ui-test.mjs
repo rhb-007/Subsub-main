@@ -57,7 +57,9 @@ const JOB = () => ({
     signedWO: null, rating: null,
   } },
   photos: [], severity: null, client: null, sqft: null, stories: null, scope: "Fix the leak",
-  measurementDocs: [], materialSource: null, materialsPaidBy: null,
+  measurementDocs: ["old-sketch.pdf",
+    { key: "acc_pm/measurement-doc/x-hover.pdf", name: "hover.pdf", type: "application/pdf", size: 9 }],
+  materialSource: null, materialsPaidBy: null,
   requestedBy: null, approvedAt: "2026-10-01", declinedAt: null, withdrawnAt: null,
   completedAt: null, access: "tenant", accessEffective: "tenant", accessUserId: "u_john",
   reportDetail: null, propertyName: null, visit: null,
@@ -87,6 +89,10 @@ const api = serveApi({ port: API, routes: (path) => {
   if (path === "/api/jobs/job_sink/access") {
     S.accessAsks++;
     return S.accessStatus === 200 ? [200, PLAN] : [404, { error: "job_not_found" }];
+  }
+  if (path === "/api/jobs/job_sink/measurements/1") {
+    S.measAsks = (S.measAsks || 0) + 1;
+    return [200, null, { raw: "%PDF-1.4 hover", type: "application/pdf" }];
   }
   if (/^\/api\/work-orders\/[^/]+\/inspection$/.test(path)) return [404, { error: "not_found" }];
   // 074. The "Sent via SubSub" link the work order prints at its foot.
@@ -155,6 +161,20 @@ try {
     const r = await read(page);
     t.ck("the work order opened", !!r && r.title === "WO-1", JSON.stringify(r));
     t.ck("its header carries an Access link", r?.link === "Access", String(r?.link));
+    // The measurement documents are FILES: the stored one is fetched on mount
+    // and drawn as two real anchors; a name never uploaded says so.
+    await wait(400);
+    const meas = await page.evaluate(() => [...document.querySelectorAll(".modal .wo-doc .meas-row")].map((m) => ({
+      text: m.innerText.replace(/\s+/g, " ").trim(),
+      links: [...m.querySelectorAll("a.meas-dl")].map((a) => ({ href: a.getAttribute("href"),
+        target: a.getAttribute("target"), dl: a.hasAttribute("download") })),
+    })));
+    t.ck("the stored document was asked for by position", S.measAsks >= 1, String(S.measAsks));
+    t.ck("it opens and downloads from a blob, in a new tab",
+      meas[1]?.links?.length === 2 && meas[1].links.every((l) => /^blob:/.test(l.href) && l.target === "_blank")
+        && meas[1].links.some((l) => l.dl), JSON.stringify(meas));
+    t.ck("a name that was never uploaded says so, with nothing to press",
+      /never uploaded/.test(meas[0]?.text || "") && meas[0]?.links?.length === 0, JSON.stringify(meas[0]));
     t.ck("its Job section carries the agreed visit beside the job's own date",
       /9 AM.10 AM.*\(confirmed\)/.test(r?.visit || ""), String(r?.visit));
     t.ck("the Job section names who lets who in",

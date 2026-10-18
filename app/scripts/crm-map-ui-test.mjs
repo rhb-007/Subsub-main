@@ -41,6 +41,12 @@ let RULES = { rules: [], unmapped: [] };
 const saved = [];
 const removed = [];
 const minted = [];
+const flips = [];
+let INTEG = [
+  { id: "api", name: "Zapier, Make and your own scripts", what: "w", uses: "An API key", soon: false, enabled: true },
+  { id: "jobnimbus", name: "JobNimbus", what: "w", uses: "A webhook address", soon: false, enabled: true },
+  { id: "hover", name: "Hover", what: "w", uses: "Your Hover account", soon: true, enabled: false },
+];
 
 const ACCOUNT = () => ({
   id: "acc_gc", name: "Outerhome", subdomain: "outerhome", kind: "general_contractor",
@@ -84,6 +90,13 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/subs") return [200, []];
   if (path === "/api/jobs") return [200, []];
   if (path === "/api/weather") return [200, {}];
+  if (path.startsWith("/api/integrations/") && method === "PUT") {
+    const id = path.split("/").pop();
+    flips.push({ id, enabled: body?.enabled });
+    INTEG = INTEG.map((i) => (i.id === id ? { ...i, enabled: !!body?.enabled } : i));
+    return [200, { integrations: INTEG, onScale: true, migration: null }];
+  }
+  if (path === "/api/integrations") return [200, { integrations: INTEG, onScale: true, migration: null }];
   if (path === "/api/account-users") return [200, [
     { id: "u_rae", name: "Rae", email: "rae@outerhome.test", phone: null, role: ROLE,
       subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
@@ -92,7 +105,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
 
 const browser = await launch();
 
-// Opens Account -> Profile, where the panel lives beside the API token.
+// Opens Account -> Integrations, where the panel lives beside the API token.
 const openPanel = async () => {
   const r = await visitApp(browser, { host: "outerhome", webPort: WEB,
     seat: { userId: "u_rae", accountId: "acc_gc" }, viewport: { width: 1200, height: 1600 } });
@@ -105,7 +118,7 @@ const openPanel = async () => {
     if (await r.page.$(".seg-tabs, nav.tabs")) break;
   }
   await r.page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => b.innerText.trim() === "Profile")?.click());
+    .find((b) => b.innerText.trim() === "Integrations")?.click());
   for (let n = 0; n < 40; n++) { await wait(200); if (await r.page.$(".crm-list, .crm-add, .portal-panel")) break; }
   await wait(600);
   return r;
@@ -439,6 +452,33 @@ try {
       [...document.querySelectorAll(".tok-new .tok-val")].map((c) => c.innerText.trim()));
     t.ck("picking a CRM rewrites the address", /\/hooks\/jobnimbus\/ssk_/.test(after[1] || ""),
       JSON.stringify(after));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- the integration switches --");
+  {
+    const { ctx, page, crashes } = await openPanel();
+    const rows = () => page.evaluate(() => [...document.querySelectorAll(".integ-row")].map((r) => ({
+      id: r.dataset.integ, on: r.querySelector('[role="switch"]')?.getAttribute("aria-checked"),
+      hasSwitch: !!r.querySelector('[role="switch"]'), soon: /Coming soon/.test(r.innerText),
+    })));
+    const before = await rows();
+    t.ck("every integration has a row", before.length === 3, JSON.stringify(before));
+    t.ck("Zapier is on", before.find((r) => r.id === "api")?.on === "true");
+    t.ck("Hover says coming soon and has no switch",
+      before.find((r) => r.id === "hover")?.soon && !before.find((r) => r.id === "hover")?.hasSwitch);
+    t.ck("the switches sit above the token panel", await page.evaluate(() => {
+      const a = document.querySelector(".integ-panel")?.getBoundingClientRect().top;
+      const b = [...document.querySelectorAll(".portal-panel")].find((p) => /Connect your CRM/i.test(p.textContent || ""))
+        ?.getBoundingClientRect().top;
+      return a != null && b != null && a < b;
+    }));
+    await page.evaluate(() => document.querySelector('.integ-row[data-integ="api"] [role="switch"]')?.click());
+    await wait(500);
+    t.ck("pressing it sends off", flips.length === 1 && flips[0].id === "api" && flips[0].enabled === false,
+      JSON.stringify(flips));
+    t.ck("and draws the server's answer", (await rows()).find((r) => r.id === "api")?.on === "false");
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

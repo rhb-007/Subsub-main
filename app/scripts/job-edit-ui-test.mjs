@@ -112,6 +112,7 @@ const patched = [];
 // locally invented one disagrees the moment a crew is or is not a party.
 const visitReads = [];
 const web = serveApp({ dir: OUT, port: WEB });
+const uploads = [];
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, PM];
@@ -119,6 +120,10 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account-users") return [200, USERS];
   if (path === "/api/jobs") return [200, JOBS()];
   if (path === "/api/visits") { visitReads.push(1); return [200, VISITS()]; }
+  if (path.startsWith("/api/uploads/measurement-doc/") && method === "PUT") {
+    uploads.push(path);
+    return [200, { key: "acc_pm/measurement-doc/u1-hover.pdf", size: 12, type: "application/pdf" }];
+  }
   if (/^\/api\/jobs\/[^/]+$/.test(path) && method === "PATCH") {
     patched.push({ path, body });
     // WHAT THE ROUTE ANSWERS WHEN MOVING THE DATE ASKED SOMEBODY. The edit
@@ -363,6 +368,23 @@ try {
     t.ck("the unbooked trade comes off", !dropped.includes("Roofing"), JSON.stringify(dropped));
   }
 
+  console.log("\n-- a measurement document is UPLOADED when it is picked --");
+  {
+    await page.evaluate(() => [...document.querySelectorAll(".modal .job-steps button")]
+      .find((b) => b.innerText.includes("Materials"))?.click());
+    await wait(300);
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const f = join(mkdtempSync(join(tmpdir(), "meas-")), "hover.pdf");
+    writeFileSync(f, "%PDF-1.4 hover");
+    const input = await page.$('.modal .meas-upload input[type="file"]');
+    await input?.uploadFile(f);
+    await wait(900);
+    t.ck("the file went up through the checked kind", uploads.length === 1, JSON.stringify(uploads));
+    t.ck("and the form lists it", await page.evaluate(() =>
+      [...document.querySelectorAll(".modal .meas-row")].some((r) => /hover\.pdf/.test(r.innerText))));
+  }
+
   console.log("\n-- and saving sends what was typed --");
   {
     patched.length = 0;
@@ -398,6 +420,9 @@ try {
     t.ck("nor the photos", body.photos === undefined, JSON.stringify(body.photos));
     t.ck("nor the severity", body.severity === undefined, JSON.stringify(body.severity));
     t.ck("nor who asked", body.requestedBy === undefined, JSON.stringify(body.requestedBy));
+    t.ck("the measurement document is sent as the stored file, not a name",
+      (body.measurementDocs || []).some((d) => d && d.key === "acc_pm/measurement-doc/u1-hover.pdf" && d.name === "hover.pdf"),
+      JSON.stringify(body.measurementDocs));
     // AND A SAVE THAT RESCHEDULED RE-READS THE APPOINTMENT.
     //
     // The visit a card draws lives in its own list, so without this the

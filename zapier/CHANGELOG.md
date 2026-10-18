@@ -7,6 +7,15 @@ under their feet.
 
 One heading per pushed version, newest first.
 
+## 1.1.1
+
+- The API token's help text points at the new place in SubSub: **My account →
+  Integrations → Connect your CRM**. The token itself, and every Zap using it,
+  are unchanged.
+- If an account switches its Zapier integration off in SubSub, a step now
+  fails with SubSub's own sentence saying so (`integration_paused`) rather than
+  a bare 403.
+
 ## 1.1.0
 
 - **Property** is now a dropdown of the buildings on your account, instead of a

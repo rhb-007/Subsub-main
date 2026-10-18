@@ -395,7 +395,7 @@ console.log("\n-- a token reaches its own account and no other --");
 
   // The docs send somebody to a panel by name. A heading that has been
   // renamed since is a set of directions that dead-ends on their own screen.
-  const named = (docs.match(/My account → Profile → ([^<]+)</) || [])[1];
+  const named = (docs.match(/My account → Integrations → ([^<]+)</) || [])[1];
   ck("the docs name the panel to make a token on", !!named, String(named));
   ck("and that heading exists in the app", !!named && app.includes(`<h4>${named.trim()}</h4>`), String(named));
 }

@@ -164,6 +164,8 @@ import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 import { bbbLive, fetchBbbRating } from "./bbb.js";
 import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
+import { INTEGRATIONS, integrationById, hookIntegration, integrationApplies,
+  integrationEnabled } from "../shared/integrations.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -9629,6 +9631,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\baccount_integrations\b/i.test(m)) return "090_account_integrations";
   if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
   if (/\bportfolio_estimates\b/i.test(m)) return "086_portfolio_estimates";
   if (/\boccupied_units\b|\baccount_setup_fees\b/i.test(m)) return "084_unit_pricing";
@@ -10798,13 +10801,18 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     if (spanPlan.error) return c.json({ error: spanPlan.error, trade: spanPlan.trade || null }, 400);
   }
 
+  // Uploaded files only, under the caller's own prefix -- see cleanMeasurementDocs.
+  const measured = cleanMeasurementDocs(b.measurementDocs || [], c.get("auth").accountId, []);
+  if (measured.error) return c.json(measured, 400);
+  const measureDocs = measured.docs;
+
   const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
     "date", "time", "trades", "scope", "material_source", "materials_paid_by", "measurement_docs",
     "created_by", "property_id", "requested_by", "photos", "report_detail", "severity"];
   const vals = [id, jobAccountId, b.title, b.client || null, b.address || null, b.area || null,
     b.zip || null, b.sqft || null, b.stories || null, b.date || null, b.time || "07:00",
     JSON.stringify(b.trades || []), scope, materialSource, b.materialsPaidBy || null,
-    JSON.stringify(b.measurementDocs || []), userId, propertyId, requestedBy,
+    JSON.stringify(measureDocs), userId, propertyId, requestedBy,
     photos.length ? JSON.stringify(photos) : null, detail ? JSON.stringify(detail) : null, severity];
 
   // AN EXTRA COLUMN, and only when there is something to say. NULL is the
@@ -11723,6 +11731,46 @@ const cleanDetail = (d = {}) => ({
 const MAX_REPORT_PHOTOS = 6;
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif"]);
+// A job's measurement documents: a Hover or EagleView report, a takeoff, a
+// photo of a sketch. Checked rather than trusted, because the bytes are later
+// opened in a tab on our own origin -- an HTML or SVG file there is script on
+// the app's origin. So documents and images only, and nothing that renders as
+// a page. 25MB because a measurement PDF with photos runs larger than a photo.
+const MAX_MEASURE_BYTES = 25 * 1024 * 1024;
+const MEASURE_TYPES = new Set([...PHOTO_TYPES, "application/pdf", "text/plain", "text/csv",
+  "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/zip"]);
+const MAX_MEASURE_DOCS = 20;
+
+// What a save may write to jobs.measurement_docs. An entry is a file this
+// account UPLOADED -- {key, name, type, size} with a key under its own
+// measurement-doc prefix. A bare name is what the old form saved, picked and
+// never uploaded, so one is kept only where it was already on the job (so an
+// edit does not throw away the record that something was named) and a NEW one
+// is refused: a picked file is not an uploaded file.
+export function cleanMeasurementDocs(list, accountId, existing = []) {
+  if (!Array.isArray(list)) return { error: "bad_measurement_docs" };
+  if (list.length > MAX_MEASURE_DOCS) return { error: "too_many_measurement_docs" };
+  const had = new Set((existing || []).filter((d) => typeof d === "string"));
+  const out = [];
+  for (const d of list) {
+    if (typeof d === "string") {
+      if (!had.has(d)) return { error: "measurement_doc_not_uploaded", name: d };
+      out.push(d);
+      continue;
+    }
+    const key = typeof d?.key === "string" ? d.key : "";
+    if (!key.startsWith(`${accountId}/measurement-doc/`) || key.includes("..")) {
+      return { error: "bad_measurement_doc" };
+    }
+    const type = String(d.type || "").toLowerCase();
+    out.push({ key, name: String(d.name || key.split("/").pop()).slice(0, 200),
+      type: MEASURE_TYPES.has(type) ? type : "application/octet-stream",
+      size: Number.isFinite(Number(d.size)) ? Number(d.size) : null });
+  }
+  return { docs: out };
+}
 // A filename becomes part of an R2 key and comes straight off a phone, so
 // it is rewritten rather than trusted: no slashes to climb out of the
 // account's prefix, no dot-dot, nothing that is not plainly a name.
@@ -12265,7 +12313,13 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
   })();
   const sets = [], vals = [];
   if (b.notes !== undefined) { sets.push("notes = ?"); vals.push(b.notes); }
-  if (b.measurementDocs !== undefined) { sets.push("measurement_docs = ?"); vals.push(JSON.stringify(b.measurementDocs)); }
+  if (b.measurementDocs !== undefined) {
+    const had = await c.env.DB.prepare(`SELECT measurement_docs FROM jobs WHERE id = ? AND account_id = ?`)
+      .bind(id, accountId).first();
+    const measured = cleanMeasurementDocs(b.measurementDocs, accountId, parseJson(had?.measurement_docs, []));
+    if (measured.error) return c.json(measured, 400);
+    sets.push("measurement_docs = ?"); vals.push(JSON.stringify(measured.docs));
+  }
   // THE PLAIN TEXT OF THE JOB. Trimmed, and an emptied optional field is
   // stored NULL rather than "": a column holding an empty string where it
   // means "not given" is a lie a screen reads back, which is the same reason
@@ -18719,6 +18773,50 @@ async function woInspection(c, woId) {
 // have no walk behind them -- they were typed, or arrived from a CRM -- and a
 // 404 on the common case is a modal that has to decide whether a missing
 // answer is a fault. Nothing to seed is the ordinary state, not an error.
+// A job's measurement document, by POSITION on the job and never by R2 key --
+// a key in a URL is a key anybody can paste. Who may read it is who reads the
+// work order it rides on: the hiring account's admin or pm, and the company
+// holding a live (not voided, not declined) work order on the job, which is
+// how a subcontractor sees the Hover report before they price or turn up.
+// A stranger, a voided crew and an index past the end all answer not_found.
+// A bare name from before files were stored answers no_file: the row says
+// something was named, and nothing was ever uploaded.
+app.get("/api/jobs/:id/measurements/:index", async (c) => {
+  const auth = c.get("auth");
+  const id = c.req.param("id");
+  const index = Number(c.req.param("index"));
+  if (!Number.isInteger(index) || index < 0) return c.json({ error: "not_found" }, 404);
+  let job = null;
+  if ((auth.role === "admin" || auth.role === "pm") && maySeeJob(auth, id)) {
+    job = await c.env.DB.prepare(`SELECT measurement_docs FROM jobs WHERE id = ? AND account_id = ?`)
+      .bind(id, auth.accountId).first();
+  }
+  if (!job) {
+    const companyId = await seatCompany(c);
+    if (companyId) {
+      job = await c.env.DB.prepare(
+        `SELECT j.measurement_docs FROM jobs j
+           JOIN work_orders w ON w.job_id = j.id
+          WHERE j.id = ? AND w.company_id = ? AND w.voided_at IS NULL
+            AND COALESCE(w.status, '') <> 'declined' LIMIT 1`
+      ).bind(id, companyId).first();
+    }
+  }
+  if (!job) return c.json({ error: "not_found" }, 404);
+  const d = parseJson(job.measurement_docs, [])[index];
+  if (d === undefined) return c.json({ error: "not_found" }, 404);
+  if (typeof d === "string" || !d?.key) return c.json({ error: "no_file" }, 404);
+  const obj = await c.env.FILES.get(d.key);
+  if (!obj) return c.json({ error: "no_file" }, 404);
+  const type = MEASURE_TYPES.has(String(d.type || "")) ? d.type : "application/octet-stream";
+  return new Response(obj.body, { headers: {
+    "Content-Type": type,
+    "Content-Disposition": `inline; filename="${String(d.name || "document").replace(/[^\w.\- ]/g, "_")}"`,
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, max-age=300",
+  } });
+});
+
 app.get("/api/jobs/:id/trade-scope", requireRole("admin", "pm"), async (c) => {
   const auth = c.get("auth");
   let insp = null;
@@ -20128,6 +20226,17 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
     if (declared > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
     const body = await c.req.arrayBuffer();
     if (body.byteLength > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
+    if (body.byteLength === 0) return c.json({ error: "empty" }, 400);
+    const key = `${accountId}/${kind}/${uid()}-${safeFileName(fileName)}`;
+    await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
+    return c.json({ key, size: body.byteLength, type });
+  }
+  if (kind === "measurement-doc") {
+    if (!MEASURE_TYPES.has(type)) return c.json({ error: "not_a_document", type }, 415);
+    const declared = Number(c.req.header("Content-Length") || 0);
+    if (declared > MAX_MEASURE_BYTES) return c.json({ error: "too_big", max: MAX_MEASURE_BYTES }, 413);
+    const body = await c.req.arrayBuffer();
+    if (body.byteLength > MAX_MEASURE_BYTES) return c.json({ error: "too_big", max: MAX_MEASURE_BYTES }, 413);
     if (body.byteLength === 0) return c.json({ error: "empty" }, 400);
     const key = `${accountId}/${kind}/${uid()}-${safeFileName(fileName)}`;
     await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
@@ -22929,14 +23038,14 @@ const apiError = (c, status, error, message, extra = {}) =>
 // Resolves the bearer token to an account, or answers. Returns null when it
 // has already answered, so callers `if (!ctx) return;` -- there is no second
 // place that decides what a bad token means.
-async function apiCaller(c) {
+async function apiCaller(c, integration = "api") {
   const header = c.req.header("Authorization") || "";
   const raw = /^Bearer\s+(.+)$/i.exec(header.trim())?.[1]?.trim();
   if (!raw) {
     return { res: apiError(c, 401, "missing_token",
       "Send your SubSub API token as: Authorization: Bearer <token>.") };
   }
-  return apiCallerForToken(c, raw);
+  return apiCallerForToken(c, raw, integration);
 }
 
 // The same caller, with the token read off the PATH instead of a header.
@@ -22945,16 +23054,32 @@ async function apiCaller(c) {
 // It exists because a JobNimbus automation webhook takes a URL and offers no
 // field for a header, so a token that can only arrive in a header cannot
 // arrive at all. Same shape and same reasoning as /api/pack/:token.
-async function apiCallerByPathToken(c) {
+async function apiCallerByPathToken(c, integration) {
   const raw = String(c.req.param("token") || "").trim();
   if (!raw) {
     return { res: apiError(c, 401, "missing_token",
       "The webhook URL must end with your SubSub webhook token.") };
   }
-  return apiCallerForToken(c, raw);
+  return apiCallerForToken(c, raw, integration);
 }
 
-async function apiCallerForToken(c, raw) {
+// Whether the account has this integration switched on. No row is on, and a
+// database without 090 is on: a missing table must not silently stop every
+// job a CRM sends, which would cost somebody their work to report our schema.
+async function integrationOn(env, accountId, id) {
+  if (!id) return true;
+  try {
+    const rows = (await env.DB.prepare(
+      `SELECT provider, enabled FROM account_integrations WHERE account_id = ?`
+    ).bind(accountId).all()).results || [];
+    return integrationEnabled(rows, id);
+  } catch (err) {
+    if (missingSchema(err)) return true;
+    throw err;
+  }
+}
+
+async function apiCallerForToken(c, raw, integration) {
   let row;
   try {
     row = await c.env.DB.prepare(
@@ -22993,6 +23118,18 @@ async function apiCallerForToken(c, raw) {
     return { res: apiError(c, 403, "not_a_hiring_account",
       "This account is not set up to hire subcontractors, so it cannot take jobs.",
       { kind: row.kind }) };
+  }
+
+  // The account's own switch in Account -> Integrations. Checked here, at the
+  // one place every door's token is read, so turning an integration off stops
+  // it on the server rather than only on the screen. Named, and after the
+  // token check: a stranger with a bad token learns nothing about switches,
+  // and the person who turned it off can read why the sender stopped.
+  if (!(await integrationOn(c.env, row.account_id, integration))) {
+    const name = integrationById(integration)?.name || integration;
+    return { res: apiError(c, 403, "integration_paused",
+      `${name} is switched off for this account. Turn it back on in SubSub under Account, Integrations.`,
+      { integration }) };
   }
 
   const limit = await rateLimit(c.env, "api-ingest", row.account_id, { limit: 300, windowMinutes: 1 });
@@ -23230,6 +23367,80 @@ app.get("/api/v1/properties", async (c) => {
 // ---- The tokens themselves, from inside the account ----------------------
 // Admin only. A project manager runs work; wiring the company's CRM to it is
 // an account-level decision, and a token is a key to create jobs on it.
+// ---- Account -> Integrations ----------------------------------------------
+//
+// ADMIN ONLY, for the reason the API key panel is: each of these decides what
+// arrives on the account from outside it, for every job from then on. The
+// list is app/shared/integrations.js; the switch is enforced at the token
+// check every door shares (integrationOn above), so this screen and the
+// receivers cannot disagree about what is on.
+async function integrationsFor(env, accountId) {
+  const acct = await env.DB.prepare(
+    `SELECT plan, comped, kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  const hasBuildings = ACCOUNT_KINDS_WITH_PROPERTIES.includes(acct?.kind || "");
+  let rows = [];
+  let migration = null;
+  try {
+    rows = (await env.DB.prepare(
+      `SELECT provider, enabled, updated_at FROM account_integrations WHERE account_id = ?`
+    ).bind(accountId).all()).results || [];
+  } catch (err) {
+    migration = missingSchema(err);
+    if (!migration) throw err;
+  }
+  return {
+    acct,
+    hasBuildings,
+    migration,
+    list: INTEGRATIONS.filter((i) => integrationApplies(i, { hasBuildings })).map((i) => ({
+      id: i.id, name: i.name, what: i.what, uses: i.uses, soon: !!i.soon,
+      enabled: i.soon ? false : integrationEnabled(rows, i.id),
+      updatedAt: rows.find((r) => r.provider === i.id)?.updated_at || null,
+    })),
+  };
+}
+
+app.get("/api/integrations", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  const { acct, list, migration } = await integrationsFor(c.env, accountId);
+  if (!HIRING_KINDS.includes(acct?.kind)) return c.json({ error: "not_a_hiring_account" }, 403);
+  return c.json({ integrations: list, onScale: accountOnScale(acct), migration });
+});
+
+app.put("/api/integrations/:id", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = String(c.req.param("id") || "");
+  const body = await c.req.json().catch(() => ({}));
+  if (typeof body.enabled !== "boolean") return c.json({ error: "enabled_required" }, 400);
+  const { acct, list } = await integrationsFor(c.env, accountId);
+  if (!HIRING_KINDS.includes(acct?.kind)) return c.json({ error: "not_a_hiring_account" }, 403);
+  const item = list.find((i) => i.id === id);
+  // An id this account is not offered (an inspection app on an account with
+  // no buildings) answers exactly as an unknown one does.
+  if (!item) return c.json({ error: "not_found" }, 404);
+  // Nothing to switch yet: a toggle that changes nothing is a toggle that lies.
+  if (item.soon) return c.json({ error: "not_available" }, 409);
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO account_integrations (account_id, provider, enabled, updated_at, updated_by)
+       VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+       ON CONFLICT (account_id, provider)
+       DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at,
+                     updated_by = excluded.updated_by`
+    ).bind(accountId, id, body.enabled ? 1 : 0, userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  if (item.enabled !== body.enabled) {
+    await logActivity(c.env, accountId, userId, "integration",
+      `${body.enabled ? "Turned on" : "Turned off"} ${item.name}`, { integration: id, enabled: body.enabled });
+  }
+  const after = await integrationsFor(c.env, accountId);
+  return c.json({ integrations: after.list, onScale: accountOnScale(after.acct), migration: after.migration });
+});
+
 app.get("/api/api-tokens", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   try {
@@ -23341,7 +23552,7 @@ app.post("/api/v1/hooks/:source/:token", async (c) => {
   }
   const preset = SOURCE_PRESETS[source];
 
-  const ctx = await apiCallerByPathToken(c);
+  const ctx = await apiCallerByPathToken(c, hookIntegration(source));
   if (ctx.res) return ctx.res;
   const { token, accountId } = ctx;
 
@@ -23729,7 +23940,7 @@ app.post("/api/v1/hooks/:source/:token/inspections", async (c) => {
       `SubSub has no inspection receiver for "${source}".`,
       { supported: Object.keys(INSPECT_PRESETS) });
   }
-  const ctx = await apiCallerByPathToken(c);
+  const ctx = await apiCallerByPathToken(c, "inspection_hooks");
   if (ctx.res) return ctx.res;
   return inspectIngestCall(c, { ctx, urlSource: source, preset: INSPECT_PRESETS[source] });
 });

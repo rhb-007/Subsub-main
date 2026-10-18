@@ -13706,6 +13706,68 @@ refactor.
   width assertion passes either way; it is iPad Safari's date input, and the
   first look on the iPad is the real test.
 
+- **ACCOUNT -> INTEGRATIONS: EVERYTHING THAT RUNS ON THE ACCOUNT'S OWN
+  CREDENTIALS, EACH WITH A SWITCH THE SERVER ENFORCES.** Asked for as *"we need
+  an integrations section in My Account to manage these, and turn them on/off,
+  maybe include Zapier in there as well"*. Migration 090
+  (`account_integrations`), `app/shared/integrations.js`.
+
+  **A new Account tab, Integrations**, for an admin on a hiring account. It
+  leads with the switches, then the three panels that used to sit on Profile:
+  the API key (Connect your CRM), the CRM's words and the inspection app's
+  words. Profile is for the person; what posts into the account is not.
+  `developers.html` and the Zapier help text now say *My account ->
+  Integrations*, and the Zapier app went to **1.1.1** for that text alone.
+
+  **Six rows.** Zapier, Make and your own scripts (the API key on the header
+  endpoint), JobNimbus (its webhook), Other CRMs (the generic webhook), and
+  Inspection apps, only on an account with buildings. **Hover and CompanyCam
+  are listed as Coming soon with no switch**, because a toggle that changes
+  nothing is a toggle that lies; they need developer access from each company
+  before SubSub can connect to them, and the manager will pick which report or
+  project to attach.
+
+  **Off is enforced at the token check every door shares** (`apiCallerForToken`
+  takes which switch governs the door), so a paused integration's posts are
+  refused with `integration_paused` naming where to turn it back on. It is
+  checked after the token, so a bad token still learns nothing about switches.
+  A CRM with a receiver of its own has its own switch, and any other source
+  falls under Other CRMs, so a receiver added later can still be stopped.
+  **No row is on, and a database without 090 is on**: a missing table must not
+  stop every job a CRM sends. The list names the file and a switch press
+  answers `migration_needed`. Each change goes in the account's feed.
+
+  **AND A MEASUREMENT DOCUMENT IS A FILE NOW, NOT A NAME.** Found while
+  scoping this: the job form's *Upload measurements, takeoff, or drawings*
+  kept the picked filename and sent no bytes, and the work order's *Open*
+  downloaded the work order's own text. So a work order listed a Hover report
+  nobody could open. The same shape as `SubForm`'s documents: a picked file is
+  not an uploaded file.
+
+  - **Picking uploads it, there and then**, through a checked kind
+    (`measurement-doc`): PDFs, images, spreadsheets, documents and zips up to
+    25 MB, and never HTML or SVG, because the bytes are opened on our own
+    origin. A refusal names the file and why.
+  - **A save keeps only stored files**: `{key, name, type, size}` under the
+    caller's own prefix. A new bare name is refused
+    (`measurement_doc_not_uploaded`), and an old one already on the job is
+    kept and drawn dashed, *never uploaded*, so an edit does not lose the
+    record that something was named.
+  - **`GET /api/jobs/:id/measurements/:index` serves it by position**, never by
+    R2 key, to the hiring account's admin or pm and to the company holding a
+    live (not voided, not declined) work order on the job. Everybody else gets
+    `not_found`; a name with no file gets `no_file`. It is sent `nosniff`.
+  - **The work order fetches each file on mount** and draws Open and Download
+    as real anchors with `target="_blank"`, the iPad rule the compliance
+    documents already follow.
+
+  `test:integrations` (32), `test:measuredocs` (15), plus `test:crmmapui`,
+  `test:woaccess` and `test:jobeditui`. The mutations fire, each on its own
+  assertion (eleven in all). `test:jobeditui` still has 3 failures from before this change:
+  its fixture visit is dated Oct 6, which has now passed.
+
+  **Pasting 090 is required** before a switch can be turned off.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

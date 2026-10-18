@@ -3282,17 +3282,6 @@ export default function SubSub() {
     persist("patchJob.notes", api.patchJob(id, { notes }));
     setJobs((js) => js.map((j) => j.id === id ? { ...j, notes } : j));
   };
-  const addMeasurementDoc = (id, name) => {
-    const next = [...(allJobs.find((j) => j.id === id)?.measurementDocs || []), name];
-    persist("patchJob.measurementDocs", api.patchJob(id, { measurementDocs: next }));
-    setJobs((js) => js.map((j) => j.id === id ? { ...j, measurementDocs: next } : j));
-  };
-  const removeMeasurementDoc = (id, name) => {
-    const next = (allJobs.find((j) => j.id === id)?.measurementDocs || []).filter((d) => d !== name);
-    persist("patchJob.measurementDocs", api.patchJob(id, { measurementDocs: next }));
-    setJobs((js) => js.map((j) => j.id === id ? { ...j, measurementDocs: next } : j));
-  };
-
   // Assigning a contractor ISSUES a work order for that trade. The WO is never
   // authored separately — it is derived from the job plus these trade details.
   // ISSUING IS AWAITED, AND NOTHING IS DRAWN UNTIL THE SERVER TOOK IT.
@@ -7302,8 +7291,8 @@ export default function SubSub() {
                     {j.scope && <p className="job-scope">{j.scope}</p>}
                     {(j.measurementDocs || []).length > 0 && (
                       <div className="job-meas">
-                        {j.measurementDocs.map((d) => (
-                          <span key={d} className="meas-chip"><FileText size={11} /> {d}</span>
+                        {j.measurementDocs.map((d, i) => (
+                          <span key={measKey(d, i)} className="meas-chip"><FileText size={11} /> {measName(d)}</span>
                         ))}
                       </div>
                     )}
@@ -20236,6 +20225,88 @@ function InspectionIngest({ isScale }) {
   );
 }
 
+// Why a switch did not move, in words. A refusal named rather than "try
+// again", because two of these are not fixed by trying again.
+function integrationErrText(ex) {
+  const code = ex?.body?.error || ex?.code || "";
+  if (code === "migration_needed") {
+    return `This needs a database update first (${ex?.body?.migration || "090_account_integrations"}). Every integration stays on until then.`;
+  }
+  if (code === "not_available") return "That one isn't available to connect yet.";
+  if (code === "not_found") return "That integration isn't offered for this account.";
+  if (ex?.status === 401) return "You've been signed out. Sign in again and try once more.";
+  return `That didn't save${code ? ` (${code})` : ""}. Try again in a moment.`;
+}
+
+// The switches. One per integration that runs on the account's own
+// credentials, read from the server so the screen draws its answer rather
+// than a second opinion; off is enforced at the token check every receiver
+// shares. Hover and CompanyCam are listed and say "Coming soon" with no
+// switch, because a toggle that changes nothing is a toggle that lies.
+function IntegrationSwitches() {
+  const [data, setData] = useState(null);
+  const [failed, setFailed] = useState("");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState({});
+  const load = useCallback(async () => {
+    try { setData(await api.integrations()); setFailed(""); }
+    catch (ex) { setFailed(integrationErrText(ex)); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const flip = async (it) => {
+    setBusy(it.id); setErr((e) => ({ ...e, [it.id]: "" }));
+    try { setData(await api.setIntegration(it.id, !it.enabled)); }
+    catch (ex) { setErr((e) => ({ ...e, [it.id]: integrationErrText(ex) })); }
+    finally { setBusy(""); }
+  };
+  const list = data?.integrations || [];
+  return (
+    <div className="portal-panel settings-panel integ-panel">
+      <h4>Integrations</h4>
+      <p className="panel-note">
+        Systems that post into SubSub on your own accounts. Turn one off and it
+        stops: anything it sends is refused, with a note saying it's switched off
+        here. Turn it back on and it picks up again. Nothing already in SubSub
+        is touched either way.
+      </p>
+      {data && data.onScale === false && (
+        <p className="cov-hint">These need the Scale plan. On Basic nothing posts in, whatever the switches say.</p>
+      )}
+      {data?.migration && (
+        <p className="cov-hint">Switches need a database update ({data.migration}). Until then every integration is on.</p>
+      )}
+      {failed && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {failed}</p>}
+      {!data && !failed && <p className="panel-note">Loading…</p>}
+      <div className="integ-list">
+        {list.map((it) => (
+          <div key={it.id} className={`open-hire integ-row ${it.enabled ? "on" : ""} ${it.soon ? "soon" : ""}`}
+            data-integ={it.id}>
+            {it.soon ? (
+              <span className="integ-soon">Coming soon</span>
+            ) : (
+              <button type="button" role="switch" aria-checked={it.enabled}
+                aria-label={`${it.name}: ${it.enabled ? "on" : "off"}`}
+                className="oh-switch" disabled={busy === it.id || !!data?.migration}
+                onClick={() => flip(it)}>
+                <span className="oh-knob" />
+              </button>
+            )}
+            <div>
+              <strong>{it.name}</strong>
+              <span>{it.what}</span>
+              <span className="integ-uses">
+                Uses: {it.uses}
+                {it.soon ? " · waiting on developer access" : it.enabled ? " · On" : " · Off"}
+              </span>
+              {err[it.id] && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err[it.id]}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ApiTokens({ isScale, canInspect }) {
   const [rows, setRows] = useState(null);
   const [name, setName] = useState("");
@@ -22835,6 +22906,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     // 077. The page they hand out, beside the paperwork it is made from.
     .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["passport", "Passport"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
+    // What runs on the account's own credentials: its API key, its CRM and
+    // inspection-app webhooks. The hiring side only, which is who can mint a key.
+    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hires !== false ? [["integrations", "Integrations"]] : [])
     // Only where there are buildings for tenants to be in.
     // Tenants left this list for the main menu: one screen for one list.
     .concat(canManage ? [["billing", "Subscription"]] : [])
@@ -23163,46 +23237,6 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               Still gated on the account being hireable and on a seat that runs
               it, because that has not changed -- a code for a company nobody
               can hire is a code for nothing. */}
-          {/* The key an account's CRM authenticates with.
-              On Profile because that is where the QR code and the other
-              give-something-to-somebody-else things are, and because it is
-              the tab an admin opens for their own settings rather than the
-              company's. Admin only: a project manager runs work, but wiring
-              the company's scheduling system to SubSub is an account-level
-              decision and a token is a key to create jobs on it.
-
-              Scale, checked on the SERVER on every call as well as here --
-              hiding the panel is not a gate, and a downgrade has to stop an
-              integration that is already running. */}
-          {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
-            <ApiTokens isScale={plan === "scale"} canInspect={kindHasProperties(accountKind)} />
-          )}
-          {/* Directly below the token, because setting a CRM up is one story
-              and making somebody find the second half on another tab is how
-              a half-configured integration happens.
-
-              `canManage`, the same gate as the token above it, and the same
-              one `/api/crm-rules` now asks. It was admin OR pm, matching the
-              route as it was written -- so a project manager reached half of
-              the CRM integration and not the other half. Wiring the company's
-              scheduling system to SubSub is one account-level decision, and a
-              trade rule is the dictionary every arriving job is read
-              through. */}
-          {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
-            <CrmMapping />
-          )}
-          {/* Beside the CRM pair, because it is the same story -- a system
-              outside SubSub posting records in -- and setting one up should not
-              mean finding its second half on another tab.
-
-              `hasProperties` as well as `canManage`, which is exactly what
-              `/api/inspection-rules` asks: an account with no buildings has no
-              units to walk, so a condition dictionary on one is a setting about
-              nothing. The same pair of gates on both sides, because a screen
-              stricter than its route is the same lie as looser. */}
-          {canManage && kindHasProperties(accountKind) && (
-            <InspectionIngest isScale={plan === "scale"} />
-          )}
 
           {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
             <div className="portal-panel settings-panel">
@@ -23577,6 +23611,55 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           }
           onConfirm={async () => { await onRemoveUser(removing.id); setRemoving(null); }}
           onCancel={() => setRemoving(null)} />
+      )}
+
+      {/* Integrations: everything that runs on the account's own credentials,
+          each with a switch the receivers enforce, and the wiring for them
+          under the switches. Moved off Profile, which was the tab for the
+          person, not for what posts into the account. */}
+      {pane === "integrations" && canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+        <>
+          <IntegrationSwitches />
+          {/* The key an account's CRM authenticates with.
+              On Integrations, under the switches, because every one of these
+              runs on the account's own credentials: the switch says whether
+              it may post in, and this is how it is wired. Admin only: a project manager runs work, but wiring
+              the company's scheduling system to SubSub is an account-level
+              decision and a token is a key to create jobs on it.
+
+              Scale, checked on the SERVER on every call as well as here --
+              hiding the panel is not a gate, and a downgrade has to stop an
+              integration that is already running. */}
+          {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+            <ApiTokens isScale={plan === "scale"} canInspect={kindHasProperties(accountKind)} />
+          )}
+          {/* Directly below the token, because setting a CRM up is one story
+              and making somebody find the second half on another tab is how
+              a half-configured integration happens.
+
+              `canManage`, the same gate as the token above it, and the same
+              one `/api/crm-rules` now asks. It was admin OR pm, matching the
+              route as it was written -- so a project manager reached half of
+              the CRM integration and not the other half. Wiring the company's
+              scheduling system to SubSub is one account-level decision, and a
+              trade rule is the dictionary every arriving job is read
+              through. */}
+          {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+            <CrmMapping />
+          )}
+          {/* Beside the CRM pair, because it is the same story -- a system
+              outside SubSub posting records in -- and setting one up should not
+              mean finding its second half on another tab.
+
+              `hasProperties` as well as `canManage`, which is exactly what
+              `/api/inspection-rules` asks: an account with no buildings has no
+              units to walk, so a condition dictionary on one is a setting about
+              nothing. The same pair of gates on both sides, because a screen
+              stricter than its route is the same lie as looser. */}
+          {canManage && kindHasProperties(accountKind) && (
+            <InspectionIngest isScale={plan === "scale"} />
+          )}
+        </>
       )}
 
       {pane === "users" && canManage && (
@@ -27391,21 +27474,7 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
 
       <div className="form-sec">Measurement documents</div>
       <p className="sec-note">Uploaded by you — contractors see these on their work order.</p>
-      <div className="meas-list">
-        {f.measurementDocs.map((d) => (
-          <div key={d} className="meas-row">
-            <FileText size={14} /><span className="meas-name">{d}</span>
-            <button type="button" className="icon-x" onClick={() => set("measurementDocs", f.measurementDocs.filter((x) => x !== d))}><X size={12} /></button>
-          </div>
-        ))}
-        <label className="meas-upload">
-          <Upload size={14} /> Upload measurements, takeoff, or drawings
-          <input type="file" hidden multiple onChange={(e) => {
-            const names = [...e.target.files].map((x) => x.name);
-            set("measurementDocs", [...new Set([...f.measurementDocs, ...names])]);
-          }} />
-        </label>
-      </div>
+      <MeasurementPicker docs={f.measurementDocs} onChange={(next) => set("measurementDocs", next)} />
       </>)}
 
       {/* The modal used to close on click whatever the server said, so a
@@ -35030,6 +35099,114 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
 }
 
 // ---- Work order document (derived view, downloadable) -------------------
+// A job's measurement documents. An entry is {key, name, type, size} once
+// the file is really stored; a bare string is what the old form saved -- a
+// name picked and never uploaded -- and says so wherever it is drawn.
+const measName = (d) => (typeof d === "string" ? d : d?.name || "document");
+const measKey = (d, i) => (typeof d === "string" ? `name:${d}` : d?.key || `i:${i}`);
+const measStored = (d) => typeof d !== "string" && !!d?.key;
+
+function measureErrText(ex, name) {
+  const code = ex?.body?.error || ex?.message || "";
+  if (code === "not_a_document") return `${name} isn't a PDF, image, spreadsheet or document, so it wasn't added.`;
+  if (code === "too_big") return `${name} is over 25 MB, so it wasn't added.`;
+  if (code === "empty") return `${name} is empty.`;
+  if (ex?.status === 401) return "You've been signed out. Sign in again and try once more.";
+  return `${name} didn't upload${code ? ` (${code})` : ""}. Try again.`;
+}
+
+// Picking a file UPLOADS it, there and then, and only an upload that landed
+// is added to the job. The old control kept the filename and sent nothing,
+// so a work order listed a document nobody could open.
+function MeasurementPicker({ docs, onChange }) {
+  const [busy, setBusy] = useState(0);
+  const [errs, setErrs] = useState([]);
+  const latest = useRef(docs);
+  latest.current = docs;
+  const add = async (files) => {
+    const list = [...files];
+    if (!list.length) return;
+    setErrs([]); setBusy((n) => n + list.length);
+    const bad = [];
+    for (const file of list) {
+      try {
+        const r = await api.uploadMeasurementDoc(file);
+        const entry = { key: r.key, name: file.name, type: r.type || file.type || "", size: r.size ?? file.size };
+        latest.current = [...latest.current, entry];
+        onChange(latest.current);
+      } catch (ex) { bad.push(measureErrText(ex, file.name)); }
+      finally { setBusy((n) => n - 1); }
+    }
+    setErrs(bad);
+  };
+  return (
+    <div className="meas-list">
+      {docs.map((d, i) => (
+        <div key={measKey(d, i)} className={`meas-row ${measStored(d) ? "" : "unstored"}`}>
+          <FileText size={14} /><span className="meas-name">{measName(d)}</span>
+          {!measStored(d) && <span className="meas-note">Name only, never uploaded. Remove it and upload the file.</span>}
+          <button type="button" className="icon-x" aria-label={`Remove ${measName(d)}`}
+            onClick={() => onChange(docs.filter((_, k) => k !== i))}><X size={12} /></button>
+        </div>
+      ))}
+      {busy > 0 && <p className="fld-note meas-busy">Uploading {busy} file{busy > 1 ? "s" : ""}…</p>}
+      {errs.map((e) => <p key={e} className="fld-err" role="alert"><AlertTriangle size={12} /> {e}</p>)}
+      <label className="meas-upload">
+        <Upload size={14} /> Upload measurements, takeoff, or drawings
+        <input type="file" hidden multiple
+          accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.gif,.csv,.txt,.xls,.xlsx,.doc,.docx,.zip"
+          onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
+      </label>
+    </div>
+  );
+}
+
+// The work order's copy: each stored document fetched ON MOUNT, so Open and
+// Download are ordinary anchors with the blob already in hand. A press that
+// had to await a fetch would lose its user gesture, which iOS Safari blocks
+// as a popup -- and Download carries target too, because iOS ignores
+// download on a blob URL and would replace the page with the file.
+function MeasurementDocList({ jobId, docs }) {
+  const [blobs, setBlobs] = useState({});
+  useEffect(() => {
+    let live = true;
+    const made = [];
+    docs.forEach((d, i) => {
+      if (!measStored(d)) return;
+      api.measurementBlob(jobId, i)
+        .then((b) => { made.push(b.url); if (live) setBlobs((x) => ({ ...x, [i]: b })); else URL.revokeObjectURL(b.url); })
+        .catch((ex) => { if (live) setBlobs((x) => ({ ...x, [i]: { failed: ex?.message || "failed" } })); });
+    });
+    return () => { live = false; made.forEach((u) => URL.revokeObjectURL(u)); };
+  }, [jobId, JSON.stringify(docs)]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!docs.length) return <p className="muted">None attached to this job.</p>;
+  return (
+    <div className="meas-list">
+      {docs.map((d, i) => {
+        const b = blobs[i];
+        return (
+          <div key={measKey(d, i)} className="meas-row view" data-meas={i}>
+            <FileText size={14} /><span className="meas-name">{measName(d)}</span>
+            {!measStored(d) ? (
+              <span className="meas-note">Named on the job, but the file was never uploaded.</span>
+            ) : b?.failed ? (
+              <span className="meas-note">{b.failed === "no_file" ? "The file isn't in storage. Ask for it again." : "Couldn't load it. Close and open the work order again."}</span>
+            ) : !b ? (
+              <span className="meas-note">Loading…</span>
+            ) : (
+              <>
+                <a className="meas-dl" href={b.url} target="_blank" rel="noopener noreferrer">Open</a>
+                <a className="meas-dl" href={b.url} download={measName(d)} target="_blank" rel="noopener noreferrer">
+                  <Download size={12} /> Download</a>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand, cos,
   accessViewer = null }) {
   // ACCESS ON EVERY WORK ORDER, where the hiring account keeps buildings.
@@ -35122,7 +35299,7 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       ...(coPending ? [`  (${coPending} change order${coPending === 1 ? "" : "s"} pending — not included)`] : []),
       "",
       (job.measurementDocs || []).length
-        ? `Measurement documents: ${job.measurementDocs.join(", ")}` : "",
+        ? `Measurement documents: ${job.measurementDocs.map(measName).join(", ")}` : "",
       "",
       `Status: ${a.auto ? "Auto-scheduled" : a.status}`,
       "",
@@ -35244,18 +35421,7 @@ function WorkOrderDoc({ job, trade, a, onClose, onUploadSigned, canUpload, brand
       )}
 
       <div className="wo-doc-sec">Measurement documents</div>
-      {(job.measurementDocs || []).length === 0 ? (
-        <p className="muted">None attached to this job.</p>
-      ) : (
-        <div className="meas-list">
-          {job.measurementDocs.map((d) => (
-            <div key={d} className="meas-row view">
-              <FileText size={14} /><span className="meas-name">{d}</span>
-              <button className="meas-dl" onClick={download}><Download size={12} /> Open</button>
-            </div>
-          ))}
-        </div>
-      )}
+      <MeasurementDocList jobId={job.id} docs={job.measurementDocs || []} />
 
       <div className="wo-doc-sec">Signed copy</div>
       {a.signedWO ? (
@@ -41340,6 +41506,12 @@ body{background:var(--paper)}
 .oh-knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
   background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s ease}
 .open-hire.on .oh-knob{transform:translateX(18px)}
+.integ-list{display:flex;flex-direction:column;gap:10px}
+.integ-row{margin:0}
+.integ-row.soon{background:var(--paper);border-style:dashed}
+.integ-row .integ-soon{flex:none;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;
+  background:#fff;border:1px solid var(--line);color:var(--ink-soft);white-space:nowrap}
+.integ-row .integ-uses{font-size:11.5px;color:var(--ink-soft)}
 .sf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 0}
 .sf-head h5{margin:0;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
   color:var(--brand-dk)}
@@ -44550,6 +44722,11 @@ button.mc-title:hover{text-decoration:underline}
 .meas-row{display:flex;align-items:center;gap:9px;background:var(--paper);border:1px solid var(--line);
   border-radius:9px;padding:9px 11px;font-size:12.5px}
 .meas-row.view{background:var(--card)}
+.meas-row{flex-wrap:wrap}
+.meas-row.unstored{border-style:dashed}
+.meas-note{flex-basis:100%;font-size:11.5px;color:var(--ink-soft);padding-left:23px}
+a.meas-dl{text-decoration:none}
+.meas-busy{margin:0}
 .meas-name{flex:1;min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .meas-dl{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;color:var(--brand);
   background:none;border:1px solid var(--line);padding:4px 9px;border-radius:6px;cursor:pointer}

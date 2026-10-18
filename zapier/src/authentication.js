@@ -26,7 +26,7 @@ module.exports = {
       // the page documenting it leaves somebody searching our site from
       // inside a Zapier modal.
       helpText:
-        "In SubSub: **My account → Profile → Connect your CRM → Create token**. " +
+        "In SubSub: **My account → Integrations → Connect your CRM → Create token**. " +
         "It starts `ssk_` and is shown once. The API is part of the Scale plan. " +
         "Full instructions: [subsub.work/developers](https://subsub.work/developers)",
     },

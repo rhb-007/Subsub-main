@@ -425,7 +425,7 @@ body.nav-open{overflow:hidden}
 
 <div class="dev-note">
   <p><strong>The API is part of the Scale plan.</strong> Create your token in SubSub under
-  <strong>My account → Profile → Connect your CRM</strong>. It is shown once, when you create it:
+  <strong>My account → Integrations → Connect your CRM</strong>. It is shown once, when you create it:
   SubSub stores only a fingerprint of it, so nobody here can read it back to you.</p>
 </div>
 
@@ -519,7 +519,7 @@ Content-Type: application/json</code></pre>
   No CRM has a concept of a trade. What yours sends is a job type, a status and tags — your own
   words, and nothing in them means <code>roofing</code> until somebody says so. So the webhook
   address does not ask for <code>trades</code>. It reads those words and looks them up against the
-  rules on your account, under <strong>My account → Profile → What your CRM calls things</strong>.
+  rules on your account, under <strong>My account → Integrations → What your CRM calls things</strong>.
   Rules apply to every system you post from, so it is one list however many you connect.
 </p>
 <p>
@@ -729,6 +729,7 @@ Content-Type: application/json</code></pre>
   <tr><td>401</td><td><code>missing_token</code></td><td>Send <code>Authorization: Bearer &lt;token&gt;</code>.</td></tr>
   <tr><td>401</td><td><code>invalid_token</code></td><td>The token is wrong or has been revoked. Create a new one.</td></tr>
   <tr><td>403</td><td><code>scale_required</code></td><td>The account is on Basic. The API is part of Scale.</td></tr>
+  <tr><td>403</td><td><code>integration_paused</code></td><td>The account has switched this integration off under <strong>My account → Integrations</strong>. Nothing is stored; it starts working again the moment it is switched back on.</td></tr>
   <tr><td>403</td><td><code>not_a_hiring_account</code></td><td>This account is set up as a subcontractor, so it has nobody to assign.</td></tr>
   <tr><td>404</td><td><code>property_not_found</code></td><td>No building with that <code>propertyId</code> on this account.</td></tr>
   <tr><td>429</td><td><code>rate_limited</code></td><td>300 requests per minute per account. Back off and retry.</td></tr>
@@ -827,7 +828,7 @@ Content-Type: application/json</code></pre>
   <strong>arrives</strong> — it is never refused over a word — and the reply says which words were
   not understood, in <code>unmapped</code>, with <code>needsAnswers</code> counting the rooms left
   without one. Say what those mean once under
-  <strong>My account → Profile → Inspections from your inspection app</strong> and every walk after
+  <strong>My account → Integrations → Inspections from your inspection app</strong> and every walk after
   that reads properly.
 </p>
 
@@ -858,7 +859,8 @@ Content-Type: application/json</code></pre>
 <ul>
   <li>It is shown once. SubSub stores a SHA-256 of it, not the token, so it cannot be read back — by you or by us. Lost it? Revoke it and make another.</li>
   <li>It belongs to one account and can only create jobs on that account.</li>
-  <li>Revoke it any time under <strong>My account → Profile</strong>. Anything using it stops immediately; jobs it already created stay, because that work is real.</li>
+  <li>Pause any integration with its switch under <strong>My account → Integrations</strong>: what it sends is refused with <code>integration_paused</code> until it is switched back on.</li>
+  <li>Revoke it any time under <strong>My account → Integrations</strong>. Anything using it stops immediately; jobs it already created stay, because that work is real.</li>
   <li>Keep it server-side. Anyone holding it can create jobs on your account.</li>
 </ul>
 

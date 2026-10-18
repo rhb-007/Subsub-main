@@ -99,6 +99,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/properties") return [200, []];
   if (path === "/api/inspections") return [200, []];
   if (path === "/api/weather") return [200, {}];
+  if (path === "/api/integrations") return [200, { integrations: [], onScale: true, migration: null }];
   if (path === "/api/account-users") return [200, [
     { id: "u_rae", name: "Rae", email: "rae@sound.test", phone: null, role: "admin",
       subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
@@ -107,7 +108,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
 
 const browser = await launch();
 
-// Opens Account -> Profile, where the panel lives beside the API token.
+// Opens Account -> Integrations, where the panel lives beside the API token.
 const openPanel = async () => {
   const r = await visitApp(browser, { host: "sound", webPort: WEB,
     seat: { userId: "u_rae", accountId: "acc_pm" }, viewport: { width: 1200, height: 2000 } });
@@ -120,7 +121,7 @@ const openPanel = async () => {
     if (await r.page.$(".seg-tabs, nav.tabs")) break;
   }
   await r.page.evaluate(() => [...document.querySelectorAll("button")]
-    .find((b) => b.innerText.trim() === "Profile")?.click());
+    .find((b) => b.innerText.trim() === "Integrations")?.click());
   for (let n = 0; n < 40; n++) { await wait(200); if (await r.page.$(".portal-panel")) break; }
   await wait(700);
   return r;
