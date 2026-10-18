@@ -7900,6 +7900,19 @@ refactor.
   buttons at 1024px and 390px. Taking the CSS out fails ten of its twelve
   assertions.
 
+- **THE CREW WAS SWAPPED FOR A NEW TAKE OF THE SAME SIX, CUT THE SAME WAY.**
+  Same size (1639x960), so the srcset, width/height and centered alignment did
+  not move. Cut by flood fill from the edges through pixels that are exactly
+  neutral (channel spread 4 or less), then 2px into near-neutral pixels for the
+  antialiased edge. The tighter test is what kept the **white hard hat**: it
+  touches the border through light pixels, but carries a slight tint (spread
+  about 12) the printed checkerboard does not. Two enclosed pockets were
+  cleared because they carry both checker tones in quantity (behind the hammer,
+  and inside the nail gun's grip), and the bearded puppet's eye whites, which
+  carry one, were kept. **A hole-fill step undoes exactly that clearing**, which
+  the first attempt found. `test:hero` 60/60, and swapping the uncut upload back
+  in fails three. The alt text says lumber, not timber.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
