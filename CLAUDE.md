@@ -13848,6 +13848,37 @@ refactor.
   dropped, the return-host check dropped, unconfirmed addresses allowed, and
   step 1 not restored after the trip.
 
+- **THE MAP GOES FULL SCREEN, SHOWS THE ACCOUNT'S HQ, AND SAYS WHOSE MAP IT
+  IS.** Asked for as *"be able to maximize to entire size of screen, have
+  current account HQ address located on the map, add the SubSub logo | Job Map
+  as a water mark in the upper left hand corner"*. All three are in `PinMap`,
+  so the Jobs, Properties and Tenants maps all get them; the watermark says
+  *Job Map*, *Property Map* or *Tenant Map*.
+
+  **Full screen is a fixed layer over the page**, legend included, with the
+  page under it held still and Escape (or the same control, now *Exit full
+  screen*) as the way out. The map is told its box changed (`resize`), or it
+  keeps drawing at the old size inside the new one. The watermark is the
+  gold-and-black SubSub logo, then *| Job Map*, with `pointer-events:none` so
+  it never takes a press meant for the map.
+
+  **The HQ comes off the account's own company row** (`accounts.company_id`),
+  through the same route, cache and batch as the pins, under a key no real id
+  can take, and never returned among the points. Its street is the company's
+  mailing street when there is one; otherwise the profile's town, state and
+  ZIP place it, drawn hollow as approximate. The fit includes it, so the map
+  answers *how far is that from us*. **An account with no company row (a
+  property manager, a portfolio manager, an owner) has no office address
+  anywhere in SubSub, so it gets no HQ and nothing is guessed from its
+  buildings.** A company row with no town or ZIP says where to add one, and an
+  address the geocoder cannot place says so. `hqState` on the reply is `set`,
+  `pending`, `no_address`, `not_found` or `none`, and the map keeps asking
+  while it is `pending`.
+
+  `test:map` (57) and `test:mapui` (45). The server mutation leaving the HQ in
+  the points fails two; the UI mutations (no fixed layer, a watermark that
+  takes presses, no HQ marker, no Escape) each fail their own.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

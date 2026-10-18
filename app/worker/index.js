@@ -5291,6 +5291,33 @@ app.get("/api/map/points", requireRole("admin", "pm"), async (c) => {
     }
   }
 
+  // THE ACCOUNT'S OWN HQ. The company row behind the account -- which only a
+  // hireable kind has -- is where the office is, and it rides through the
+  // same cache and the same batch as everything else under a key no real id
+  // can take. An account with no company row has no office address anywhere
+  // in SubSub, and says so rather than guessing one from its buildings.
+  const HQ = "__hq";
+  let hqState = "none";
+  try {
+    const co = await c.env.DB.prepare(
+      `SELECT co.city, co.state, co.zip, co.mail_street, co.mail_city, co.mail_state, co.mail_zip
+         FROM accounts a JOIN companies co ON co.id = a.company_id WHERE a.id = ?`
+    ).bind(accountId).first();
+    if (co) {
+      // The company's street is its mailing address when it gave one; the
+      // profile itself holds a town, a state and a ZIP, which place the
+      // office near enough and are drawn as approximate.
+      const street = String(co.mail_street || "").trim();
+      const a = street
+        ? { address: street, city: co.mail_city || co.city, state: co.mail_state || co.state, zip: co.mail_zip || co.zip }
+        : { address: "", city: co.city, state: co.state, zip: co.zip };
+      const w = { line: addressLine(a), city: String(a.city || "").trim(),
+        state: String(a.state || "").trim(), zip: String(a.zip || "").trim().slice(0, 5) };
+      hqState = w.line ? "set" : "no_address";
+      if (hqState === "set") where.set(HQ, w);
+    }
+  } catch (err) { if (!missingSchema(err)) throw err; }
+
   const noAddress = [];
   const keyOf = new Map();
   for (const [id, w] of where) {
@@ -5345,7 +5372,14 @@ app.get("/api/map/points", requireRole("admin", "pm"), async (c) => {
     if (stillDue) { pending.push(id); continue; }
     points[id] = hit.precision === "none" ? null : { lat: hit.lat, lng: hit.lng, precision: hit.precision };
   }
-  return c.json({ of, points, pending, noAddress });
+  let hq = null;
+  if (hqState === "set") {
+    if (pending.includes(HQ)) { pending.splice(pending.indexOf(HQ), 1); hqState = "pending"; }
+    else if (points[HQ]) hq = points[HQ];
+    else hqState = "not_found";
+    delete points[HQ];
+  }
+  return c.json({ of, points, pending, noAddress, hq, hqState });
 });
 
 app.get("/api/connect/lookup", requireRole("admin", "pm"), async (c) => {

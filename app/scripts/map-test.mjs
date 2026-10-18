@@ -189,6 +189,40 @@ const GC = ["u_gc", "acc_gc"], PM = ["u_pm", "acc_pm"];
     && wrong.body.error === "no_map_for_this_account", JSON.stringify(wrong.body));
 }
 
+// ---- the account's own HQ ----------------------------------------------------
+{
+  console.log("\n-- the account's HQ --");
+  const db = seed(); const env = ENV(db);
+  db.exec(`INSERT INTO companies(id,company,mail_street,mail_city,mail_state,mail_zip,city,state,zip) VALUES
+      ('cmp_gc','Outerhome','400 Pine St','Tacoma','WA','98402','Seattle','WA','98109'),
+      ('cmp_rival','Rival GC','',NULL,NULL,NULL,NULL,'WA',NULL);
+    UPDATE accounts SET company_id = 'cmp_gc' WHERE id = 'acc_gc';
+    UPDATE accounts SET company_id = 'cmp_rival' WHERE id = 'acc_other';`);
+  const r = await call(env, "/api/map/points?of=jobs", GC);
+  ck("the company row's address is the HQ, placed", r.body.hqState === "set" && r.body.hq?.lat === 47.25
+    && r.body.hq.lng === -122.44 && r.body.hq.precision === "address", JSON.stringify({ hq: r.body.hq, s: r.body.hqState }));
+  ck("the HQ is never one of the points, pending or the unplaced",
+    !Object.keys(r.body.points).some((k) => k.startsWith("__")) && !r.body.pending.concat(r.body.noAddress).some((k) => String(k).startsWith("__")),
+    JSON.stringify(r.body));
+  ck("its address is cached like any other", !!db.prepare(`SELECT 1 FROM geocodes WHERE address_key = ?`)
+    .get(addressKey("400 Pine St, Tacoma, WA 98402")));
+  ck("the account's jobs are unchanged beside it", Object.keys(r.body.points).sort().join(",") === "j_a,j_b");
+  const rival = await call(env, "/api/map/points?of=jobs", ["u_rival", "acc_other"]);
+  ck("a company row with no street says so, and draws no HQ",
+    rival.body.hqState === "no_address" && rival.body.hq === null, JSON.stringify({ hq: rival.body.hq, s: rival.body.hqState }));
+  ck("and it is our HQ, never another account's", rival.body.hq?.lat !== 47.25);
+  const pm = await call(env, "/api/map/points?of=buildings", PM);
+  ck("an account with no company row has no HQ, and nothing is guessed from its buildings",
+    pm.body.hqState === "none" && pm.body.hq === null, JSON.stringify({ hq: pm.body.hq, s: pm.body.hqState }));
+  db.exec(`UPDATE companies SET mail_street = NULL WHERE id = 'cmp_gc'`);
+  const near = await call(env, "/api/map/points?of=jobs", GC);
+  ck("with no street, the profile's own ZIP places it, approximately",
+    near.body.hqState === "set" && near.body.hq?.precision === "zip" && near.body.hq.lat === 47.63, JSON.stringify(near.body.hq));
+  db.exec(`UPDATE companies SET mail_street = '1 Nowhere Rd', mail_zip = '00000', zip = '00000', mail_city = NULL, city = NULL WHERE id = 'cmp_gc'`);
+  const nf = await call(env, "/api/map/points?of=jobs", GC);
+  ck("an HQ the geocoder cannot place says so", nf.body.hqState === "not_found" && nf.body.hq === null, JSON.stringify(nf.body.hqState));
+}
+
 // ---- the buildings map ----------------------------------------------------
 {
   console.log("\n-- a property manager's buildings --");

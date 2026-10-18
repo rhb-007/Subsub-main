@@ -91,7 +91,8 @@ const gcPoints = () => {
   };
   // j_f arrives on the second ask: the map keeps asking while some are pending.
   if (gcAsks >= 2) pts.j_f = { lat: 47.66, lng: -122.35, precision: "address" };
-  return { of: "jobs", points: pts, pending: gcAsks >= 2 ? [] : ["j_f"], noAddress: ["j_e"] };
+  return { of: "jobs", points: pts, pending: gcAsks >= 2 ? [] : ["j_f"], noAddress: ["j_e"],
+    hq: { lat: 47.59, lng: -122.30, precision: "address" }, hqState: "set" };
 };
 
 const PROPS = [
@@ -118,7 +119,7 @@ const TENANTS = [
 ];
 const pmPoints = () => ({ of: "buildings",
   points: { p1: { lat: 47.6687, lng: -122.3843, precision: "address" }, p2: { lat: 47.6097, lng: -122.3422, precision: "address" }, p3: null },
-  pending: [], noAddress: [] });
+  pending: [], noAddress: [], hq: null, hqState: "none" });
 
 const membership = (a) => ({ accountId: a.id, accountName: a.name, subdomain: a.subdomain, kind: a.kind,
   role: "admin", companyId: null, plan: "scale", billing: "monthly", theme: null, trades: [],
@@ -177,6 +178,17 @@ const card = (page) => page.evaluate(() => {
   return { text: c.innerText, docked: c.classList.contains("docked"), pinned: c.classList.contains("pinned"),
     left: r.left, right: r.right, top: r.top, bottom: r.bottom, vw: innerWidth, vh: innerHeight };
 });
+const mapChrome = (page) => page.evaluate(() => {
+  const w = document.querySelector(".map-wrap"), m = document.querySelector(".map-mark"), b = document.querySelector(".map-box");
+  if (!w || !m) return null;
+  const wr = w.getBoundingClientRect(), mr = m.getBoundingClientRect(), br = b.getBoundingClientRect();
+  return { text: m.innerText.replace(/\s+/g, " ").trim(), logo: !!m.querySelector('svg[aria-label="SubSub"]'),
+    dx: mr.left - wr.left, dy: mr.top - wr.top, pe: getComputedStyle(m).pointerEvents,
+    wrap: { l: wr.left, t: wr.top, w: wr.width, h: wr.height }, boxH: br.height, vw: innerWidth, vh: innerHeight,
+    full: w.classList.contains("full"), maxLabel: document.querySelector(".map-max")?.getAttribute("aria-label") || "",
+    hq: [...document.querySelectorAll(".map-hq")].map((h) => h.innerText.replace(/\s+/g, " ").trim()),
+    legend: document.querySelector(".map-legend")?.innerText || "" };
+});
 const hoverPin = async (page, pred) => {
   const all = await pins(page);
   const p = all.find(pred);
@@ -217,6 +229,29 @@ try {
     const unplaced = await page.evaluate(() => document.querySelector(".map-unplaced")?.innerText || "");
     t.ck("a job with no address is named as not on the map", /Not on the map/.test(unplaced) && /Fence repair/.test(unplaced)
       && /no address/.test(unplaced), unplaced);
+
+    let mc = await mapChrome(page);
+    t.ck("the map carries the SubSub logo and its name, in the upper left",
+      !!mc && mc.logo && /\|\s*Job Map/.test(mc.text) && mc.dx >= 0 && mc.dx < 24 && mc.dy >= 0 && mc.dy < 24, JSON.stringify(mc));
+    t.ck("and the watermark never takes a press", mc?.pe === "none", mc?.pe);
+    t.ck("the account's HQ is on the map, named, and in the key",
+      mc?.hq.length === 1 && /HQ/.test(mc.hq[0]) && /Your HQ/.test(mc.legend), JSON.stringify(mc?.hq));
+    t.ck("it is not one of the job pins", (await pins(page)).length === 4);
+    const small = mc;
+    await page.click(".map-max");
+    await wait(600);
+    mc = await mapChrome(page);
+    t.ck("Full screen fills the whole screen", !!mc && mc.full && Math.abs(mc.wrap.l) < 1 && Math.abs(mc.wrap.t) < 1
+      && Math.abs(mc.wrap.w - mc.vw) < 1 && Math.abs(mc.wrap.h - mc.vh) < 1, JSON.stringify(mc?.wrap));
+    t.ck("and the map itself grows into it", !!mc && mc.boxH > small.boxH + 100 && mc.boxH > mc.vh - 120,
+      `${small.boxH} -> ${mc?.boxH}`);
+    t.ck("the watermark stays in the upper left", !!mc && mc.dx < 24 && mc.dy < 24, JSON.stringify(mc));
+    t.ck("the control now says how to get back", mc?.maxLabel === "Exit full screen", mc?.maxLabel);
+    t.ck("the pins are still there", (await pins(page)).length === 4);
+    await page.keyboard.press("Escape");
+    await wait(500);
+    mc = await mapChrome(page);
+    t.ck("Escape puts it back in the page", !!mc && !mc.full && Math.abs(mc.boxH - small.boxH) < 2, JSON.stringify(mc?.wrap));
 
     await hoverPin(page, (p) => p.label === "Elysian Electric");
     let c = await card(page);
@@ -289,6 +324,10 @@ try {
       && ps.some((x) => x.label === "Press Apts"), JSON.stringify(ps.map((x) => x.label)));
     t.ck("a building with open work is marked", ps.some((x) => x.label === "Ballard Apts" && /tone-wait/.test(x.cls))
       && ps.some((x) => x.label === "Press Apts" && /tone-ok/.test(x.cls)), JSON.stringify(ps.map((x) => [x.label, x.cls])));
+    const pmc = await mapChrome(page);
+    t.ck("the buildings map is named as such", /\|\s*Property Map/.test(pmc?.text || ""), pmc?.text);
+    t.ck("an account with no HQ address draws none and guesses none", pmc?.hq.length === 0 && !/Your HQ/.test(pmc.legend),
+      JSON.stringify(pmc?.hq));
     await hoverPin(page, (x) => x.label === "Ballard Apts");
     const c = await card(page);
     t.ck("the card says how full the building is", !!c && /12 units/.test(c.text) && /10 occupied/.test(c.text), c?.text);
@@ -302,6 +341,7 @@ try {
     await wait(1200);
     t.ck("Tenants offers a Map view", await pressView(page, ".tn-view", "Map"), "no switch");
     await wait(4000);
+    t.ck("the tenants map is named as such", /\|\s*Tenant Map/.test((await mapChrome(page))?.text || ""));
     await hoverPin(page, (x) => x.label === "Ballard Apts");
     const c2 = await card(page);
     t.ck("the tenants map leads with who lives there",

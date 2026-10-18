@@ -33,7 +33,7 @@ import {
   // Aliased: this file has its own QrCode, which draws one rather than
   // standing for the idea of one.
   QrCode as QrCodeIcon,
-  Maximize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
+  Maximize2, Minimize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
   Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet,
   // Aliased: Map is the JavaScript built-in, which this file uses constantly.
@@ -25014,17 +25014,18 @@ const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
 // A large portfolio is geocoded a batch per call, so the map fills in over a
 // few seconds rather than one request running for a minute.
 function useMapPoints(of, key = "") {
-  const [state, setState] = useState({ points: {}, pending: [], noAddress: [], loading: true, error: "" });
+  const [state, setState] = useState({ points: {}, pending: [], noAddress: [], hq: null, hqState: "none", loading: true, error: "" });
   useEffect(() => {
     let live = true, tries = 0, timer = null;
     const ask = async () => {
       try {
         const r = await api.mapPoints(of);
         if (!live) return;
-        setState({ points: r.points || {}, pending: r.pending || [], noAddress: r.noAddress || [], loading: false, error: "" });
+        setState({ points: r.points || {}, pending: r.pending || [], noAddress: r.noAddress || [],
+          hq: r.hq || null, hqState: r.hqState || "none", loading: false, error: "" });
         // Bounded: an address the geocoder never answers about must not keep
         // a tab polling for ever. Ten more asks is a few hundred addresses.
-        if ((r.pending || []).length && tries++ < 10) timer = setTimeout(ask, 2500);
+        if (((r.pending || []).length || r.hqState === "pending") && tries++ < 10) timer = setTimeout(ask, 2500);
       } catch (e) {
         if (!live) return;
         const migration = e?.body?.error === "migration_needed" ? (e.body.migration || "") : "";
@@ -25043,7 +25044,13 @@ function useMapPoints(of, key = "") {
 // floating beside the pin: a card that runs off the edge of a 390px screen
 // is a card nobody can read, and the foot of the map is often below the
 // fold, which the first version found by putting it there.
-function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText, ariaLabel }) {
+// THREE THINGS EVERY MAP CARRIES. A maximize control, because a map in a
+// panel on an iPad is a keyhole; the account's own HQ, because "how far is
+// that from us" is the first question after "where is it"; and SubSub's
+// mark with the map's name in the upper left, out of the way of every
+// control and never in the way of a press (pointer-events:none).
+function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText, ariaLabel,
+  title = "Map", hq = null, hqName = "" }) {
   const box = useRef(null);
   const mapRef = useRef(null);
   const markers = useRef([]);
@@ -25053,6 +25060,21 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
   const [picked, setPicked] = useState(null); // pin key tapped or clicked
   const [, setTick] = useState(0);
   const [narrow, setNarrow] = useState(false);
+  const [full, setFull] = useState(false);
+  const hqMarker = useRef(null);
+
+  // Full screen is a fixed layer over the page, so the map has to be told
+  // its box changed; the page under it must not scroll behind it; and
+  // Escape is the way out a keyboard expects.
+  useEffect(() => {
+    mapRef.current?.resize();
+    if (!full) return undefined;
+    const was = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e) => { if (e.key === "Escape") setFull(false); };
+    window.addEventListener("keydown", onKey);
+    return () => { document.body.style.overflow = was; window.removeEventListener("keydown", onKey); };
+  }, [full]);
 
   useEffect(() => {
     let live = true;
@@ -25116,10 +25138,28 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
     });
     // Opens on the work, not on the country. One pin is a street, not a
     // continent at zoom 18.
-    const b = pinBounds(pins);
+    hqMarker.current?.remove();
+    hqMarker.current = null;
+    if (hq) {
+      const el = document.createElement("div");
+      el.className = `map-hq${hq.precision === "address" ? "" : " approx"}`;
+      el.dataset.hq = "1";
+      el.setAttribute("role", "img");
+      el.setAttribute("aria-label", `${hqName || "Your"} HQ`);
+      const dot = document.createElement("span");
+      dot.className = "map-hq-dot";
+      dot.textContent = "HQ";
+      const lab = document.createElement("span");
+      lab.className = "map-pin-label";
+      lab.textContent = hqName ? `${hqName} HQ` : "Your HQ";
+      el.append(dot, lab);
+      hqMarker.current = new lib.Marker({ element: el, anchor: "bottom" }).setLngLat([hq.lng, hq.lat]).addTo(map);
+    }
+    // The office is in the frame too, so the map answers "how far out".
+    const b = pinBounds(hq ? [...pins, { lat: hq.lat, lng: hq.lng }] : pins);
     if (b) map.fitBounds(b, { padding: 64, maxZoom: 14, duration: 0 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lib, pinsKey, failed]);
+  }, [lib, pinsKey, failed, hq?.lat, hq?.lng, hqName]);
 
   const openKey = picked || hover;
   const open = pins.find((p) => p.key === openKey);
@@ -25143,8 +25183,13 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
     );
   }
   return (
-    <div className="map-wrap" role="region" aria-label={ariaLabel}>
+    <div className={`map-wrap${full ? " full" : ""}`} role="region" aria-label={ariaLabel}>
       <div className="map-box" ref={box} />
+      <div className="map-mark" aria-hidden="true"><SubSubLogo height={16} /><span className="map-mark-sep">|</span><span>{title}</span></div>
+      <button type="button" className="map-max" onClick={() => setFull((f) => !f)}
+        aria-label={full ? "Exit full screen" : "Full screen"} title={full ? "Exit full screen (Esc)" : "Full screen"}>
+        {full ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+      </button>
       {!lib && <div className="map-loading">Loading the map…</div>}
       {lib && pins.length === 0 && <div className="map-empty">{emptyText}</div>}
       {open && (narrow || at) && (
@@ -25162,6 +25207,15 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
       {legend && <div className="map-legend">{legend}</div>}
     </div>
   );
+}
+
+// Why the office is not on the map, when it could be. An account with no
+// company row (a managing agent) has no office address anywhere in SubSub,
+// so it says nothing rather than pointing at a field that does not exist.
+function MapHqNote({ state }) {
+  if (state === "no_address") return <p className="fine map-hq-note">Your HQ isn't on the map: add your company's city and ZIP in Account → Company.</p>;
+  if (state === "not_found") return <p className="fine map-hq-note">Your HQ address couldn't be found on the map. Check it in Account → Company.</p>;
+  return null;
 }
 
 // What could not be placed, said rather than left as pins quietly missing.
@@ -25245,14 +25299,16 @@ function JobsMap({ jobs, subs = [], visits = [], now, today, onOpenJob, propName
     <div className="jobs-map">
       {pts.error && <p className="billing-err" role="alert">{pts.error}</p>}
       <PinMap pins={pins} renderCard={card} pinLabel={labelOf} pinTone={toneOf}
-        ariaLabel="Map of current jobs"
+        ariaLabel="Map of current jobs" title="Job Map" hq={pts.hq}
         emptyText={pts.loading ? "Finding your jobs…" : current.length ? "None of your current jobs could be placed yet." : "No current jobs to show."}
         legend={<>
           <span><i className="map-key tone-ok" /> On track</span>
           <span><i className="map-key tone-wait" /> Waiting on a reply or a time</span>
           <span><i className="map-key tone-bad" /> Needs a contractor</span>
           <span><i className="map-key approx" /> Approximate</span>
+          {pts.hq && <span><i className="map-key hq" /> Your HQ</span>}
         </>} />
+      <MapHqNote state={pts.hqState} />
       <MapUnplaced pending={pts.pending.filter((id) => byId[id])} noAddress={pts.noAddress.filter((id) => byId[id])}
         failed={failedIds} nameOf={(id) => byId[id]?.title || "A job"} onOpen={onOpenJob} />
     </div>
@@ -25349,12 +25405,15 @@ function BuildingsMap({ properties, jobs = [], subs = [], tenants = null, focus 
       {pts.error && <p className="billing-err" role="alert">{pts.error}</p>}
       <PinMap pins={pins} renderCard={card} pinLabel={labelOf} pinTone={toneOf}
         ariaLabel={focus === "tenants" ? "Map of your tenants' buildings" : "Map of your buildings"}
+        title={focus === "tenants" ? "Tenant Map" : "Property Map"} hq={pts.hq}
         emptyText={pts.loading ? "Finding your buildings…" : properties.length ? "None of your buildings could be placed yet." : "No buildings yet."}
         legend={<>
           <span><i className="map-key tone-wait" /> Open work</span>
           <span><i className="map-key tone-ok" /> Nothing open</span>
           <span><i className="map-key approx" /> Approximate</span>
+          {pts.hq && <span><i className="map-key hq" /> Your HQ</span>}
         </>} />
+      <MapHqNote state={pts.hqState} />
       <MapUnplaced pending={pts.pending.filter((id) => byId[id])} noAddress={pts.noAddress.filter((id) => byId[id])}
         failed={failedIds} nameOf={(id) => byId[id]?.name || "A building"}
         onOpen={onOpenProperty ? (id) => onOpenProperty(byId[id]) : null} />
@@ -44272,6 +44331,24 @@ strong.insp-name{background:none;border:0;padding:0}
    narrow box, because a card off the edge of a phone cannot be read. */
 .map-wrap{position:relative;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#eef0ec}
 .map-box{width:100%;height:min(68dvh,640px);min-height:340px}
+/* Full screen is the whole viewport, legend included, above the app chrome
+   and below a docked card, which is fixed at 60 for the same screen. */
+.map-wrap.full{position:fixed;inset:0;z-index:55;border:0;border-radius:0;display:flex;flex-direction:column}
+.map-wrap.full .map-box{flex:1 1 auto;height:auto;min-height:0}
+.map-wrap.full .map-card.docked{z-index:61}
+.map-mark{position:absolute;top:10px;left:10px;z-index:2;display:flex;align-items:center;gap:7px;pointer-events:none;
+  color:#111;font-size:13px;font-weight:800;letter-spacing:.01em;background:rgba(255,255,255,.72);
+  border-radius:8px;padding:5px 9px;opacity:.85}
+.map-mark-sep{color:#8a8f88;font-weight:400}
+.map-max{position:absolute;top:84px;right:10px;z-index:2;width:29px;height:29px;display:flex;align-items:center;
+  justify-content:center;border:0;border-radius:4px;background:#fff;color:#333;cursor:pointer;
+  box-shadow:0 0 0 2px rgba(0,0,0,.1)}
+.map-max:hover{background:#f2f2f2}
+.map-hq{display:flex;flex-direction:column;align-items:center;gap:2px;pointer-events:none}
+.map-hq-dot{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:7px;
+  background:#111;color:#E39B32;font-size:10.5px;font-weight:900;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.map-hq.approx .map-hq-dot{background:#fff;color:#111;border:3px solid #111}
+.map-key.hq{border-radius:3px;background:#111}
 .map-loading,.map-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:14px;color:var(--ink-soft);pointer-events:none}
 .map-empty{inset:auto 0 16px 0;height:auto}
