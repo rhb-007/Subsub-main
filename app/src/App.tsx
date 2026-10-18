@@ -20236,6 +20236,10 @@ function integrationErrText(ex) {
     return `This needs a database update first (${ex?.body?.migration || "090_account_integrations"}). Every integration stays on until then.`;
   }
   if (code === "not_available") return "That one isn't available to connect yet.";
+  if (code === "token_required") return "Paste the whole access token, with no spaces in it.";
+  if (code === "token_refused") return `CompanyCam didn't accept that token${ex?.body?.detail ? ` (${ex.body.detail})` : ""}. Check it was copied whole and hasn't been deleted there.`;
+  if (code === "provider_unreachable") return "Couldn't reach CompanyCam just now, so nothing was saved. Try again in a moment.";
+  if (code === "not_configured") return "SubSub can't store connected accounts yet (its sealing key isn't set). Nothing was saved. Tell SubSub support.";
   if (code === "not_found") return "That integration isn't offered for this account.";
   if (ex?.status === 401) return "You've been signed out. Sign in again and try once more.";
   return `That didn't save${code ? ` (${code})` : ""}. Try again in a moment.`;
@@ -20244,8 +20248,9 @@ function integrationErrText(ex) {
 // The switches. One per integration that runs on the account's own
 // credentials, read from the server so the screen draws its answer rather
 // than a second opinion; off is enforced at the token check every receiver
-// shares. Hover and CompanyCam are listed and say "Coming soon" with no
-// switch, because a toggle that changes nothing is a toggle that lies.
+// shares. Hover and Aurora are listed and say "Coming soon" with no switch,
+// because a toggle that changes nothing is a toggle that lies -- and
+// CompanyCam offers Connect until a token is behind it, for the same reason.
 function IntegrationSwitches() {
   const [data, setData] = useState(null);
   const [failed, setFailed] = useState("");
@@ -20262,15 +20267,33 @@ function IntegrationSwitches() {
     catch (ex) { setErr((e) => ({ ...e, [it.id]: integrationErrText(ex) })); }
     finally { setBusy(""); }
   };
+  // Connecting by token: the box opens on Connect, the token goes up once,
+  // and the reply is the whole list again so the row redraws from the server.
+  const [connecting, setConnecting] = useState("");
+  const [tokenText, setTokenText] = useState("");
+  const connect = async (it) => {
+    setBusy(it.id); setErr((e) => ({ ...e, [it.id]: "" }));
+    try {
+      setData(await api.connectIntegration(it.id, tokenText.trim()));
+      setConnecting(""); setTokenText("");
+    } catch (ex) { setErr((e) => ({ ...e, [it.id]: integrationErrText(ex) })); }
+    finally { setBusy(""); }
+  };
+  const disconnect = async (it) => {
+    setBusy(it.id); setErr((e) => ({ ...e, [it.id]: "" }));
+    try { setData(await api.disconnectIntegration(it.id)); }
+    catch (ex) { setErr((e) => ({ ...e, [it.id]: integrationErrText(ex) })); }
+    finally { setBusy(""); }
+  };
   const list = data?.integrations || [];
   return (
     <div className="portal-panel settings-panel integ-panel">
       <h4>Integrations</h4>
       <p className="panel-note">
-        Systems that post into SubSub on your own accounts. Turn one off and it
-        stops: anything it sends is refused, with a note saying it's switched off
-        here. Turn it back on and it picks up again. Nothing already in SubSub
-        is touched either way.
+        Systems connected to SubSub on your own accounts. Turn one off and it
+        stops: anything it sends is refused, and nothing is read from it, with a
+        note saying it's switched off here. Turn it back on and it picks up
+        again. Nothing already in SubSub is touched either way.
       </p>
       {data && data.onScale === false && (
         <p className="cov-hint">These need the Scale plan. On Basic nothing posts in, whatever the switches say.</p>
@@ -20286,6 +20309,14 @@ function IntegrationSwitches() {
             data-integ={it.id}>
             {it.soon ? (
               <span className="integ-soon">Coming soon</span>
+            ) : it.connect && !it.connection ? (
+              /* No switch until there is a credential behind it: switching on
+                 something nothing can reach changes nothing. */
+              <button type="button" className="btn-solid integ-connect"
+                disabled={busy === it.id || !!data?.connMigration}
+                onClick={() => { setConnecting(connecting === it.id ? "" : it.id); setTokenText(""); }}>
+                Connect
+              </button>
             ) : (
               <button type="button" role="switch" aria-checked={it.enabled}
                 aria-label={`${it.name}: ${it.enabled ? "on" : "off"}`}
@@ -20299,8 +20330,44 @@ function IntegrationSwitches() {
               <span>{it.what}</span>
               <span className="integ-uses">
                 Uses: {it.uses}
-                {it.soon ? " · waiting on developer access" : it.enabled ? " · On" : " · Off"}
+                {it.soon ? " · waiting on developer access"
+                  : it.connect && !it.connection ? " · Not connected"
+                  : it.enabled ? " · On" : " · Off"}
               </span>
+              {it.connection && (
+                <span className="integ-conn">
+                  Connected{it.connection.label ? <> to <b>{it.connection.label}</b></> : null}
+                  {it.connection.connectedAt ? ` · ${formatDay(String(it.connection.connectedAt).slice(0, 10))}` : ""}
+                  <button type="button" className="link-btn" disabled={busy === it.id}
+                    onClick={() => disconnect(it)}>Disconnect</button>
+                </span>
+              )}
+              {it.connection?.lastError === "token_refused" && (
+                <p className="fld-err" role="alert"><AlertTriangle size={12} /> {it.name} stopped accepting
+                  this token. Disconnect and connect again with a new one.</p>
+              )}
+              {it.connect && !it.connection && data?.connMigration && (
+                <p className="cov-hint">Connecting needs a database update first ({data.connMigration}).</p>
+              )}
+              {connecting === it.id && !it.connection && (
+                <div className="integ-token">
+                  <label className="fld">
+                    <span>{it.name} access token</span>
+                    <input type="password" autoComplete="off" spellCheck={false} value={tokenText}
+                      onChange={(e) => setTokenText(e.target.value)} placeholder="Paste the token" />
+                  </label>
+                  {it.tokenHelp && <p className="cov-hint">{it.tokenHelp}</p>}
+                  <p className="cov-hint">
+                    SubSub checks it with {it.name} before saving, stores it encrypted, and never
+                    shows it again. Disconnecting deletes it.
+                  </p>
+                  <div className="tok-new-acts">
+                    <button type="button" className="btn-solid" disabled={busy === it.id || tokenText.trim().length < 8}
+                      onClick={() => connect(it)}>{busy === it.id ? "Checking…" : `Connect ${it.name}`}</button>
+                    <button type="button" className="btn-ghost" onClick={() => setConnecting("")}>Cancel</button>
+                  </div>
+                </div>
+              )}
               {err[it.id] && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err[it.id]}</p>}
             </div>
           </div>
@@ -27536,7 +27603,8 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
 
       <div className="form-sec">Measurement documents</div>
       <p className="sec-note">Uploaded by you — contractors see these on their work order.</p>
-      <MeasurementPicker docs={f.measurementDocs} onChange={(next) => set("measurementDocs", next)} />
+      <MeasurementPicker docs={f.measurementDocs} onChange={(next) => set("measurementDocs", next)}
+        searchHint={f.address} />
       </>)}
 
       {/* The modal used to close on click whatever the server said, so a
@@ -35217,11 +35285,25 @@ function measureErrText(ex, name) {
 // Picking a file UPLOADS it, there and then, and only an upload that landed
 // is added to the job. The old control kept the filename and sent nothing,
 // so a work order listed a document nobody could open.
-function MeasurementPicker({ docs, onChange }) {
+function MeasurementPicker({ docs, onChange, searchHint = "" }) {
   const [busy, setBusy] = useState(0);
   const [errs, setErrs] = useState([]);
   const latest = useRef(docs);
   latest.current = docs;
+  // Whether this account has CompanyCam connected and switched on. The status
+  // route never errors, so the button is simply not drawn on every way this
+  // can fail -- and a seat that cannot ask (a guest) gets the same nothing.
+  const [cc, setCc] = useState(null);
+  const [ccOpen, setCcOpen] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api.companycamStatus().then((r) => { if (live) setCc(r); }).catch(() => { if (live) setCc(null); });
+    return () => { live = false; };
+  }, []);
+  const imported = (entries) => {
+    latest.current = [...latest.current, ...entries];
+    onChange(latest.current);
+  };
   const add = async (files) => {
     const list = [...files];
     if (!list.length) return;
@@ -35256,7 +35338,159 @@ function MeasurementPicker({ docs, onChange }) {
           accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.gif,.csv,.txt,.xls,.xlsx,.doc,.docx,.zip"
           onChange={(e) => { add(e.target.files); e.target.value = ""; }} />
       </label>
+      {cc?.connected && (
+        <button type="button" className="meas-upload meas-cc" onClick={() => setCcOpen(true)}>
+          <Camera size={14} /> Import from CompanyCam
+        </button>
+      )}
+      {ccOpen && (
+        <CompanyCamImport searchHint={searchHint} room={MAX_MEASURE_DOCS_UI - docs.length}
+          onClose={() => setCcOpen(false)}
+          onImported={(entries) => { imported(entries); }} />
+      )}
     </div>
+  );
+}
+
+// A job carries at most this many measurement documents; the route refuses
+// more, so the picker does not offer to import past it.
+const MAX_MEASURE_DOCS_UI = 20;
+
+// Why a CompanyCam read or import did not work, in words.
+function companycamErrText(ex) {
+  const code = ex?.body?.error || ex?.code || "";
+  if (code === "integration_paused") return "CompanyCam is switched off for this account (Account, Integrations).";
+  if (code === "not_connected") return "CompanyCam isn't connected any more. An admin can connect it again in Account, Integrations.";
+  if (code === "companycam_refused") return "CompanyCam stopped accepting this account's token. An admin needs to connect it again in Account, Integrations.";
+  if (code === "provider_unreachable") return "Couldn't reach CompanyCam just now. Try again in a moment.";
+  if (code === "too_many") return `That's more than one import can carry (${ex?.body?.max || 20} at most).`;
+  if (code === "not_found") return "That project isn't in this CompanyCam account any more.";
+  if (!ex?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
+  return `That didn't work${code ? ` (${code})` : ""}. Try again in a moment.`;
+}
+
+const ccSkipText = (s) => {
+  const what = s.name || (s.kind === "photo" ? "A photo" : "A document");
+  if (s.why === "not_ready") return `${what}: CompanyCam is still processing it.`;
+  if (s.why === "not_a_document") return `${what}: that kind of file can't go on a job (${s.type || "unknown type"}).`;
+  if (s.why === "too_big") return `${what}: over the 25 MB limit.`;
+  if (s.why === "not_in_project") return `${what}: no longer in that project.`;
+  return `${what}: couldn't be copied from CompanyCam.`;
+};
+
+// Pick a project, then the photos and documents in it. Opened from the job
+// form; what comes back is copied into SubSub on the server and appended to
+// the job's measurement documents, which the save then stores. The search
+// starts on the job's own address, because that is how a CompanyCam project
+// is usually named.
+function CompanyCamImport({ searchHint, room, onClose, onImported }) {
+  const [q, setQ] = useState(() => String(searchHint || "").split(",")[0].trim());
+  const [projects, setProjects] = useState(null);
+  const [project, setProject] = useState(null);
+  const [items, setItems] = useState(null);
+  const [picked, setPicked] = useState({ photos: [], documents: [] });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [skipped, setSkipped] = useState([]);
+  const search = async (text) => {
+    setBusy(true); setErr("");
+    try { setProjects((await api.companycamProjects(text)).projects || []); }
+    catch (ex) { setErr(companycamErrText(ex)); setProjects([]); }
+    finally { setBusy(false); }
+  };
+  useEffect(() => { search(q); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const open = async (p) => {
+    setProject(p); setItems(null); setPicked({ photos: [], documents: [] }); setErr(""); setSkipped([]);
+    try { setItems(await api.companycamProject(p.id)); }
+    catch (ex) { setErr(companycamErrText(ex)); setItems({ photos: [], documents: [] }); }
+  };
+  const toggle = (kind, id) => setPicked((x) => ({
+    ...x, [kind]: x[kind].includes(id) ? x[kind].filter((v) => v !== id) : [...x[kind], id],
+  }));
+  const count = picked.photos.length + picked.documents.length;
+  const over = count > room;
+  const run = async () => {
+    setBusy(true); setErr(""); setSkipped([]);
+    try {
+      const r = await api.companycamImport({ projectId: project.id, ...picked });
+      if (r.docs?.length) onImported(r.docs);
+      if (r.skipped?.length) { setSkipped(r.skipped); setPicked({ photos: [], documents: [] }); }
+      else onClose();
+    } catch (ex) { setErr(companycamErrText(ex)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={onClose} wide className="cc-modal">
+      <h3>{project ? project.name : "Import from CompanyCam"}</h3>
+      {!project ? (
+        <>
+          <form className="cc-search" onSubmit={(e) => { e.preventDefault(); search(q); }}>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Project name or street" aria-label="Search CompanyCam projects" />
+            <button type="submit" className="btn-ghost" disabled={busy}><Search size={14} /> Search</button>
+          </form>
+          {projects === null || busy ? <p className="panel-note">Loading…</p>
+            : !projects.length ? <p className="panel-note">No CompanyCam project matches that. Try the street name alone, or clear the box to see recent ones.</p>
+            : (
+              <div className="cc-projects">
+                {projects.map((p) => (
+                  <button key={p.id} type="button" className="cc-project" data-cc-project={p.id} onClick={() => open(p)}>
+                    {p.thumb ? <img src={p.thumb} alt="" loading="lazy" /> : <span className="cc-noimg"><Camera size={16} /></span>}
+                    <span><b>{p.name}</b>{p.address && p.address !== p.name && <em>{p.address}</em>}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+        </>
+      ) : !items ? <p className="panel-note">Loading the project…</p> : (
+        <>
+          <button type="button" className="link-btn" onClick={() => { setProject(null); setItems(null); }}>‹ All projects</button>
+          {project.address && project.address !== project.name && <p className="panel-note">{project.address}</p>}
+          <div className="form-sec">Documents</div>
+          {!items.documents.length ? <p className="panel-note">No documents in this project.</p> : (
+            <div className="cc-docs">
+              {items.documents.map((d) => (
+                <label key={d.id} className={`cc-doc ${d.usable ? "" : "off"}`}>
+                  <input type="checkbox" disabled={!d.usable} checked={picked.documents.includes(d.id)}
+                    onChange={() => toggle("documents", d.id)} />
+                  <FileText size={14} /> <span>{d.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="form-sec">Photos</div>
+          {!items.photos.length ? <p className="panel-note">No photos in this project.</p> : (
+            <div className="cc-photos">
+              {items.photos.map((ph) => {
+                const on = picked.photos.includes(ph.id);
+                return (
+                  <button key={ph.id} type="button" disabled={!ph.usable} aria-pressed={on}
+                    className={`cc-photo ${on ? "on" : ""}`} data-cc-photo={ph.id}
+                    title={ph.usable ? (ph.description || "Photo") : "CompanyCam is still processing this one"}
+                    onClick={() => toggle("photos", ph.id)}>
+                    {ph.thumb ? <img src={ph.thumb} alt={ph.description || "Photo"} loading="lazy" /> : <Camera size={18} />}
+                    {on && <span className="cc-tick"><Check size={14} /></span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {skipped.length > 0 && (
+            <div className="fld-err" role="alert">
+              <AlertTriangle size={12} /> Imported what it could. These weren't:
+              <ul>{skipped.map((sk) => <li key={sk.kind + sk.id}>{ccSkipText(sk)}</li>)}</ul>
+            </div>
+          )}
+          {over && <p className="fld-err"><AlertTriangle size={12} /> This job has room for {room} more file{room === 1 ? "" : "s"}. Pick fewer.</p>}
+          <div className="modal-actions">
+            <button type="button" className="btn-ghost" onClick={onClose}>{skipped.length ? "Done" : "Cancel"}</button>
+            <button type="button" className="btn-solid" disabled={busy || !count || over} onClick={run}>
+              {busy ? "Copying…" : count ? `Import ${count}` : "Pick photos or documents"}</button>
+          </div>
+          <p className="cov-hint">They're copied into SubSub, so the work order keeps them even if the CompanyCam project changes.</p>
+        </>
+      )}
+      {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+    </Modal>
   );
 }
 
@@ -41613,6 +41847,28 @@ body{background:var(--paper)}
 .integ-row .integ-soon{flex:none;font-size:11px;font-weight:700;padding:3px 8px;border-radius:999px;
   background:#fff;border:1px solid var(--line);color:var(--ink-soft);white-space:nowrap}
 .integ-row .integ-uses{font-size:11.5px;color:var(--ink-soft)}
+.integ-row .integ-connect{flex:none;align-self:flex-start}
+.integ-row .integ-conn{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;color:var(--ink)}
+.integ-row .integ-conn .link-btn{margin-left:4px}
+.integ-token{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-width:460px}
+.integ-token input{width:100%}
+.meas-cc{border:1px dashed var(--line);background:var(--card);font:inherit;cursor:pointer;width:100%;text-align:left}
+.cc-search{display:flex;gap:8px;margin:6px 0 12px}
+.cc-search input{flex:1;min-width:0}
+.cc-projects{display:flex;flex-direction:column;gap:6px;max-height:52vh;overflow:auto}
+.cc-project{display:flex;align-items:center;gap:10px;text-align:left;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--card);font:inherit;cursor:pointer;min-height:56px}
+.cc-project img,.cc-project .cc-noimg{width:44px;height:44px;border-radius:8px;object-fit:cover;flex:none;display:flex;align-items:center;justify-content:center;background:var(--paper)}
+.cc-project span{display:flex;flex-direction:column;min-width:0}
+.cc-project em{font-style:normal;font-size:12px;color:var(--ink-soft)}
+.cc-docs{display:flex;flex-direction:column;gap:6px}
+.cc-doc{display:flex;align-items:center;gap:8px;font-size:13.5px;min-height:36px}
+.cc-doc.off{opacity:.55}
+.cc-photos{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;max-height:44vh;overflow:auto}
+.cc-photo{position:relative;aspect-ratio:1;padding:0;border:2px solid transparent;border-radius:10px;overflow:hidden;background:var(--paper);cursor:pointer;display:flex;align-items:center;justify-content:center}
+.cc-photo img{width:100%;height:100%;object-fit:cover;display:block}
+.cc-photo.on{border-color:var(--brand)}
+.cc-photo:disabled{opacity:.5;cursor:default}
+.cc-tick{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;background:var(--brand);color:#fff;display:flex;align-items:center;justify-content:center}
 .sf-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 0}
 .sf-head h5{margin:0;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;
   color:var(--brand-dk)}

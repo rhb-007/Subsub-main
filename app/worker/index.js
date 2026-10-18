@@ -166,6 +166,10 @@ import { bbbLive, fetchBbbRating } from "./bbb.js";
 import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
 import { INTEGRATIONS, integrationById, hookIntegration, integrationApplies,
   integrationEnabled } from "../shared/integrations.js";
+import { sealSecret, openSecret, sealingConfigured } from "./secretbox.js";
+import { ccGet, ccRefused, ccDownload } from "./companycam.js";
+import { ccProjectView, ccPhotoView, ccDocView, ccPhotoUsable, ccImageUrl, ccHttps,
+  cleanCcImport, ccPhotoFileName, CC_PHOTO_PAGE, CC_PROJECT_PAGE } from "../shared/companycam.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -9749,6 +9753,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
   if (/\baccount_integrations\b/i.test(m)) return "090_account_integrations";
   if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
   if (/\bportfolio_estimates\b/i.test(m)) return "086_portfolio_estimates";
@@ -23506,23 +23511,51 @@ async function integrationsFor(env, accountId) {
     migration = missingSchema(err);
     if (!migration) throw err;
   }
+  // Which of the connect-by-token integrations hold a credential. Never the
+  // credential itself: what leaves is the name the other system gave the
+  // account, when it was connected, and the last refusal if there was one.
+  let conns = [];
+  let connMigration = null;
+  try {
+    conns = (await env.DB.prepare(
+      `SELECT provider, label, connected_at, last_ok_at, last_error
+         FROM account_connections WHERE account_id = ?`
+    ).bind(accountId).all()).results || [];
+  } catch (err) {
+    connMigration = missingSchema(err);
+    if (!connMigration) throw err;
+  }
   return {
     acct,
     hasBuildings,
     migration,
-    list: INTEGRATIONS.filter((i) => integrationApplies(i, { hasBuildings })).map((i) => ({
-      id: i.id, name: i.name, what: i.what, uses: i.uses, soon: !!i.soon,
-      enabled: i.soon ? false : integrationEnabled(rows, i.id),
-      updatedAt: rows.find((r) => r.provider === i.id)?.updated_at || null,
-    })),
+    connMigration,
+    list: INTEGRATIONS.filter((i) => integrationApplies(i, { hasBuildings })).map((i) => {
+      const conn = i.connect ? conns.find((r) => r.provider === i.id) : null;
+      return {
+        id: i.id, name: i.name, what: i.what, uses: i.uses, soon: !!i.soon,
+        connect: i.connect || null, tokenHelp: i.tokenHelp || null,
+        enabled: i.soon ? false : integrationEnabled(rows, i.id),
+        updatedAt: rows.find((r) => r.provider === i.id)?.updated_at || null,
+        connection: conn ? {
+          label: conn.label || null, connectedAt: conn.connected_at || null,
+          lastOkAt: conn.last_ok_at || null, lastError: conn.last_error || null,
+        } : null,
+      };
+    }),
   };
 }
 
+const integrationsReply = (env, r) => ({
+  integrations: r.list, onScale: accountOnScale(r.acct), migration: r.migration,
+  connMigration: r.connMigration, sealing: sealingConfigured(env),
+});
+
 app.get("/api/integrations", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
-  const { acct, list, migration } = await integrationsFor(c.env, accountId);
+  const { acct, list, migration, connMigration } = await integrationsFor(c.env, accountId);
   if (!HIRING_KINDS.includes(acct?.kind)) return c.json({ error: "not_a_hiring_account" }, 403);
-  return c.json({ integrations: list, onScale: accountOnScale(acct), migration });
+  return c.json(integrationsReply(c.env, { acct, list, migration, connMigration }));
 });
 
 app.put("/api/integrations/:id", requireRole("admin"), async (c) => {
@@ -23555,8 +23588,226 @@ app.put("/api/integrations/:id", requireRole("admin"), async (c) => {
     await logActivity(c.env, accountId, userId, "integration",
       `${body.enabled ? "Turned on" : "Turned off"} ${item.name}`, { integration: id, enabled: body.enabled });
   }
-  const after = await integrationsFor(c.env, accountId);
-  return c.json({ integrations: after.list, onScale: accountOnScale(after.acct), migration: after.migration });
+  return c.json(integrationsReply(c.env, await integrationsFor(c.env, accountId)));
+});
+
+// ---- Connecting an outside system by its token ------------------------------
+//
+// CompanyCam first. The admin pastes the account's own CompanyCam access
+// token; it is tried against CompanyCam BEFORE anything is stored, so a typo
+// is refused while they are still looking at the box rather than discovered
+// the first time somebody opens the job form. Stored sealed (secretbox.js),
+// never echoed back.
+app.put("/api/integrations/:id/connection", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = String(c.req.param("id") || "");
+  const { acct, list } = await integrationsFor(c.env, accountId);
+  if (!HIRING_KINDS.includes(acct?.kind)) return c.json({ error: "not_a_hiring_account" }, 403);
+  const item = list.find((i) => i.id === id);
+  if (!item || item.connect !== "token") return c.json({ error: "not_found" }, 404);
+  const body = await c.req.json().catch(() => ({}));
+  const token = String(body.token || "").trim();
+  if (token.length < 8 || token.length > 500 || /\s/.test(token)) return c.json({ error: "token_required" }, 400);
+  // Refused by name rather than stored in the clear.
+  if (!sealingConfigured(c.env)) return c.json({ error: "not_configured" }, 503);
+
+  const probe = await ccGet(c.env, token, "/company");
+  if (ccRefused(probe)) return c.json({ error: "token_refused", detail: probe.words || null }, 400);
+  if (!probe.ok || !probe.data?.id) return c.json({ error: "provider_unreachable", status: probe.status }, 502);
+  const label = String(probe.data.name || "").trim().slice(0, 120) || null;
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO account_connections (account_id, provider, secret_enc, label, connected_at, connected_by, last_ok_at, last_error)
+       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, NULL)
+       ON CONFLICT (account_id, provider)
+       DO UPDATE SET secret_enc = excluded.secret_enc, label = excluded.label,
+                     connected_at = excluded.connected_at, connected_by = excluded.connected_by,
+                     last_ok_at = excluded.last_ok_at, last_error = NULL`
+    ).bind(accountId, id, await sealSecret(c.env, token), label, userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  await logActivity(c.env, accountId, userId, "integration",
+    `Connected ${item.name}${label ? ` (${label})` : ""}`, { integration: id, connected: true });
+  return c.json(integrationsReply(c.env, await integrationsFor(c.env, accountId)));
+});
+
+app.delete("/api/integrations/:id/connection", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const id = String(c.req.param("id") || "");
+  const { acct, list } = await integrationsFor(c.env, accountId);
+  if (!HIRING_KINDS.includes(acct?.kind)) return c.json({ error: "not_a_hiring_account" }, 403);
+  const item = list.find((i) => i.id === id);
+  if (!item || item.connect !== "token") return c.json({ error: "not_found" }, 404);
+  try {
+    await c.env.DB.prepare(
+      `DELETE FROM account_connections WHERE account_id = ? AND provider = ?`).bind(accountId, id).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+  if (item.connection) {
+    await logActivity(c.env, accountId, userId, "integration",
+      `Disconnected ${item.name}`, { integration: id, connected: false });
+  }
+  return c.json(integrationsReply(c.env, await integrationsFor(c.env, accountId)));
+});
+
+// ---- CompanyCam: browse a project and import into a job ---------------------
+//
+// Admin or pm, the seats that write a job's measurement documents. Every read
+// goes through ccAccess, which answers in one place: a hiring account, the
+// switch on, a connection stored, and a token that still opens.
+async function ccAccess(c) {
+  const { accountId } = c.get("auth");
+  const acct = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!HIRING_KINDS.includes(acct?.kind)) return { resp: c.json({ error: "not_a_hiring_account" }, 403) };
+  if (!(await integrationOn(c.env, accountId, "companycam"))) {
+    return { resp: c.json({ error: "integration_paused", integration: "companycam" }, 409) };
+  }
+  let row;
+  try {
+    row = await c.env.DB.prepare(
+      `SELECT secret_enc, label FROM account_connections WHERE account_id = ? AND provider = 'companycam'`
+    ).bind(accountId).first();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return { resp: c.json({ error: "not_connected", migration }, 409) };
+  }
+  if (!row) return { resp: c.json({ error: "not_connected" }, 409) };
+  // A row that will not open (the key changed, or was never set here) is not
+  // a token, and nothing is sent to CompanyCam with it.
+  const token = await openSecret(c.env, row.secret_enc);
+  if (!token) return { resp: c.json({ error: "not_connected", reason: "cannot_open" }, 409) };
+  return { accountId, token, label: row.label || null };
+}
+
+// What a CompanyCam refusal costs, recorded on the row so the Integrations
+// panel says it the next time an admin looks, and answered by name now.
+async function ccFailed(c, accountId, r) {
+  const refused = ccRefused(r);
+  try {
+    await c.env.DB.prepare(
+      `UPDATE account_connections SET last_error = ? WHERE account_id = ? AND provider = 'companycam'`
+    ).bind(refused ? "token_refused" : `unreachable_${r.status || 0}`, accountId).run();
+  } catch { /* the reply below is what matters */ }
+  return refused
+    ? c.json({ error: "companycam_refused", detail: r.words || null }, 409)
+    : c.json({ error: "provider_unreachable", status: r.status }, 502);
+}
+
+async function ccOk(env, accountId) {
+  try {
+    await env.DB.prepare(
+      `UPDATE account_connections SET last_ok_at = CURRENT_TIMESTAMP, last_error = NULL
+        WHERE account_id = ? AND provider = 'companycam'`).bind(accountId).run();
+  } catch { /* bookkeeping only */ }
+}
+
+// Whether the job form should offer the import at all. Never an error: a
+// button that is not drawn is the honest answer to every way this fails.
+app.get("/api/companycam/status", requireRole("admin", "pm"), async (c) => {
+  const a = await ccAccess(c);
+  if (a.resp) {
+    const body = await a.resp.clone().json().catch(() => ({}));
+    return c.json({ connected: false, reason: body.error || "not_connected" });
+  }
+  return c.json({ connected: true, label: a.label });
+});
+
+app.get("/api/companycam/projects", requireRole("admin", "pm"), async (c) => {
+  const a = await ccAccess(c);
+  if (a.resp) return a.resp;
+  const q = String(c.req.query("q") || "").trim().slice(0, 120);
+  const page = Math.max(1, Math.min(50, Number(c.req.query("page")) || 1));
+  const r = await ccGet(c.env, a.token, "/projects",
+    { query: q, page, per_page: CC_PROJECT_PAGE, status: "active" });
+  if (!r.ok) return ccFailed(c, a.accountId, r);
+  await ccOk(c.env, a.accountId);
+  const list = (Array.isArray(r.data) ? r.data : []).map(ccProjectView).filter(Boolean);
+  return c.json({ projects: list, page, more: list.length >= CC_PROJECT_PAGE });
+});
+
+app.get("/api/companycam/projects/:id", requireRole("admin", "pm"), async (c) => {
+  const a = await ccAccess(c);
+  if (a.resp) return a.resp;
+  const id = String(c.req.param("id") || "");
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) return c.json({ error: "not_found" }, 404);
+  const p = await ccGet(c.env, a.token, `/projects/${id}`);
+  if (p.status === 404) return c.json({ error: "not_found" }, 404);
+  if (!p.ok) return ccFailed(c, a.accountId, p);
+  const [ph, dc] = await Promise.all([
+    ccGet(c.env, a.token, `/projects/${id}/photos`, { per_page: CC_PHOTO_PAGE }),
+    ccGet(c.env, a.token, `/projects/${id}/documents`, { per_page: 100 }),
+  ]);
+  if (!ph.ok) return ccFailed(c, a.accountId, ph);
+  if (!dc.ok) return ccFailed(c, a.accountId, dc);
+  await ccOk(c.env, a.accountId);
+  return c.json({
+    project: ccProjectView(p.data),
+    photos: (Array.isArray(ph.data) ? ph.data : [])
+      .filter((x) => x && x.status !== "deleted").map(ccPhotoView).filter(Boolean),
+    documents: (Array.isArray(dc.data) ? dc.data : []).map(ccDocView).filter(Boolean),
+  });
+});
+
+// The import. NOTHING IN THE BODY IS A URL: it names a project and ids in it,
+// and every file is looked up again on CompanyCam under the account's token
+// -- a document must be in that project's own document list, a photo must say
+// it belongs to that project -- before its bytes are fetched. A caller who
+// could hand us a URL could make the Worker fetch anything at all and store it
+// as a work order file.
+//
+// Each file becomes an ordinary measurement document under this account's
+// prefix, through the same type and size rules as an upload, and is handed
+// back as the entry the job form appends; the save route's own checks then
+// store it. One that fails is named and skipped, so a bad file does not cost
+// the other nineteen.
+app.post("/api/companycam/import", requireRole("admin", "pm"), async (c) => {
+  const a = await ccAccess(c);
+  if (a.resp) return a.resp;
+  const pick = cleanCcImport(await c.req.json().catch(() => ({})));
+  if (pick.error) return c.json(pick, 400);
+
+  const docs = [];
+  const skipped = [];
+  const store = async (name, got, source) => {
+    const key = `${a.accountId}/measurement-doc/${uid()}-${safeFileName(name)}`;
+    await c.env.FILES.put(key, got.body, { httpMetadata: { contentType: got.type } });
+    docs.push({ key, name, type: got.type, size: got.body.byteLength, source });
+  };
+  const rules = { allowType: (t) => MEASURE_TYPES.has(t), maxBytes: MAX_MEASURE_BYTES };
+
+  if (pick.documents.length) {
+    const r = await ccGet(c.env, a.token, `/projects/${pick.projectId}/documents`, { per_page: 100 });
+    if (!r.ok) return r.status === 404 ? c.json({ error: "not_found" }, 404) : ccFailed(c, a.accountId, r);
+    const theirs = Array.isArray(r.data) ? r.data : [];
+    for (const id of pick.documents) {
+      const d = theirs.find((x) => String(x?.id) === id);
+      const url = ccHttps(d?.url);
+      if (!d || !url) { skipped.push({ id, kind: "document", why: "not_in_project" }); continue; }
+      const got = await ccDownload(url, { ...rules, fallbackType: String(d.content_type || "").toLowerCase() });
+      if (got.error) { skipped.push({ id, kind: "document", name: d.name || null, why: got.error }); continue; }
+      await store(String(d.name || `CompanyCam-document-${id}`), got, { provider: "companycam", kind: "document", id });
+    }
+  }
+  for (const id of pick.photos) {
+    const r = await ccGet(c.env, a.token, `/photos/${id}`);
+    if (ccRefused(r)) return ccFailed(c, a.accountId, r);
+    const ph = r.ok ? r.data : null;
+    if (!ph || String(ph.project_id) !== pick.projectId) { skipped.push({ id, kind: "photo", why: "not_in_project" }); continue; }
+    if (!ccPhotoUsable(ph)) { skipped.push({ id, kind: "photo", why: "not_ready" }); continue; }
+    const got = await ccDownload(ccImageUrl(ph.uris, ["original", "web"]), { ...rules, fallbackType: "image/jpeg" });
+    if (got.error) { skipped.push({ id, kind: "photo", why: got.error }); continue; }
+    await store(ccPhotoFileName(ph, got.type), got, { provider: "companycam", kind: "photo", id });
+  }
+  await ccOk(c.env, a.accountId);
+  return c.json({ docs, skipped });
 });
 
 app.get("/api/api-tokens", requireRole("admin"), async (c) => {

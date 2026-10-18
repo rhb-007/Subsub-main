@@ -313,6 +313,9 @@ WITH spec(j) AS (SELECT
   -- 090. Integration switches in Account. Until it is run every integration
   -- reads as on and pressing a switch names the file.
   ',["m090_account_integrations","col","account_integrations",["account_id","provider","enabled","updated_at","updated_by"]]' ||
+  -- 091. An account's connection to an outside system (CompanyCam first).
+  -- Until it is run connecting names the file and nothing else changes.
+  ',["m091_account_connections","col","account_connections",["account_id","provider","secret_enc","label","connected_at","connected_by","last_ok_at","last_error"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

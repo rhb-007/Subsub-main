@@ -13893,6 +13893,82 @@ refactor.
   Passport. `test:passportconnect` (11); putting the entry back and taking the
   requests off fails five.
 
+- **COMPANYCAM IS CONNECTED BY THE ACCOUNT'S OWN TOKEN, AND A JOB IMPORTS A
+  PROJECT'S PHOTOS AND DOCUMENTS AS MEASUREMENT DOCUMENTS.** Asked for as
+  *"finalize api integrations with company cam, hover, and aurora for
+  measurements"*. Migration 091 (`account_connections`),
+  `app/shared/companycam.js`, `app/worker/companycam.js`,
+  `app/worker/secretbox.js`. Hover and Aurora are listed as Coming soon (see
+  below).
+
+  **Every field name comes from CompanyCam's own published OpenAPI spec**
+  (Core API v2, `https://api.companycam.com/v2`, Bearer auth), cloned from
+  their public `openapi-spec` repository, because their help and docs sites
+  are blocked from this environment. That is the Stripe v2 rule: the spec or
+  the SDK, never memory.
+
+  **THIS REVERSES "WE NEVER HOLD SOMEBODY'S CRM CREDENTIAL", deliberately.**
+  JobNimbus is a webhook so no key is stored here. Reading a CompanyCam project
+  needs the account's token, so it is stored, and stored **sealed**: AES-GCM
+  under `INTEGRATION_SECRET_KEY` (a Worker secret, SHA-256 of any long random
+  string), `v1:<iv>:<ciphertext>`. Without the key, connecting answers
+  `not_configured` rather than storing it in the clear. A row the key cannot
+  open reads as not connected and is never sent anywhere. The token is never
+  echoed back. Changing the key disconnects every account, and the setup panel
+  says so.
+
+  **The token is tried before it is stored**: `GET /company`, and its name is
+  the row's label (*Connected to Outerhome Roofing*). A refused token answers
+  `token_refused` with CompanyCam's own words; CompanyCam unreachable is
+  `provider_unreachable` and stores nothing. Admin only, hiring kinds only, the
+  API key panel's gate. Disconnect deletes the row.
+
+  **The Integrations row offers Connect until a token is behind it**, and only
+  then a switch. Off (`integration_paused`) refuses browsing and importing; the
+  job form's `GET /api/companycam/status` never errors, so the import button is
+  simply not drawn on every way this fails. A token CompanyCam later refuses is
+  recorded (`last_error`) and the panel says to connect again.
+
+  **NOTHING IN THE IMPORT BODY IS A URL.** It names a project and ids. Each
+  document is looked up again in that project's own document list and each
+  photo by `/photos/{id}`, which must say it belongs to that project, under
+  the account's token, before any bytes are fetched. A caller who could hand
+  us a URL could make the Worker fetch anything and store it as a work order
+  file. The bytes are fetched **with no Authorization header**, because a
+  static file host must never be handed the account's token, and they go
+  through the measurement-document rules (type list, 25 MB, `nosniff` on the
+  way out). The API's `content_type` is used when storage answers
+  octet-stream. A photo still processing is skipped as `not_ready`. Each skip
+  is named and does not cost the other files.
+
+  **An import is a copy**, stored as an ordinary measurement document under
+  the account's prefix, so the work order keeps it after the project is
+  archived or the account disconnects. The picker hands the entries back to
+  the job form and the job's own save stores them through
+  `cleanMeasurementDocs`, so there is one save path. It searches CompanyCam
+  with the job's street to start, and only active projects.
+
+  **The browser never receives a CompanyCam file URL**, only thumbnails for the
+  picker, and a project shows a name and a place, never its contact, notepad or
+  collaborators.
+
+  `test:companycam` (62) and `test:companycamui` (22). Nine mutations fire,
+  each on its own assertions: documents not checked against the project, photos
+  not checked against the project, the token sent to the file host, no sealing
+  key, the switch ignored, a pending photo imported, a switch drawn before
+  connecting, the import button drawn when not connected, and imported entries
+  not appended.
+
+  **Hover and Aurora are not built, and that is the rule rather than a gap.**
+  `developers.hover.to`, `docs.aurorasolar.com` and CompanyCam's help site are
+  denied by this environment's network policy, and Hover needs SubSub
+  registered as a Hover partner (an OAuth client only Hover issues). A preset
+  written from guesses looks supported and fails on first contact. Aurora is
+  listed as Coming soon beside Hover. Both slot into `account_connections`.
+
+  **Not verified here:** a live CompanyCam call. **Paste 091 and set
+  `INTEGRATION_SECRET_KEY`** before anybody can connect.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

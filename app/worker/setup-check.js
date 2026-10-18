@@ -78,6 +78,13 @@ const GROUPS = [
       + "Unset, the Draft notes button is not shown and notes are typed by hand -- nothing else needs it.",
   },
   {
+    id: "connections", label: "Connected accounts (CompanyCam)",
+    vars: ["INTEGRATION_SECRET_KEY"],
+    matters: "Sealing the CompanyCam token an account pastes in Account -> Integrations, so the "
+      + "database never holds it in the clear. Any long random string. Unset, connecting is "
+      + "refused by name and nothing else changes. Changing it disconnects every account.",
+  },
+  {
     id: "sms", label: "Text messages (Twilio)",
     vars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM"],
     matters: "Texting a tenant their invite. Unset, invites still go by email and "

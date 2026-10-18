@@ -246,6 +246,8 @@
     "test:weather": "node --no-warnings scripts/weather-test.mjs",
     "test:apiingest": "node --no-warnings scripts/api-ingest-test.mjs",
     "test:integrations": "node --no-warnings scripts/integrations-test.mjs",
+    "test:companycam": "node --no-warnings scripts/companycam-test.mjs",
+    "test:companycamui": "node scripts/companycam-ui-test.mjs",
     "test:measuredocs": "node --no-warnings scripts/measure-docs-test.mjs",
     "test:jobnimbus": "node --no-warnings scripts/jobnimbus-test.mjs",
     "test:crmmapui": "node scripts/crm-map-ui-test.mjs",

@@ -52,8 +52,11 @@ ck("the generic address is 'other CRMs'", hookIntegration("generic") === "webhoo
 ck("an unknown source still falls under a switch", hookIntegration("acculynx") === "webhooks");
 ck("no row is on", integrationEnabled([], "api") === true);
 ck("a 0 row is off", integrationEnabled([{ provider: "api", enabled: 0 }], "api") === false);
-ck("Hover and CompanyCam are listed as soon",
-  ["hover", "companycam"].every((id) => INTEGRATIONS.find((i) => i.id === id)?.soon));
+ck("Hover and Aurora are listed as soon",
+  ["hover", "aurora"].every((id) => INTEGRATIONS.find((i) => i.id === id)?.soon));
+ck("CompanyCam connects by token, not soon",
+  INTEGRATIONS.find((i) => i.id === "companycam")?.connect === "token"
+  && !INTEGRATIONS.find((i) => i.id === "companycam")?.soon);
 
 console.log("\n-- the list --");
 let DB = seed(), env = { DB: makeD1(DB) };

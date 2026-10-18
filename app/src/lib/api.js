@@ -641,6 +641,19 @@ export const api = {
   integrations: () => request("/integrations"),
   setIntegration: (id, enabled) => request(`/integrations/${encodeURIComponent(id)}`,
     { method: "PUT", body: JSON.stringify({ enabled }) }),
+  // Connecting an outside system by its token (CompanyCam). The token goes
+  // up once and is never read back.
+  connectIntegration: (id, token) => request(`/integrations/${encodeURIComponent(id)}/connection`,
+    { method: "PUT", body: JSON.stringify({ token }) }),
+  disconnectIntegration: (id) => request(`/integrations/${encodeURIComponent(id)}/connection`,
+    { method: "DELETE" }),
+  // Browsing a CompanyCam project and importing from it into a job. The
+  // import answers measurement-document entries the job form appends.
+  companycamStatus: () => request("/companycam/status"),
+  companycamProjects: (q, page = 1) =>
+    request(`/companycam/projects?q=${encodeURIComponent(q || "")}&page=${page}`),
+  companycamProject: (id) => request(`/companycam/projects/${encodeURIComponent(id)}`),
+  companycamImport: (body) => request("/companycam/import", { method: "POST", body: JSON.stringify(body) }),
   apiTokens: () => request("/api-tokens"),
   createApiToken: (name) => request("/api-tokens", { method: "POST", body: JSON.stringify({ name }) }),
   revokeApiToken: (id) => request(`/api-tokens/${encodeURIComponent(id)}`, { method: "DELETE" }),

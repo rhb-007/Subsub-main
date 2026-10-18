@@ -2573,3 +2573,16 @@ CREATE TABLE IF NOT EXISTS account_integrations (
   updated_by  TEXT REFERENCES users(id),
   PRIMARY KEY (account_id, provider)
 );
+
+-- 091: an account's connection to an outside system. The token is sealed.
+CREATE TABLE IF NOT EXISTS account_connections (
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  provider      TEXT NOT NULL,
+  secret_enc    TEXT NOT NULL,
+  label         TEXT,
+  connected_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+  connected_by  TEXT REFERENCES users(id),
+  last_ok_at    TEXT,
+  last_error    TEXT,
+  PRIMARY KEY (account_id, provider)
+);

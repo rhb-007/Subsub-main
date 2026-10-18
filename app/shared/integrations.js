@@ -18,6 +18,11 @@
 // switch the receiver did not read would be a switch that lies -- the
 // sender would go on landing jobs while the screen said it was off.
 //
+// `connect: "token"` is one SubSub READS FROM with the account's own token,
+// pasted in Account -> Integrations and stored sealed (worker/secretbox.js).
+// Its switch is drawn only once it is connected, because switching on
+// something with no credential behind it changes nothing.
+//
 // `soon` is an integration SubSub cannot yet connect to. It is listed so an
 // account sees what is coming, and it has no switch: a control that changes
 // nothing is the screen-that-lies rule pointed at a toggle.
@@ -60,8 +65,18 @@ export const INTEGRATIONS = [
   {
     id: "companycam",
     name: "CompanyCam",
-    what: "Attach CompanyCam photos of a project to a job, so the work order carries them.",
-    uses: "Your CompanyCam account",
+    what: "Import a CompanyCam project's photos and documents onto a job, measurement reports included, so the work order carries them.",
+    uses: "Your CompanyCam access token",
+    connect: "token",
+    // Where the token is made is CompanyCam's screen, not ours, so this names
+    // their own help article rather than a menu path that may move.
+    tokenHelp: "Create an access token in your CompanyCam account (CompanyCam's help article \"Building custom integrations with CompanyCam's API\" shows where), then paste it here.",
+  },
+  {
+    id: "aurora",
+    name: "Aurora Solar",
+    what: "Attach an Aurora design's measurements to a job, so the work order carries them.",
+    uses: "Your Aurora API key",
     soon: true,
   },
 ];
