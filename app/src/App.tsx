@@ -42180,6 +42180,7 @@ p.fld-note{margin:6px 0 0}
 .sent-state{text-align:center;padding:14px 0}
 .sent-state svg{color:var(--brand);margin-bottom:8px}
 .sent-state p{color:var(--ink-soft);margin:0 0 20px}
+.sent-state .btn-solid{display:block;margin:0 auto}
 @media(max-width:640px){.fld-row{flex-direction:column;gap:0}.detail-actions,.card-actions{flex-wrap:wrap}.stat-cards{flex-wrap:wrap}}
 
 /* crews — detail */
