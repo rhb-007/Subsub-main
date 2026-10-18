@@ -13814,8 +13814,9 @@ refactor.
   account, on SubSub's own front door, gets *Sign up with Google* under the
   message. Not on a company's page, where the answer is to be added by them.
 
-  **The logo is `SubSubStacked`**: the mark over the word, all of it
-  `#E39B32`, drawn from the real paths rather than set in a font. The name is
+  **The logo is `SubSubStacked`**: the mark over the word, the mark in
+  gold (`#E39B32`) and the word in black (`#111111`), as asked after an
+  all-gold first version. Both are drawn from the real paths rather than set in a font. The name is
   kept as a hidden `h1` so it is not printed twice. A company's page keeps its
   own mark and name.
 

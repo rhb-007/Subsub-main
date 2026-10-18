@@ -1,4 +1,4 @@
-// SubSub's own sign-in page wears the stacked logo, mark over word, in gold.
+// SubSub's own sign-in page wears the stacked logo, mark over word: the mark gold, the word black.
 // A company's page keeps its own mark and name.
 //
 //   node scripts/login-logo-test.mjs
@@ -25,7 +25,8 @@ const read = (page) => page.evaluate(() => {
   const st = document.querySelector(".login-brand .ss-stacked");
   const svgs = st ? [...st.querySelectorAll("svg")] : [];
   const r = svgs.map((s) => s.getBoundingClientRect());
-  const fills = svgs.flatMap((s) => [...s.querySelectorAll("path, g")].map((p) => p.getAttribute("fill")).filter(Boolean));
+  const fillsOf = (s) => [...new Set([...(s?.querySelectorAll("path, g") || [])].map((p) => p.getAttribute("fill")).filter(Boolean))];
+  const markFills = fillsOf(svgs[0]), wordFills = fillsOf(svgs[1]);
   const card = document.querySelector(".login-card")?.getBoundingClientRect();
   const h1 = document.querySelector(".login-brand h1");
   return {
@@ -33,7 +34,7 @@ const read = (page) => page.evaluate(() => {
     markAbove: r.length === 2 ? r[0].bottom <= r[1].top : null,
     centered: r.length === 2 && card ? r.every((b) => Math.abs((b.left + b.right) / 2 - (card.left + card.right) / 2) < 3) : null,
     wordWider: r.length === 2 ? r[1].width > r[0].width * 2 : null,
-    fills: [...new Set(fills)],
+    markFills, wordFills,
     h1Visible: h1 ? h1.getBoundingClientRect().height > 2 : null,
     h1: h1?.textContent || "",
   };
@@ -49,7 +50,8 @@ try {
     t.ck(`${vp.width}px: the mark sits above the word`, s.markAbove === true, JSON.stringify(s));
     t.ck(`${vp.width}px: both are centered in the card`, s.centered === true, JSON.stringify(s));
     t.ck(`${vp.width}px: the word is the wide part, as in the logo`, s.wordWider === true, JSON.stringify(s));
-    t.ck(`${vp.width}px: all of it is gold`, s.fills.length === 1 && s.fills[0] === "#E39B32", JSON.stringify(s.fills));
+    t.ck(`${vp.width}px: the mark is gold`, s.markFills.length === 1 && s.markFills[0] === "#E39B32", JSON.stringify(s.markFills));
+    t.ck(`${vp.width}px: the word is black`, s.wordFills.length === 1 && s.wordFills[0] === "#111111", JSON.stringify(s.wordFills));
     t.ck(`${vp.width}px: the name is not printed a second time`, s.h1Visible === false && s.h1 === "SubSub", JSON.stringify(s));
     t.ck(`${vp.width}px: nothing crashed`, crashes.length === 0, crashes.join(" | "));
     await ctx.close();
