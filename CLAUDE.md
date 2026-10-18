@@ -13768,6 +13768,54 @@ refactor.
 
   **Pasting 090 is required** before a switch can be turned off.
 
+- **SIGNING UP WITH GOOGLE, AND SUBSUB'S OWN SIGN-IN PAGE WEARS THE STACKED
+  GOLD LOGO.** Asked for as *"allow to signup too, then ask all other
+  questions the normal sign up asks minus the data already included from the
+  Google Auth"*. Until now Google only signed in: a Google address SubSub had
+  never seen landed on *"this email isn't on a SubSub account yet"* with no
+  way on.
+
+  **`get-started.html` has Continue with Google on step 1.** The press asks
+  `GET /api/signup/google` for Supabase's Google address (the Supabase URL
+  stays in the Worker, not the page), and Google sends the tab back to the
+  form with an access token in the address. **The token comes off the address
+  bar at once**, and what was already picked on step 1 (role, units, mobile,
+  referral code) is kept in `sessionStorage` across the trip, because the trip
+  reloads the page. `POST /api/signup/google-identity` says who came back; the
+  email box is filled and locked, the name is filled if blank, and *Use a
+  different email* undoes it. Everything else on the form is asked as before.
+
+  **The address comes off the token, never the body**: `/api/signup` takes
+  `googleToken`, checks it with Supabase again, and uses Google's address
+  whatever the email box says. An unconfirmed address is refused, a Google
+  login already tied to a SubSub user is `email_in_use`, and an expired token
+  makes nothing. No Supabase password login is made beside it and nothing
+  needs confirming, so the reply says `viaGoogle` and the welcome email and
+  the last screen say to sign in with Continue with Google. The return
+  address is checked to be https on subsub.work, or the start route is an open
+  redirect with Google in front of it. **Supabase's Redirect URLs must allow
+  `https://subsub.work/**`**; the `*.subsub.work` wildcard does not cover the
+  bare domain.
+
+  **The app's sign-in page links to it**: a Google account with no SubSub
+  account, on SubSub's own front door, gets *Sign up with Google* under the
+  message. Not on a company's page, where the answer is to be added by them.
+
+  **The logo is `SubSubStacked`**: the mark over the word, all of it
+  `#E39B32`, drawn from the real paths rather than set in a font. The name is
+  kept as a hidden `h1` so it is not printed twice. A company's page keeps its
+  own mark and name.
+
+  **A per-account switch for Google sign-in was asked about and not built.**
+  Google sign-in belongs to the person, not the account: one person sits on
+  several accounts, and a switch on one of them would not decide how they
+  prove who they are.
+
+  `test:googlesignup` (30) and `test:loginlogo` (16). Five mutations fire,
+  each on its own assertion: the body's address used, the auth-id check
+  dropped, the return-host check dropped, unconfirmed addresses allowed, and
+  step 1 not restored after the trip.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

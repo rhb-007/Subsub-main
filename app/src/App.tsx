@@ -34596,6 +34596,30 @@ function SubSubMark({ height = 24 }) {
   );
 }
 
+// SubSub's own sign-in page wears the stacked logo, mark over word, all of it
+// in the brand gold. The word is drawn here rather than set in a font, so it
+// is the real logo and not the name in whatever face the page has.
+const SUBSUB_GOLD = "#E39B32";
+function SubSubStacked({ markHeight = 64 }) {
+  const wordWidth = Math.round(markHeight * 0.842 * 2.72);
+  return (
+    <div className="ss-stacked" role="img" aria-label="SubSub">
+      <SubSubMark height={markHeight} />
+      <svg width={wordWidth} viewBox="158 84 375 76" xmlns="http://www.w3.org/2000/svg"
+        aria-hidden="true" style={{ height: "auto", display: "block" }}>
+        <g fill={SUBSUB_GOLD}>
+          <path d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/>
+          <path d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/>
+          <path d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/>
+          <path d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/>
+          <path d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/>
+          <path d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/>
+        </g>
+      </svg>
+    </div>
+  );
+}
+
 function BrandMark({ brand, height = 24 }) {
   // SubSub's own front door wears SubSub's own mark, not two initials.
   if (brand.isSubSub) return <SubSubMark height={height} />;
@@ -34928,8 +34952,19 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
     <div className="login-wrap wl-themed" style={themeVars(wl)}>
       <div className="login-card">
         <div className="login-brand">
-          <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
-          <h1>{brand.name}</h1>
+          {/* SubSub's own front door: the stacked logo in gold, with the name
+              kept for screen readers rather than printed twice. */}
+          {brand.isSubSub ? (
+            <>
+              <div className="login-logo-wrap login-logo-stacked"><SubSubStacked markHeight={64} /></div>
+              <h1 className="sr-only">SubSub</h1>
+            </>
+          ) : (
+            <>
+              <div className="login-logo-wrap"><BrandMark brand={brand} height={38} /></div>
+              <h1>{brand.name}</h1>
+            </>
+          )}
           <p>{signInTagline(brand)}</p>
         </div>
 
@@ -34939,6 +34974,15 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
         {entryErr && (
           <div className="login-form">
             <div className="login-err"><AlertTriangle size={13} /> {entryErr}</div>
+            {/* A Google account SubSub has never seen, on SubSub's own front
+                door: the way on is signing up with it, not a dead end. Not on
+                a company's page, whose answer is to be added by them. */}
+            {brand.isSubSub && !onSubdomain && /isn't on a SubSub account/.test(entryErr) && (
+              <a className="login-signup" href="https://subsub.work/get-started.html">
+                <span>New to SubSub?</span>
+                <b>Sign up with Google &#8250;</b>
+              </a>
+            )}
             {onForgetProvider && (
               <button className="login-forgot" onClick={onForgetProvider}>
                 Use a different Google account
@@ -44784,6 +44828,8 @@ a.meas-dl{text-decoration:none}
   border-top:1px solid var(--line)}
 .ss-foot-by{opacity:1}
 .login-logo-wrap{display:flex;align-items:center;justify-content:center;color:var(--ink);margin-bottom:14px;min-height:40px}
+.ss-stacked{display:flex;flex-direction:column;align-items:center;gap:14px}
+.login-logo-stacked{margin-bottom:16px}
 .login-foot{display:flex;flex-direction:column;align-items:center;gap:5px}
 
 /* contractor: who they work for */

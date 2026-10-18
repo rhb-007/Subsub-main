@@ -368,6 +368,9 @@ app.use("/api/*", async (c, next) => {
   // unauthenticated, since the applicant has no session at all yet (that's
   // exactly what a successful application eventually leads to).
   if (c.req.path === "/api/auth/dev-login" || c.req.path === "/api/auth/me" || c.req.path === "/api/signup"
+    // Signing up with Google, from the marketing site's form: nobody has an
+    // account yet. The identity route checks the Supabase token itself.
+    || c.req.path === "/api/signup/google" || c.req.path === "/api/signup/google-identity"
     || c.req.path.startsWith("/api/platform/")
     || c.req.path.startsWith("/api/apply/")
     // Booking a demo, from the marketing site. Nobody has an account yet --
@@ -1093,6 +1096,66 @@ app.get("/api/auth/me", async (c) => {
 // Creates three rows together: the account, its first user, and an admin
 // membership joining them. In real-auth mode the Supabase user is created
 // first, because a failure there must not leave an orphan account behind.
+// ---------------------------------------------------------------------------
+// Signing up with Google. The marketing form sends the browser to Supabase's
+// Google sign-in and back to itself; Supabase leaves an access token in the
+// address, and the form hands that token here. Nothing is created until the
+// form is finished: these two routes only start the trip and read who came
+// back, and /api/signup checks the token again when the account is made.
+// ---------------------------------------------------------------------------
+
+// Where Google may send them back to: a SubSub address only, or this is an
+// open redirect with Google's sign-in in front of it.
+function signupReturnOk(env, raw) {
+  const domain = env.APP_DOMAIN || "subsub.work";
+  let u;
+  try { u = new URL(String(raw || "")); } catch { return null; }
+  if (u.protocol !== "https:") return null;
+  if (u.hostname !== domain && !u.hostname.endsWith(`.${domain}`)) return null;
+  u.hash = "";
+  return u.toString();
+}
+
+// The person behind a Supabase token, for signing up. Google proves the
+// address, so an unconfirmed one is refused rather than trusted.
+async function googleSignupIdentity(env, token) {
+  const t = String(token || "").trim();
+  if (!t || t.length > 4096) return { error: "google_expired", status: 401 };
+  let u = null;
+  try { u = await verifySupabaseToken(env, `Bearer ${t}`); } catch { u = null; }
+  if (!u?.id || !u.email) return { error: "google_expired", status: 401 };
+  if (!(u.email_confirmed_at || u.confirmed_at)) return { error: "google_unverified", status: 400 };
+  const meta = u.user_metadata || {};
+  return {
+    authId: u.id,
+    email: String(u.email).trim().toLowerCase(),
+    name: String(meta.full_name || meta.name || "").trim().slice(0, 120),
+  };
+}
+
+app.get("/api/signup/google", (c) => {
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return c.json({ error: "auth_not_configured" }, 501);
+  const ret = signupReturnOk(c.env, c.req.query("return"));
+  if (!ret) return c.json({ error: "bad_return" }, 400);
+  return c.json({
+    url: `${c.env.SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(ret)}`,
+  });
+});
+
+app.post("/api/signup/google-identity", async (c) => {
+  const rl = await rateLimit(c.env, "signup-google", clientIp(c), { limit: 30, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return c.json({ error: "auth_not_configured" }, 501);
+  const b = await c.req.json().catch(() => ({}));
+  const who = await googleSignupIdentity(c.env, b?.token);
+  if (who.error) return c.json({ error: who.error }, who.status || 400);
+  // Whether this Google login already has a SubSub account. Safe to say: the
+  // caller has just proved they hold the address.
+  const has = await c.env.DB.prepare(
+    `SELECT 1 FROM users WHERE auth_id = ? OR lower(email) = ? LIMIT 1`).bind(who.authId, who.email).first();
+  return c.json({ email: who.email, name: who.name, hasAccount: !!has });
+});
+
 app.post("/api/signup", async (c) => {
   // Two ceilings, because they guard different things. The loose one bounds
   // probing (a rejected request writes nothing, and somebody mistyping their
@@ -1107,7 +1170,18 @@ app.post("/api/signup", async (c) => {
   const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "general_contractor";
   const company = String(b.company || "").trim();
   const personName = String(b.name || "").trim();
-  const email = String(b.email || "").trim().toLowerCase();
+  // SIGNING UP WITH GOOGLE. The form carries the Supabase token Google's
+  // sign-in left it, and the ADDRESS COMES OFF THE TOKEN, never the body: a
+  // body naming somebody else's address over a token for your own must not
+  // make an account on theirs. Google has already proved the address, so
+  // there is no confirmation email and no password to set.
+  let google = null;
+  if (b.googleToken) {
+    if (!c.env.SUPABASE_URL || !c.env.SUPABASE_ANON_KEY) return c.json({ error: "auth_not_configured" }, 501);
+    google = await googleSignupIdentity(c.env, b.googleToken);
+    if (google.error) return c.json({ error: google.error }, google.status || 400);
+  }
+  const email = google ? google.email : String(b.email || "").trim().toLowerCase();
   const phoneRaw = String(b.phone || "").trim();
   const phone = phoneRaw ? normalizePhone(phoneRaw) : null;
   const subdomain = validSubdomain(b.subdomain);
@@ -1200,6 +1274,11 @@ app.post("/api/signup", async (c) => {
     c.env.DB.prepare(`SELECT id FROM users WHERE lower(email) = lower(?)`).bind(email).first(),
   ]);
   if (subTaken) return c.json({ error: "subdomain_taken" }, 409);
+  // A Google login already tied to a SubSub user has an account to sign in
+  // to, whatever address is on it.
+  if (google && await c.env.DB.prepare(`SELECT 1 FROM users WHERE auth_id = ?`).bind(google.authId).first()) {
+    return c.json({ error: "email_in_use" }, 409);
+  }
   if (emailTaken) {
     // "You already have an account" is not always true, and when it is wrong
     // it is a dead end. Somebody holding a GUEST seat -- a building owner or a
@@ -1236,7 +1315,9 @@ app.post("/api/signup", async (c) => {
   }
 
   let authId = null, needsConfirmation = false;
-  if (realAuth) {
+  if (google) {
+    authId = google.authId;
+  } else if (realAuth) {
     const signed = await supabaseSignUp(c.env, email, authPassword);
     if (!signed.ok) {
       const status = signed.error === "email_in_use" ? 409
@@ -1323,7 +1404,7 @@ app.post("/api/signup", async (c) => {
   });
 
   await logEvent(c.env, accountId, userId, "account.created", accountId,
-    { kind, plan, billing, subdomain, viaAuth: realAuth, referredBy: referredBy?.code || null,
+    { kind, plan, billing, subdomain, viaAuth: realAuth, viaGoogle: !!google, referredBy: referredBy?.code || null,
       units: estimate || undefined });
   await logActivity(c.env, accountId, userId, "account_created",
     `${personName} created this account on the ${plan === "scale" ? "Scale" : "Basic"} plan`);
@@ -1352,7 +1433,8 @@ app.post("/api/signup", async (c) => {
   }
   try {
     const welcome = welcomeEmail({ firstName: personName.split(/\s+/)[0], companyName: company, email,
-      planName: plan === "scale" ? "Scale" : "Basic", needsConfirmation, hasPassword: !!chosen });
+      planName: plan === "scale" ? "Scale" : "Basic", needsConfirmation, hasPassword: !!chosen,
+      viaGoogle: !!google });
     const sent = await sendEmail(c.env, { to: email, ...welcome });
     await logMail(c.env, { accountId, companyId: null, to: email, kind: "welcome",
       subject: welcome.subject, result: sent });
@@ -1379,6 +1461,8 @@ app.post("/api/signup", async (c) => {
     // link, which the closing screen has to say rather than telling somebody
     // to "sign in with the password you just chose".
     hasPassword: !!chosen,
+    // Signed up with Google: the way back in is "Continue with Google".
+    viaGoogle: !!google,
     // The app is reached at the account's own subdomain once DNS is pointed
     // at it; the caller decides whether to send them there or to app.*.
     // Branding, and with it a company hostname, is a Scale feature. A Basic

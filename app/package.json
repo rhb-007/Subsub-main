@@ -233,6 +233,8 @@
     "test:discover": "node scripts/discover-test.mjs",
     "test:embedplace": "node scripts/embed-place-test.mjs",
     "test:resetflow": "node scripts/reset-flow-test.mjs",
+    "test:loginlogo": "node scripts/login-logo-test.mjs",
+    "test:googlesignup": "node --no-warnings scripts/google-signup-test.mjs",
     "test:pwhelp": "node scripts/password-help-test.mjs",
     "test:stuck": "node scripts/stuck-subs-test.mjs",
     "test:portalinvite": "node scripts/portal-invite-test.mjs",

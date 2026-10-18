@@ -259,6 +259,21 @@ legend{font:600 15px/1 Inter;padding:0;margin-bottom:13px}
 .done p{margin-top:12px;color:var(--muted);font-size:16px}
 .done ul{margin-top:20px}
 .hide{display:none !important}
+/* Signing up with Google: the same white button the app's sign-in draws,
+   and a rule with words under it, so the form below reads as the other way. */
+.g-sign{margin:4px 0 18px}
+.btn-google{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:50px;
+  padding:12px 16px;border:1.5px solid var(--rule);border-radius:10px;background:#fff;color:#1f1f1f;
+  font:600 15.5px/1.2 Inter;cursor:pointer}
+.btn-google:hover{border-color:#9aa59f}
+.btn-google[disabled]{opacity:.6;cursor:default}
+.g-or{display:flex;align-items:center;gap:12px;margin:18px 0 0;color:#5D6F67;font-size:13.5px}
+.g-or::before,.g-or::after{content:"";flex:1;height:1px;background:var(--rule)}
+.g-done{margin:0;padding:12px 14px;border-radius:10px;background:#eef6f1;border:1px solid #cfe3d7;
+  font-size:14.5px;line-height:1.45;color:var(--ink)}
+.g-done button{border:0;background:none;padding:0;margin-left:4px;color:var(--forest);font:inherit;
+  font-weight:600;text-decoration:underline;cursor:pointer}
+.field input[readonly]{background:#f4f6f5;color:#3d4a44}
 
 /* ---------- cta band ---------- */
 .band{background:var(--forest);color:#fff;padding:72px 0}
@@ -509,6 +524,19 @@ body.nav-open{overflow:hidden}
               <input id="occupied" type="number" inputmode="numeric" min="0" step="1"></div>
           </div>
           <p class="units-quote" id="unitQuote" aria-live="polite"></p>
+        </div>
+        <!-- SIGN UP WITH GOOGLE. Google proves the address, so there is no
+             confirmation email and no password to set; the address comes off
+             Google's answer and the box below is locked to it. The rest of
+             the form is the same questions, minus what Google already said. -->
+        <div class="g-sign" id="gSign">
+          <button type="button" class="btn-google" id="gBtn">
+            <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+            <span>Continue with Google</span>
+          </button>
+          <p class="g-done hide" id="gDone">Signed up with Google as <b id="gEmail"></b>.
+            <button type="button" id="gUndo">Use a different email</button></p>
+          <div class="g-or" id="gOr"><span>or fill in your details</span></div>
         </div>
         <div class="two">
           <div class="field"><label for="name">Your name</label>
@@ -1388,7 +1416,10 @@ body.nav-open{overflow:hidden}
     auth_failed: 'We could not set up your login. Your details are fine — this is a '
       + 'fault on our side. Email support@subsub.work and we will sort it out.',
     signup_conflict: 'That company name or email was claimed a moment ago. Try again.',
-    invalid_trades: 'One of those trades was not recognized. Reload the page and pick again.'
+    invalid_trades: 'One of those trades was not recognized. Reload the page and pick again.',
+    google_expired: 'Your Google sign-in timed out. Press Continue with Google again.',
+    google_unverified: 'Google has not confirmed that address yet. Use a different email.',
+    auth_not_configured: 'Signing up with Google is not available right now. Fill in your details instead.'
   };
 
   // The message has to live on whichever step the person is sent back to,
@@ -1449,7 +1480,10 @@ body.nav-open{overflow:hidden}
       // beats the cookie; the cookie is the last link, claim or Passport
       // they arrived through. The server decides which wins and checks both.
       refCode: ((document.getElementById('refCode') || {}).value || '').trim(),
-      referral: ssReadRef()
+      referral: ssReadRef(),
+      // Signed up with Google: the server reads the address off this token,
+      // not off the email box above.
+      googleToken: googleToken || undefined
     };
 
     fetch(API + '/signup', {
@@ -1470,7 +1504,8 @@ body.nav-open{overflow:hidden}
         }
         if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ go(2); }
         else if(code === 'email_in_use' || code === 'invalid_email' || code === 'invalid_phone'
-          || code === 'weak_password'){ go(1); }
+          || code === 'weak_password' || code === 'google_expired' || code === 'google_unverified'){ go(1); }
+        if(code === 'google_expired'){ forgetGoogle(); }
         showSignupError(FIELD_ERRORS[code] || 'We could not create the account. Please try again.');
         if(code === 'subdomain_taken' || code === 'invalid_subdomain'){ sub.focus(); }
         return;
@@ -1583,7 +1618,10 @@ body.nav-open{overflow:hidden}
             + (uq.setupCents ? ', plus a one-time ' + usd(uq.setupCents) + ' setup fee,' : '')
             + ' from the units you gave. Once you add your buildings, the price follows them.';
         }
-        dl.textContent = res.body.needsConfirmation
+        dl.textContent = res.body.viaGoogle
+          ? co + ' is on SubSub. Sign in with "Continue with Google" as '
+            + payload.email + ', and you are in.' + invites
+          : res.body.needsConfirmation
           // One thing left, and it is the only thing on the screen that
           // matters -- so it leads, rather than trailing a list of details.
           ? co + ' is on SubSub. One last step: open the link we just sent to '
@@ -1592,7 +1630,7 @@ body.nav-open{overflow:hidden}
           : co + ' is on SubSub. Use "Forgot password?" on the sign-in page with '
             + payload.email + ' to pick a password, and you are in.' + invites;
       }
-      if(btn && res.body.needsConfirmation){ btn.textContent = 'Go to sign-in'; }
+      if(btn && (res.body.needsConfirmation || res.body.viaGoogle)){ btn.textContent = 'Go to sign-in'; }
       done();
     }).catch(function(){
       Array.prototype.forEach.call(btns, function(b){ b.disabled = false; });
@@ -1653,6 +1691,104 @@ body.nav-open{overflow:hidden}
   paintRole();
   addRow();
   if(plan === 'basic'){ addRow(); addRow(); }  // three slots ready on Basic
+
+  /* ---- signing up with Google ------------------------------------------
+     The button sends this tab to Google through Supabase and back to this
+     page, with an access token in the address. What was already chosen on
+     step 1 is kept in this tab while they are away, because the trip reloads
+     the page. The token is handed to the server twice: once to say who came
+     back, and again when the account is made, where it is checked again. */
+  var googleToken = null;
+  var G_KEY = 'ss_signup_google';
+  var gBtn = document.getElementById('gBtn'), gDone = document.getElementById('gDone'),
+      gOr = document.getElementById('gOr'), gEmail = document.getElementById('gEmail');
+  function gSave(){
+    try{
+      var r = document.querySelector('input[name="role"]:checked');
+      sessionStorage.setItem(G_KEY, JSON.stringify({
+        role: r ? r.value : '', units: unitsEl ? unitsEl.value : '', occupied: occEl ? occEl.value : '',
+        phone: phoneEl ? phoneEl.value : '', refCode: (document.getElementById('refCode') || {}).value || ''
+      }));
+    }catch(e){}
+  }
+  function gRestore(){
+    var v = null;
+    try{ v = JSON.parse(sessionStorage.getItem(G_KEY) || 'null'); sessionStorage.removeItem(G_KEY); }catch(e){ v = null; }
+    if(!v) return;
+    if(v.role){
+      var r = document.querySelector('input[name="role"][value="' + v.role.replace(/"/g,'') + '"]');
+      if(r){ r.checked = true; r.dispatchEvent(new Event('change', {bubbles:true})); }
+    }
+    if(unitsEl && v.units){ unitsEl.value = v.units; unitsEl.dispatchEvent(new Event('input', {bubbles:true})); }
+    if(occEl && v.occupied){ occEl.value = v.occupied; occEl.dispatchEvent(new Event('input', {bubbles:true})); }
+    if(phoneEl && v.phone) phoneEl.value = v.phone;
+    var rc = document.getElementById('refCode');
+    if(rc && v.refCode && !rc.value) rc.value = v.refCode;
+  }
+  function useGoogle(who){
+    var emailEl = document.getElementById('email'), nameEl = document.getElementById('name');
+    emailEl.value = who.email; emailEl.readOnly = true; clearFieldError(emailEl);
+    if(who.name && !nameEl.value.trim()) nameEl.value = who.name;
+    gEmail.textContent = who.email;
+    gDone.classList.remove('hide'); gBtn.classList.add('hide'); gOr.classList.add('hide');
+  }
+  function forgetGoogle(){
+    googleToken = null;
+    var emailEl = document.getElementById('email');
+    emailEl.readOnly = false; emailEl.value = '';
+    gDone.classList.add('hide'); gBtn.classList.remove('hide'); gOr.classList.remove('hide');
+  }
+  gBtn.addEventListener('click', function(){
+    gSave();
+    gBtn.disabled = true;
+    var back = location.origin + location.pathname + location.search;
+    fetch(API + '/signup/google?return=' + encodeURIComponent(back))
+      .then(function(r){ return r.json().catch(function(){ return {}; }); })
+      .then(function(b){
+        if(b && b.url){ location.href = b.url; return; }
+        gBtn.disabled = false;
+        showSignupError(FIELD_ERRORS[b && b.error] || 'Signing up with Google is not available right now. Fill in your details instead.');
+      })
+      .catch(function(){
+        gBtn.disabled = false;
+        showSignupError('We could not reach the server. Check your connection and try again.');
+      });
+  });
+  document.getElementById('gUndo').addEventListener('click', function(){
+    forgetGoogle(); document.getElementById('email').focus();
+  });
+  (function(){
+    var h = location.hash.replace(/^#/, '');
+    if(!h || (h.indexOf('access_token=') === -1 && h.indexOf('error') === -1)) return;
+    var hp = new URLSearchParams(h);
+    // Off the address at once: a token sitting in the bar is a token in the
+    // history and in anything somebody shares from this tab.
+    try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){}
+    gRestore();
+    var tok = hp.get('access_token');
+    if(!tok){
+      showSignupError('Google sign-in did not finish. Press Continue with Google to try again, or fill in your details.');
+      return;
+    }
+    fetch(API + '/signup/google-identity', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({token: tok})
+    }).then(function(r){
+      return r.json().catch(function(){ return {}; }).then(function(b){ return {ok: r.ok, body: b}; });
+    }).then(function(res){
+      if(!res.ok){
+        showSignupError(FIELD_ERRORS[res.body && res.body.error] || 'Google sign-in did not finish. Try again, or fill in your details.');
+        return;
+      }
+      if(res.body.hasAccount){
+        showSignupError(res.body.email + ' already has a SubSub account. Sign in at app.subsub.work with Continue with Google.');
+        return;
+      }
+      googleToken = tok;
+      useGoogle(res.body);
+    }).catch(function(){
+      showSignupError('We could not reach the server. Check your connection and try again.');
+    });
+  })();
 })();
 </script>
 <script>

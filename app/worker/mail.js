@@ -354,9 +354,11 @@ ${NOREPLY}`;
 // whose password nobody knows is the dead end this exists to remove.
 // Sentences are not hard-wrapped here: the HTML keeps every newline, so a
 // wrap at 80 columns breaks a sentence in half in every mail client.
-export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword }) {
+export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword, viaGoogle }) {
   const app = "https://app.subsub.work";
-  const steps = needsConfirmation
+  const steps = viaGoogle
+    ? `To sign in, go to ${app} and press "Continue with Google" with ${email}.`
+    : needsConfirmation
     ? `To sign in, open the "Confirm your signup" email (it may come from "Supabase Auth"; check Junk), press the link and choose a password.
 
 No email after ten minutes? Go to ${app}, press "Forgot password?" and enter ${email}.`
