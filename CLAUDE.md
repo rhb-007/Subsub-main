@@ -7913,6 +7913,24 @@ refactor.
   the first attempt found. `test:hero` 60/60, and swapping the uncut upload back
   in fails three. The alt text says lumber, not timber.
 
+- **THE MENU ENTRY SAYS PASSPORT, AND THE HERO CREW STAYS INSIDE ITS COLUMN.**
+  Two asks, one message. *"Should the my QR code refer to passport, so it's
+  more usable and clear what it is?"* The code in the profile menu has opened
+  the Passport since the Passport shipped, and the entry still read **My QR
+  code**, so nobody could tell from the menu what a stranger would land on. It
+  reads **My Passport QR** in the menu, the drawer and the Profile panel (one
+  name for one object), and the note under the code says it opens the
+  Passport. Every printed code still works, as the Passport entry records.
+
+  **The crew overran its column on purpose and that was the fault.** The 125%
+  width and -13% margin made the picture as tall as the copy, and the hero
+  clips the spill, so on an iPad the nail gun and the plank were cut off at the
+  right edge and the hammer sat over the lede, reported with both edges
+  circled. It is `width:100%` inside its own column now. The price is height:
+  about 0.63 of the copy's rather than 0.7. `test:hero` moved with it, from "no
+  more than a sliver clipped" to **nothing past the viewport and clear of the
+  words**, and putting the overrun back fails four assertions.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

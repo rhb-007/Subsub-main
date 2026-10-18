@@ -518,7 +518,7 @@ try {
     t.ck("linking sends the address and then says what shows", sent.length === 1 && sent[0].path === "/api/my-passport/bbb"
       && /1296-1000123456/.test(sent[0].body.url) && /Showing A/.test(bb2) && /Remove/.test(bb2), JSON.stringify(sent) + " " + bb2);
     t.ck("what is still blank is named", /Fill these in/.test(after) && /Photos of your work/.test(after), after.slice(0, 600));
-    // My QR code, on Profile, is the Passport now.
+    // My Passport QR, on Profile, is the Passport now.
     await page.evaluate(() => [...document.querySelectorAll("button")].find((x) => x.innerText.trim() === "Profile")?.click());
     await wait(1200);
     const qr = await page.evaluate(() => ({
@@ -526,7 +526,7 @@ try {
       code: document.querySelector(".cx-code-txt")?.innerText || "",
       svg: !!document.querySelector(".cx-code svg"),
     }));
-    t.ck("My QR code is the Passport's address", qr.svg && qr.url === `https://app.subsub.work/p/${SLUG}` && !qr.code, JSON.stringify(qr));
+    t.ck("My Passport QR is the Passport's address", qr.svg && qr.url === `https://app.subsub.work/p/${SLUG}` && !qr.code, JSON.stringify(qr));
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

@@ -106,8 +106,8 @@ try {
 
     await countFetches(page);
     const items = await text(page, ".user-menu button");
-    t.ck("the code is offered", items.some((x) => /My QR code/i.test(x)), items.join(" | "));
-    t.ck("and it is the first thing in the menu", /My QR code/i.test(items[0] || ""), items[0]);
+    t.ck("the code is offered", items.some((x) => /My Passport QR/i.test(x)), items.join(" | "));
+    t.ck("and it is the first thing in the menu", /My Passport QR/i.test(items[0] || ""), items[0]);
     t.ck("nothing is drawn before it is asked for",
       (await page.$(".qrp")) === null && (await fetches(page)) === 0, String(await fetches(page)));
 
@@ -298,7 +298,7 @@ try {
     await wait(250);
     const items = await text(page, ".user-menu button");
     t.ck("is not offered a code it cannot have",
-      !items.some((x) => /My QR code/i.test(x)), items.join(" | "));
+      !items.some((x) => /My Passport QR/i.test(x)), items.join(" | "));
     t.ck("and nothing went looking for one",
       !api.calls.includes("/api/connect/code"), api.calls.join(" "));
     t.ck("nor is the phone's copy in the markup",

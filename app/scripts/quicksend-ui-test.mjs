@@ -4,7 +4,7 @@
 // The panel on Compliance pack is for MANAGING what has been sent -- the list, the
 // view counts, revoking. This is the other half of the same act: a general
 // contractor asks for your insurance while you are standing on their site, and
-// the answer should be six seconds long. It sits beside My QR code because they
+// the answer should be six seconds long. It sits beside My Passport QR because they
 // are the same kind of thing -- give somebody your details without a
 // conversation. The code is how they add you; this is how they get your paper.
 //
@@ -95,7 +95,7 @@ try {
 
     const items = await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
       .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
-    t.ck("the QR code is in the menu", items.some((i) => /My QR code/.test(i)), JSON.stringify(items));
+    t.ck("the QR code is in the menu", items.some((i) => /My Passport QR/.test(i)), JSON.stringify(items));
     t.ck("and sending documents is right beside it",
       items.some((i) => /Quick send/.test(i)), JSON.stringify(items));
 
@@ -160,7 +160,7 @@ try {
       .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
     t.ck("sending is not offered", !items.some((i) => /Quick send/.test(i)),
       JSON.stringify(items));
-    t.ck("but the QR code still is", items.some((i) => /My QR code/.test(i)),
+    t.ck("but the QR code still is", items.some((i) => /My Passport QR/.test(i)),
       JSON.stringify(items));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();

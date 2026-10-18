@@ -6063,7 +6063,7 @@ export default function SubSub() {
                     {canShowQr && (
                       <>
                         <button className="um-qr" onClick={toggleQr} aria-expanded={qrOpen}>
-                          <QrCodeIcon size={14} /> My QR code
+                          <QrCodeIcon size={14} /> My Passport QR
                           <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
                         </button>
                         {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
@@ -6165,7 +6165,7 @@ export default function SubSub() {
           {canShowQr && (
             <div className="drawer-qr" onClick={(e) => e.stopPropagation()}>
               <button className="um-qr" onClick={toggleQr} aria-expanded={qrOpen}>
-                <QrCodeIcon size={14} /> My QR code
+                <QrCodeIcon size={14} /> My Passport QR
                 <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
               </button>
               {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
@@ -23241,9 +23241,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           {canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
             <div className="portal-panel settings-panel">
               {/* Named the way the header menu names it. The menu entry has
-                  said "My QR code" since it was added, and a panel calling the
+                  said "My Passport QR" now, and a panel calling the
                   same thing something else is two names for one object. */}
-              <h4>My QR code</h4>
+              <h4>My Passport QR</h4>
               <p className="panel-note">
                 Show this to a general contractor and have them scan it. It opens your SubSub Passport,
                 where they read your license and insurance and connect with you. Once you accept, they
@@ -29157,7 +29157,7 @@ function QrPeek({ code, err, onRetry }) {
         <Copy size={13} /> {copied ? "Copied" : "Copy link"}
       </button>
       <p className="qrp-note">
-        Show this to have them add you. Nothing of yours moves until you accept.
+        Scan to open your SubSub Passport and connect. Nothing of yours moves until you accept.
       </p>
       {copyErr && <p className="qrp-note" role="alert">{copyErr}</p>}
       {full && <QrFull code={code} onClose={() => setFull(false)} />}

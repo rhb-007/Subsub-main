@@ -195,21 +195,20 @@ try {
     ck(`${name}: the crew is centred on the copy, not hung from its top or its foot`,
       Math.abs(above - below) <= 24, `${above}px below the headline, ${below}px above the end of the copy`);
     ck(`${name}: and neither gap is a separate block's worth`,
-      above >= 0 && above <= 90 && below >= 0 && below <= 90, `${above}px / ${below}px`);
+      above >= 0 && above <= 110 && below >= 0 && below <= 110, `${above}px / ${below}px`);
     // A wider picture is shorter beside the same copy, and at 1024 the copy
     // reflows to more lines while the crew only scales. The bound is what this
     // assertion's own name says -- not a third of the copy -- with room for
     // that reflow rather than tuned to the widest desktop.
     ck(`${name}: so it is the same height as the copy, not a third of it`,
-      o.imgH / o.copyH > 0.65, `crew ${o.imgH}px vs copy ${o.copyH}px (${(o.imgH / o.copyH).toFixed(2)})`);
-    // It overruns its column on purpose and .hero clips the spill, so the
-    // no-sideways-scroll check above can no longer fail on this. This is what
-    // replaces it: a future width bump must not cut a puppet in half.
-    ck(`${name}: and no more than a sliver is clipped off the right`,
-      o.overRight <= o.imgW * 0.08, `${o.overRight}px past the viewport, image ${o.imgW}px`);
-    // The box may overlap the widest line a little; the bound is that no
-    // puppet sits on the words.
-    ck(`${name}: the crew does not land on the words`, o.inkGap > -40, `${o.inkGap}px`);
+      o.imgH / o.copyH > 0.55, `crew ${o.imgH}px vs copy ${o.copyH}px (${(o.imgH / o.copyH).toFixed(2)})`);
+    // It stays INSIDE its column now. It used to overrun on purpose and let
+    // .hero clip the spill, which cut the nail gun and the plank off the right
+    // edge and laid the hammer over the lede -- reported with both edges
+    // circled. So nothing past the viewport at all, and clear of the words.
+    ck(`${name}: and none of it is clipped off the right`,
+      o.overRight <= 0, `${o.overRight}px past the viewport, image ${o.imgW}px`);
+    ck(`${name}: the crew does not touch the words`, o.inkGap >= 0, `${o.inkGap}px`);
   }
 
   console.log("\n-- and it is drawn at a sensible size --");
