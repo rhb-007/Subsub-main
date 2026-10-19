@@ -22,6 +22,7 @@ import { createPortal } from "react-dom";
 // flag only decides what ships to the browser.
 const BUILD = import.meta.env.VITE_BUILD === "platform" ? "platform" : "tenant";
 import {
+  Monitor, Moon,
   Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList, ClipboardCheck,
@@ -41,6 +42,8 @@ import {
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool } from "./lib/photoshrink.js";
+import { withDark } from "./lib/darkcss.js";
+import { useTheme } from "./lib/theme.js";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
@@ -2080,6 +2083,7 @@ export default function SubSub() {
   // "you are not allowed to see this". See hydrateAccount().
   const [loadErr, setLoadErr] = useState(null);
   const [loggedIn, setLoggedIn] = useState(false);
+  const themeCtl = useTheme(loggedIn);
   // A general contractor links to their own application form from their own
   // website, and the account page's "open the live application form" link
   // points at the same place. A query string rather than a path, for the same
@@ -6075,6 +6079,7 @@ export default function SubSub() {
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> My account
                     </button>
+                    <ThemePicker ctl={themeCtl} />
                     {brand.subdomain && brand.subdomain !== "app" && (
                       <>
                         <div className="um-sec">Your sign-in address</div>
@@ -6360,6 +6365,7 @@ export default function SubSub() {
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> My account</button>
+            <ThemePicker ctl={themeCtl} drawer />
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
                 it. "Switch to Cascade Management" on its own reads as taking
                 the place over -- which is the opposite of the truth when the
@@ -41394,8 +41400,31 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
   );
 }
 
+// System, Dark or Light. The rows are radios, so the choice is said by a tick
+// as well as by position, and System is first because it is the default.
+const THEME_ROWS = [
+  { id: "system", label: "System", icon: Monitor },
+  { id: "dark", label: "Dark", icon: Moon },
+  { id: "light", label: "Light", icon: Sun },
+];
+function ThemePicker({ ctl, drawer = false }) {
+  return (
+    <div className={`theme-pick${drawer ? " in-drawer" : ""}`} role="radiogroup" aria-label="Theme">
+      <div className="theme-head">Theme</div>
+      {THEME_ROWS.map(({ id, label, icon: Icon }) => (
+        <button key={id} type="button" role="radio" aria-checked={ctl.pref === id}
+          className={`theme-opt${ctl.pref === id ? " on" : ""}`}
+          onClick={(e) => { e.stopPropagation(); ctl.setPref(id); }}>
+          <Icon size={drawer ? 15 : 14} /> <span>{label}</span>
+          {ctl.pref === id && <Check size={14} className="theme-tick" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ---- Styles --------------------------------------------------------------
-const CSS = `
+const BASE_CSS = `
 :root{--ink:#1a2b23;--ink-soft:#4a5c53;--paper:#f6f4ee;--card:#fffdf8;--line:#e2ddd0;
   --brand:#1f6b4a;--brand-dk:#14523a;--amber:#c8871e;--red:#b5442e;--shadow:0 1px 2px rgba(26,43,35,.06);
   /* --amber is a fill colour. On the card it is 2.98:1, which fails AA for
@@ -42795,6 +42824,19 @@ p.fld-note{margin:6px 0 0}
 .ua-role{font-size:11px;color:var(--ink-soft)}
 .ua-tick{margin-left:auto;color:var(--brand);flex:none}
 .um-account{border-bottom:1px solid var(--line);border-radius:8px 8px 0 0 !important;margin-bottom:3px;color:var(--brand) !important;font-weight:700 !important}
+.theme-pick{border-bottom:1px solid var(--line);padding:2px 0 4px;margin-bottom:3px}
+.theme-head{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--ink-soft);padding:8px 14px 4px}
+.theme-pick .theme-opt{display:flex;flex-direction:row !important;align-items:center !important;gap:9px !important;width:100%;border:0;background:none;
+  padding:8px 14px;cursor:pointer;text-align:left;font:inherit;font-size:13.5px;color:var(--ink)}
+.theme-pick .theme-opt svg{color:var(--ink-soft)}
+.theme-pick .theme-opt:hover{background:var(--paper)}
+.theme-pick .theme-opt.on{font-weight:700}
+.theme-pick .theme-opt.on svg{color:var(--brand)}
+.theme-pick .theme-tick{margin-left:auto}
+.theme-pick.in-drawer{padding:4px 0 6px;border-top:1px solid var(--line);margin:0}
+.theme-pick.in-drawer .theme-head{padding:10px 20px 4px}
+.drawer-actions .theme-pick .theme-opt{padding:11px 20px;min-height:44px}
 .um-link{display:flex;align-items:center;gap:8px;padding:8px 12px 10px;font-size:12.5px;
   color:var(--ink);text-decoration:none;border-bottom:1px solid var(--line);margin-bottom:3px}
 .um-link span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -48310,3 +48352,14 @@ button.job-insp:hover{border-color:#2f5577}
   color:var(--amber-ink);background:#fffaf0;border:1px solid #f0d9a8;border-radius:10px}
 
 `;
+// The dark theme is derived from the sheet above, a twin after each rule (see
+// lib/darkcss.js), then the
+// core tokens are set by hand: the page a step darker than a card so a card
+// reads as raised, the text brighter than an inversion makes it, and the brand
+// green lifted so it reads as a link and carries dark text as a button.
+const DARK_TOKENS = `:root[data-theme="dark"]{color-scheme:dark;--paper:#121311;--card:#1c1a17;
+  --ink:#e8ece9;--ink-soft:#a9b6af;--line:#33302a;--brand:#4fae80;--brand-dk:#6cc095;
+  --amber-ink:#e0a64a;--shadow:0 1px 2px rgba(0,0,0,.4)}
+:root[data-theme="dark"] img{color-scheme:light}
+`;
+const CSS = withDark(BASE_CSS) + DARK_TOKENS;

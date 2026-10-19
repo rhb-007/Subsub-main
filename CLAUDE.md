@@ -14081,6 +14081,48 @@ refactor.
   signup form, `pricing.html`'s two FAQ answers and `test:signupunits` were
   moved to the new rule rather than loosened.
 
+- **DARK MODE IS DERIVED FROM THE LIGHT SHEET, AND EACH DARK RULE SITS RIGHT
+  AFTER THE RULE IT SHADOWS.** Asked for as *"Need to add a dark mode etc to user
+  accounts"*, with a Theme menu reading System / Dark / Light. `src/lib/theme.js`
+  holds the choice, `src/lib/darkcss.js` builds the theme.
+
+  **The picker is in the profile menu and the drawer**, three radio rows with a
+  tick, System first because it is the default. It is remembered **on this
+  device** (`ss_theme`, localStorage with try/catch), the way an iPad's own
+  setting is: dark on the phone at night and light on the tablet on a roof are
+  both reasonable. System follows the device **live**, with no reload. Picking
+  does not close the menu. **A signed-out page is always light**, because the
+  sign-in, apply and pack pages wear a company's own colors.
+
+  **The dark sheet is generated, not written.** `App.tsx` carries about five
+  hundred literal colors as well as its tokens, and a hand-written dark sheet
+  would be a second copy of every one of them that the next change leaves
+  behind. `withDark` gives every rule that has a color a twin under
+  `html[data-theme="dark"]`, with the color's lightness turned over in OKLab
+  and its hue and chroma kept, so contrast survives by construction. A strongly
+  colored accent (amber, red, the brand green) moves less, so it still looks
+  like itself. Three things are not inverted: dark translucent backgrounds
+  (modal backdrops), translucent shadows, and the customer's own theme
+  (`wl-`, `theme-preview`), which previews a page their visitors see in light.
+  Then `DARK_TOKENS` sets the core tokens by hand: the page a step darker than
+  a card, the text brighter than an inversion makes it, and the brand green
+  lifted so it reads as a link and carries dark text as a button.
+
+  **The twin adds no specificity and follows its rule immediately, and the
+  first version got both wrong.** Appended at the end under
+  `:root[data-theme="dark"]`, each twin gained two classes' worth and beat
+  rules it was meant to lose to: `.shs-day.has`'s dark tint painted over
+  `.shs-day.is-next`'s solid brand, so the next booked day on the dashboard
+  disappeared. `:where(...)` adds nothing, and writing the twin in place keeps
+  the cascade between any two rules exactly as it was in light.
+  `test:themeui` (23) reads the computed colors, not the stylesheet. Two
+  mutations fire: the prefix outside `:where` (the next-day check) and the
+  theme applied while signed out.
+
+  **Still open:** the staff console does not take the setting. It shares the
+  stylesheet, so a dark console is the same switch away, but nobody asked for
+  it and its forest bars would invert.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
