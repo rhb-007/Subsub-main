@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck, checkStatements } from "./lib/check-sql.mjs";
 import { unitPricing, setupTierFor, portfolioUnits, unitTermsText, UNIT_THRESHOLD,
-  UNIT_PRICE_CENTS, MIN_MONTHLY_CENTS, SETUP_TIERS } from "../shared/unitpricing.js";
+  UNIT_PRICE_CENTS, MIN_MONTHLY_CENTS, SETUP_TIERS, yearlyAllowed, effectiveBilling } from "../shared/unitpricing.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -51,9 +51,16 @@ const SCHEMA = readFileSync(new URL("../worker/schema.sql", import.meta.url), "u
     !unitPricing("general_contractor", [b(500, 500)]).eligible
     && !unitPricing("general_contractor", [b(500, 500)]).applies);
   ck("a building owner is", unitPricing("building_owner", [b(90, 90)]).applies);
-  ck("yearly is allowed only at 80 or fewer",
-    unitPricing("property_manager", [b(80, 80)]).annualAllowed
+  ck("a unit-priced kind is never yearly, at any size",
+    !unitPricing("property_manager", [b(80, 80)]).annualAllowed
     && !unitPricing("property_manager", [b(81, 81)]).annualAllowed);
+  ck("a general contractor still may be", unitPricing("general_contractor", [b(500, 500)]).annualAllowed
+    && yearlyAllowed("general_contractor") && !yearlyAllowed("building_owner"));
+  ck("a stored year with nothing paid behind it reads as monthly",
+    effectiveBilling({ kind: "property_manager", billing: "annual" }) === "monthly");
+  ck("a yearly subscription really running keeps its year",
+    effectiveBilling({ kind: "property_manager", billing: "annual", stripe_subscription_id: "sub_1" }) === "annual");
+  ck("a general contractor's year is its year", effectiveBilling({ kind: "general_contractor", billing: "annual" }) === "annual");
   const tiers = [[81, 25000], [250, 25000], [251, 50000], [500, 50000], [501, 100000],
     [1000, 100000], [1001, 200000], [5000, 200000]];
   ck("each setup step doubles: $250, $500, $1,000, $2,000",
@@ -235,9 +242,23 @@ async function hook(env, payload) {
   db.exec(`UPDATE properties SET units = 70, occupied_units = 70 WHERE id = 'p_new1'`);
   await call(env, "/api/billing/checkout", { method: "POST", seat: ["u_new", "acc_new"], body: { cycle: "annual" } });
   const flat = calls.find((c) => /checkout\/sessions/.test(c.url))?.body || {};
-  ck("at 80 or fewer it is the flat price, yearly allowed, no setup line",
-    flat["line_items[0][price]"] === "price_annual" && !flat["line_items[1][quantity]"] && !flat["metadata[setup_cents]"],
-    JSON.stringify(flat));
+  ck("at 80 or fewer, yearly is refused too: one price, monthly", !flat["line_items[0][price]"], JSON.stringify(flat));
+  calls = [];
+  await call(env, "/api/billing/checkout", { method: "POST", seat: ["u_new", "acc_new"], body: { cycle: "monthly" } });
+  const flatMo = calls.find((c) => /checkout\/sessions/.test(c.url))?.body || {};
+  ck("and monthly is the flat $99 price, no setup line",
+    flatMo["line_items[0][price]"] === "price_monthly" && !flatMo["line_items[1][quantity]"] && !flatMo["metadata[setup_cents]"],
+    JSON.stringify(flatMo));
+  const pa = await call(env, "/api/account", { method: "PATCH", seat: ["u_new", "acc_new"], body: { billing: "annual" } });
+  ck("the account cannot be switched to yearly either", pa.status === 409 && pa.body.error === "annual_not_available",
+    `${pa.status} ${JSON.stringify(pa.body)}`);
+  db.exec(`UPDATE accounts SET billing = 'annual', plan = 'scale', stripe_subscription_id = NULL WHERE id = 'acc_new'`);
+  const ga = await call(env, "/api/account", { seat: ["u_new", "acc_new"] });
+  ck("a stored year with no yearly subscription reads as monthly", ga.body.billing === "monthly", JSON.stringify(ga.body.billing));
+  db.exec(`UPDATE accounts SET stripe_subscription_id = 'sub_year' WHERE id = 'acc_new'`);
+  const gy = await call(env, "/api/account", { seat: ["u_new", "acc_new"] });
+  ck("a yearly subscription really running is still yearly", gy.body.billing === "annual", JSON.stringify(gy.body.billing));
+  db.exec(`UPDATE accounts SET billing = 'monthly', plan = 'basic', stripe_subscription_id = NULL WHERE id = 'acc_new'`);
 
   calls = [];
   await call(env, "/api/billing/checkout", { method: "POST", seat: ["u_gc", "acc_gc"], body: { cycle: "monthly" } });

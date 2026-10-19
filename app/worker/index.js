@@ -160,7 +160,7 @@ import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passp
   ACCESS_KINDS as PASSPORT_ACCESS_KINDS, openableKinds, ACCESS_MESSAGE_MAX, accessMove, MAX_PHOTOS as PASSPORT_MAX_PHOTOS,
   CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
 import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_CENTS,
-  MIN_MONTHLY_CENTS, validEstimate, pricingRows } from "../shared/unitpricing.js";
+  MIN_MONTHLY_CENTS, validEstimate, pricingRows, yearlyAllowed, effectiveBilling } from "../shared/unitpricing.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 import { bbbLive, fetchBbbRating } from "./bbb.js";
 import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
@@ -1205,11 +1205,13 @@ app.post("/api/signup", async (c) => {
     if (v.error) return c.json({ error: v.error }, 400);
     estimate = v.estimate;
   }
-  // Past 80 units Scale is monthly only. The form already says so and moves
-  // the choice; this is the same rule on the server, so a yearly signup at 500
-  // units cannot be stored and then refused at the checkout.
+  // A property manager, a portfolio manager and a building owner are billed
+  // monthly at every size: their one price is max($99, $1.25 x occupied), and
+  // a $990 year would undercut its own floor. The form says so; this is the
+  // same rule on the server, so a yearly signup cannot be stored and then
+  // refused at the checkout.
+  if (billing === "annual" && !yearlyAllowed(b.kind)) billing = "monthly";
   const estimatePricing = estimate ? unitPricing(b.kind, pricingRows([], estimate).rows) : null;
-  if (estimatePricing?.applies && billing === "annual") billing = "monthly";
   // Absent is fine (an older page, or a caller that does not collect them);
   // present but wrong is not, because it would store ids nothing can render.
   const trades = b.trades === undefined ? [] : validTrades(b.trades);
@@ -1730,11 +1732,12 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   if (!account) return c.json({ error: "not_found" }, 404);
   const user = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
 
-  // 084. A portfolio past 80 units is billed per occupied unit, monthly only,
-  // with a one-time setup fee on the first invoice. Refused rather than
-  // quietly switched to monthly: somebody who pressed "yearly" should be told.
+  // 084. A unit-priced kind is billed monthly at every size (past 80 units per
+  // occupied unit, with a one-time setup fee on the first invoice). Refused
+  // rather than quietly switched to monthly: somebody who pressed "yearly"
+  // should be told.
   const units = await accountUnitPricing(c.env, accountId, account.kind);
-  if (units.applies && cycle === "annual") {
+  if (cycle === "annual" && !yearlyAllowed(account.kind)) {
     return c.json({ error: "annual_not_available", threshold: UNIT_THRESHOLD }, 409);
   }
   let lineItems = [{ price, quantity: 1 }];
@@ -6512,7 +6515,7 @@ app.get("/api/account", async (c) => {
   if (!a) return c.json({ error: "not_found" }, 404);
   const user = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
   return c.json({
-    id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
+    id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: effectiveBilling(a),
     logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
     // null when nobody has chosen yet -- which is the cue to ask, and is not
     // the same answer as an empty list.
@@ -6563,12 +6566,12 @@ app.get("/api/account-by-subdomain/:subdomain", async (c) => {
   const a = await c.env.DB.prepare(
     // kind is read back below and was never selected, so every branded
     // sign-in page thought it belonged to a general contractor.
-    `SELECT id, name, subdomain, kind, plan, billing, logo_key, use_default_mark, theme
+    `SELECT id, name, subdomain, kind, plan, billing, stripe_subscription_id, logo_key, use_default_mark, theme
        FROM accounts WHERE subdomain = ?`
   ).bind(c.req.param("subdomain").toLowerCase()).first();
   if (!a) return c.notFound();
   return c.json({
-    id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: a.billing,
+    id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: effectiveBilling(a),
     logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
   });
 });
@@ -8367,7 +8370,17 @@ app.patch("/api/account", requireRole("admin"), async (c) => {
     }
   }
   if (b.plan != null) { sets.push("plan = ?"); vals.push(b.plan); }
-  if (b.billing != null) { sets.push("billing = ?"); vals.push(b.billing); }
+  if (b.billing != null) {
+    if (!["monthly", "annual"].includes(b.billing)) return c.json({ error: "invalid_billing" }, 400);
+    // Yearly is not a cycle a unit-priced kind can be on. Read against the
+    // kind this same request leaves the account as.
+    if (b.billing === "annual") {
+      const k = b.kind != null ? b.kind
+        : (await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first())?.kind;
+      if (!yearlyAllowed(k)) return c.json({ error: "annual_not_available" }, 409);
+    }
+    sets.push("billing = ?"); vals.push(b.billing);
+  }
   if (b.logoKey !== undefined) { sets.push("logo_key = ?"); vals.push(b.logoKey); }
   if (b.useDefaultMark != null) { sets.push("use_default_mark = ?"); vals.push(b.useDefaultMark ? 1 : 0); }
   if (b.theme !== undefined) {
@@ -24808,12 +24821,12 @@ app.get("/api/platform/revenue", async (c) => {
   const [subEvents, invoices, accounts] = await Promise.all([
     c.env.DB.prepare(`SELECT * FROM subscription_events ORDER BY at`).all(),
     c.env.DB.prepare(`SELECT * FROM invoices ORDER BY period_start DESC LIMIT 200`).all(),
-    c.env.DB.prepare(`SELECT id, name, plan, billing FROM accounts`).all(),
+    c.env.DB.prepare(`SELECT id, name, kind, plan, billing, stripe_subscription_id FROM accounts`).all(),
   ]);
   // Normalized: an annual plan counts as its monthly twelfth, or the number
   // means nothing once the mix moves.
   const mrrCents = accounts.results.reduce((n, a) =>
-    n + (a.plan === "scale" ? (a.billing === "annual" ? Math.round(99000 / 12) : 9900) : 0), 0);
+    n + (a.plan === "scale" ? (effectiveBilling(a) === "annual" ? Math.round(99000 / 12) : 9900) : 0), 0);
   return c.json({
     mrrCents, arrCents: mrrCents * 12,
     subscriptionEvents: subEvents.results,
@@ -24842,7 +24855,7 @@ app.get("/api/platform/accounts", async (c) => {
   const { error, staff } = await requireStaff(c);
   if (error) return error;
   const { results } = await c.env.DB.prepare(
-    `SELECT a.id, a.name, a.subdomain, a.kind, a.plan, a.billing, a.created_at,
+    `SELECT a.id, a.name, a.subdomain, a.kind, a.plan, a.billing, a.stripe_subscription_id, a.created_at,
             (SELECT COUNT(*) FROM memberships m WHERE m.account_id = a.id AND m.role <> 'contractor') AS users,
             (SELECT COUNT(*) FROM engagements e WHERE e.account_id = a.id) AS subs,
             (SELECT COUNT(*) FROM jobs j WHERE j.account_id = a.id) AS jobs
@@ -24850,11 +24863,11 @@ app.get("/api/platform/accounts", async (c) => {
   ).all();
   const rows = results.map((a) => {
     const base = { id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
-      plan: a.plan, billing: a.billing, createdAt: a.created_at,
+      plan: a.plan, billing: effectiveBilling(a), createdAt: a.created_at,
       users: a.users, subs: a.subs, jobs: a.jobs };
     if (!staff.finance) return base;   // omitted, not hidden in the interface
     return { ...base, mrrCents: a.plan === "scale"
-      ? (a.billing === "annual" ? Math.round(99000 / 12) : 9900) : 0 };
+      ? (effectiveBilling(a) === "annual" ? Math.round(99000 / 12) : 9900) : 0 };
   });
   return c.json(rows);
 });
@@ -24998,10 +25011,13 @@ app.get("/api/platform/bootstrap", async (c) => {
   } catch (err) {
     if (!missingSchema(err)) console.warn("[platform] portfolio estimates unavailable:", err?.message || err);
   }
+  // Every unit-priced account's month, not only those past 80: these kinds
+  // are monthly at every size, so under 80 the answer is the $99 minimum and
+  // a stored "annual" with no yearly subscription behind it must not read as
+  // $82.50. Null only for a yearly subscription really running.
   const unitMonthly = (a) => {
-    if (!unitPriced(a.kind) || a.billing === "annual") return null;
-    const u = unitPricing(a.kind, pricingRows(portfolios[a.id] || [], estimates[a.id] || null).rows);
-    return u.applies ? u.monthlyCents : null;
+    if (!unitPriced(a.kind) || effectiveBilling(a) === "annual") return null;
+    return unitPricing(a.kind, pricingRows(portfolios[a.id] || [], estimates[a.id] || null).rows).monthlyCents;
   };
 
   return c.json({
@@ -25009,7 +25025,7 @@ app.get("/api/platform/bootstrap", async (c) => {
     // the dedicated revenue route — otherwise the omission is cosmetic.
     accounts: accounts.results.map((a) => ({
       id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind,
-      plan: a.plan, billing: a.billing, comped: !!a.comped, compNote: a.comp_note,
+      plan: a.plan, billing: effectiveBilling(a), comped: !!a.comped, compNote: a.comp_note,
       // The account's own company row (031). A company window reads it to
       // list the account's OWN team beside the contractor seats other
       // accounts gave them: without it a subcontractor account's admin was
@@ -25262,7 +25278,7 @@ app.post("/api/platform/accounts", async (c) => {
   const subdomain = validSubdomain(b.subdomain);
   const kind = ACCOUNT_KINDS.includes(b.kind) ? b.kind : "general_contractor";
   const plan = b.plan === "scale" ? "scale" : "basic";
-  const billing = b.billing === "annual" ? "annual" : "monthly";
+  const billing = b.billing === "annual" && yearlyAllowed(kind) ? "annual" : "monthly";
   if (!name) return c.json({ error: "name_required" }, 400);
   if (!subdomain) return c.json({ error: "invalid_subdomain" }, 400);
 
@@ -25387,6 +25403,7 @@ app.patch("/api/platform/accounts/:id", async (c) => {
   }
   if (b.billing != null) {
     if (!["monthly", "annual"].includes(b.billing)) return c.json({ error: "invalid_billing" }, 400);
+    if (b.billing === "annual" && !yearlyAllowed(account.kind)) return c.json({ error: "annual_not_available" }, 409);
     sets.push("billing = ?"); vals.push(b.billing);
   }
   if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);

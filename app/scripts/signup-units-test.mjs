@@ -146,7 +146,7 @@ console.log("\n-- only the three kinds, and wrong numbers are refused --");
   t.ck("and a fraction", frac.status === 400 && frac.body.error === "invalid_units");
   const small = await signup(env, { kind: "portfolio_manager", plan: "scale", billing: "annual", units: { total: 60 } });
   const smallAcc = db.prepare(`SELECT billing FROM accounts WHERE id = ?`).get(small.body.accountId);
-  t.ck("80 or fewer keeps yearly", small.status === 201 && smallAcc?.billing === "annual" && small.body.units?.applies === false,
+  t.ck("80 or fewer is monthly too: one price at every size", small.status === 201 && smallAcc?.billing === "monthly" && small.body.units?.applies === false,
     JSON.stringify(small.body));
   const none = await signup(env, { kind: "property_manager", plan: "scale" });
   t.ck("no units given is fine", none.status === 201 && none.body.units === null);
@@ -214,12 +214,13 @@ try {
       && r.units === "300" && r.occ === "250", JSON.stringify(r));
     t.ck("the quote is the bill's: month and setup", r.quote.includes(usd(want.monthlyCents)) && r.quote.includes(usd(want.setupCents)), r.quote);
     t.ck("the plan pill says the same month", r.pill.startsWith(usd(want.monthlyCents) + "/mo"), r.pill);
-    t.ck("and says yearly gives way past 80", /billed monthly, so this replaces the yearly price/.test(r.quote), r.quote);
+    t.ck("and says the yearly choice is replaced", /billed monthly for property managers.*replaces the yearly price/.test(r.quote), r.quote);
 
     await set(page, "units", 60); await set(page, "occupied", 60);
     const under = await read(page);
     t.ck("under 80 the price is the flat one, with no setup fee", /\$99/.test(under.quote) && /No setup fee/.test(under.quote), under.quote);
-    t.ck("and a yearly choice comes back", /\$990\/yr/.test(under.pill), under.pill);
+    t.ck("and it stays monthly: no $990 year for these kinds", /^\$99\/mo/.test(under.pill) && !/\$990/.test(under.pill)
+      && /billed monthly\. No setup fee/.test(under.quote), `${under.pill} | ${under.quote}`);
 
     await set(page, "units", 10); await set(page, "occupied", 20);
     const over = await read(page);

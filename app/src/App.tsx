@@ -64,7 +64,8 @@ import { KIND_WORDS, kindShort, kindRefusal, isConditional, formsReasonText, ren
 import { coverProblemText, fixableByUpload } from "../shared/paygate.js";
 import { MIN_FUND_CENTS, canPay, payRefusalText, fundSuggestion } from "../shared/escrow.js";
 import { feeTermsText, DEFAULT_FEE_TERMS } from "../shared/fee.js";
-import { unitPriced, unitTermsText, formatUsd as unitUsd, UNIT_THRESHOLD } from "../shared/unitpricing.js";
+import { unitPriced, unitTermsText, formatUsd as unitUsd, UNIT_THRESHOLD,
+  MIN_MONTHLY_CENTS as MIN_MONTHLY_CENTS_UI, UNIT_PRICE_CENTS as UNIT_PRICE_CENTS_UI } from "../shared/unitpricing.js";
 import { jobsMapFor, buildingsMapFor, groupPins, pinBounds, PRECISION as MAP_PRECISION } from "../shared/mapgeo.js";
 import { smsUsageText, smsOverageText, SMS_OVERAGE_TERMS, SMS_INCLUDED_SCALE, SMS_BLOCK_MESSAGES, SMS_BLOCK_PRICE_CENTS } from "../shared/smsquota.js";
 import { INSURANCE_LINES, OPTIONAL_LINES, BOND_MIN, INSURANCE_MIN, checkItems, findingsFor,
@@ -8318,6 +8319,7 @@ export default function SubSub() {
           onClose={() => { reviewGuard.current = null; setReviewing(null); }} /></Modal>}
       {upgradePrompt && <Modal onClose={() => setUpgradePrompt(null)}>
         <UpgradePrompt kind={upgradePrompt.kind} plan={plan} billing={billing} onSetBilling={setBilling} words={rosterWords(account)}
+          accountKind={account.kind}
           count={upgradePrompt.kind === "contractor" ? subs.length
             : upgradePrompt.kind === "job" ? jobsThisMonth : seatCount}
           // No optimistic switch and no queued follow-up action: the browser
@@ -18566,11 +18568,14 @@ function BecomeHiring({ account, onCancel, onConfirm }) {
 }
 
 // ---- Upgrade gate (shown instead of the add form when a plan is maxed) ---
-function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline, busy, err,
+function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, onDecline, busy, err, accountKind,
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
   const cur = PLANS[plan];
   const next = PLANS.scale;
-  const [cycle, setCycle] = useState(billing === "annual" ? "annual" : "monthly");
+  // A property manager, a portfolio manager and a building owner have one
+  // Scale price, monthly, so there is no cycle to pick (shared/unitpricing.js).
+  const monthlyOnly = unitPriced(accountKind);
+  const [cycle, setCycle] = useState(billing === "annual" && !monthlyOnly ? "annual" : "monthly");
   const annual = cycle === "annual";
 
   // Why they're seeing this, in their own numbers.
@@ -18597,6 +18602,7 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
         uniform ordering and a connection to your CRM.
       </p>
 
+      {!monthlyOnly && (
       <div className="cycle up-cycle" role="tablist" aria-label="Billing cycle">
         {[["monthly", "Monthly"], ["annual", "Annual"]].map(([c, l]) => (
           <button key={c} role="tab" aria-selected={cycle === c}
@@ -18605,6 +18611,7 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
           </button>
         ))}
       </div>
+      )}
 
       <div className="up-buy">
         <div className="up-price-block">
@@ -18612,7 +18619,9 @@ function UpgradePrompt({ kind, plan, count, billing, onSetBilling, onUpgrade, on
           <span className="up-terms">
             {annual
               ? `${formatDollars(next.annual)} billed once a year, plus sales tax · saves ${formatDollars(next.annualSaving)}`
-              : "Billed monthly, plus sales tax · cancel any time"}
+              : monthlyOnly
+                ? `Billed monthly, plus sales tax · past ${UNIT_THRESHOLD} units, ${unitUsd(UNIT_PRICE_CENTS_UI)} per occupied unit`
+                : "Billed monthly, plus sales tax · cancel any time"}
           </span>
         </div>
         <button className="btn-solid up-go" onClick={onUpgrade} disabled={busy}>
@@ -23024,12 +23033,18 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // kind that is never billed per unit.
   const [unitInfo, setUnitInfo] = useState(null);
   const perUnit = !!unitInfo?.applies;
-  // Per-unit is monthly only, so a portfolio past 80 units that has not paid
-  // yet is not left on a yearly choice the checkout would refuse. An account
-  // already on a yearly plan keeps it: that year is paid for.
+  // ONE SCALE PRICE for a property manager, a portfolio manager and a building
+  // owner: max($99, $1.25 x occupied), billed monthly at every size. Offering
+  // the $990 year as well put $186.25 in the price box and $82.50 on the plan
+  // card for one 149-unit account. The only yearly left is a year somebody
+  // already PAID for, kept to its end -- the server reports "annual" for these
+  // kinds only while that subscription is really running.
+  const unitKind = unitPriced(accountKind);
+  const liveYearly = unitKind && billing === "annual" && !!currentPeriodEnd && !comped;
+  const scaleMonthCents = unitInfo?.monthlyCents || 9900;
   useEffect(() => {
-    if (perUnit && billing === "annual" && plan !== "scale") onSetBilling?.("monthly");
-  }, [perUnit, billing, plan]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (unitKind && billing === "annual" && !liveYearly) onSetBilling?.("monthly");
+  }, [unitKind, billing, liveYearly]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // profile form
   const [p, setP] = useState({ name: me.name, email: me.email, phone: me.phone || "" });
@@ -23853,7 +23868,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <span className="pc-name">{active.name}</span>
               {active.annual ? (
                 <span className="pc-cycle">
-                  {billing === "annual" ? `${formatDollars(active.annual)}/yr` : `${active.price}/mo`}
+                  {unitKind && plan === "scale" && !liveYearly ? `${unitUsd(scaleMonthCents)}/mo`
+                    : billing === "annual" ? `${formatDollars(active.annual)}/yr` : `${active.price}/mo`}
                   {!currentPeriodEnd && (billing === "annual" ? " · billed yearly" : " · billed monthly")}
                 </span>
               ) : (
@@ -23902,10 +23918,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <UnitPrice onLoad={setUnitInfo} />
           )}
 
-          {perUnit && plan !== "scale" ? (
+          {unitKind ? (
             <div className="cycle-row">
               <span className="cycle-note unit-monthly-only">
-                Billed monthly. Yearly billing is for portfolios of {UNIT_THRESHOLD} units or fewer.
+                {liveYearly
+                  ? <>Your Scale year is paid through {niceDay(currentPeriodEnd)}.</>
+                  : <>Billed monthly: {unitUsd(MIN_MONTHLY_CENTS_UI)} a month, or {unitUsd(UNIT_PRICE_CENTS_UI)} per
+                    occupied unit once your buildings hold more than {UNIT_THRESHOLD} units.</>}
               </span>
             </div>
           ) : (
@@ -23932,13 +23951,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <span className="plan-name">{pl.name}</span>
                 {pl.tagline && <span className="plan-tag">{pl.tagline(planWords)}</span>}
                 <div className="plan-price">
-                  {pl.id === "scale" && perUnit && billing !== "annual"
-                    ? <>{unitUsd(unitInfo.monthlyCents)}<span>/mo</span></>
+                  {pl.id === "scale" && unitKind && !liveYearly
+                    ? <>{unitUsd(scaleMonthCents)}<span>/mo</span></>
                     : pl.annual && billing === "annual"
                     ? <>{pl.annualMonthly}<span>{pl.per}</span></>
                     : <>{pl.price}<span>{pl.per}</span></>}
                 </div>
-                {pl.id === "scale" && perUnit && billing !== "annual" && (
+                {pl.id === "scale" && perUnit && !liveYearly && (
                   <span className="plan-bill plan-unit-bill">
                     {unitInfo.perUnitCents >= unitInfo.minMonthlyCents
                       ? `${unitUsd(unitInfo.unitPriceCents)} × ${unitInfo.occupied.toLocaleString("en-US")} occupied units`
@@ -23952,7 +23971,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                         here rather than letting the total appear on the
                         payment form is the difference between a price and a
                         surprise. */}
-                    {billing === "annual"
+                    {billing === "annual" && !(pl.id === "scale" && unitKind && !liveYearly)
                       ? `${formatDollars(pl.annual)} billed once a year, plus sales tax`
                       : "Billed monthly, plus sales tax · cancel any time"}
                   </span>

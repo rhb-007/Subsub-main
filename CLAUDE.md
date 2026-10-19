@@ -14038,6 +14038,49 @@ refactor.
   changes (no web service URL); a sub re-adds it to refresh it, and the QR
   code always opens the live page anyway.
 
+- **A PROPERTY MANAGER HAS ONE SCALE PRICE, MONTHLY, AT EVERY SIZE.** Reported
+  with Account -> Subscription on screen for a 149-unit property manager: the
+  price box said **$186.25** a month and the Scale card under it said
+  **$82.50/mo, $990 billed once a year**. *"These should not be different
+  numbers... if over 80 units it's 1.25/occupied unit, if below the min is
+  $99/mo."*
+
+  **The $990 year was the second price.** It is $82.50 a month, which is under
+  the $99 that is the floor for these kinds, so it could only ever disagree
+  with the rule. A property manager, a portfolio manager and a building owner
+  now pay **max($99, $1.25 x occupied units), billed monthly**, whatever their
+  size; past 80 units the setup fee is unchanged. **This reverses 084/086's
+  "yearly is allowed at 80 units or fewer"**, at the owner's word. A general
+  contractor and a subcontractor keep the year. `yearlyAllowed(kind)` in
+  `shared/unitpricing.js` is the one rule, read by signup, the checkout,
+  `PATCH /api/account`, the console's create and edit, the billing screen and
+  the upgrade prompt.
+
+  **A stored "annual" is not a year somebody paid for.** The reported account
+  had no card and no invoice and still read *$990/yr, billed yearly*:
+  `accounts.billing` said annual and nothing behind it did. `effectiveBilling`
+  reads yearly for these kinds only while a Stripe subscription is really
+  running, so `/api/account`, the subdomain lookup, the console bootstrap and
+  the console's MRR all say monthly otherwise. The console MRR now reads the
+  unit-priced month for every one of these accounts (the $99 minimum under
+  80), not only those past it, so it stops counting $82.50 for one.
+
+  **A year already paid for is kept to its end, and the screen says so** --
+  *Your Scale year is paid through ...* -- with no switch. What happens at
+  that renewal is unchanged and still open (the sync skips a yearly
+  subscription).
+
+  **On screen:** no Monthly / Annual switch for these kinds, one line saying
+  how they are billed, and the Scale card, the current-plan line and the price
+  box all reading the same month. The fallback that moves a stored year back
+  to monthly (so the checkout is never asked for a year it refuses) now runs on
+  Scale too. `test:unitpriceui` drives the reported account (on Scale, stored
+  yearly, nothing paid yearly) and requires $186.25 in all three places. The
+  card guard and the fallback each catch the bug on their own, so mutating one
+  of them alone is caught by its own assertion and not by the $186.25 one. The
+  signup form, `pricing.html`'s two FAQ answers and `test:signupunits` were
+  moved to the new rule rather than loosened.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -902,14 +902,16 @@ body.nav-open{overflow:hidden}
     var on = unitsAsked();
     uBox.classList.toggle('hide', !on);
     var a = unitAnswer();
-    // Past the threshold Scale is monthly only, on the server as well as here.
-    billing = a && !a.error && a.applies ? 'monthly' : askedBilling;
+    // A property manager, portfolio manager or owner has one Scale price,
+    // billed monthly at every size, on the server as well as here: the $990
+    // year would undercut the $99 floor and put two prices on one screen.
+    billing = on ? 'monthly' : askedBilling;
     if(!on) return;
     document.getElementById('unitsLede').textContent =
       'Scale is ' + usd(U.MIN) + ' a month for up to ' + U.TH + ' units. Past ' + U.TH
       + ' it is ' + usd(U.UNIT) + ' per occupied unit a month, never less than ' + usd(U.MIN)
-      + ', billed monthly, with a one-time setup fee. Leave it blank and the price follows '
-      + 'the buildings you add.';
+      + ', with a one-time setup fee. Billed monthly either way. Leave it blank and the price '
+      + 'follows the buildings you add.';
     var q = document.getElementById('unitQuote');
     if(!a){
       q.innerHTML = 'Enter your units to see your price. Until then it is <b>' + usd(U.MIN)
@@ -923,7 +925,9 @@ body.nav-open{overflow:hidden}
       return;
     }
     if(!a.applies){
-      q.innerHTML = '<b>' + usd(U.MIN) + '</b> a month, monthly or yearly. No setup fee.';
+      q.innerHTML = '<b>' + usd(U.MIN) + '</b> a month, billed monthly. No setup fee.'
+        + (askedBilling === 'annual' ? '<span class="uq-note">Scale is billed monthly for '
+          + 'property managers, portfolio managers and owners, so this replaces the yearly price you picked.</span>' : '');
       return;
     }
     var how = a.per < U.MIN
@@ -934,8 +938,8 @@ body.nav-open{overflow:hidden}
       + 'Plus a one-time setup fee of <b>' + usd(a.setup) + '</b>.'
       + (a.occupied === null ? '<span class="uq-note">With no occupied count, every unit is '
         + 'counted as occupied.</span>' : '')
-      + (askedBilling === 'annual' ? '<span class="uq-note">Past ' + U.TH + ' units Scale is '
-        + 'billed monthly, so this replaces the yearly price you picked.</span>' : '');
+      + (askedBilling === 'annual' ? '<span class="uq-note">Scale is billed monthly for '
+        + 'property managers, portfolio managers and owners, so this replaces the yearly price you picked.</span>' : '');
   }
   unitsEl.addEventListener('input', function(){
     clearFieldError(unitsEl); clearFieldError(occEl);

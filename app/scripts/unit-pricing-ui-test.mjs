@@ -20,9 +20,10 @@ const sent = [];
 
 let KIND = "property_manager";
 let UNITS = null;
+let PLAN = "basic", PERIOD_END = null;
 const acct = () => ({
   id: "acc_pm", name: "Sound Property Management", subdomain: "sound", kind: KIND,
-  plan: "basic", billing: "annual", useDefaultMark: true, theme: null, trades: ["plumbing"],
+  plan: PLAN, billing: "annual", currentPeriodEnd: PERIOD_END, useDefaultMark: true, theme: null, trades: ["plumbing"],
   logoKey: null, subscriptionStatus: null, hostnameStatus: null,
   user: { id: "usr_a", name: "Rae Lane", email: "rae@sound.test", role: "admin" },
 });
@@ -76,6 +77,9 @@ const billingState = (page) => page.evaluate(() => ({
   applies: !!document.querySelector(".unit-price.applies"),
   monthlyOnly: document.querySelector(".unit-monthly-only")?.innerText || "",
   cycleTabs: [...document.querySelectorAll(".cycle button")].map((b) => b.innerText.trim()),
+  current: document.querySelector(".plan-current .pc-cycle")?.innerText || "",
+  scaleBill: [...document.querySelectorAll(".plan-card")].find((c) => /scale/i.test(c.querySelector(".plan-name")?.innerText || ""))
+    ?.innerText || "",
   scalePrice: [...document.querySelectorAll(".plan-card")].find((c) => /scale/i.test(c.querySelector(".plan-name")?.innerText || ""))
     ?.querySelector(".plan-price")?.innerText || "",
   unitBill: document.querySelector(".plan-unit-bill")?.innerText || "",
@@ -135,11 +139,13 @@ try {
     UNITS = APPLIES;
   }
 
-  console.log("\n-- at 80 or fewer units: eligible, flat, yearly still offered --");
+  console.log("\n-- at 80 or fewer units: the $99 minimum, still monthly only --");
   {
+    // One Scale price for these kinds at every size. The $990 year is $82.50
+    // a month, under their own $99 floor, so it is not offered here either.
     KIND = "property_manager";
     UNITS = { ...APPLIES, applies: false, total: 60, occupied: 60, unknown: 0, monthlyCents: 9900,
-      perUnitCents: 7500, setupCents: 0, setupLabel: null, annualAllowed: true };
+      perUnitCents: 7500, setupCents: 0, setupLabel: null, annualAllowed: false };
     const { ctx, page } = await visitApp(browser, { host: "sound", webPort: WEB,
       seat: { userId: "usr_a", accountId: "acc_pm" }, viewport: { width: 1180, height: 1500 } });
     await wait(2600);
@@ -147,9 +153,47 @@ try {
     const s = await billingState(page);
     t.ck("it says the flat price and the rule past 80",
       !s.applies && /hold 60 units/.test(s.panel) && /\$99 a month/.test(s.panel) && /\$1\.25 per occupied unit/.test(s.panel), s.panel);
-    t.ck("yearly is offered", s.cycleTabs.length === 2, s.cycleTabs.join(","));
-    t.ck("the card keeps the flat price, and lists the rule", !s.unitBill && /Over 80 units/.test(s.unitFeat), s.unitFeat);
+    t.ck("yearly is not offered at 60 units either", s.cycleTabs.length === 0 && /Billed monthly/.test(s.monthlyOnly),
+      `${s.cycleTabs.join(",")} | ${s.monthlyOnly}`);
+    t.ck("the card says $99 a month, never $82.50", /^\$99\s*\/mo/.test(s.scalePrice) && !/82\.50|\$990/.test(s.scaleBill),
+      `${s.scalePrice} | ${s.scaleBill}`);
+    t.ck("and lists the rule", !s.unitBill && /Over 80 units/.test(s.unitFeat), s.unitFeat);
     await ctx.close();
+  }
+
+  console.log("\n-- the reported account: on Scale, stored yearly, nothing actually paid yearly --");
+  {
+    // 149 units, $186.25 in the price box and $82.50 on the card. The price
+    // box and the card must say the same thing, and so must the current plan.
+    KIND = "property_manager"; PLAN = "scale"; PERIOD_END = null;
+    UNITS = { ...APPLIES, total: 149, occupied: 149, unknown: 3, monthlyCents: 18625, perUnitCents: 18625 };
+    const { ctx, page } = await visitApp(browser, { host: "sound", webPort: WEB,
+      seat: { userId: "usr_a", accountId: "acc_pm" }, viewport: { width: 1180, height: 1500 } });
+    await wait(2600);
+    await openSubscription(page);
+    const s = await billingState(page);
+    t.ck("the price box says $186.25", /\$186\.25/.test(s.panel), s.panel);
+    t.ck("the Scale card says the same $186.25", /^\$186\.25\s*\/mo/.test(s.scalePrice), s.scalePrice);
+    t.ck("and nowhere a yearly price", !/82\.50|\$990/.test(s.scaleBill) && s.cycleTabs.length === 0,
+      `${s.scaleBill} | ${s.cycleTabs.join(",")}`);
+    t.ck("the current plan says the same month", /^\$186\.25\/mo/.test(s.current), s.current);
+    await ctx.close();
+  }
+
+  console.log("\n-- a yearly subscription already paid for keeps its year --");
+  {
+    KIND = "property_manager"; PLAN = "scale"; PERIOD_END = "2027-03-01T00:00:00.000Z";
+    UNITS = { ...APPLIES, total: 149, occupied: 149, unknown: 0, monthlyCents: 18625, perUnitCents: 18625 };
+    const { ctx, page } = await visitApp(browser, { host: "sound", webPort: WEB,
+      seat: { userId: "usr_a", accountId: "acc_pm" }, viewport: { width: 1180, height: 1500 } });
+    await wait(2600);
+    await openSubscription(page);
+    const s = await billingState(page);
+    t.ck("it says the year is paid, and offers no switch", /Your Scale year is paid through/.test(s.monthlyOnly)
+      && s.cycleTabs.length === 0, `${s.monthlyOnly} | ${s.cycleTabs.join(",")}`);
+    t.ck("and the current plan is the year they paid", /\$990\/yr/.test(s.current), s.current);
+    await ctx.close();
+    PLAN = "basic"; PERIOD_END = null;
   }
 
   console.log("\n-- a general contractor is never shown any of it --");

@@ -2,9 +2,15 @@
 //
 // A general contractor and a subcontractor pay the flat $99 a month (or $990
 // a year). A property manager, a portfolio manager and a building owner pay
-// the same until their buildings hold more than UNIT_THRESHOLD units. Past
-// that, the month is $1.25 for every OCCUPIED unit, never less than the flat
-// $99, billed monthly only, with a one-time setup fee sized to the portfolio.
+// ONE price, monthly only: $1.25 for every OCCUPIED unit, never less than
+// $99. Up to UNIT_THRESHOLD units that is simply the $99 minimum; past it,
+// the per-unit figure, plus a one-time setup fee sized to the portfolio.
+//
+// Monthly only AT EVERY SIZE, which is a decision rather than a tidy-up. The
+// $990 year is $82.50 a month, under the $99 that is the floor for these
+// kinds, and offering it put two Scale prices on one screen -- $186.25 in the
+// price box and $82.50 on the plan card for the same 149-unit account. One
+// rule, one number.
 //
 // One module, read by the Worker (checkout, the subscription sync, the
 // billing read) and by the screens that quote the price, so the figure on a
@@ -30,6 +36,20 @@ export const SETUP_TIERS = [
 ];
 
 export const unitPriced = (kind) => UNIT_PRICED_KINDS.includes(kind || "");
+
+// Whether a kind may be billed yearly at all.
+export const yearlyAllowed = (kind) => !unitPriced(kind);
+
+// The cycle an account is ACTUALLY on. A unit-priced kind reads as yearly only
+// while a yearly Stripe subscription is really running -- a year already paid
+// for is kept to its end. Anything else stored as "annual" on one of these
+// kinds (set by hand, or from before yearly was withdrawn) is monthly, so no
+// screen and no figure quotes a year nobody is paying for.
+export function effectiveBilling({ kind, billing, stripeSubscriptionId, stripe_subscription_id } = {}) {
+  const asked = billing === "annual" ? "annual" : "monthly";
+  if (asked === "monthly" || !unitPriced(kind)) return asked;
+  return (stripeSubscriptionId || stripe_subscription_id) ? "annual" : "monthly";
+}
 
 const count = (v) => {
   if (v === "" || v == null) return null;
@@ -87,7 +107,7 @@ export function unitPricing(kind, buildings = []) {
       : { kind: "flat", quantity: 1 },
     setupCents: applies ? tier.cents : 0,
     setupLabel: applies ? tier.label : null,
-    annualAllowed: !applies,
+    annualAllowed: !eligible,
   };
 }
 
