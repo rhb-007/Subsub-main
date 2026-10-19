@@ -63,9 +63,11 @@ console.log("\n-- the pages, on disk --");
   t.ck("and when its data was last updated",
     allCalc.every((p) => read(`${p.dir}/index.html`).includes(`Data last updated ${asOfLabel(HANDYCAP_AS_OF)}`)),
     asOfLabel(HANDYCAP_AS_OF));
-  const or = read("check/or/index.html");
+  // California: no register SubSub reads, so no live form.
+  const or = read("check/ca/index.html");
   t.ck("a state SubSub cannot check live draws no live form", !/id="tlQuery"/.test(or) && /id="tlCheck"/.test(or));
-  t.ck("and names its own board's lookup", /Oregon Construction Contractors Board|CCB|ccb/i.test(or) && /rel="noopener"/.test(or));
+  t.ck("and names its own board's lookup", /Contractors State License Board|CSLB/i.test(or) && /rel="noopener"/.test(or));
+  t.ck("Oregon, read directly now, draws the live form", /id="tlQuery"/.test(read("check/or/index.html")));
   t.ck("Washington's draws the live form", /id="tlQuery"/.test(read("check/wa/index.html")));
   t.ck("no page claims a registry check outside Washington",
     pages.filter((p) => p.dir.startsWith("check/") && p.dir !== "check/wa").every((p) => !/verified against the state registry/i.test(read(`${p.dir}/index.html`))));
@@ -271,15 +273,15 @@ try {
   }
   console.log("\n-- the checker, a state that is not live --");
   {
-    const { ctx, page, crashes } = await open("/check/or/");
+    const { ctx, page, crashes } = await open("/check/ca/");
     let r = await result(page);
-    t.ck("it says Oregon is not live and links its own board", /Oregon is not live yet/.test(r)
+    t.ck("it says California is not live and links its own board", /California is not live yet/.test(r)
       && !!(await page.$("#tlResult a[href^='http']")), r);
     await setVal(page, "#tlNotifyEmail", "pm@flats.test"); await submit(page, "#tlNotify"); await wait(600);
     const lead = posts.filter((p) => p.path === "/api/public/leads").pop();
     t.ck("asking to be told posts a lead tagged with the tool and the state",
-      lead?.body.tool === "check" && lead.body.state === "OR" && lead.body.detail?.notifyWhenLive === true, JSON.stringify(lead));
-    t.ck("and says so", /We.ll email you when Oregon is live/.test(await result(page)));
+      lead?.body.tool === "check" && lead.body.state === "CA" && lead.body.detail?.notifyWhenLive === true, JSON.stringify(lead));
+    t.ck("and says so", /We.ll email you when California is live/.test(await result(page)));
     t.ck("no page error", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

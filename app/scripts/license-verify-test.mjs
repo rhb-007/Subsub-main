@@ -44,11 +44,15 @@ globalThis.fetch = async (url) => {
       contractorlicensestatus: "ACTIVE", contractorlicensetypecodedesc: "CONSTRUCTION CONTRACTOR",
       ubi: "604123456", licenseeffectivedate: "2025-01-15T00:00:00.000",
       licenseexpirationdate: "2027-12-31T00:00:00.000", primaryprincipalname: "R BRAUN" }]);
-    if (u.includes("/ciwg-agsx.json")) return ok([{ insurance_company: "State National Ins Co",
-      policy_number: "NXT9-01-GL", coverage_amount: "1000000", effective_date: "2026-01-01T00:00:00.000",
-      insurance_expiration_date: "2027-01-01T00:00:00.000" }]);
-    if (u.includes("/bzff-4fmt.json")) return ok([{ surety_company: "North River Insurance Company",
-      bond_amount: "30000", effective_date: "2025-01-15T00:00:00.000" }]);
+    // The register's own field names (shared/stateregistries.js, read off a
+    // live answer by the probe workflow). The first version of this fixture
+    // used invented ones, matching the mapping's invented ones, so the test
+    // passed while a real L&I check read no insurance and the wrong bond.
+    if (u.includes("/ciwg-agsx.json")) return ok([{ insurancecompany: "State National Ins Co",
+      insurancepolicyno: "NXT9-01-GL", insuranceamt: "1000000.0000", effectivedate: "2026-01-01T00:00:00.000",
+      expirationdate: "2027-01-01T00:00:00.000" }]);
+    if (u.includes("/bzff-4fmt.json")) return ok([{ bondfirmname: "North River Insurance Company",
+      bondamt: "30000.0000", bondeffectivedate: "2025-01-15T00:00:00.000", bondexpirationdate: "Until Canceled" }]);
     return ok([]);
   }
   return ok({});

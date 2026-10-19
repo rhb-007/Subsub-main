@@ -173,6 +173,7 @@ import { ccProjectView, ccPhotoView, ccDocView, ccPhotoUsable, ccImageUrl, ccHtt
 import { walletConfigured, walletPassJson, earliestDay } from "../shared/walletpass.js";
 import { readSigner, buildPkpass } from "./pkpass.js";
 import { WALLET_IMAGES } from "./walletimages.js";
+import { REGISTRIES, REGISTRY_STATES, cleanName, lookUpLicense } from "../shared/stateregistries.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -8929,107 +8930,12 @@ app.patch("/api/subs/:companyId", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// License verification. WA (L&I, data.wa.gov) was the original, hand-built
-// integration and its field names come from confirmed dataset knowledge.
-// The other six states below (STATE_LICENSING_APIS.md's "Tier 1") are new:
-// their dataset IDs and field names are best-effort, from search results,
-// NOT a live schema check — this sandbox's network policy blocks
-// *.state-domains the same way it blocks data.wa.gov, so none of this has
-// been exercised against a live response. Every result carries
-// `fieldMappingVerified` so callers (and the UI) can tell confirmed WA
-// parsing apart from best-effort parsing elsewhere, and the full raw
-// response is always stored — if a field name below is wrong, the raw
-// data is still there to fix it from, not lost.
-//
-// Coverage caveats worth knowing before trusting a result, from the
-// survey doc: CT/IA have no insurance or bond fields at all (registration-
-// only); IL's dataset only covers roofing (Illinois has no general
-// contractor license); TX's TDLR dataset has NO general-contractor
-// license at all (only trades like electrical/HVAC); DC's is a general
-// business-license registry, not a dedicated contractor board.
+// License verification against the state's own register. Which registers, and
+// every field name in them, live in shared/stateregistries.js -- read off the
+// registers' real responses by the "Probe license registries" workflow, since
+// nothing in the build container can reach a state portal. DC (ArcGIS) is the
+// one still unchecked against a live answer, and says so.
 // ---------------------------------------------------------------------------
-
-const SOCRATA_STATES = {
-  WA: {
-    base: "https://data.wa.gov/resource", licenseField: "contractorlicensenumber",
-    datasets: { general: "m8qx-ubtq", insurance: "ciwg-agsx", bond: "bzff-4fmt" },
-    fieldMappingVerified: true,
-    map: (lic, insuranceRows, bondRows) => {
-      const today = new Date().toISOString().slice(0, 10);
-      const current = (rows, endField) =>
-        rows.filter((r) => !r.cancel_date && (!r[endField] || r[endField].slice(0, 10) >= today))
-          .sort((a, b) => (b.effective_date || "").localeCompare(a.effective_date || ""))[0] || null;
-      return {
-        businessName: lic.businessname, status: lic.contractorlicensestatus,
-        licenseType: lic.contractorlicensetypecodedesc, ubi: lic.ubi,
-        effectiveDate: lic.licenseeffectivedate?.slice(0, 10),
-        expirationDate: lic.licenseexpirationdate?.slice(0, 10),
-        suspendDate: lic.contractorlicensesuspenddate?.slice(0, 10) || null,
-        principal: lic.primaryprincipalname,
-        insurance: current(insuranceRows, "insurance_expiration_date"),
-        bond: current(bondRows, "bond_expiration_date"),
-      };
-    },
-  },
-  OR: {
-    base: "https://data.oregon.gov/resource", licenseField: "ccb_number",
-    datasets: { general: "g77e-6bhs" }, fieldMappingVerified: false,
-    // Single dataset reportedly carries bond + insurance inline — no
-    // second/third fetch needed if this field mapping holds up.
-    map: (lic) => ({
-      businessName: lic.business_name || lic.dba_name, status: lic.status,
-      licenseType: lic.endorsement || lic.license_type,
-      effectiveDate: lic.issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
-      suspendDate: null, principal: lic.principal_name,
-      insurance: lic.insurance_company ? { insurance_company: lic.insurance_company, coverage_amount: lic.insurance_amount } : null,
-      bond: lic.bond_company ? { surety_company: lic.bond_company, bond_amount: lic.bond_amount } : null,
-    }),
-  },
-  CT: {
-    base: "https://data.ct.gov/resource", licenseField: "license_number",
-    datasets: { general: "5r9m-qgni" }, fieldMappingVerified: false,
-    map: (lic) => ({
-      businessName: lic.business_name, status: lic.license_status, licenseType: "Home Improvement Contractor",
-      effectiveDate: lic.issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
-      suspendDate: null, principal: null, insurance: null, bond: null, // CT dataset has no bond/insurance fields
-    }),
-  },
-  IA: {
-    base: "https://data.iowa.gov/resource", licenseField: "registration_number",
-    datasets: { general: "dpf3-iz94" }, fieldMappingVerified: false,
-    map: (lic) => ({
-      businessName: lic.business_name, status: "ACTIVE", // dataset is pre-filtered to active-only
-      licenseType: lic.primary_activity,
-      effectiveDate: lic.issue_date?.slice(0, 10), expirationDate: lic.expire_date?.slice(0, 10),
-      suspendDate: null, principal: [lic.first_name, lic.last_name].filter(Boolean).join(" ") || null,
-      insurance: null, bond: null, // registration roster only — no bond/insurance in this dataset
-    }),
-  },
-  IL: {
-    base: "https://data.illinois.gov/resource", licenseField: "license_number",
-    datasets: { general: "pzzh-kp68" }, fieldMappingVerified: false,
-    // No statewide GC license in Illinois — this only covers roofing
-    // contractors within IDFPR's combined 100+-profession dataset.
-    map: (lic) => ({
-      businessName: lic.name || lic.business_name, status: lic.license_status,
-      licenseType: lic.profession || "Roofing Contractor",
-      effectiveDate: lic.original_issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
-      suspendDate: null, principal: null, insurance: null, bond: null,
-    }),
-  },
-  TX: {
-    base: "https://data.texas.gov/resource", licenseField: "license_number",
-    datasets: { general: "7358-krk7" }, fieldMappingVerified: false,
-    // Texas has NO general-contractor license — only useful for
-    // TDLR-regulated trades (electrical, HVAC, etc).
-    map: (lic) => ({
-      businessName: lic.business_name || lic.licensee_name, status: lic.license_status,
-      licenseType: lic.license_type || lic.endorsement,
-      effectiveDate: lic.original_issue_date?.slice(0, 10), expirationDate: lic.expiration_date?.slice(0, 10),
-      suspendDate: null, principal: null, insurance: null, bond: null,
-    }),
-  },
-};
 
 // Datasets are public open-data endpoints outside our control — a block
 // page, rate-limit response, or outage can come back as non-JSON even on a
@@ -9051,20 +8957,7 @@ async function fetchJsonSafe(url) {
   }
 }
 
-async function verifySocrataState(cfg, licenseNumber) {
-  const q = `?${cfg.licenseField}=${encodeURIComponent(licenseNumber)}`;
-  const rows = {};
-  for (const [key, id] of Object.entries(cfg.datasets)) {
-    const res = await fetchJsonSafe(`${cfg.base}/${id}.json${q}`);
-    if (!res.ok) return { found: false, status: "CHECK_FAILED", error: res.error, fieldMappingVerified: cfg.fieldMappingVerified };
-    rows[key] = res.data;
-  }
-  const lic = rows.general?.[0];
-  // Say so explicitly. A bare { found: false } has no status at all, and the
-  // screens that describe a check used to read .status straight off it.
-  if (!lic) return { found: false, status: "NOT_FOUND", fieldMappingVerified: cfg.fieldMappingVerified };
-  return { found: true, fieldMappingVerified: cfg.fieldMappingVerified, raw: lic, ...cfg.map(lic, rows.insurance || [], rows.bond || []) };
-}
+const verifyRegistry = (code, licenseNumber) => lookUpLicense(code, licenseNumber, fetchJsonSafe);
 
 // DC: ArcGIS Feature Service, not Socrata — different query shape entirely.
 async function verifyDC(licenseNumber) {
@@ -9092,9 +8985,8 @@ async function verifyDC(licenseNumber) {
 async function askStateRegistry(state, licenseNumber) {
   const code = (state || "").trim().toUpperCase();
   if (code === "DC") return verifyDC(licenseNumber);
-  const cfg = SOCRATA_STATES[code];
-  if (!cfg) return { found: false, status: "UNSUPPORTED_STATE", supportedStates: [...Object.keys(SOCRATA_STATES), "DC"] };
-  return verifySocrataState(cfg, licenseNumber);
+  if (!REGISTRIES[code]) return { found: false, status: "UNSUPPORTED_STATE", supportedStates: [...REGISTRY_STATES, "DC"] };
+  return verifyRegistry(code, licenseNumber);
 }
 
 // ===========================================================================
@@ -9109,13 +9001,13 @@ async function askStateRegistry(state, licenseNumber) {
 // provider when LICENSE_LOOKUP_PARTNER names one of worker/licenses.js's
 // PROVIDERS and its key is set. byName may be null -- most partners verify by
 // number only -- and the route says so rather than pretending to search.
-const LOOKUP_PROVIDERS = {
-  WA: {
-    id: "wa-lni", label: "Washington State L&I",
-    byLicense: (env, license) => askStateRegistry("WA", license),
-    byName: (env, name) => socrataNameSearch(SOCRATA_STATES.WA, name),
-  },
-};
+// Every register SubSub reads directly is a provider; byName is null where the
+// register is too large to search by name without timing out (IL, TX).
+const LOOKUP_PROVIDERS = Object.fromEntries(REGISTRY_STATES.map((code) => [code, {
+  id: `registry-${code.toLowerCase()}`, label: REGISTRIES[code].label,
+  byLicense: (env, license) => askStateRegistry(code, license),
+  byName: REGISTRIES[code].nameSearch ? (env, name) => registryNameSearch(code, name) : null,
+}]));
 function lookupProviderFor(env, state) {
   if (!isLiveState(state)) return null;
   if (LOOKUP_PROVIDERS[state]) return LOOKUP_PROVIDERS[state];
@@ -9130,18 +9022,12 @@ function lookupProviderFor(env, state) {
 // public data -- which is what the state's own lookup page offers -- and never
 // anything of SubSub's: this reads data.wa.gov, not the companies table, so it
 // is not the directory this product refuses. Ten rows, no status in them.
-async function socrataNameSearch(cfg, name) {
-  const q = String(name).toUpperCase().replace(/'/g, "''").replace(/[%_]/g, "");
-  const where = `upper(businessname) like '%${q}%'`;
-  const url = `${cfg.base}/${cfg.datasets.general}.json?$where=${encodeURIComponent(where)}`
-    + `&$order=${encodeURIComponent("businessname")}&$limit=${MAX_MATCHES}`;
+async function registryNameSearch(code, name) {
+  const reg = REGISTRIES[code];
+  const url = `${reg.nameSearch(cleanName(name))}&$limit=${MAX_MATCHES}`;
   const res = await fetchJsonSafe(url);
   if (!res.ok) return { ok: false, error: res.error };
-  return { ok: true, rows: (res.data || []).map((r) => ({
-    businessName: r.businessname || null,
-    licenseNumber: r[cfg.licenseField] || null,
-    city: r.city || r.businessaddresscity || null,
-  })) };
+  return { ok: true, rows: (Array.isArray(res.data) ? res.data : []).map(reg.nameRow) };
 }
 
 async function storeLead(env, { email, tool, state, detail, refCode }) {

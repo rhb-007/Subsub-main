@@ -44,8 +44,8 @@ globalThis.fetch = async (url, init = {}) => {
     if (u.includes("$where")) return ok([]);
     if (u.includes("m8qx-ubtq") && u.includes("BAYRR*222")) return ok([LIC]);
     if (u.includes("m8qx-ubtq")) return ok([]);
-    if (u.includes("ciwg-agsx")) return ok([{ insurance_company: "Cascade Mutual", coverage_amount: "1000000", insurance_expiration_date: "2027-03-01T00:00:00.000", effective_date: "2026-03-01" }]);
-    if (u.includes("bzff-4fmt")) return ok([{ surety_company: "Western Surety", bond_amount: "15000", bond_expiration_date: "2027-01-02T00:00:00.000", effective_date: "2024-01-02" }]);
+    if (u.includes("ciwg-agsx")) return ok([{ insurancecompany: "Cascade Mutual", insuranceamt: "1000000.0000", expirationdate: "2027-03-01T00:00:00.000", effectivedate: "2026-03-01T00:00:00.000" }]);
+    if (u.includes("bzff-4fmt")) return ok([{ bondfirmname: "Western Surety", bondamt: "15000.0000", bondexpirationdate: "01/02/2027", bondeffectivedate: "2024-01-02T00:00:00.000" }]);
     return ok([]);
   }
   return ok({});
@@ -64,7 +64,7 @@ const post = (env, path, body, ip = `10.1.0.${++ipN}`) => worker.fetch(new Reque
 
 try {
   console.log("\n-- the rules --");
-  ck("Washington is the one live state, because it is the one verified mapping", JSON.stringify(LIVE_STATES) === '["WA"]');
+  ck("the live states are the registers read off a real answer", JSON.stringify(LIVE_STATES) === '["WA","OR","CT","IL","TX"]', JSON.stringify(LIVE_STATES));
   ck("a state is required", readLookup({ license: "X123" }).error === "state_required");
   ck("a number or a name", readLookup({ state: "WA" }).error === "license_or_name_required");
   ck("a name of two letters is not a search", readLookup({ state: "WA", name: "ab" }).error === "name_too_short");
@@ -124,16 +124,16 @@ try {
 
   console.log("\n-- where it cannot answer --");
   {
-    const [st, r] = await post(S.env, "/api/public/license-lookup", { state: "OR", license: "123456" });
-    ck("a state wired but unverified is refused, not answered", st === 404 && r.error === "state_not_live"
-      && JSON.stringify(r.live) === '["WA"]', JSON.stringify(r));
-    ck("and Oregon's registry was never asked", !asked.some((u) => u.includes("oregon")));
+    const [st, r] = await post(S.env, "/api/public/license-lookup", { state: "CA", license: "123456" });
+    ck("a state with no register read is refused, not answered", st === 404 && r.error === "state_not_live"
+      && JSON.stringify(r.live) === '["WA","OR","CT","IL","TX"]', JSON.stringify(r));
+    ck("and nothing was asked about California", !asked.some((u) => /\.ca\.gov|cslb/i.test(u)));
     // The discriminating fixture: a 50-state partner IS configured, and could
-    // answer for Oregon. A partner nobody has seen answer against real records
+    // answer for California. A partner nobody has seen answer against real records
     // is exactly what LIVE_STATES keeps off a public page, so it is still no.
     const partnered = { ...S.env, LICENSE_LOOKUP_PARTNER: "statelicense", STATELICENSE_API_KEY: "sk_partner",
       STATELICENSE_API_BASE: "https://partner.test/v1" };
-    const [stP, rP] = await post(partnered, "/api/public/license-lookup", { state: "OR", license: "123456" });
+    const [stP, rP] = await post(partnered, "/api/public/license-lookup", { state: "CA", license: "123456" });
     ck("even with a partner configured, a state nobody has verified is refused", stP === 404 && rP.error === "state_not_live",
       JSON.stringify(rP));
     waDown = true;

@@ -181,8 +181,18 @@ export const REGISTRIES = {
     base: "https://data.texas.gov/resource",
     normalize: (n) => String(n).trim().toUpperCase().replace(/^(TACLA|TACLB|TECL|ECL)/, "").replace(/[A-Z]$/, "").replace(/^0+(?=\d)/, ""),
     lookups(n) { return { general: soda(this.base, "7358-krk7", eq("license_number", n)) }; },
-    map(rows, today = today0()) {
-      const all = rows.general || [];
+    // The prefix people write on a van says which licence they mean: TACLA or
+    // TACLB is air conditioning, TECL is electrical. The register stores the
+    // bare number, and 19400 is both an A/C and an electrical contractor.
+    typeFor(raw) {
+      const s = String(raw || "").trim().toUpperCase();
+      if (/^TACL/.test(s)) return /^A\/C Contractor$/i;
+      if (/^T?ECL/.test(s)) return /^Electrical Contractor$/i;
+      return null;
+    },
+    map(rows, today = today0(), raw = "") {
+      const want = this.typeFor(raw);
+      const all = (rows.general || []).filter((r) => !want || want.test(r.license_type || ""));
       if (!all.length) return null;
       const contractors = all.filter((r) => /contractor/i.test(r.license_type || ""));
       const pool = contractors.length ? contractors : all.filter((r) => !/apprentice|CE Provider|apprenticeship/i.test(r.license_type || ""));
@@ -200,6 +210,32 @@ export const REGISTRIES = {
 };
 
 export const REGISTRY_STATES = Object.keys(REGISTRIES);
+
+// Look one number up given a fetch that returns rows (or throws). The Worker
+// passes its own; tests pass a stub. Same result shape the checks store.
+export async function lookUpLicense(code, rawNumber, fetchRows, today = today0()) {
+  const reg = REGISTRIES[code];
+  const n = reg.normalize(rawNumber);
+  const rows = {};
+  for (const [key, url] of Object.entries(reg.lookups(n))) {
+    const r = await fetchRows(url);
+    if (!r.ok) return { found: false, status: "CHECK_FAILED", error: r.error, fieldMappingVerified: true };
+    rows[key] = Array.isArray(r.data) ? r.data : [];
+  }
+  const mapped = reg.map(rows, today, rawNumber);
+  // Two licences of different kinds under one number, neither a contractor's:
+  // not an answer about anybody, so it is a check that could not settle rather
+  // than one picked between, and the error says what would settle it.
+  if (mapped?.ambiguous) {
+    return { found: false, status: "CHECK_FAILED", fieldMappingVerified: true,
+      error: `ambiguous_number: ${mapped.types.join(", ")}. Add the prefix from the license (for Texas, TACLA or TECL).` };
+  }
+  // A bare { found: false } has no status at all, and the screens that describe
+  // a check read .status straight off it.
+  if (!mapped) return { found: false, status: "NOT_FOUND", fieldMappingVerified: true, source: reg.label };
+  const raw = Object.values(rows).find((r) => r.length)?.[0] || null;
+  return { found: true, fieldMappingVerified: true, source: reg.label, raw, ...mapped };
+}
 
 // A name typed into a search: upper case, quotes doubled, wildcards removed.
 export const cleanName = (name) => q(String(name).toUpperCase()).replace(/[%_]/g, "");

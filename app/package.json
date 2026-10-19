@@ -294,7 +294,8 @@
     "test:passportconnect": "node scripts/passport-connect-ui-test.mjs",
     "test:walletpass": "node --no-warnings scripts/wallet-pass-test.mjs",
     "wallet:images": "node scripts/build-wallet-images.mjs",
-    "test:themeui": "node --no-warnings scripts/theme-ui-test.mjs"
+    "test:themeui": "node --no-warnings scripts/theme-ui-test.mjs",
+    "test:registries": "node --no-warnings scripts/state-registries-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

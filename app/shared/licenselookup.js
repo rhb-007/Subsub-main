@@ -31,8 +31,13 @@
 
 import { checkView, licenseActive } from "./licensecheck.js";
 import { stateName, normalizeState } from "./states.js";
+import { REGISTRY_STATES } from "./stateregistries.js";
 
-export const LIVE_STATES = ["WA"];
+// The registers SubSub reads directly, each checked against the register's own
+// answer by the "Probe license registries" workflow (shared/stateregistries.js).
+// A partner never makes a state live by being configured: that is still the
+// decision described above.
+export const LIVE_STATES = [...REGISTRY_STATES];
 export const isLiveState = (s) => LIVE_STATES.includes(normalizeState(s) || "");
 
 export const NAME_MIN = 3;
@@ -47,7 +52,9 @@ export function readLookup({ state, license, name } = {}) {
   const lic = String(license || "").trim().toUpperCase().replace(/\s+/g, "");
   const nm = String(name || "").trim().replace(/\s+/g, " ");
   if (!lic && !nm) return { error: "license_or_name_required" };
-  if (lic && !/^[A-Z0-9*\-]{3,30}$/.test(lic)) return { error: "bad_license" };
+  // A dot is how Connecticut ("HIC.0631057") and Illinois ("104.018690")
+  // print their numbers; each register's own normalize takes it off.
+  if (lic && !/^[A-Z0-9*.\-#]{3,30}$/.test(lic)) return { error: "bad_license" };
   if (!lic && nm.length < NAME_MIN) return { error: "name_too_short" };
   return { state: st, license: lic || null, name: lic ? null : nm.slice(0, 80) };
 }

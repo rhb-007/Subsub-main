@@ -14123,6 +14123,59 @@ refactor.
   stylesheet, so a dark console is the same switch away, but nobody asked for
   it and its forest bars would invert.
 
+- **FIVE STATE REGISTERS ARE READ DIRECTLY NOW, EVERY FIELD NAME READ OFF A
+  LIVE ANSWER, AND WASHINGTON'S BOND AND INSURANCE HAD BEEN READ WRONG.** Asked
+  for as *"get the license api checked for all the states possible, not just
+  Washington"*. `shared/stateregistries.js`, the **Probe license registries**
+  workflow (`.github/workflows/probe-licenses.yml`, a button), and
+  `test:registries` (29).
+
+  **The build container cannot reach any state portal, so the probe runs on a
+  GitHub runner.** It prints each dataset's columns, sample rows, which licence
+  types it holds, and the result of the exact URLs the module builds, run end
+  to end against numbers taken from the registers themselves. Re-press it
+  whenever a register looks wrong: a mapping is only as good as the last time
+  somebody looked at a real row.
+
+  **What it found.** Of the six wired states, Iowa's dataset no longer exists
+  and four mappings had wrong field names (Oregon read `ccb_number` and
+  `business_name`, which the register does not have). **Washington, the one
+  marked verified, read its bond and insurance through names the dataset does
+  not have** (`surety_company`, `insurance_expiration_date`, `effective_date`),
+  so nothing was ever filtered or sorted, and the bond shown could be one that
+  expired years ago, where the register has a newer one. Its test fed the
+  mapping the same invented names: a test of its own fixture. The fixtures are
+  now rows copied from the registers' answers.
+
+  **The five, and what each covers.**
+  - **WA**: L&I contractor registration, bond and insurance (the one in force).
+  - **OR**: two boards, picked by the number's shape. A plain number is the
+    CCB (active licences only, with bond and insurance). A lettered number is
+    Building Codes (electricians and plumbers).
+  - **CT**: Home Improvement Contractor registrations. `HIC.0631057` becomes
+    `631057`, and inactive ones say why.
+  - **IL**: roofing contractors only, the one construction trade Illinois
+    licenses statewide. The query is pinned to that type, because the dataset
+    is every profession IDFPR licenses.
+  - **TX**: TDLR trade licences (A/C, electrical, elevator). The register has no
+    status column, so the status is the expiry read against today. A number can
+    belong to two licence types, so the prefix decides (`TACLA` is A/C, `TECL`
+    is electrical). A bare number held by two contractors is a check that could
+    not settle, never one picked between.
+
+  `LIVE_STATES` is these five, so the free /check tool answers for them and
+  their subs can earn SubSub Verified. Illinois and Texas offer no name search,
+  because their registers time out on one. A dot is now allowed in a typed
+  number. DC is unchanged and still unchecked.
+
+  **Still open, and a partner question rather than a build:** the other 45
+  states publish no open data. California (CSLB) and Florida (DBPR) publish
+  bulk files that could be loaded nightly. Everything else is a state website
+  that only a commercial verifier (they scrape the boards) can reach.
+  `worker/licenses.js` already has the seam for one: `LICENSE_LOOKUP_PARTNER`
+  plus its key. A partner is never live until somebody has seen its answers
+  against real records.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

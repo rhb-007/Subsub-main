@@ -79,14 +79,15 @@ console.log("\n-- REVIEW QUEUE: these name other companies' prices --");
 
 console.log("\n-- what the pages claim about licence checks --");
 {
-  // THE PRODUCT'S OWN ANSWER, read out of the Worker rather than remembered:
-  // only WA carries `fieldMappingVerified: true`, and the comment above it
-  // says the other six have never been exercised against a live response.
-  const worker = read("app/worker/index.js");
-  const verified = (worker.match(/fieldMappingVerified: true/g) || []).length;
-  ck("exactly one state's licence parsing is verified", verified === 1, String(verified));
-  ck("and it is Washington",
-    /WA: \{[\s\S]{0,400}fieldMappingVerified: true/.test(worker));
+  // THE PRODUCT'S OWN ANSWER, read out of the registry module rather than
+  // remembered: the registers SubSub reads directly, each checked against a
+  // live answer by the probe workflow. Washington is one of them; the pages
+  // below still name it when they claim a registry check, because the others
+  // cover narrower ground (Illinois is roofing only, Texas trades only).
+  const regs = read("app/shared/stateregistries.js");
+  const states = [...regs.matchAll(/^  ([A-Z]{2}): \{$/gm)].map((m) => m[1]);
+  ck("the registers read directly are the five checked ones", states.join(",") === "WA,OR,CT,IL,TX", states.join(","));
+  ck("and Washington is among them", states.includes("WA"));
 
   // So a page may not say "the state registry" flat. It names Washington, or
   // it does not make the claim at all.
