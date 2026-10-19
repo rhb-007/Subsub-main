@@ -291,12 +291,16 @@
     "test:consolegmv": "node --no-warnings scripts/console-gmv-ui-test.mjs",
     "test:messaging": "node --no-warnings scripts/messaging-test.mjs",
     "test:messagingui": "node --no-warnings scripts/messaging-ui-test.mjs",
-    "test:passportconnect": "node scripts/passport-connect-ui-test.mjs"
+    "test:passportconnect": "node scripts/passport-connect-ui-test.mjs",
+    "test:walletpass": "node --no-warnings scripts/wallet-pass-test.mjs",
+    "wallet:images": "node scripts/build-wallet-images.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
+    "fflate": "0.8.3",
     "lucide-react": "^0.460.0",
     "maplibre-gl": "6.11.2",
+    "node-forge": "1.4.0",
     "postal-mime": "3.0.1",
     "qrcode-generator": "^2.0.4",
     "react": "^18.3.1",

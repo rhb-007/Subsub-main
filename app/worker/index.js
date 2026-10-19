@@ -170,6 +170,9 @@ import { sealSecret, openSecret, sealingConfigured } from "./secretbox.js";
 import { ccGet, ccRefused, ccDownload } from "./companycam.js";
 import { ccProjectView, ccPhotoView, ccDocView, ccPhotoUsable, ccImageUrl, ccHttps,
   cleanCcImport, ccPhotoFileName, CC_PHOTO_PAGE, CC_PROJECT_PAGE } from "../shared/companycam.js";
+import { walletConfigured, walletPassJson, earliestDay } from "../shared/walletpass.js";
+import { readSigner, buildPkpass } from "./pkpass.js";
+import { WALLET_IMAGES } from "./walletimages.js";
 
 const app = new Hono();
 app.use("/api/*", cors());
@@ -19891,6 +19894,9 @@ app.get("/api/my-passport", requireRole("admin", "pm", "contractor"), async (c) 
       ORDER BY CASE pa.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, pa.requested_at DESC
       LIMIT 100`).bind(who.companyId).all();
   return c.json({ passport: passportRowToJs(row), preview,
+    // Whether the Add to Apple Wallet button can work. Only the Worker holds
+    // the signing certificate, so only the Worker can say.
+    wallet: walletConfigured(c.env),
     bbb: bbbOwnView(await bbbProfileRow(c.env, who.companyId), { live: bbbLive(c.env) }),
     photos: (await passportPhotos(c.env, who.companyId)).map((p) => ({ id: p.id, caption: p.caption || null })),
     access: (access || []).map(accessRowToJs) });
@@ -20112,6 +20118,63 @@ app.get("/api/public/passport/:slug", async (c) => {
     `UPDATE passports SET view_count = view_count + 1, last_viewed_at = CURRENT_TIMESTAMP WHERE company_id = ?`
   ).bind(row.company_id).run();
   return c.json(shape);
+});
+
+// When a company first existed on SubSub: the earliest of its own account
+// (a hireable account since 031), the first time anybody engaged it, and the
+// company row itself. The same rule overflow reads for "three months on
+// SubSub", so the card and that bar cannot disagree about one company.
+async function companyMemberSince(env, companyId) {
+  const co = await env.DB.prepare(`SELECT created_at FROM companies WHERE id = ?`).bind(companyId).first();
+  let acct = null, eng = null;
+  try {
+    acct = (await env.DB.prepare(`SELECT MIN(created_at) AS d FROM accounts WHERE company_id = ?`)
+      .bind(companyId).first())?.d;
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  try {
+    eng = (await env.DB.prepare(`SELECT MIN(invited_at) AS d FROM engagements WHERE company_id = ?`)
+      .bind(companyId).first())?.d;
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  return earliestDay(acct, eng, co?.created_at);
+}
+
+// The Passport as an Apple Wallet card. Public and keyed by the slug, like the
+// page, because the button is an ordinary link: iOS opens a .pkpass straight
+// from Safari, and a link cannot carry a sign-in header. That is safe because
+// the card says nothing the public page does not -- see shared/walletpass.js,
+// which also explains why it carries no license or insurance status.
+app.get("/api/public/passport/:slug/wallet.pkpass", async (c) => {
+  const rl = await rateLimit(c.env, "passport-wallet", clientIp(c), { limit: 30, windowMinutes: 10 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  if (!walletConfigured(c.env)) return c.json({ error: "wallet_not_configured" }, 503);
+  let row;
+  try { row = await publishedPassport(c.env, c.req.param("slug")); }
+  catch (err) { if (missingSchema(err)) return c.json({ error: "not_found" }, 404); throw err; }
+  if (!row) return c.json({ error: "not_found" }, 404);
+  const view = await passportPublicShape(c.env, row);
+  if (!view) return c.json({ error: "not_found" }, 404);
+  // Which setting is wrong, by name and never by value, so the fix is one
+  // setting rather than five.
+  const signer = readSigner(c.env);
+  if (signer.error) {
+    console.error("[wallet] cannot sign:", signer.error);
+    return c.json({ error: "wallet_not_configured", detail: signer.error }, 503);
+  }
+  const pass = walletPassJson({
+    view, companyId: row.company_id, memberSince: await companyMemberSince(c.env, row.company_id),
+    passTypeId: String(c.env.APPLE_PASS_TYPE_ID).trim(), teamId: String(c.env.APPLE_TEAM_ID).trim(),
+  });
+  const files = { "pass.json": new TextEncoder().encode(JSON.stringify(pass)) };
+  for (const [name, b64] of Object.entries(WALLET_IMAGES)) {
+    files[name] = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+  }
+  const bytes = await buildPkpass(signer, files);
+  return new Response(bytes, { headers: {
+    "Content-Type": "application/vnd.apple.pkpass",
+    "Content-Disposition": 'attachment; filename="SubSub-Passport.pkpass"',
+    "Cache-Control": "private, no-store",
+    "X-Robots-Tag": "noindex",
+  } });
 });
 
 app.get("/api/public/passport/:slug/photo/:id", async (c) => {

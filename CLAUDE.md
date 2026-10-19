@@ -13969,6 +13969,75 @@ refactor.
   **Not verified here:** a live CompanyCam call. **Paste 091 and set
   `INTEGRATION_SECRET_KEY`** before anybody can connect.
 
+- **THE PASSPORT GOES IN APPLE WALLET AS A CARD WITH A QR CODE, AND THE CARD
+  CARRIES NO STATUS.** Asked for as *"a SubSub passport card w/ QR code, member
+  since, etc that goes into an iOS apple wallet"*. `app/shared/walletpass.js`
+  (what the card says), `app/worker/pkpass.js` (signing and zipping), and
+  `GET /api/public/passport/:slug/wallet.pkpass`.
+
+  **No "Verified", no license or insurance state, no expiry, front or back.**
+  A pass sits on a phone for years and changes only if we push an update, so a
+  printed verdict is the decal's problem in a smaller format: a claim that
+  outlives its facts. The card says who the company is, its trades, where it
+  is, its contact, how long in business and **member since**. The **QR code
+  opens the live Passport**, which is where whether they are covered is
+  answered on the day it is scanned, and the back says so in words. The license
+  NUMBER is on the back because the public page shows it; its check is not.
+  The test reads every front field for a verdict word, and adding the badge to
+  the card fails it.
+
+  **Member since is the earliest of the company's own account, the first time
+  anybody engaged it, and its company row**, which is overflow's *three months
+  on SubSub* rule, so the two cannot disagree about one company. It is read as
+  text, cut to the day, so an ISO "T" cannot sort after a `CURRENT_TIMESTAMP`
+  space and no timezone moves it into the month before.
+
+  **Public and keyed by the slug, like the page**, because the button is an
+  ordinary link: iOS opens a `.pkpass` straight from Safari, and a link cannot
+  carry a sign-in header. That is safe because the card carries nothing the
+  public page does not. Only a **published** Passport gets one, and it is
+  rate-limited and `noindex`. The serial number is the company, so adding it
+  twice replaces it.
+
+  **The signature is built the way passkit-generator 3.5.0 builds it**, read
+  from its source rather than recalled: a detached PKCS#7 over `manifest.json`,
+  SHA-1, Apple's WWDR intermediate and the pass certificate both included, with
+  the contentType, messageDigest and signingTime attributes. node-forge 1.4.0
+  does the ASN.1 and fflate 0.8.3 the zip, both pinned exactly. **Forge was run
+  inside workerd, not only in Node**: its `isNodejs` test is false there, so it
+  never reaches for Node's crypto, and it signed. It adds about 124 KB gzipped
+  to the Worker.
+
+  **`test:walletpass` verifies the signature with openssl**, against a test
+  chain standing in for Apple's, rather than trusting the code that made it,
+  and checks every file's SHA-1 against the manifest. **The WWDR certificate is
+  counted, not searched for**: the pass certificate names it as its issuer, so
+  a search for its name passed with it missing, which mutation caught. Seven
+  server mutations fire, each on its own assertion.
+
+  **A wrong setting is named, never its value**: `bad_pass_cert`,
+  `bad_wwdr_cert`, `bad_pass_key` or `key_does_not_match_cert`. A key that is
+  not the certificate's would otherwise sign passes every phone refuses, with
+  nothing on our side looking wrong. A PEM pasted with literal `\n` pairs or
+  spaces for line breaks is put back into shape. An encrypted key takes
+  `APPLE_PASS_KEY_PASSPHRASE`.
+
+  **The button is on the sub's Passport tab only, and only when it can work**:
+  published, and `/api/my-passport` saying `wallet: true`, which only the
+  Worker can answer because only it holds the certificate. `test:passportui`
+  drives both gates, each on its own. The images are SubSub's mark, drawn with
+  sharp by `npm run wallet:images` into `worker/walletimages.js`, because a
+  Worker cannot rasterize an SVG.
+
+  **Not verified here, and it cannot be until Apple issues the certificate:**
+  a real iPhone adding the card. Apple's site is blocked from this
+  environment, so the WWDR G4 certificate has to come from Apple directly.
+  **Still open:** the button is a black SubSub button reading *Add to Apple
+  Wallet*. Apple's guidelines want their own badge artwork, which needs
+  downloading from Apple. And the card is not updated when the Passport
+  changes (no web service URL); a sub re-adds it to refresh it, and the QR
+  code always opens the live page anyway.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -822,6 +822,7 @@ export const api = {
   // opening the files does, and the files come back as blobs because the
   // route needs an Authorization header an <a href> cannot carry.
   publicPassport: (slug) => request(`/public/passport/${encodeURIComponent(slug)}`),
+  passportWalletUrl: (slug) => `${API_BASE}/public/passport/${encodeURIComponent(slug)}/wallet.pkpass`,
   passportPhotoUrl: (slug, id) => `${API_BASE}/public/passport/${encodeURIComponent(slug)}/photo/${encodeURIComponent(id)}`,
   passportAccess: (slug) => request(`/passport/${encodeURIComponent(slug)}/access`),
   askPassportAccess: (slug, message) => request(`/passport/${encodeURIComponent(slug)}/access`,

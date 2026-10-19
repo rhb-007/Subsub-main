@@ -36,7 +36,7 @@ const t = tally();
 
 const SLUG = "bay-roofing-k7q2m";
 const NOT_CONNECTED = () => ({ status: "none", mayRequest: true, mayConnect: true, connectPending: false, files: [] });
-const S = { verified: true, access: NOT_CONNECTED(), kind: "general_contractor",
+const S = { verified: true, wallet: true, access: NOT_CONNECTED(), kind: "general_contractor",
   published: false, posts: [], pendingReq: true, bbb: true,
   myBbb: { linked: false, live: true } };
 const PAGE = () => ({
@@ -66,7 +66,7 @@ const acct = () => ({
 const MINE = () => ({
   passport: { slug: SLUG, url: `https://app.subsub.work/p/${SLUG}`, published: S.published, trades: ["roofing"],
     foundedYear: 2012, about: "Residential re-roofs.", viewCount: 3 },
-  preview: PAGE(), photos: [], bbb: S.myBbb,
+  preview: PAGE(), photos: [], bbb: S.myBbb, wallet: S.wallet,
   access: S.pendingReq ? [{ id: "pa1", accountId: "acc_gc", accountName: "Outerhome", requesterName: "Dana Ruiz",
     message: "For the Pine St job", status: "pending", requestedAt: "2026-10-09 10:00:00" }]
     : [{ id: "pa1", accountId: "acc_gc", accountName: "Outerhome", status: "approved", requestedAt: "2026-10-09 10:00:00" }],
@@ -494,6 +494,23 @@ try {
     await wait(900);
     let sent = S.posts.slice(before);
     t.ck("publishing posts published:true", sent.some((p) => p.path === "/api/my-passport" && p.body.published === true), JSON.stringify(sent));
+    // The Apple Wallet card: offered once published and only when the server
+    // can sign one. Before publishing the route answers 404, so no button.
+    const walletHref = () => page.evaluate(() => document.querySelector(".pp-wallet-btn")?.getAttribute("href") || null);
+    const wBefore = edit.pub.some((x) => /Publish my Passport/.test(x));
+    const wAfter = await walletHref();
+    t.ck("once published, Add to Apple Wallet links the signed pass",
+      wBefore && wAfter && wAfter.endsWith(`/public/passport/${SLUG}/wallet.pkpass`), String(wAfter));
+    // The server could sign here, so only the taking down hides the button.
+    await page.evaluate(() => [...document.querySelectorAll(".pp-pub button")].find((b) => /Take it down/.test(b.innerText))?.click());
+    await wait(900);
+    t.ck("taken down, there is no card to add", (await walletHref()) === null);
+    S.wallet = false;
+    await page.evaluate(() => [...document.querySelectorAll(".pp-pub button")].find((b) => /Publish/.test(b.innerText))?.click());
+    await wait(900);
+    t.ck("published but the server cannot sign: no button onto a refusal", (await walletHref()) === null
+      && await page.evaluate(() => !!document.querySelector(".pp-pub")));
+    S.wallet = true;
     before = S.posts.length;
     await page.evaluate(() => [...document.querySelectorAll(".pp-requests button")].find((b) => /Share them/.test(b.innerText))?.click());
     await wait(900);

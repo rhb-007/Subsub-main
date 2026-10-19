@@ -85,6 +85,18 @@ const GROUPS = [
       + "refused by name and nothing else changes. Changing it disconnects every account.",
   },
   {
+    id: "wallet", label: "Apple Wallet Passport card",
+    vars: ["APPLE_PASS_TYPE_ID", "APPLE_TEAM_ID", "APPLE_PASS_CERT", "APPLE_PASS_KEY", "APPLE_WWDR_CERT"],
+    matters: "The Add to Apple Wallet button on a subcontractor's Passport tab. The Pass Type ID and Team ID "
+      + "name the pass, the certificate and its private key (PEM) sign it, and Apple's WWDR G4 "
+      + "certificate (PEM) lets an iPhone trust it. Unset, the button is not drawn.",
+  },
+  {
+    id: "wallet-pass", label: "Apple Wallet key passphrase (only if the key has one)",
+    vars: ["APPLE_PASS_KEY_PASSPHRASE"],
+    matters: "Only needed when APPLE_PASS_KEY is an encrypted key. Off is normal.",
+  },
+  {
     id: "sms", label: "Text messages (Twilio)",
     vars: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_FROM"],
     matters: "Texting a tenant their invite. Unset, invites still go by email and "

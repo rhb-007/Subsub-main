@@ -30455,6 +30455,20 @@ function PassportPanel() {
               <Globe size={14} /> Publish my Passport</button>
           )}
         </div>
+        {/* The card for an iPhone's Wallet. A plain link, because iOS opens a
+            .pkpass straight from Safari and a link cannot carry a sign-in,
+            so the route is public and keyed by the slug -- which is why it is
+            offered only once the Passport is published. Drawn only when the
+            server says it can sign one: a button onto a refusal is a button
+            that lies. */}
+        {pp.published && d.wallet && (
+          <div className="pp-wallet">
+            <a className="pp-wallet-btn" href={api.passportWalletUrl(pp.slug)}>
+              <Wallet size={18} /> Add to Apple Wallet</a>
+            <span className="pp-sub">A card on your iPhone with your QR code and the date you joined SubSub.
+              Scanning it opens this live Passport, so your license and insurance are always checked that day.</span>
+          </div>
+        )}
         {note && <p className="pp-note" role="status">{note}</p>}
         {(() => {
           // Named, not counted: "4 gaps" does not say which four. Each row of
@@ -42091,6 +42105,11 @@ body{background:var(--paper)}
 .pp-cta .claim-btn{margin-top:6px}
 .pp-edit{display:flex;flex-direction:column;gap:14px}
 .pp-pub{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px}
+.pp-wallet{margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.pp-wallet .pp-sub{flex:1 1 220px}
+.pp-wallet-btn{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:0 18px;border-radius:10px;
+  background:#000;color:#fff;font-weight:600;font-size:15px;text-decoration:none}
+.pp-wallet-btn:hover{background:#222}
 .pp-note{margin:10px 0 0;font-size:13px;font-weight:700}
 .pp-k{display:block;margin:6px 0;font-size:12.5px;font-weight:700;color:var(--ink-soft)}
 .pp-req{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;
