@@ -41,6 +41,28 @@ for (const [st, [domain, ids]] of Object.entries(CONFIGURED)) {
     });
   }
 }
+// What kinds of licence each multi-profession dataset holds, and the exact
+// query shape the Worker sends, run against a number the sample rows carry.
+const GROUPS = [
+  ["IL", "data.illinois.gov", "pzzh-kp68", "license_type"],
+  ["TX", "data.texas.gov", "7358-krk7", "license_type"],
+  ["CT", "data.ct.gov", "5r9m-qgni", "credentialtype"],
+  ["OR", "data.oregon.gov", "g77e-6bhs", "license_type"],
+  ["ORBCD", "data.oregon.gov", "vhbr-cuaq", "lictype"],
+];
+out.groups = {};
+for (const [st, domain, id, field] of GROUPS) {
+  const r = await get(`https://${domain}/resource/${id}.json?$select=${field},count(*)&$group=${field}&$limit=400`);
+  out.groups[st] = r.body;
+}
+out.samples = {};
+const one = async (key, url) => { out.samples[key] = (await get(url)).body; };
+await one("IL_roof", "https://data.illinois.gov/resource/pzzh-kp68.json?$where=upper(license_type) like '%25ROOF%25'&$limit=3");
+await one("TX_elec", "https://data.texas.gov/resource/7358-krk7.json?$where=upper(license_type) like '%25ELECTRIC%25'&$limit=3");
+await one("ORBCD", "https://data.oregon.gov/resource/vhbr-cuaq.json?$limit=3");
+await one("OR_byNumber", "https://data.oregon.gov/resource/g77e-6bhs.json?license_number=100215");
+await one("CT_byNumber", "https://data.ct.gov/resource/5r9m-qgni.json?credentialnumber=631057");
+await one("OR_count", "https://data.oregon.gov/resource/g77e-6bhs.json?$select=count(*)");
 const seen = new Set();
 for (const q of QUERIES) {
   const r = await get(`https://api.us.socrata.com/api/catalog/v1?q=${encodeURIComponent(q)}&only=dataset&limit=100`);
