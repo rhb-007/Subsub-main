@@ -77,3 +77,34 @@ for (const q of QUERIES) {
 console.log("PROBE_JSON_BEGIN");
 console.log(JSON.stringify(out));
 console.log("PROBE_JSON_END");
+
+// Third half: the lookups shared/stateregistries.js actually builds, run end to
+// end and mapped, against numbers taken from each register's own rows.
+const { REGISTRIES, cleanName } = await import("../shared/stateregistries.js");
+const pick = async (url, field) => { const r = await get(url); return Array.isArray(r.body) ? r.body[0]?.[field] : null; };
+const nums = {
+  WA: ["04CONCL862CR", "ECOSTSC758NN"],
+  OR: ["100215", await pick("https://data.oregon.gov/resource/vhbr-cuaq.json?lictype=C-Electrical%20Contractor&$limit=1", "licnbr")],
+  CT: ["HIC.0631057", "631082"],
+  IL: [await pick("https://data.illinois.gov/resource/pzzh-kp68.json?license_type=ROOFING%20CONTRACTOR&license_status=ACTIVE&$limit=1", "license_number")],
+  TX: [await pick("https://data.texas.gov/resource/7358-krk7.json?license_type=A%2FC%20Contractor&$limit=1", "license_number"),
+    await pick("https://data.texas.gov/resource/7358-krk7.json?license_type=Electrical%20Contractor&$limit=1", "license_number")],
+};
+out.endToEnd = {};
+for (const [st, list] of Object.entries(nums)) {
+  const reg = REGISTRIES[st];
+  out.endToEnd[st] = [];
+  for (const raw of list.filter(Boolean)) {
+    const n = reg.normalize(raw);
+    const rows = {}; const statuses = {};
+    for (const [k, url] of Object.entries(reg.lookups(n))) { const r = await get(url); statuses[k] = r.status; rows[k] = Array.isArray(r.body) ? r.body : []; }
+    out.endToEnd[st].push({ raw, n, statuses, counts: Object.fromEntries(Object.entries(rows).map(([k, v]) => [k, v.length])), mapped: reg.map(rows) });
+  }
+  if (reg.nameSearch) {
+    const r = await get(`${reg.nameSearch(cleanName("construction"))}&$limit=3`);
+    out.endToEnd[st].push({ nameSearch: r.status, rows: Array.isArray(r.body) ? r.body.map(reg.nameRow) : r.body });
+  }
+}
+console.log("E2E_BEGIN");
+console.log(JSON.stringify(out.endToEnd));
+console.log("E2E_END");
