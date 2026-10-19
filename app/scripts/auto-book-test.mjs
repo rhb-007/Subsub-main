@@ -173,7 +173,7 @@ try {
     ck("the card offers a way to set a time when there is none",
       /needsTime && !mustAnswer && onProposeVisit[\s\S]{0,400}Propose a time/.test(src));
     ck("and only says booked when there is a booking",
-      /when\.kind === "confirmed"\s*\?\s*"Auto-scheduled — booked to your calendar"/.test(src));
+      /when\.kind === "confirmed"\s*\?\s*(tt\()?"Auto-scheduled — booked to your calendar"/.test(src));
   }
 } catch (err) {
   fail++;

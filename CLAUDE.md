@@ -14176,6 +14176,47 @@ refactor.
   plus its key. A partner is never live until somebody has seen its answers
   against real records.
 
+- **SPANISH, FOR THE PEOPLE WHO DO THE WORK, AND ONLY WHERE IT IS
+  TRANSLATED.** Asked for as *"need to support Spanish (for subcontractors,
+  handymen, contractors accounts)"*. `src/lib/i18n.js`, `src/i18n/es.js`,
+  `test:i18n` and `test:spanishui`.
+
+  **`tt("English")` returns the Spanish, and the English is the key.** A
+  string nobody has translated yet still reads, in English, rather than as a
+  key or a blank. An edit to the English falls back to English until the
+  translation follows, and `test:i18n` names every `tt()` string with no
+  Spanish line and every `{placeholder}` the two disagree on. The language is
+  a module value set by `App` before it renders, because `tt()` is called from
+  hundreds of places and threading it through props would touch each of them.
+
+  **A Language setting (English / Español, each written in its own language)
+  sits in the profile menu and the drawer**, per device like the theme. With
+  nothing chosen, a device set to Spanish starts in Spanish. **It is offered
+  only to contractor and handyman seats and a subcontractor account's own
+  team**, and everybody else stays in English whatever the device remembers.
+  A manager on a crew member's tablet must not be handed a half-translated
+  hiring app, and the mutation that drops the gate fails exactly that. The
+  page's `lang` attribute follows, so a screen reader pronounces it right.
+
+  **What is translated:** the contractor portal (My Jobs, the calendar,
+  Waiting on you, job requests and quotes, crews, availability, coverage, the
+  compliance pack, Passport, referrals, agreements and lien-waiver chrome), the
+  access panel, the visit form, the nav and menu, trade names and the
+  greeting. Dates and times follow the language (`uiLocale`). About 560
+  strings, in "usted", the register the Spanish flyer already uses. GC,
+  handyman and W-9 stay as crews say them.
+
+  **What deliberately is not:** the signed documents themselves (the
+  subcontractor agreement and the lien waivers), because a translated contract
+  is a different document from the one stamped and hashed. Their buttons and
+  instructions are in Spanish; the text being signed is not.
+
+  **Still open, and the next phases:** emails and texts (they need the
+  language stored on the person, `users.locale`, so a message sent at night
+  knows it), the signup form and `/subs`, a subcontractor account's hiring
+  screens (Jobs, Availability, the roster), and the general contractor's whole
+  app. **Not verified:** the Spanish has not been read by a native speaker.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

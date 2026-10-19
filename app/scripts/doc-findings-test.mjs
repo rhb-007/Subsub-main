@@ -451,9 +451,9 @@ console.log("\n-- the screen collects them --");
   // faults would have rendered a dangling em dash and nothing at all, on the
   // screen somebody opens straight after reading the email about it.
   ck("the contractor's own row counts the faults rather than printing an empty note",
-    /\{probs\.length\} thing\{probs\.length === 1 \? "" : "s"\} to fix<\/>/.test(APP));
+    /tt\(probs\.length === 1 \? "\{n\} thing to fix" : "\{n\} things to fix", \{ n: probs\.length \}\)/.test(APP));
   ck("and still says the old thing when there are none, without a dangling dash",
-    /Needs a new copy\{rv\?\.note \? <> — \{rv\.note\}<\/> : null\}/.test(APP));
+    /Needs a new copy"\)\}\{rv\?\.note \? <> — \{rv\.note\}<\/> : null\}/.test(APP));
   ck("with the list and each instruction under it, because a count is not actionable",
     /className="dm-fixes"/.test(APP) && /needs these corrected/.test(APP));
   ck("and it tells them uploading replaces what is on file",

@@ -22,7 +22,7 @@ import { createPortal } from "react-dom";
 // flag only decides what ships to the browser.
 const BUILD = import.meta.env.VITE_BUILD === "platform" ? "platform" : "tenant";
 import {
-  Monitor, Moon,
+  Monitor, Moon, Languages,
   Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList, ClipboardCheck,
@@ -44,6 +44,7 @@ import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoU
 import { inPool } from "./lib/photoshrink.js";
 import { withDark } from "./lib/darkcss.js";
 import { useTheme } from "./lib/theme.js";
+import { tt, uiLocale, useLang, setLang, getLang, useDocLang } from "./lib/i18n.js";
 // The same file the Worker imports, so a problem cannot be an emergency in
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
@@ -783,7 +784,7 @@ const relTime = (iso) => {
     if (hrs < 24) return `in ${hrs} hour${hrs === 1 ? "" : "s"}`;
     const days = Math.round(hrs / 24);
     if (days < 30) return `in ${days} day${days === 1 ? "" : "s"}`;
-    return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    return new Date(t).toLocaleDateString(uiLocale(), { month: "short", day: "numeric", year: "numeric" });
   }
   if (ago < 90 * 1000) return "just now";
   const mins = Math.round(ago / 60000);
@@ -792,7 +793,7 @@ const relTime = (iso) => {
   if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
   const days = Math.round(hrs / 24);
   if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
-  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(t).toLocaleDateString(uiLocale(), { month: "short", day: "numeric", year: "numeric" });
 };
 
 const REPORT_EDIT_WINDOW_MS = 10 * 60 * 1000;
@@ -1050,7 +1051,13 @@ const seedMemberships = [
 
 
 // ---- Helpers -------------------------------------------------------------
-const catMeta = (id) => CATEGORIES.find((c) => c.id === id) || CATEGORIES[0];
+// The trade's name follows the language; its id, icon and everything else do
+// not. English returns the very same object, so nothing on the hiring side
+// sees a change.
+const catMeta = (id) => {
+  const c = CATEGORIES.find((x) => x.id === id) || CATEGORIES[0];
+  return getLang() === "es" ? { ...c, label: tt(c.label) } : c;
+};
 const acceptRate = (s) => {
   const t = s.accepted + s.declined;
   return t ? Math.round((s.accepted / t) * 100) : 0;
@@ -1737,10 +1744,11 @@ const moneyRaw = (v) => String(v ?? "").replace(/[^0-9.]/g, "");
 function Hello({ name, weather }) {
   // Re-read on every render rather than frozen in state: a dashboard left open
   // over lunch should not still say good morning.
-  const line = weatherLine(weather);
+  // The condition after the dot follows the language; the figure does not.
+  const line = weatherLine(weather)?.replace(/· (.+)$/, (m, w) => `· ${tt(w)}`) || null;
   return (
     <h2>
-      {greetingFor(new Date().getHours())}{name ? `, ${name}` : ""}
+      {tt(greetingFor(new Date().getHours()))}{name ? `, ${name}` : ""}
       {line && <span className="hello-wx" title={weather?.place || ""}>{line}</span>}
     </h2>
   );
@@ -1749,7 +1757,7 @@ function Hello({ name, weather }) {
 function formatDay(dateStr) {
   if (!dateStr) return "";
   const d = new Date(`${dateStr}T12:00:00`);
-  return isNaN(d) ? dateStr : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return isNaN(d) ? dateStr : d.toLocaleDateString(uiLocale(), { month: "short", day: "numeric" });
 }
 // An expiry, which is the one date on this screen where the YEAR matters:
 // "Expires Jun 30" reads as this June to somebody looking at a certificate
@@ -1761,7 +1769,7 @@ function formatExpiry(dateStr) {
   if (isNaN(d)) return dateStr;
   const opts = { month: "short", day: "numeric" };
   if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
-  return d.toLocaleDateString(undefined, opts);
+  return d.toLocaleDateString(uiLocale(), opts);
 }
 // A renewal date, from a full ISO timestamp rather than a plain date string --
 // Stripe's period end carries a time, and "renews 20 Sep 2027" wants the year
@@ -1787,7 +1795,7 @@ function niceDay(iso) {
   if (!iso) return "";
   const raw = String(iso);
   const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T12:00:00` : raw);
-  return isNaN(d) ? "" : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+  return isNaN(d) ? "" : d.toLocaleDateString(uiLocale(), { year: "numeric", month: "short", day: "numeric" });
 }
 
 // "4 minutes ago" rather than an ISO timestamp: the only thing anyone wants
@@ -1861,7 +1869,7 @@ function relDay(k, from = dayKey()) {
   if (n === 1) return "Tomorrow";
   if (n === -1) return "Yesterday";
   if (n < 0) return `${-n} days ago`;
-  if (n < 7) return dayFromKey(k).toLocaleDateString(undefined, { weekday: "long" });
+  if (n < 7) return dayFromKey(k).toLocaleDateString(uiLocale(), { weekday: "long" });
   return `In ${n} days`;
 }
 // THE DAY ON A SCHEDULE ROW, which `relDay` could not answer on its own.
@@ -1890,7 +1898,7 @@ function rowDay(k, from = dayKey()) {
   if (n === 1) return "Tomorrow";
   if (n === -1) return "Yesterday";
   const d = dayFromKey(k);
-  return d.toLocaleDateString(undefined, {
+  return d.toLocaleDateString(uiLocale(), {
     weekday: "short", month: "short", day: "numeric",
     ...(d.getFullYear() === dayFromKey(from).getFullYear() ? {} : { year: "numeric" }),
   });
@@ -1920,7 +1928,7 @@ function formatWhen(dateStr, timeStr) {
   const [h = "07", min = "00"] = (timeStr || "07:00").split(":");
   const d = new Date(`${dateStr}T${(timeStr || "07:00")}:00`);
   if (isNaN(d)) return null;
-  const day = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  const day = d.toLocaleDateString(uiLocale(), { weekday: "short", month: "short", day: "numeric" });
   const hr = Number(h); const ap = hr >= 12 ? "PM" : "AM"; const h12 = hr % 12 || 12;
   return `${day} · ${h12}:${min} ${ap}`;
 }
@@ -2084,6 +2092,7 @@ export default function SubSub() {
   const [loadErr, setLoadErr] = useState(null);
   const [loggedIn, setLoggedIn] = useState(false);
   const themeCtl = useTheme(loggedIn);
+  const langCtl = useLang();
   // A general contractor links to their own application form from their own
   // website, and the account page's "open the live application form" link
   // points at the same place. A query string rather than a path, for the same
@@ -2606,6 +2615,7 @@ export default function SubSub() {
     if (view === "properties" || view === "inspections" || view === "tenants") return hasProperties(account);
     return true;
   };
+
   const canRate = role === "admin" || role === "pm";
   const canComplete = role === "admin" || role === "pm";
   // WHO MAY CHANGE SOMEBODY ELSE'S SEAT, and it is a role rather than a
@@ -2653,6 +2663,14 @@ export default function SubSub() {
   // fallback — otherwise every subdomain would show the same generic/demo
   // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
+  // Spanish is offered where it is translated: the people who do the work.
+  // Everybody else stays in English whatever this device remembers, so a
+  // manager signing in on a crew member's tablet is not handed a half-
+  // translated screen.
+  const langEligible = loggedIn && (can("portal") || kindOf(account) === "subcontractor");
+  const lang = langEligible ? langCtl.lang : "en";
+  setLang(lang);
+  useDocLang(lang);
   // 085. A saved Map view on an account that has no jobs map (a different
   // seat on this browser, or an account that changed kind) opens on the list.
   useEffect(() => {
@@ -6068,7 +6086,7 @@ export default function SubSub() {
                     {canShowQr && (
                       <>
                         <button className="um-qr" onClick={toggleQr} aria-expanded={qrOpen}>
-                          <QrCodeIcon size={14} /> My Passport QR
+                          <QrCodeIcon size={14} /> {tt("My Passport QR")}
                           <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
                         </button>
                         {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
@@ -6077,9 +6095,10 @@ export default function SubSub() {
                     {canQuickSend && <QuickSend />}
                     {can("tenant") && <div className="um-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
-                      <UserCog size={14} /> My account
+                      <UserCog size={14} /> {tt("My account")}
                     </button>
                     <ThemePicker ctl={themeCtl} />
+                    {langEligible && <LangPicker ctl={langCtl} />}
                     {brand.subdomain && brand.subdomain !== "app" && (
                       <>
                         <div className="um-sec">Your sign-in address</div>
@@ -6140,7 +6159,7 @@ export default function SubSub() {
                       </>
                     )}
                     <button className="um-signout" onClick={() => { setUserMenu(false); clearAuth(); setLoggedIn(false); }}>
-                      <LogOut size={14} /> Sign out
+                      <LogOut size={14} /> {tt("Sign out")}
                     </button>
                   </div>
                 </>
@@ -6171,7 +6190,7 @@ export default function SubSub() {
           {canShowQr && (
             <div className="drawer-qr" onClick={(e) => e.stopPropagation()}>
               <button className="um-qr" onClick={toggleQr} aria-expanded={qrOpen}>
-                <QrCodeIcon size={14} /> My Passport QR
+                <QrCodeIcon size={14} /> {tt("My Passport QR")}
                 <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
               </button>
               {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
@@ -6205,7 +6224,7 @@ export default function SubSub() {
           )}
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
-              Dashboard
+              {tt("Dashboard")}
               {/* Somebody has asked to work with this account and nothing
                   moves until it is answered. Amber for the same reason a job
                   request is: it is theirs to answer. The contractor portal's
@@ -6221,17 +6240,17 @@ export default function SubSub() {
               thing waiting on this person. */}
           {can("inbox") && (
             <button className={tab === "inbox" ? "on" : ""} onClick={() => openInbox()} data-nav="inbox">
-              Inbox{inbox.unread > 0 && <LiveCount n={inbox.unread} what="unread" />}
+              {tt("Inbox")}{inbox.unread > 0 && <LiveCount n={inbox.unread} what="unread" />}
             </button>
           )}
           {can("contractors") && (
             <button className={tab === "network" ? "on" : ""} onClick={() => { setTab("network"); setNetView("roster"); }}>
-              {rosterWords(account).Many} <span className="count">{subs.length}</span>
+              {tt(rosterWords(account).Many)} <span className="count">{subs.length}</span>
             </button>
           )}
           {can("calendar") && (
             <button className={tab === "calendar" ? "on" : ""} onClick={() => setTab("calendar")}>
-              Availability
+              {tt("Availability")}
             </button>
           )}
           {/* An account that can be HIRED keeps its own four documents, and
@@ -6245,7 +6264,7 @@ export default function SubSub() {
           {isHireable(account) && (role === "admin" || role === "pm") && (
             <button className={tab === "account" ? "" : ""}
               onClick={() => { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }}>
-              Compliance pack
+              {tt("Compliance pack")}
               {/* Presence, not approval -- nobody verifies their own, so a
                   count built on missingDocs() would read 4 forever. And the
                   REQUIRED ones only: a badge that will not clear until
@@ -6261,7 +6280,7 @@ export default function SubSub() {
           )}
           {can("jobs") && (
             <button className={tab === "jobs" ? "on" : ""} onClick={() => setTab("jobs")}>
-              Jobs <span className="count">{jobs.length}</span>
+              {tt("Jobs")} <span className="count">{jobs.length}</span>
             </button>
           )}
           {can("properties") && accountProperties.length >= 0 && (
@@ -6290,7 +6309,7 @@ export default function SubSub() {
           )}
           {can("uniforms") && (
             <button className={tab === "uniforms" ? "on" : ""} onClick={() => setTab("uniforms")}>
-              Uniforms{uniformOrders.filter((o) => o.status === "pending").length > 0 &&
+              {tt("Uniforms")}{uniformOrders.filter((o) => o.status === "pending").length > 0 &&
                 <span className="count amber">{uniformOrders.filter((o) => o.status === "pending").length}</span>}
             </button>
           )}
@@ -6320,7 +6339,7 @@ export default function SubSub() {
             .map(([id, label]) => (
               <button key={id} className={tab === "portal" && (id === "jobs" ? JOB_PANES.includes(pane) : pane === id) ? "on" : ""}
                 onClick={() => { setPane(id); setTab("portal"); }}>
-                {label}
+                {tt(label)}
                 {id === "jobs" && crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
               </button>
             ))}
@@ -6349,7 +6368,7 @@ export default function SubSub() {
           ].map(([id, label]) => (
             <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
-              {label}
+              {tt(label)}
               {id === "jobs" && crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
               {/* Somebody is waiting on a yes or a no. Amber for the same
                   reason a job request is: it is theirs to answer and
@@ -6364,8 +6383,9 @@ export default function SubSub() {
           ))}
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
-            <button onClick={() => setTab("account")}><UserCog size={15} /> My account</button>
+            <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
             <ThemePicker ctl={themeCtl} drawer />
+            {langEligible && <LangPicker ctl={langCtl} drawer />}
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
                 it. "Switch to Cascade Management" on its own reads as taking
                 the place over -- which is the opposite of the truth when the
@@ -6395,7 +6415,7 @@ export default function SubSub() {
                 {seatsWaiting > 0 && <span className="count amber">{seatsWaiting}</span>}
               </button>
             )}
-            <button className="drawer-out" onClick={() => setLoggedIn(false)}><LogOut size={15} /> Sign out</button>
+            <button className="drawer-out" onClick={() => setLoggedIn(false)}><LogOut size={15} /> {tt("Sign out")}</button>
           </div>
         </nav>
       </header>
@@ -8596,36 +8616,36 @@ function ChangeOrderRow({ c, now, side, onRespond, onVoid }) {
       <div className="co-main">
         <span className="co-scope">{c.scope}</span>
         <span className="co-meta">
-          {CO_KINDS.find((k) => k.id === c.kind)?.label} · raised by {c.raisedBy}
-          {c.origin === "sub" ? " (subcontractor)" : ""} · {c.raisedAt.slice(0, 10)}
+          {CO_KINDS.find((k) => k.id === c.kind)?.label}{" "}{tt("· raised by")}{" "}{c.raisedBy}
+          {c.origin === "sub" ? tt(" (subcontractor)") : ""} · {c.raisedAt.slice(0, 10)}
           {c.status === "pending" && c.origin === "gc" && left !== null && !expired &&
-            <> · <Clock size={11} /> {countdown(left)} to respond</>}
+            <> · <Clock size={11} /> {countdown(left)}{" "}{tt("to respond")}</>}
         </span>
         {c.note && <span className="co-note">“{c.note}”</span>}
       </div>
       <div className="co-side">
         <b className={`co-delta ${c.valueDelta > 0 ? "up" : c.valueDelta < 0 ? "down" : ""}`}>
-          {c.valueDelta === 0 ? "No cost" : (c.valueDelta > 0 ? "+" : "−") + formatMoney(Math.abs(c.valueDelta))}
+          {c.valueDelta === 0 ? tt("No cost") : (c.valueDelta > 0 ? "+" : "−") + formatMoney(Math.abs(c.valueDelta))}
         </b>
         <span className={`co-status s-${expired ? "expired" : c.status}`}>
-          {expired ? "Expired" : c.status === "pending"
-            ? (mine ? `Awaiting ${side === "gc" ? "subcontractor" : "approval"}` : "Needs your response")
-            : c.status === "accepted" ? "Accepted" : c.status === "declined" ? "Declined" : "Void"}
+          {expired ? tt("Expired") : c.status === "pending"
+            ? (mine ? `Awaiting ${side === "gc" ? "subcontractor" : "approval"}` : tt("Needs your response"))
+            : c.status === "accepted" ? tt("Accepted") : c.status === "declined" ? tt("Declined") : tt("Void")}
         </span>
         {canRespond && !declining && (
           <div className="trade-actions">
-            <button className="resp accept" onClick={() => onRespond(c.id, "accepted")}><Check size={12} /> Accept</button>
-            <button className="resp decline" onClick={() => setDeclining(true)}><X size={12} /> Decline</button>
+            <button className="resp accept" onClick={() => onRespond(c.id, "accepted")}><Check size={12} />{" "}{tt("Accept")}</button>
+            <button className="resp decline" onClick={() => setDeclining(true)}><X size={12} />{" "}{tt("Decline")}</button>
           </div>
         )}
         {canRespond && declining && (
           <div className="sc-propose">
-            <input placeholder="Reason (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
-            <button className="resp decline" onClick={() => { onRespond(c.id, "declined", note); setDeclining(false); }}>Confirm</button>
+            <input placeholder={tt("Reason (optional)")} value={note} onChange={(e) => setNote(e.target.value)} />
+            <button className="resp decline" onClick={() => { onRespond(c.id, "declined", note); setDeclining(false); }}>{tt("Confirm")}</button>
           </div>
         )}
         {mine && c.status === "pending" && onVoid && (
-          <button className="trade-swap" onClick={() => onVoid(c.id)}>Withdraw</button>
+          <button className="trade-swap" onClick={() => onVoid(c.id)}>{tt("Withdraw")}</button>
         )}
       </div>
     </div>
@@ -8739,28 +8759,28 @@ function ServiceCallRow({ c, job, showSubActions, onConfirm, onResolve, onResche
     <div className={`sc-row sc-${c.status}`}>
       <span className={`sc-kind k-${c.kind}`}>
         {c.kind === "callback" ? <Wrench size={11} /> : <ShieldCheck size={11} />}
-        {c.kind === "callback" ? "Callback" : "Warranty"}
+        {c.kind === "callback" ? tt("Callback") : tt("Warranty")}
       </span>
       <div className="sc-main">
-        <span className="sc-job">{job ? job.title : "Job"} · {catMeta(c.trade).label}</span>
+        <span className="sc-job">{job ? job.title : tt("Job")} · {catMeta(c.trade).label}</span>
         <span className="sc-issue">{c.issue}</span>
         <span className="sc-meta">
-          {c.company}{c.crewName ? ` · ${c.crewName}` : ""} · raised {c.raisedAt.slice(0, 10)} by {c.raisedBy}
+          {c.company}{c.crewName ? ` · ${c.crewName}` : ""}{" "}{tt("· raised")}{" "}{c.raisedAt.slice(0, 10)}{" "}{tt("by")}{" "}{c.raisedBy}
           {c.returnDate ? ` · return ${formatDay(c.returnDate)}` : ""}
         </span>
         {c.subNote && <span className="sc-note">“{c.subNote}”</span>}
       </div>
       <div className="sc-side">
         <span className={`sc-status s-${c.status}`}>
-          {c.status === "awaiting-confirmation" ? "Awaiting confirmation"
-            : c.status === "scheduled" ? "Confirmed" : "Resolved"}
+          {c.status === "awaiting-confirmation" ? tt("Awaiting confirmation")
+            : c.status === "scheduled" ? tt("Confirmed") : tt("Resolved")}
         </span>
         {showSubActions && c.status === "awaiting-confirmation" && !proposing && (
           <div className="trade-actions">
             <button className="resp accept" onClick={() => onConfirm(c.id)}>
-              <Check size={12} /> Confirm {c.returnDate ? formatDay(c.returnDate) : "visit"}
+              <Check size={12} />{" "}{tt("Confirm")}{" "}{c.returnDate ? formatDay(c.returnDate) : "visit"}
             </button>
-            <button className="resp decline" onClick={() => setProposing(true)}>Propose another date</button>
+            <button className="resp decline" onClick={() => setProposing(true)}>{tt("Propose another date")}</button>
           </div>
         )}
         {showSubActions && proposing && (
@@ -8768,12 +8788,12 @@ function ServiceCallRow({ c, job, showSubActions, onConfirm, onResolve, onResche
             <input type="date" value={alt} onChange={(e) => setAlt(e.target.value)} />
             <button className="resp accept" disabled={!alt}
               onClick={() => { onConfirm(c.id, { returnDate: alt, subNote: "Proposed a different date" }); setProposing(false); }}>
-              <Check size={12} /> Send
+              <Check size={12} />{" "}{tt("Send")}
             </button>
           </div>
         )}
         {!showSubActions && c.status === "scheduled" && (
-          <button className="trade-swap" onClick={() => onResolve(c.id)}>Mark resolved</button>
+          <button className="trade-swap" onClick={() => onResolve(c.id)}>{tt("Mark resolved")}</button>
         )}
       </div>
     </div>
@@ -15470,7 +15490,7 @@ function impEndsAt(v) {
 function impEndsText(v) {
   const t = impEndsAt(v);
   return Number.isFinite(t)
-    ? `at ${new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : "soon";
+    ? `at ${new Date(t).toLocaleTimeString(uiLocale() || [], { hour: "numeric", minute: "2-digit" })}` : "soon";
 }
 
 // WHAT A REFUSED PROPOSAL SAYS, BY NAME. Reported as "tried to propose a time
@@ -15546,19 +15566,19 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
   return (
     <div className="visit-form">
       <div className="fld-row">
-        <label className="fld">Date<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
-        <label className="fld">From<input type="time" value={f.startTime} onChange={(e) => setStart(e.target.value)} /></label>
-        <label className="fld">To<input type="time" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /></label>
+        <label className="fld">{tt("Date")}<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
+        <label className="fld">{tt("From")}<input type="time" value={f.startTime} onChange={(e) => setStart(e.target.value)} /></label>
+        <label className="fld">{tt("To")}<input type="time" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /></label>
       </div>
-      <label className="fld">Note for {forWhom} <span className="fld-note">optional</span>
+      <label className="fld">{tt("Note for")}{" "}{forWhom} <span className="fld-note">{tt("optional")}</span>
         <input value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })}
-          placeholder={placeholder || "e.g. The plumber needs access to the unit below too"} />
+          placeholder={placeholder || tt("e.g. The plumber needs access to the unit below too")} />
       </label>
       {err && <p className="fld-err"><AlertTriangle size={12} /> {err}</p>}
       <div className="form-actions">
         {onCancel && <button className="btn-ghost" onClick={onCancel} disabled={busy}>{cancelLabel}</button>}
         <button className="btn-solid" onClick={send} disabled={busy}>
-          <Calendar size={14} /> {busy ? "Proposing…" : replacing ? "Propose this time instead" : "Propose this time"}
+          <Calendar size={14} /> {busy ? tt("Proposing…") : replacing ? tt("Propose this time instead") : tt("Propose this time")}
         </button>
       </div>
     </div>
@@ -15626,7 +15646,7 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
   if (compact && !open) {
     const canSayWhere = plan.canEditHow && plan.kind !== "none" && !plan.how;
     return (
-      <section className="acc-strip" aria-label="Access">
+      <section className="acc-strip" aria-label={tt("Access")}>
         <p className="acc-strip-head">
           <Key size={14} />
           <span>{head}{plan.how && <span className="acc-strip-how"> {plan.how}.</span>}</span>
@@ -15648,30 +15668,30 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
           ))}
           <button type="button" className="acc-strip-more"
             onClick={() => { setOpen(true); if (canSayWhere) { setHow(""); setEditing(true); } }}>
-            {canSayWhere ? <><MapPin size={13} /> Say where to meet</> : <>Access details <ChevronRight size={13} /></>}
+            {canSayWhere ? <><MapPin size={13} />{" "}{tt("Say where to meet")}</> : <>{tt("Access details")}{" "}<ChevronRight size={13} /></>}
           </button>
         </div>
       </section>
     );
   }
   return (
-    <section className={`acc-panel ${compact ? "acc-open" : ""}`} aria-label="Access">
-      <h4 className="acc-title"><Key size={15} /> Access
-        {compact && <button type="button" className="acc-less" onClick={() => { setOpen(false); setEditing(false); setErr(""); }}>Show less</button>}
+    <section className={`acc-panel ${compact ? "acc-open" : ""}`} aria-label={tt("Access")}>
+      <h4 className="acc-title"><Key size={15} />{" "}{tt("Access")}
+        {compact && <button type="button" className="acc-less" onClick={() => { setOpen(false); setEditing(false); setErr(""); }}>{tt("Show less")}</button>}
       </h4>
       {head && <p className="acc-head">{head}</p>}
       <dl className="acc-facts">
         <div>
-          <dt>Where</dt>
+          <dt>{tt("Where")}</dt>
           <dd>{plan.how
-            ? <>{plan.how}{plan.howFrom && <span className="acc-from"> — said by {plan.howFrom === "tenant" ? (viewer === "tenant" ? "you" : "the tenant") : "the office"}</span>}</>
-            : <span className="acc-none">{plan.kind === "none" ? "Nobody needs to meet you." : "Not said yet."}</span>}</dd>
+            ? <>{plan.how}{plan.howFrom && <span className="acc-from">{" "}{tt("— said by")}{" "}{plan.howFrom === "tenant" ? (viewer === "tenant" ? "you" : tt("the tenant")) : tt("the office")}</span>}</>
+            : <span className="acc-none">{plan.kind === "none" ? tt("Nobody needs to meet you.") : tt("Not said yet.")}</span>}</dd>
         </div>
         <div>
-          <dt>When</dt>
+          <dt>{tt("When")}</dt>
           <dd>{plan.when?.date
-            ? <>{visitWhen(plan.when)}{plan.when.status !== "confirmed" && <span className="acc-from"> — proposed, not confirmed yet</span>}</>
-            : <span className="acc-none">No time agreed yet.</span>}</dd>
+            ? <>{visitWhen(plan.when)}{plan.when.status !== "confirmed" && <span className="acc-from">{" "}{tt("— proposed, not confirmed yet")}</span>}</>
+            : <span className="acc-none">{tt("No time agreed yet.")}</span>}</dd>
         </div>
       </dl>
       {people.length > 0 && (
@@ -15680,39 +15700,39 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
             <li key={i} className={p.you ? "acc-you" : ""}>
               <div className="acc-who">
                 <b>{p.firstName || (p.side === "crew" ? p.company : ACCESS_SIDE_WORD[p.side])}</b>
-                <span className="acc-role">{p.you ? "You" : p.side === "crew" ? (p.company || "Crew") : ACCESS_SIDE_WORD[p.side]}</span>
-                {p.bestTime && !p.you && <span className="acc-role">Best time: {p.bestTime}</span>}
+                <span className="acc-role">{p.you ? tt("You") : p.side === "crew" ? (p.company || tt("Crew")) : ACCESS_SIDE_WORD[p.side]}</span>
+                {p.bestTime && !p.you && <span className="acc-role">{tt("Best time:")}{" "}{p.bestTime}</span>}
               </div>
               {p.phone ? (
                 <div className="acc-call">
                   <span className="acc-num">{formatPhone(p.phone)}</span>
                   {!p.you && (
                     <>
-                      <a className="acc-btn" href={`tel:${phoneDigits(p.phone)}`}><PhoneCall size={15} /> Call</a>
-                      <a className="acc-btn" href={`sms:${phoneDigits(p.phone)}`}><MessageSquareText size={15} /> Text</a>
+                      <a className="acc-btn" href={`tel:${phoneDigits(p.phone)}`}><PhoneCall size={15} />{" "}{tt("Call")}</a>
+                      <a className="acc-btn" href={`sms:${phoneDigits(p.phone)}`}><MessageSquareText size={15} />{" "}{tt("Text")}</a>
                     </>
                   )}
                 </div>
               ) : (
                 <span className="acc-none">{p.you
-                  ? (viewer === "tenant" ? "No mobile on file. Add one in My account so the crew can reach you." : "No mobile on file.")
-                  : "No mobile on file."}</span>
+                  ? (viewer === "tenant" ? tt("No mobile on file. Add one in My account so the crew can reach you.") : tt("No mobile on file."))
+                  : tt("No mobile on file.")}</span>
               )}
             </li>
           ))}
         </ul>
       )}
       {plan.live && viewer === "tenant" && plan.kind === "tenant" && !others.length && (
-        <p className="acc-none">The crew's first name and mobile appear here once they accept the job.</p>
+        <p className="acc-none">{tt("The crew's first name and mobile appear here once they accept the job.")}</p>
       )}
       {plan.live && viewer === "team" && !people.some((p) => p.side === "crew") && (
-        <p className="acc-none">Nobody has accepted this job yet. Their name and number appear here once they do.</p>
+        <p className="acc-none">{tt("Nobody has accepted this job yet. Their name and number appear here once they do.")}</p>
       )}
       {plan.canEditHow && plan.kind !== "none" && (editing ? (
         <div className="acc-edit">
-          <label className="acc-lbl" htmlFor={`acc-how-${jobId}`}>Where to meet, or how they get in</label>
+          <label className="acc-lbl" htmlFor={`acc-how-${jobId}`}>{tt("Where to meet, or how they get in")}</label>
           <textarea id={`acc-how-${jobId}`} rows={2} maxLength={ACCESS_HOW_MAX} value={how}
-            onChange={(e) => setHow(e.target.value)} placeholder="e.g. Meet at the front door" />
+            onChange={(e) => setHow(e.target.value)} placeholder={tt("e.g. Meet at the front door")} />
           <div className="acc-presets">
             {presets.map((t) => (
               <button key={t} type="button" className="acc-preset" onClick={() => setHow(t)}>{t}</button>
@@ -15720,14 +15740,14 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
           </div>
           {err && <p className="form-err">{err}</p>}
           <VisitActs acts={[
-            { kind: "yes", label: busy ? "Saving…" : "Save", icon: <Check size={16} />,
+            { kind: "yes", label: busy ? tt("Saving…") : tt("Save"), icon: <Check size={16} />,
               onClick: save, disabled: busy },
-            { kind: "quiet", label: "Cancel", onClick: () => { setEditing(false); setErr(""); } },
+            { kind: "quiet", label: tt("Cancel"), onClick: () => { setEditing(false); setErr(""); } },
           ]} />
         </div>
       ) : (
         <button type="button" className="acc-change" onClick={() => { setHow(plan.how || ""); setEditing(true); }}>
-          <MapPin size={14} /> {plan.how ? "Change where to meet" : "Say where to meet"}
+          <MapPin size={14} /> {plan.how ? tt("Change where to meet") : tt("Say where to meet")}
         </button>
       ))}
     </section>
@@ -21205,7 +21225,7 @@ function WorkOrderProgress({ woId, canManage, canPayOut, isMine, onChanged }) {
 
 const hoursDay = (k) => {
   const d = new Date(`${k}T12:00:00`);
-  return isNaN(d) ? k : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return isNaN(d) ? k : d.toLocaleDateString(uiLocale(), { month: "short", day: "numeric" });
 };
 const hoursLabel = (sub) => {
   const ds = sub.entries.map((e) => e.date);
@@ -24757,7 +24777,7 @@ function JobsCalendar({ jobs, selected, onSelect, onOpenJob, onNewJob }) {
     const d = new Date(at.y, at.m + n, 1);
     setCursor({ y: d.getFullYear(), m: d.getMonth() });
   };
-  const monthLabel = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const monthLabel = first.toLocaleDateString(uiLocale(), { month: "long", year: "numeric" });
   const inMonth = jobs.filter((j) => j.date && j.date.slice(0, 7) === dayKey(first).slice(0, 7)).length;
   const undated = jobs.filter((j) => !j.date);
   const dayJobs = selected && byDay[selected] ? byDay[selected] : [];
@@ -25584,7 +25604,7 @@ function JobsTimeline({ jobs, subs = [], onOpenJob }) {
               return (
                 <span key={k} className={`jtl-day ${wk ? "wk" : ""} ${k === todayK ? "today" : ""}`}
                   title={niceDay(k)} data-day={k}>
-                  <i>{d.toLocaleDateString(undefined, { weekday: "narrow" })}</i>
+                  <i>{d.toLocaleDateString(uiLocale(), { weekday: "narrow" })}</i>
                   <b>{d.getDate()}</b>
                 </span>
               );
@@ -26195,9 +26215,9 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
       {next ? (
         <button className="sh-next" onClick={() => onOpenJob(next.id)}>
           <span className="shn-when">
-            <span className="shn-dow">{dayFromKey(next.date).toLocaleDateString(undefined, { weekday: "short" })}</span>
+            <span className="shn-dow">{dayFromKey(next.date).toLocaleDateString(uiLocale(), { weekday: "short" })}</span>
             <span className="shn-day">{dayFromKey(next.date).getDate()}</span>
-            <span className="shn-mon">{dayFromKey(next.date).toLocaleDateString(undefined, { month: "short" })}</span>
+            <span className="shn-mon">{dayFromKey(next.date).toLocaleDateString(uiLocale(), { month: "short" })}</span>
           </span>
           <span className="shn-main">
             <span className="shn-lede">{relDay(next.date, todayK)}{next.time ? ` · ${niceTime(next.time)}` : ""}{next.when.kind === "proposed" ? " · not confirmed yet" : ""}</span>
@@ -26254,7 +26274,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
             className={`shs-day ${n ? "has" : ""} ${k === todayK ? "today" : ""} ${next && k === next.date ? "is-next" : ""}`}
             onClick={() => onGoCalendar(k)}
             title={n ? `${n} job${n === 1 ? "" : "s"} on ${niceDay(k)}` : `Nothing on ${niceDay(k)}`}>
-            <span className="shs-dow">{d.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+            <span className="shs-dow">{d.toLocaleDateString(uiLocale(), { weekday: "narrow" })}</span>
             <span className="shs-dom">{d.getDate()}</span>
             <span className="shs-n">{n || ""}</span>
           </button>
@@ -27036,7 +27056,7 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
           <div className="cal-corner">Contractor <span className="cc-note">free crews</span></div>
           {days.map((d) => (
             <div key={fmt(d)} data-day={fmt(d)} className="cal-dayhead">
-              <span className="dow">{d.toLocaleDateString(undefined, { weekday: "short" })}</span>
+              <span className="dow">{d.toLocaleDateString(uiLocale(), { weekday: "short" })}</span>
               <span className="dom">{d.getDate()}</span>
             </div>
           ))}
@@ -28424,27 +28444,27 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
   return (
     <>
       <section>
-        <h4><Zap size={14} /> Overflow work</h4>
+        <h4><Zap size={14} />{" "}{tt("Overflow work")}</h4>
         <div className={`auto-card ${on ? "on" : ""}`}>
           <Zap size={18} />
           <div className="auto-card-main">
-            <span className="auto-title">{on ? "You're in" : "Not opted in"}</span>
+            <span className="auto-title">{on ? tt("You're in") : tt("Not opted in")}</span>
             <span className="auto-desc">
               {on
-                ? "When an account has nobody of their own for an urgent job, it can reach you. Answering is never a commitment."
-                : "Accounts with nobody free for an urgent job can reach contractors who opt in. You choose which trades, and answering is never a commitment."}
+                ? tt("When an account has nobody of their own for an urgent job, it can reach you. Answering is never a commitment.")
+                : tt("Accounts with nobody free for an urgent job can reach contractors who opt in. You choose which trades, and answering is never a commitment.")}
             </span>
           </div>
           <label className="auto-toggle">
             <input type="checkbox" checked={on}
               onChange={(e) => { onOptIn(e.target.checked, trades); setSaved(false); }} />
-            <span>{on ? "On" : "Off"}</span>
+            <span>{on ? tt("On") : tt("Off")}</span>
           </label>
         </div>
 
         {on && (
           <>
-            <div className="form-sec">Trades you want overflow for</div>
+            <div className="form-sec">{tt("Trades you want overflow for")}</div>
             <div className="pick-grid">
               {(categories || []).map((cid) => (
                 <button key={cid} type="button" className={`pick ${trades.includes(cid) ? "on" : ""}`}
@@ -28457,7 +28477,7 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
             <div className="form-actions">
               <button className="btn-solid" disabled={saved}
                 onClick={() => { onOptIn(true, trades); setSaved(true); }}>
-                {saved ? "Saved" : "Save trades"}
+                {saved ? tt("Saved") : tt("Save trades")}
               </button>
             </div>
           </>
@@ -28468,7 +28488,7 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
           <div className="doc-block" style={{ marginTop: 14 }}>
             <AlertTriangle size={17} />
             <div>
-              <b>Not eligible yet</b>
+              <b>{tt("Not eligible yet")}</b>
               <ul className="ovf-reasons">
                 {standing.reasons.map((r) => <li key={r}>{ELIGIBILITY_TEXT[r] || r}</li>)}
               </ul>
@@ -28476,15 +28496,15 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
           </div>
         )}
         {standing?.eligible && (
-          <p className="cov-hint"><CheckCircle2 size={13} /> You're eligible for overflow work.
+          <p className="cov-hint"><CheckCircle2 size={13} />{" "}{tt("You're eligible for overflow work.")}
             {standing.joinedOn ? ` On SubSub since ${standing.joinedOn}.` : ""}</p>
         )}
       </section>
 
       <section>
-        <h4>Jobs you've been asked about</h4>
+        <h4>{tt("Jobs you've been asked about")}</h4>
         {offers.length === 0
-          ? <p className="muted">Nothing yet. These arrive by email too.</p>
+          ? <p className="muted">{tt("Nothing yet. These arrive by email too.")}</p>
           : (
             <div className="ovf-list">
               {offers.map((o) => (
@@ -28494,12 +28514,12 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
                       <h4>{catMeta(o.trade).label} · {o.account}</h4>
                       <span className="pf-sub">
                         {[o.where, o.jobDate ? formatDay(o.jobDate) : null].filter(Boolean).join(" · ")}
-                        {o.gross ? ` · up to ${formatMoney(o.net / 100)}` : " · they'll take a quote"}
+                        {o.gross ? ` · up to ${formatMoney(o.net / 100)}` : tt(" · they'll take a quote")}
                       </span>
                       <span className="pf-sub">
                         {o.status === "open" ? `Closes ${new Date(o.expiresAt).toLocaleString()}`
-                          : o.won ? "You got it" : o.status === "filled" ? "Went to somebody else"
-                          : o.status === "cancelled" ? "Taken down" : "Closed"}
+                          : o.won ? tt("You got it") : o.status === "filled" ? tt("Went to somebody else")
+                          : o.status === "cancelled" ? tt("Taken down") : tt("Closed")}
                       </span>
                     </div>
                   </div>
@@ -28507,11 +28527,11 @@ function OverflowOffers({ standing, offers, onOptIn, onRespond, categories }) {
                   {o.status === "open" && (
                     o.mine?.status === "offered"
                       ? <div className="ovf-mine">
-                          <CheckCircle2 size={14} /> You put your hand up
+                          <CheckCircle2 size={14} />{" "}{tt("You put your hand up")}
                           {o.mine.canStart ? ` — ${o.mine.canStart}` : ""}
                           {o.mine.price ? ` · ${formatMoney(o.mine.price / 100)}` : ""}
                           <button className="pf-mini" onClick={() => onRespond(o.id, { status: "withdrawn" })}>
-                            Withdraw
+                            {tt("Withdraw")}
                           </button>
                         </div>
                       : <OverflowAnswer offer={o} onRespond={onRespond} />
@@ -28796,7 +28816,7 @@ function ReferScreen({ fromName }) {
   useEffect(() => { load(); }, [load]);
 
   if (err) return <div className="refer"><p className="form-err">{err}</p></div>;
-  if (!data) return <div className="refer"><p className="panel-note">Loading your link…</p></div>;
+  if (!data) return <div className="refer"><p className="panel-note">{tt("Loading your link…")}</p></div>;
   if (!data.available) return null;
 
   const isSub = data.kind === "sub";
@@ -28849,39 +28869,39 @@ function ReferScreen({ fromName }) {
   return (
     <div className="refer">
       <div className="page-head">
-        <h2>{isSub ? "Get your GCs on SubSub" : "Refer a GC"}</h2>
+        <h2>{isSub ? tt("Get your GCs on SubSub") : tt("Refer a GC")}</h2>
       </div>
       <section className="refer-hero">
         <div className="refer-earn">
           <Gift size={22} />
           <div>
-            <h3>{isSub ? "Earn $100 for every GC who signs up and starts paying" : "You both get a month of Scale free"}</h3>
+            <h3>{isSub ? tt("Earn $100 for every GC who signs up and starts paying") : tt("You both get a month of Scale free")}</h3>
             <p>{isSub
-              ? <>Send the GCs you work for your link. When one of them joins and starts paying for SubSub, you earn $100 and the <b>Preferred Sub</b> badge on your profile.</>
-              : <>When a general contractor or property manager you send here starts paying, a month of Scale is credited to their bill and to yours.</>}</p>
+              ? <>{tt("Send the GCs you work for your link. When one of them joins and starts paying for SubSub, you earn $100 and the")}{" "}<b>{tt("Preferred Sub")}</b>{" "}{tt("badge on your profile.")}</>
+              : <>{tt("When a general contractor or property manager you send here starts paying, a month of Scale is credited to their bill and to yours.")}</>}</p>
           </div>
           {data.preferredSub && (
-            <span className="refer-badge" title="You brought a paying GC onto SubSub">
-              <Award size={15} /> Preferred Sub
+            <span className="refer-badge" title={tt("You brought a paying GC onto SubSub")}>
+              <Award size={15} />{" "}{tt("Preferred Sub")}
             </span>
           )}
         </div>
         <div className="refer-code">
-          <QrCode value={data.link} size={132} label="Your referral link" />
+          <QrCode value={data.link} size={132} label={tt("Your referral link")} />
           <div className="refer-code-main">
-            <span className="refer-k">Your code</span>
+            <span className="refer-k">{tt("Your code")}</span>
             <span className="refer-v refer-codev">{data.code}</span>
-            <span className="refer-k">Your link</span>
+            <span className="refer-k">{tt("Your link")}</span>
             <span className="refer-v refer-link">{data.link}</span>
             <div className="refer-btns">
               <button className="btn-ghost" onClick={() => copy("link", data.link)}>
-                <Copy size={14} /> {copied === "link" ? "Copied" : "Copy link"}
+                <Copy size={14} /> {copied === "link" ? tt("Copied") : tt("Copy link")}
               </button>
               <button className="btn-ghost" onClick={() => copy("msg", message)}>
-                <Copy size={14} /> {copied === "msg" ? "Copied" : "Copy message"}
+                <Copy size={14} /> {copied === "msg" ? tt("Copied") : tt("Copy message")}
               </button>
               {typeof navigator !== "undefined" && navigator.share && (
-                <button className="btn-ghost" onClick={share}><Share2 size={14} /> Share</button>
+                <button className="btn-ghost" onClick={share}><Share2 size={14} />{" "}{tt("Share")}</button>
               )}
             </div>
           </div>
@@ -28889,22 +28909,22 @@ function ReferScreen({ fromName }) {
       </section>
 
       <section className="refer-send">
-        <h3>Send the invite</h3>
-        <p className="panel-note">The message, written for you. Emails go from SubSub with your name on them and your address to reply to. Texts open your own messages app, so they come from your number.</p>
+        <h3>{tt("Send the invite")}</h3>
+        <p className="panel-note">{tt("The message, written for you. Emails go from SubSub with your name on them and your address to reply to. Texts open your own messages app, so they come from your number.")}</p>
         <blockquote className="refer-msg">{message}</blockquote>
         <label className="fld">
-          <span>Phone numbers or email addresses</span>
+          <span>{tt("Phone numbers or email addresses")}</span>
           <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)}
-            placeholder={"One per line, or separated by commas"} />
+            placeholder={tt("One per line, or separated by commas")} />
         </label>
         {canPick && (
-          <button className="btn-ghost" onClick={pick}><Contact size={14} /> Pick from contacts</button>
+          <button className="btn-ghost" onClick={pick}><Contact size={14} />{" "}{tt("Pick from contacts")}</button>
         )}
         {picked.length > 0 && (
-          <p className="panel-note">{picked.length} picked from your contacts.</p>
+          <p className="panel-note">{picked.length}{" "}{tt("picked from your contacts.")}</p>
         )}
         {bad.length > 0 && (
-          <p className="form-err">Not a phone number or an email: {bad.map((b) => b.value).join(", ")}</p>
+          <p className="form-err">{tt("Not a phone number or an email:")}{" "}{bad.map((b) => b.value).join(", ")}</p>
         )}
         {phones.length > 0 && (
           <ul className="refer-phones">
@@ -28913,7 +28933,7 @@ function ReferScreen({ fromName }) {
                 <span>{p.name ? `${p.name} · ` : ""}{p.value}</span>
                 <a className={`btn-solid ${opened[p.value] ? "is-done" : ""}`} href={smsHref(p.value, message)}
                   onClick={() => texted(p.value)}>
-                  <MessageSquareText size={14} /> {opened[p.value] ? "Opened in Messages" : "Text"}
+                  <MessageSquareText size={14} /> {opened[p.value] ? tt("Opened in Messages") : tt("Text")}
                 </a>
               </li>
             ))}
@@ -28921,33 +28941,33 @@ function ReferScreen({ fromName }) {
         )}
         {emails.length > 0 && (
           <button className="btn-solid" disabled={sending} onClick={sendEmails}>
-            <Send size={14} /> {sending ? "Sending…" : `Email ${emails.length} invite${emails.length === 1 ? "" : "s"}`}
+            <Send size={14} /> {sending ? tt("Sending…") : `Email ${emails.length} invite${emails.length === 1 ? "" : "s"}`}
           </button>
         )}
         {result && !result.error && (
           <p className="refer-ok">
-            {result.sent ? `Sent ${result.sent} invite${result.sent === 1 ? "" : "s"}.` : "Nothing new to send."}
+            {result.sent ? `Sent ${result.sent} invite${result.sent === 1 ? "" : "s"}.` : tt("Nothing new to send.")}
             {(result.skipped || []).length > 0 && ` Not sent: ${result.skipped.map((s) => `${s.email} (${skippedWords[s.reason] || s.reason})`).join(", ")}.`}
           </p>
         )}
         {result?.error && <p className="form-err">{result.error}</p>}
-        <p className="panel-note refer-limit">{Math.max(0, data.inviteLimit - data.invitesToday)} of {data.inviteLimit} invites left today. Nobody is invited twice in a month.</p>
+        <p className="panel-note refer-limit">{Math.max(0, data.inviteLimit - data.invitesToday)}{" "}{tt("of")}{" "}{data.inviteLimit}{" "}{tt("invites left today. Nobody is invited twice in a month.")}</p>
       </section>
 
       <section className="refer-list">
-        <h3>Who came in on your link <span className="sec-count">{data.referred.length}</span></h3>
-        {data.opens > 0 && <p className="panel-note">Your link has been opened {data.opens} time{data.opens === 1 ? "" : "s"}.</p>}
+        <h3>{tt("Who came in on your link")}{" "}<span className="sec-count">{data.referred.length}</span></h3>
+        {data.opens > 0 && <p className="panel-note">{tt("Your link has been opened")}{" "}{data.opens}{" "}{tt("time")}{data.opens === 1 ? "" : "s"}.</p>}
         {data.referred.length === 0 ? (
-          <p className="panel-note">Nobody yet. The first one who signs up appears here.</p>
+          <p className="panel-note">{tt("Nobody yet. The first one who signs up appears here.")}</p>
         ) : (
           <ul className="refer-rows">
             {data.referred.map((r, i) => (
               <li key={i}>
                 <span className="refer-name">{r.name}</span>
-                <span className="refer-when">Joined {formatDay(String(r.joinedAt).slice(0, 10))}</span>
+                <span className="refer-when">{tt("Joined")}{" "}{formatDay(String(r.joinedAt).slice(0, 10))}</span>
                 <span className={`refer-status ${r.reward ? `rs-${r.reward.status}` : ""}`}>
                   {r.reward ? (REWARD_WORDS[r.reward.kind]?.[r.reward.status] || r.reward.status)
-                    : r.paying ? "Paying" : "Not paying yet"}
+                    : r.paying ? tt("Paying") : tt("Not paying yet")}
                 </span>
               </li>
             ))}
@@ -29289,11 +29309,11 @@ function QrPeek({ code, err, onRetry }) {
     return (
       <div className="qrp" role="alert">
         <p className="qrp-note">{err}</p>
-        <button className="pick" onClick={onRetry}>Try again</button>
+        <button className="pick" onClick={onRetry}>{tt("Try again")}</button>
       </div>
     );
   }
-  if (!code) return <div className="qrp"><p className="qrp-note">Loading…</p></div>;
+  if (!code) return <div className="qrp"><p className="qrp-note">{tt("Loading…")}</p></div>;
   return (
     <div className="qrp">
       {/* The code is the button. A code this size is for recognising, not
@@ -29301,18 +29321,18 @@ function QrPeek({ code, err, onRetry }) {
           close enough that it cannot focus -- so touching it is what makes
           it big enough to be read across a tailgate. */}
       <button className="qrp-tap" onClick={() => setFull(true)}
-        title="Make it big enough to scan" aria-label="Show the code full screen">
+        title={tt("Make it big enough to scan")} aria-label={tt("Show the code full screen")}>
         <QrCode value={code.url} size={170} label={`Connect code ${code.code}`} />
-        <span className="qrp-tap-hint"><Maximize2 size={12} /> Tap to scan</span>
+        <span className="qrp-tap-hint"><Maximize2 size={12} />{" "}{tt("Tap to scan")}</span>
       </button>
       {/* In words as well as in squares: a camera that will not focus is
           the normal case on a wet morning, not the exception. */}
       <span className="qrp-code">{code.code}</span>
       <button className="pick" onClick={copy}>
-        <Copy size={13} /> {copied ? "Copied" : "Copy link"}
+        <Copy size={13} /> {copied ? tt("Copied") : tt("Copy link")}
       </button>
       <p className="qrp-note">
-        Scan to open your SubSub Passport and connect. Nothing of yours moves until you accept.
+        {tt("Scan to open your SubSub Passport and connect. Nothing of yours moves until you accept.")}
       </p>
       {copyErr && <p className="qrp-note" role="alert">{copyErr}</p>}
       {full && <QrFull code={code} onClose={() => setFull(false)} />}
@@ -29475,7 +29495,7 @@ function AskerPanel({ requestId, onClose, onRespond }) {
           <h2>{a.account}</h2>
           <p className="panel-note">
             {KIND[a.kind] || "On SubSub"}
-            {a.since ? ` · on SubSub since ${new Date(a.since).toLocaleDateString(undefined,
+            {a.since ? ` · on SubSub since ${new Date(a.since).toLocaleDateString(uiLocale(),
               { month: "long", year: "numeric" })}` : ""}
           </p>
 
@@ -29592,7 +29612,7 @@ function ConnectAsks({ requests, onRespond, onReload }) {
     <div className="connect-asks">
       {pending.length > 0 && (
         <section className="dash-sec">
-          <h3><Users size={15} /> Asking to work with you
+          <h3><Users size={15} />{" "}{tt("Asking to work with you")}
             <span className="sec-count">{pending.length}</span></h3>
           <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload} />
         </section>
@@ -29600,14 +29620,14 @@ function ConnectAsks({ requests, onRespond, onReload }) {
 
       {past.length > 0 && (
         <details className="dash-sec cx-past">
-          <summary><Clock size={15} /> Answered ({past.length})</summary>
+          <summary><Clock size={15} />{" "}{tt("Answered (")}{past.length})</summary>
           {past.map((r) => (
             <div key={r.id} className="cx-req spent">
               <div className="cx-main">
                 <b>{r.account}</b>
                 <span className="cx-sub">
-                  {r.status === "accepted" ? "You accepted" : r.status === "declined" ? "You declined"
-                    : "They withdrew it"} · {relTime(r.respondedAt || r.createdAt)}
+                  {r.status === "accepted" ? tt("You accepted") : r.status === "declined" ? tt("You declined")
+                    : tt("They withdrew it")} · {relTime(r.respondedAt || r.createdAt)}
                 </span>
               </div>
             </div>
@@ -29655,7 +29675,7 @@ function DocPack({ token }) {
   const packDay = (iso) => {
     const t = Date.parse(`${iso}T00:00:00`);
     if (!Number.isFinite(t)) return iso;
-    return new Date(t).toLocaleDateString(undefined,
+    return new Date(t).toLocaleDateString(uiLocale(),
       { month: "short", day: "numeric", year: "numeric" });
   };
 
@@ -30404,7 +30424,7 @@ function PassportPanel() {
   useEffect(() => { load(); }, [load]);
 
   if (err) return <div className="portal-panel"><p className="form-err">{err}</p></div>;
-  if (!d || !f) return <div className="portal-panel"><p className="panel-note">Loading your Passport…</p></div>;
+  if (!d || !f) return <div className="portal-panel"><p className="panel-note">{tt("Loading your Passport…")}</p></div>;
   const pp = d.passport;
   const dirty = JSON.stringify(f.trades) !== JSON.stringify(pp.trades || [])
     || String(f.foundedYear ?? "") !== String(pp.foundedYear ?? "") || (f.about || "") !== (pp.about || "")
@@ -30456,28 +30476,26 @@ function PassportPanel() {
   return (
     <div className="pp-edit">
       <div className="portal-panel settings-panel">
-        <h4>Your SubSub Passport</h4>
-        <p className="panel-note">One page with your license, insurance, trades and photos of your work. Hand it to a GC
-          on site instead of emailing PDFs. It is also your QR code. Your documents never show publicly: a company you
-          connect with opens them from here, and nobody else can.</p>
+        <h4>{tt("Your SubSub Passport")}</h4>
+        <p className="panel-note">{tt("One page with your license, insurance, trades and photos of your work. Hand it to a GC on site instead of emailing PDFs. It is also your QR code. Your documents never show publicly: a company you connect with opens them from here, and nobody else can.")}</p>
         <PassportBadge badge={d.preview?.badge} />
         <div className="pp-qrrow">
-          <QrCode value={pp.url} size={132} label="QR code for your Passport" />
+          <QrCode value={pp.url} size={132} label={tt("QR code for your Passport")} />
           <div>
             <b className="pp-url">{pp.url}</b>
             <span className="pp-sub">{pp.published
               ? `Public · ${pp.viewCount} view${pp.viewCount === 1 ? "" : "s"}`
-              : "Private. Nobody can open it until you publish."}</span>
-            {pp.published && <PassportShare url={pp.url} name={d.preview?.name || "My company"} compact />}
+              : tt("Private. Nobody can open it until you publish.")}</span>
+            {pp.published && <PassportShare url={pp.url} name={d.preview?.name || tt("My company")} compact />}
           </div>
         </div>
         <div className="pp-pub">
           {pp.published ? (<>
-            <a className="btn-ghost" href={pp.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} /> View it</a>
-            <button className="btn-ghost" disabled={!!busy} onClick={() => save({ published: false })}>Take it down</button>
+            <a className="btn-ghost" href={pp.url} target="_blank" rel="noopener noreferrer"><ExternalLink size={14} />{" "}{tt("View it")}</a>
+            <button className="btn-ghost" disabled={!!busy} onClick={() => save({ published: false })}>{tt("Take it down")}</button>
           </>) : (
             <button className="btn-solid" disabled={!!busy} onClick={() => save({ published: true })}>
-              <Globe size={14} /> Publish my Passport</button>
+              <Globe size={14} />{" "}{tt("Publish my Passport")}</button>
           )}
         </div>
         {/* The card for an iPhone's Wallet. A plain link, because iOS opens a
@@ -30489,9 +30507,8 @@ function PassportPanel() {
         {pp.published && d.wallet && (
           <div className="pp-wallet">
             <a className="pp-wallet-btn" href={api.passportWalletUrl(pp.slug)}>
-              <Wallet size={18} /> Add to Apple Wallet</a>
-            <span className="pp-sub">A card on your iPhone with your QR code and the date you joined SubSub.
-              Scanning it opens this live Passport, so your license and insurance are always checked that day.</span>
+              <Wallet size={18} />{" "}{tt("Add to Apple Wallet")}</a>
+            <span className="pp-sub">{tt("A card on your iPhone with your QR code and the date you joined SubSub. Scanning it opens this live Passport, so your license and insurance are always checked that day.")}</span>
           </div>
         )}
         {note && <p className="pp-note" role="status">{note}</p>}
@@ -30505,7 +30522,7 @@ function PassportPanel() {
           const where = { company: "Account → Company", docs: "Compliance pack", passport: "below" };
           return (
             <div className="pp-gaps">
-              <b>Fill these in so your Passport says everything</b>
+              <b>{tt("Fill these in so your Passport says everything")}</b>
               <ul>{gaps.map((g) => <li key={g.key}>{g.label} <span className="pp-sub">({where[g.where]})</span></li>)}</ul>
             </div>
           );
@@ -30514,16 +30531,16 @@ function PassportPanel() {
 
       {pending.length > 0 && (
         <div className="portal-panel settings-panel pp-requests">
-          <h4>Asking to see your certificate and W-9</h4>
+          <h4>{tt("Asking to see your certificate and W-9")}</h4>
           {pending.map((a) => (
             <div key={a.id} className="pp-req">
-              <div><b>{a.accountName || "A company"}</b>
-                <span className="pp-sub">{a.requesterName ? `${a.requesterName} · ` : ""}asked {niceDay(String(a.requestedAt).slice(0, 10))}</span>
+              <div><b>{a.accountName || tt("A company")}</b>
+                <span className="pp-sub">{a.requesterName ? `${a.requesterName} · ` : ""}{tt("asked")}{" "}{niceDay(String(a.requestedAt).slice(0, 10))}</span>
                 {a.message && <span className="pp-msg">“{a.message}”</span>}
               </div>
               <div className="pp-req-btns">
-                <button className="btn-solid" disabled={busy === a.id} onClick={() => answer(a.id, "approve")}>Share them</button>
-                <button className="btn-ghost" disabled={busy === a.id} onClick={() => answer(a.id, "decline")}>Decline</button>
+                <button className="btn-solid" disabled={busy === a.id} onClick={() => answer(a.id, "approve")}>{tt("Share them")}</button>
+                <button className="btn-ghost" disabled={busy === a.id} onClick={() => answer(a.id, "decline")}>{tt("Decline")}</button>
               </div>
             </div>
           ))}
@@ -30531,44 +30548,43 @@ function PassportPanel() {
       )}
 
       <div className="portal-panel settings-panel">
-        <h4>What it says</h4>
-        <p className="panel-note">Your license, insurance and W-9 come from your compliance pack and update themselves.
-          These are the parts you write.</p>
-        <span className="pp-k">Trades you do</span>
+        <h4>{tt("What it says")}</h4>
+        <p className="panel-note">{tt("Your license, insurance and W-9 come from your compliance pack and update themselves. These are the parts you write.")}</p>
+        <span className="pp-k">{tt("Trades you do")}</span>
         <div className="chips">
           {TRADES.map((t) => (
             <button key={t.id} className={`chip${f.trades.includes(t.id) ? " on" : ""}`} onClick={() => toggleTrade(t.id)}>{t.label}</button>
           ))}
         </div>
-        <label className="fld"><span>Year you started</span>
+        <label className="fld"><span>{tt("Year you started")}</span>
           <input inputMode="numeric" maxLength={4} value={f.foundedYear}
             onChange={(e) => setF({ ...f, foundedYear: e.target.value.replace(/\D/g, "") })} placeholder="2014" />
         </label>
-        <label className="fld"><span>Your title (optional)</span>
+        <label className="fld"><span>{tt("Your title (optional)")}</span>
           <input maxLength={60} value={f.contactTitle} onChange={(e) => setF({ ...f, contactTitle: e.target.value })}
-            placeholder="Owner" />
-          <small className="fld-note">Printed after {d.preview?.contact || "the contact name on your company profile"} on the page.</small>
+            placeholder={tt("Owner")} />
+          <small className="fld-note">{tt("Printed after")}{" "}{d.preview?.contact || tt("the contact name on your company profile")}{" "}{tt("on the page.")}</small>
         </label>
-        <label className="fld"><span>About your company (optional)</span>
+        <label className="fld"><span>{tt("About your company (optional)")}</span>
           <textarea rows={3} maxLength={600} value={f.about} onChange={(e) => setF({ ...f, about: e.target.value })}
-            placeholder="Residential re-roofs and gutters, two crews, Pierce and King counties." />
+            placeholder={tt("Residential re-roofs and gutters, two crews, Pierce and King counties.")} />
         </label>
-        <button className="btn-solid" disabled={!dirty || !!busy} onClick={() => save()}>{busy === "save" ? "Saving…" : "Save"}</button>
+        <button className="btn-solid" disabled={!dirty || !!busy} onClick={() => save()}>{busy === "save" ? tt("Saving…") : tt("Save")}</button>
       </div>
 
       <div className="portal-panel settings-panel">
-        <h4>Photos of your work</h4>
-        <p className="panel-note">Up to twelve. They show on your public page.</p>
+        <h4>{tt("Photos of your work")}</h4>
+        <p className="panel-note">{tt("Up to twelve. They show on your public page.")}</p>
         <div className="pp-thumbs">
           {(d.photos || []).map((ph) => (
             <div key={ph.id} className="pp-thumb">
               <PassportPhotoThumb id={ph.id} />
-              <button className="pp-thumb-x" aria-label="Remove photo" disabled={busy === ph.id} onClick={() => removePhoto(ph.id)}><X size={14} /></button>
+              <button className="pp-thumb-x" aria-label={tt("Remove photo")} disabled={busy === ph.id} onClick={() => removePhoto(ph.id)}><X size={14} /></button>
             </div>
           ))}
           {(d.photos || []).length < 12 && (
             <label className="pp-thumb pp-thumb-add">
-              <ImagePlus size={20} /><span>{busy === "photo" ? "Adding…" : "Add a photo"}</span>
+              <ImagePlus size={20} /><span>{busy === "photo" ? tt("Adding…") : tt("Add a photo")}</span>
               <input type="file" accept="image/*" hidden disabled={busy === "photo"}
                 onChange={(e) => { addPhoto(e.target.files?.[0]); e.target.value = ""; }} />
             </label>
@@ -30580,14 +30596,14 @@ function PassportPanel() {
 
       {decided.length > 0 && (
         <div className="portal-panel settings-panel">
-          <h4>Who you've answered</h4>
+          <h4>{tt("Who you've answered")}</h4>
           {decided.map((a) => (
             <div key={a.id} className="pp-req">
-              <div><b>{a.accountName || "A company"}</b>
-                <span className="pp-sub">{a.status === "approved" ? "Can open your certificate and W-9"
-                  : a.status === "declined" ? "Declined" : "Stopped sharing"}</span></div>
+              <div><b>{a.accountName || tt("A company")}</b>
+                <span className="pp-sub">{a.status === "approved" ? tt("Can open your certificate and W-9")
+                  : a.status === "declined" ? tt("Declined") : tt("Stopped sharing")}</span></div>
               {a.status === "approved" && (
-                <button className="btn-ghost" disabled={busy === a.id} onClick={() => answer(a.id, "revoke")}>Stop sharing</button>
+                <button className="btn-ghost" disabled={busy === a.id} onClick={() => answer(a.id, "revoke")}>{tt("Stop sharing")}</button>
               )}
             </div>
           ))}
@@ -31133,61 +31149,57 @@ function SendDocPack({ company, anyOnFile }) {
     <div className="pack-panel">
       {all.length > 0 && (
         <div className="pack-stats">
-          <span><b>{all.length}</b> sent</span>
-          <span><b>{opened.length}</b> opened</span>
+          <span><b>{all.length}</b>{" "}{tt("sent")}</span>
+          <span><b>{opened.length}</b>{" "}{tt("opened")}</span>
           <span><b>{reach}</b> {reach === 1 ? "company" : "companies"}</span>
-          {live.length > 0 && <span className="pk-live"><b>{live.length}</b> live now</span>}
+          {live.length > 0 && <span className="pk-live"><b>{live.length}</b>{" "}{tt("live now")}</span>}
         </div>
       )}
       <div className="pack-head">
         <div>
-          <h4><Send size={14} /> Send your compliance pack</h4>
+          <h4><Send size={14} />{" "}{tt("Send your compliance pack")}</h4>
           <p className="panel-note">
-            A contractor asking for your insurance? Send it from here instead of
-            attaching it to an email. They see the carrier, the policy number, the
-            coverage and the expiry — and when you renew, what they are looking at
-            renews with it.
+            {tt("A contractor asking for your insurance? Send it from here instead of attaching it to an email. They see the carrier, the policy number, the coverage and the expiry — and when you renew, what they are looking at renews with it.")}
           </p>
         </div>
         {!open && (
           <button className="btn-solid small" disabled={!anyOnFile} onClick={() => { setOpen(true); setSent(null); }}>
-            <Send size={13} /> Send it
+            <Send size={13} />{" "}{tt("Send it")}
           </button>
         )}
       </div>
 
       {!anyOnFile && (
-        <p className="cov-hint">Add one of the documents above and you can send the pack from here.</p>
+        <p className="cov-hint">{tt("Add one of the documents above and you can send the pack from here.")}</p>
       )}
 
       {sent && (
         <div className="doc-ok-banner">
-          <CheckCircle2 size={16} /> Sent to {sent.toEmail}. You&rsquo;ll see here when they open it.
+          <CheckCircle2 size={16} />{" "}{tt("Sent to")}{" "}{sent.toEmail}{tt(". You’ll see here when they open it.")}
         </div>
       )}
 
       {open && (
         <div className="pack-form">
-          <label className="fld">Their email
-            <span className="fld-note">The address of the person who asked you for it</span>
+          <label className="fld">{tt("Their email")}
+            <span className="fld-note">{tt("The address of the person who asked you for it")}</span>
             <input type="email" value={email} autoCapitalize="none" autoCorrect="off"
-              onChange={(e) => setEmail(e.target.value)} placeholder="pm@theircompany.com" /></label>
-          <label className="fld">Their name <span className="fld-note">optional</span>
+              onChange={(e) => setEmail(e.target.value)} placeholder={tt("pm@theircompany.com")} /></label>
+          <label className="fld">{tt("Their name")}{" "}<span className="fld-note">{tt("optional")}</span>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Priya" /></label>
-          <label className="fld">Anything to say <span className="fld-note">optional</span>
+          <label className="fld">{tt("Anything to say")}{" "}<span className="fld-note">{tt("optional")}</span>
             <textarea rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)}
-              placeholder="As asked on Tuesday." /></label>
+              placeholder={tt("As asked on Tuesday.")} /></label>
           {/* Said before they send, not discovered afterwards. */}
           <p className="cov-hint">
-            Your insurance, bond and signed agreement go in the link. Your W-9 is
-            shown as on file but stays behind a sign-in — it has your tax number on it.
+            {tt("Your insurance, bond and signed agreement go in the link. Your W-9 is shown as on file but stays behind a sign-in — it has your tax number on it.")}
           </p>
           {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
           <div className="form-actions">
             <button className="btn-ghost small" disabled={busy}
-              onClick={() => { setOpen(false); setErr(""); }}>Cancel</button>
+              onClick={() => { setOpen(false); setErr(""); }}>{tt("Cancel")}</button>
             <button className="btn-solid small" disabled={busy || !email.trim()} onClick={send}>
-              {busy ? "Sending…" : "Send"}
+              {busy ? tt("Sending…") : tt("Send")}
             </button>
           </div>
         </div>
@@ -31195,23 +31207,23 @@ function SendDocPack({ company, anyOnFile }) {
 
       {live.length > 0 && (
         <div className="pack-sent">
-          <div className="form-sec">Sent</div>
+          <div className="form-sec">{tt("Sent")}</div>
           {live.map((x) => (
             <div key={x.id} className="pack-row">
               <div className="pack-who">
                 <b>{x.toName || x.toEmail}</b>
                 <span className="cx-sub">
-                  {x.toName ? `${x.toEmail} · ` : ""}sent {relTime(x.createdAt)}
+                  {x.toName ? `${x.toEmail} · ` : ""}{tt("sent")}{" "}{relTime(x.createdAt)}
                   {/* The reason to send it through here rather than as an
                       attachment: you find out whether it was read. */}
                   {x.viewCount > 0
                     ? ` · opened ${x.viewCount === 1 ? "once" : `${x.viewCount} times`}`
-                    : " · not opened yet"}
+                    : tt(" · not opened yet")}
                 </span>
               </div>
               <button className="pf-mini" onClick={async () => {
                 await api.revokeDocShare(x.id); await load();
-              }}>Withdraw</button>
+              }}>{tt("Withdraw")}</button>
             </div>
           ))}
         </div>
@@ -31338,7 +31350,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
     const d = new Date(at.y, at.m + n, 1);
     setCursor({ y: d.getFullYear(), m: d.getMonth() });
   };
-  const monthLabel = first.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const monthLabel = first.toLocaleDateString(uiLocale(), { month: "long", year: "numeric" });
   const inMonth = dated.filter((x) => monthKey(x.when.date) === monthKey(dayKey(first))).length;
   const undated = rows.length - dated.length;
   const dayRows = selected && byDay[selected] ? byDay[selected] : [];
@@ -31349,8 +31361,8 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
 
   return (
     <div className="mycal">
-      <PageHead title="Calendar"
-        sub="Your jobs and your crews' days off, across every client. Tap a day to see it and mark a crew off." />
+      <PageHead title={tt("Calendar")}
+        sub={tt("Your jobs and your crews' days off, across every client. Tap a day to see it and mark a crew off.")} />
       {saveErr && <p className="fld-err" role="alert"><AlertTriangle size={13} /> {saveErr}</p>}
       {/* The crews, and whether each is taking work. Pausing is a fact about
           a crew rather than a day, so it sits above the month rather than in
@@ -31359,8 +31371,8 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
       <div className="mcal-crews">
         {crews.length === 0 ? (
           <p className="mcal-nocrew">
-            Days off are kept per crew.{" "}
-            {onGoCrews && <button className="sh-link" onClick={onGoCrews}>Add a crew</button>}
+            {tt("Days off are kept per crew.")}{" "}
+            {onGoCrews && <button className="sh-link" onClick={onGoCrews}>{tt("Add a crew")}</button>}
           </p>
         ) : crews.map((c) => {
           const on = c.available !== false;
@@ -31371,30 +31383,30 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
               onClick={() => onToggleCrewAvailable?.(c.id, !on)}>
               <span className={`avail-dot ${on ? "up" : "down"}`} />
               <span className="mc-name">{c.name}</span>
-              <span className="mc-state">{on ? "Taking work" : "Paused"}</span>
+              <span className="mc-state">{on ? tt("Taking work") : tt("Paused")}</span>
             </button>
           );
         })}
       </div>
       {allPaused && (
-        <p className="mcal-paused"><AlertTriangle size={13} /> Every crew is paused, so nothing will be booked on any day until one takes work again.</p>
+        <p className="mcal-paused"><AlertTriangle size={13} />{" "}{tt("Every crew is paused, so nothing will be booked on any day until one takes work again.")}</p>
       )}
       <div className="jcal">
         <div className="jcal-top">
-          <button className="jcal-nav" onClick={() => step(-1)} aria-label="Previous month">
+          <button className="jcal-nav" onClick={() => step(-1)} aria-label={tt("Previous month")}>
             <ChevronLeft size={16} />
           </button>
           <div className="jcal-month">
             <strong>{monthLabel}</strong>
-            <span>{inMonth === 0 ? "nothing booked"
+            <span>{inMonth === 0 ? tt("nothing booked")
               : `${inMonth} ${inMonth === 1 ? "job" : "jobs"}`}</span>
           </div>
-          <button className="jcal-nav" onClick={() => step(1)} aria-label="Next month">
+          <button className="jcal-nav" onClick={() => step(1)} aria-label={tt("Next month")}>
             <ChevronRight size={16} />
           </button>
           <button className="jcal-today" onClick={() => {
             setCursor(monthOf(todayK)); setSelected(todayK);
-          }}>Today</button>
+          }}>{tt("Today")}</button>
         </div>
         <div className="jcal-dows">
           {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <span key={d}>{d}</span>)}
@@ -31424,30 +31436,30 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                 )}
                 {/* Read out, because three coloured dots say nothing at all to
                     a screen reader. */}
-                {off && <span className={`jc-off ${off}`} aria-hidden="true">{off === "off" ? "Off" : "Part"}</span>}
+                {off && <span className={`jc-off ${off}`} aria-hidden="true">{off === "off" ? tt("Off") : tt("Part")}</span>}
                 {site.length > 0 && <span className="jc-site" aria-hidden="true" />}
                 <span className="sr-only">{list.length
                   ? `${list.length} job${list.length === 1 ? "" : "s"}, ${tone(list) === "open" ? "not all confirmed" : "confirmed"}`
-                  : "nothing booked"}{off === "off" ? ", every crew off" : off === "part" ? ", some crews off" : ""}</span>
+                  : tt("nothing booked")}{off === "off" ? tt(", every crew off") : off === "part" ? tt(", some crews off") : ""}</span>
               </button>
             );
           })}
         </div>
 
         <div className="jcal-key">
-          <span><i className="jc-dot full" /> Time agreed</span>
-          <span><i className="jc-dot open" /> Waiting on a yes</span>
-          <span><i className="jc-dot done" /> Been and gone</span>
-          <span><i className="jc-sitekey" /> On site (estimate)</span>
-          {working.length > 0 && <span><i className="jc-offkey off" /> Every crew off</span>}
-          {working.length > 1 && <span><i className="jc-offkey part" /> Some crews off</span>}
+          <span><i className="jc-dot full" />{" "}{tt("Time agreed")}</span>
+          <span><i className="jc-dot open" />{" "}{tt("Waiting on a yes")}</span>
+          <span><i className="jc-dot done" />{" "}{tt("Been and gone")}</span>
+          <span><i className="jc-sitekey" />{" "}{tt("On site (estimate)")}</span>
+          {working.length > 0 && <span><i className="jc-offkey off" />{" "}{tt("Every crew off")}</span>}
+          {working.length > 1 && <span><i className="jc-offkey part" />{" "}{tt("Some crews off")}</span>}
         </div>
 
         {selected && (
           <div className="jcal-day">
             <div className="jcd-head">
               <h4>{niceDay(selected)} <span className="jcd-rel">{relDay(selected, todayK)}</span></h4>
-              <button className="jcd-close" onClick={() => setSelected("")} aria-label="Close this day"><X size={14} /></button>
+              <button className="jcd-close" onClick={() => setSelected("")} aria-label={tt("Close this day")}><X size={14} /></button>
             </div>
             {/* WHO IS WORKING THIS DAY, and the press that changes it. A day
                 already gone cannot be marked: nothing can be booked on it. */}
@@ -31460,10 +31472,10 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                     <div key={c.id} className={`jcd-crew ${paused ? "paused" : isOff ? "off" : "on"}`}>
                       <span className={`avail-dot ${!paused && !isOff ? "up" : "down"}`} />
                       <span className="jcdc-name">{c.name}</span>
-                      <span className="jcdc-state">{paused ? "Paused" : isOff ? "Off this day" : "Working"}</span>
+                      <span className="jcdc-state">{paused ? tt("Paused") : isOff ? tt("Off this day") : tt("Working")}</span>
                       {!paused && selected >= todayK && onToggleCrewDay && (
                         <button className="mini" onClick={() => onToggleCrewDay(c.id, selected)}>
-                          {isOff ? "Mark working" : "Mark off"}
+                          {isOff ? tt("Mark working") : tt("Mark off")}
                         </button>
                       )}
                     </div>
@@ -31477,7 +31489,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
             {(onSite[selected] || []).map((x) => (
               <button key={`site-${x.m.job.id}-${x.m.trade}`} className="jcd-row jcd-site"
                 onClick={() => onOpen?.(x.m)}>
-                <span className="jcd-time">Day {x.n} of {x.of}</span>
+                <span className="jcd-time">{tt("Day")}{" "}{x.n}{" "}{tt("of")}{" "}{x.of}</span>
                 <span className="jcd-main">
                   <span className="jcd-title">{x.m.job.title}</span>
                   <span className="jcd-meta">{[catMeta(x.m.trade).label,
@@ -31487,7 +31499,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
               </button>
             ))}
             {dayRows.length === 0 && !(onSite[selected] || []).length ? (
-              <div className="dash-empty"><ClipboardList size={22} /><p>Nothing booked for this day.</p></div>
+              <div className="dash-empty"><ClipboardList size={22} /><p>{tt("Nothing booked for this day.")}</p></div>
             ) : dayRows.map((x) => (
               <button key={`${x.m.job.id}-${x.m.trade}`} className="jcd-row"
                 onClick={() => onOpen?.(x.m)}>
@@ -31506,7 +31518,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                     time on it. */}
                 <span className="jcd-time">{x.when.startTime
                   ? visitWhen(x.when).replace(/^[^·]*·\s*/, "")
-                  : "All day"}</span>
+                  : tt("All day")}</span>
                 <span className="jcd-main">
                   <span className="jcd-title">{x.m.job.title}</span>
                   <span className="jcd-meta">
@@ -31517,8 +31529,8 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                   </span>
                 </span>
                 <span className={`mys-tag mysw-${WHEN_KINDS[x.when.kind]?.tone || "wait"}`}>
-                  {x.when.kind === "confirmed" ? "Confirmed"
-                    : x.when.kind === "proposed" ? "Not confirmed" : "Target"}
+                  {x.when.kind === "confirmed" ? tt("Confirmed")
+                    : x.when.kind === "proposed" ? tt("Not confirmed") : tt("Target")}
                 </span>
               </button>
             ))}
@@ -31530,9 +31542,9 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
             broken. */}
         {inMonth === 0 && nextAhead && monthKey(nextAhead) !== monthKey(dayKey(first)) && (
           <p className="jcal-undated">
-            Nothing booked in {monthLabel}. Your next job is on {niceDay(nextAhead)}.{" "}
+            {tt("Nothing booked in")}{" "}{monthLabel}{tt(". Your next job is on")}{" "}{niceDay(nextAhead)}.{" "}
             <button className="sh-link" onClick={() => { setCursor(monthOf(nextAhead)); setSelected(nextAhead); }}>
-              Show it
+              {tt("Show it")}
             </button>
           </p>
         )}
@@ -31541,8 +31553,8 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
             to report to somebody trying to fill a week. */}
         {undated > 0 && (
           <p className="jcal-undated">
-            {undated === 1 ? "1 job has no date on it yet" : `${undated} jobs have no date on them yet`},
-            {" "}so nothing here can show {undated === 1 ? "it" : "them"}. Ask the office when they want you.
+            {undated === 1 ? tt("1 job has no date on it yet") : `${undated} jobs have no date on them yet`},
+            {" "}{tt("so nothing here can show")}{" "}{undated === 1 ? "it" : "them"}{tt(". Ask the office when they want you.")}
           </p>
         )}
       </div>
@@ -31596,27 +31608,27 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
       </span>
       <span className="mys-title">{x.m.job.title}</span>
       <span className={`mys-tag mysw-${WHEN_KINDS[x.when.kind]?.tone || "wait"}`}>
-        {x.when.kind === "confirmed" ? "Confirmed" : x.when.kind === "proposed" ? "Not confirmed" : "Target"}
+        {x.when.kind === "confirmed" ? tt("Confirmed") : x.when.kind === "proposed" ? tt("Not confirmed") : tt("Target")}
       </span>
     </button>
   );
   return (
     <section className="sched-hero my-sched">
       <div className="sh-head">
-        <h3><Calendar size={16} /> Your schedule</h3>
+        <h3><Calendar size={16} />{" "}{tt("Your schedule")}</h3>
         {/* A panel that names the next job has to route somewhere that can
             show it -- the lie the hiring side's "Open the calendar" told when
             it landed on an empty month, which is why `MyCalendar` aims at the
             work rather than at today. */}
         {onOpenCalendar && (
-          <button className="sh-link" onClick={onOpenCalendar}>Open the calendar</button>
+          <button className="sh-link" onClick={onOpenCalendar}>{tt("Open the calendar")}</button>
         )}
       </div>
       {late.length > 0 && (
         <div className="sh-late">
           <span className="shl-lede">
             <AlertTriangle size={14} />
-            {late.length === 1 ? "1 job is past its date" : `${late.length} jobs are past their date`}
+            {late.length === 1 ? tt("1 job is past its date") : `${late.length} jobs are past their date`}
           </span>
           <div className="shl-rows">{late.slice(0, 3).map((x) => row(x, "shl-row mys-row"))}</div>
         </div>
@@ -31624,40 +31636,40 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
       {next ? (
         <button className="sh-next" onClick={() => onOpen?.(next.m)}>
           <span className="shn-when">
-            <span className="shn-dow">{dayFromKey(next.when.date).toLocaleDateString(undefined, { weekday: "short" })}</span>
+            <span className="shn-dow">{dayFromKey(next.when.date).toLocaleDateString(uiLocale(), { weekday: "short" })}</span>
             <span className="shn-day">{dayFromKey(next.when.date).getDate()}</span>
-            <span className="shn-mon">{dayFromKey(next.when.date).toLocaleDateString(undefined, { month: "short" })}</span>
+            <span className="shn-mon">{dayFromKey(next.when.date).toLocaleDateString(uiLocale(), { month: "short" })}</span>
           </span>
           <span className="shn-main">
             <span className="shn-lede">{visitWhen(next.when)}</span>
             <span className="shn-title">{next.m.job.title}</span>
             <span className="shn-meta">
-              {[next.m.job.address, next.m.job.area].filter(Boolean).join(", ") || "No address"}
+              {[next.m.job.address, next.m.job.area].filter(Boolean).join(", ") || tt("No address")}
               {" \u00b7 "}{catMeta(next.m.trade).label}
             </span>
           </span>
           <span className={`shn-fill ${next.when.kind === "confirmed" ? "full" : ""}`}>
-            {next.when.kind === "confirmed" ? "Confirmed" : next.when.kind === "proposed" ? "Not confirmed" : "Target"}
+            {next.when.kind === "confirmed" ? tt("Confirmed") : next.when.kind === "proposed" ? tt("Not confirmed") : tt("Target")}
           </span>
         </button>
       ) : (
         <div className="sh-none">
           <ClipboardList size={22} />
-          <p>{late.length ? "Nothing else booked in." : "Nothing booked in yet."}</p>
+          <p>{late.length ? tt("Nothing else booked in.") : tt("Nothing booked in yet.")}</p>
         </div>
       )}
       {next && (rest.length > 0
         ? <div className="sh-rest">
             {rest.slice(0, REST).map((x) => row(x, "shr-row mys-row"))}
-            {rest.length > REST && <p className="mys-more">and {rest.length - REST} more below.</p>}
+            {rest.length > REST && <p className="mys-more">{tt("and")}{" "}{rest.length - REST}{" "}{tt("more below.")}</p>}
           </div>
-        : <p className="sh-only">Nothing else booked in.</p>)}
+        : <p className="sh-only">{tt("Nothing else booked in.")}</p>)}
       <div className="sh-strip" role="list">
         {strip.map(({ k, d, n, soft }) => (
           <div key={k} role="listitem"
             className={`shs-day ${n ? "has" : ""} ${soft ? "soft" : ""} ${k === todayK ? "today" : ""}`}
             title={n ? `${n} job${n === 1 ? "" : "s"} on ${niceDay(k)}` : `Nothing on ${niceDay(k)}`}>
-            <span className="shs-dow">{d.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+            <span className="shs-dow">{d.toLocaleDateString(uiLocale(), { weekday: "narrow" })}</span>
             <span className="shs-dom">{d.getDate()}</span>
             <span className="shs-n">{n || ""}</span>
           </div>
@@ -31665,8 +31677,8 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
       </div>
       {undated > 0 && (
         <p className="sh-undated">
-          {undated === 1 ? "1 job has no date on it yet" : `${undated} jobs have no date on them yet`}
-          {" \u2014 ask the office when they want you."}
+          {undated === 1 ? tt("1 job has no date on it yet") : `${undated} jobs have no date on them yet`}
+          {tt(" — ask the office when they want you.")}
         </p>
       )}
     </section>
@@ -31802,11 +31814,11 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
   const jobTabs = (
     <div className="seg-tabs jobs-view" role="tablist">
       <button role="tab" aria-selected={!onCal} className={!onCal ? "on" : ""} onClick={() => onGoPane?.("jobs")}>
-        <ClipboardList size={14} /> Jobs
+        <ClipboardList size={14} />{" "}{tt("Jobs")}
         {pending.length > 0 && <span className="nv-n amber">{pending.length}</span>}
       </button>
       <button role="tab" aria-selected={onCal} className={onCal ? "on" : ""} onClick={() => onGoPane?.("schedule")}>
-        <Calendar size={14} /> Calendar
+        <Calendar size={14} />{" "}{tt("Calendar")}
       </button>
     </div>
   );
@@ -31823,18 +31835,18 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               tax form to unblock work that is waiting on a certificate. It
               still has to be said, because it stops the money. */}
           <div>
-            <strong>Action needed.</strong>{" "}
+            <strong>{tt("Action needed.")}</strong>{" "}
             {blockAssign.length > 0 && (
-              <>You can't be assigned jobs until you upload: {blockAssign.map((k) => DOC_LABELS[k]).join(", ")}.{" "}</>
+              <>{tt("You can't be assigned jobs until you upload:")}{" "}{blockAssign.map((k) => DOC_LABELS[k]).join(", ")}.{" "}</>
             )}
             {blockPay.length > 0 && (
-              <>Your {blockPay.map((k) => DOC_LABELS[k]).join(" and ")}{" "}
-                {blockAssign.length > 0 ? "is separate — it does not hold up job requests, but" : "does not hold up job requests, but"}{" "}
-                you can't be paid without it.</>
+              <>{tt("Your")}{" "}{blockPay.map((k) => DOC_LABELS[k]).join(" and ")}{" "}
+                {blockAssign.length > 0 ? tt("is separate — it does not hold up job requests, but") : tt("does not hold up job requests, but")}{" "}
+                {tt("you can't be paid without it.")}</>
             )}
           </div>
           <button className="btn-notify" onClick={onGoDocs}>
-            <Upload size={14} /> Upload {miss.length === 1 ? "document" : "documents"}
+            <Upload size={14} />{" "}{tt("Upload")}{" "}{miss.length === 1 ? "document" : "documents"}
           </button>
         </div>
       )}
@@ -31844,14 +31856,13 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           {jobTabs}
           {(changeOrders || []).filter((c) => c.status === "pending").length > 0 && (
             <section className="portal-sec">
-              <h3><FilePlus2 size={15} /> Change orders
+              <h3><FilePlus2 size={15} />{" "}{tt("Change orders")}
                 <span className="sec-count amber">
                   {(changeOrders || []).filter((c) => c.status === "pending" && c.origin === "gc").length}
                 </span>
               </h3>
               <p className="portal-sec-note">
-                A change to a work order you already accepted. Accepting updates your pay for that
-                job; the original work order stays as it was.
+                {tt("A change to a work order you already accepted. Accepting updates your pay for that job; the original work order stays as it was.")}
               </p>
               {(changeOrders || []).filter((c) => c.status === "pending").map((c) => (
                 <ChangeOrderRow key={c.id} c={c} now={now} side="sub"
@@ -31861,14 +31872,13 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           )}
           {(serviceCalls || []).filter((c) => c.status !== "resolved").length > 0 && (
             <section className="portal-sec">
-              <h3><Wrench size={15} /> Return visits
+              <h3><Wrench size={15} />{" "}{tt("Return visits")}
                 <span className="sec-count amber">
                   {(serviceCalls || []).filter((c) => c.status === "awaiting-confirmation").length}
                 </span>
               </h3>
               <p className="portal-sec-note">
-                {brand.name} has reported an issue on a job you completed. Confirm the date and
-                it's added to your schedule.
+                {brand.name}{" "}{tt("has reported an issue on a job you completed. Confirm the date and it's added to your schedule.")}
               </p>
               {(serviceCalls || []).filter((c) => c.status !== "resolved").map((c) => (
                 <ServiceCallRow key={c.id} c={c} job={jobs.find((j) => j.id === c.jobId)}
@@ -31881,12 +31891,12 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               <Hello name={first} weather={weather} />
               <p>
                 {pending.length > 0
-                  ? `${pending.length} job request${pending.length === 1 ? "" : "s"} waiting on you`
+                  ? tt(pending.length === 1 ? "{n} job request waiting on you" : "{n} job requests waiting on you", { n: pending.length })
                   : upcoming.length > 0
-                    ? `${upcoming.length} job${upcoming.length === 1 ? "" : "s"} booked — nothing waiting on you`
+                    ? tt(upcoming.length === 1 ? "{n} job booked — nothing waiting on you" : "{n} jobs booked — nothing waiting on you", { n: upcoming.length })
                     : miss.length > 0
-                      ? "Upload your documents to start receiving job requests"
-                      : "No jobs booked right now"}
+                      ? tt("Upload your documents to start receiving job requests")
+                      : tt("No jobs booked right now")}
               </p>
             </div>
             <div className="who-bar">
@@ -31904,10 +31914,10 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                     says the neutral thing rather than the flattering one. */}
                 <span className="who-for">
                   {clientCount > 1
-                    ? `${workingForVerb(clientKinds)} ${clientCount} companies`
+                    ? `${tt(workingForVerb(clientKinds))} ${tt("{n} companies", { n: clientCount })}`
                     : soleClient
-                      ? `${workingForVerb(clientKinds)} ${soleClient}`
-                      : "No clients yet"}
+                      ? `${tt(workingForVerb(clientKinds))} ${soleClient}`
+                      : tt("No clients yet")}
                 </span>
               </div>
             </div>
@@ -31937,44 +31947,44 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           <div className="dash-grid">
             <div className="dash-card accent">
               <span className="dc-num">{pending.length}</span>
-              <span className="dc-lab">Job request{pending.length === 1 ? "" : "s"} awaiting you</span>
+              <span className="dc-lab">{pending.length === 1 ? tt("Job request awaiting you") : tt("Job requests awaiting you")}</span>
             </div>
             <div className="dash-card">
               <span className="dc-num">{upcoming.length}</span>
-              <span className="dc-lab">Upcoming job{upcoming.length === 1 ? "" : "s"}</span>
+              <span className="dc-lab">{upcoming.length === 1 ? tt("Upcoming job") : tt("Upcoming jobs")}</span>
             </div>
             <div className="dash-card">
               <span className="dc-num">{crewCount(sub)}</span>
-              <span className="dc-lab">Crews · {headCount(sub)} people</span>
+              <span className="dc-lab">{tt("Crews ·")}{" "}{headCount(sub)}{" "}{tt("people")}</span>
             </div>
             <div className="dash-card">
               <span className="dc-num">{earnings ? formatMoney(earnings) : "—"}</span>
-              <span className="dc-lab">Booked value</span>
+              <span className="dc-lab">{tt("Booked value")}</span>
             </div>
           </div>
 
           {sub.autoSchedule && (
-            <div className="auto-strip"><Zap size={14} /> Auto-schedule is on — jobs matching your availability are booked directly.</div>
+            <div className="auto-strip"><Zap size={14} />{" "}{tt("Auto-schedule is on — jobs matching your availability are booked directly.")}</div>
           )}
 
 
           {workTotal > 0 && (
-            <FilterBar q={wq} onQ={setWq} placeholder="Search job, address, trade, client…"
+            <FilterBar q={wq} onQ={setWq} placeholder={tt("Search job, address, trade, client…")}
               shown={workShown} total={workTotal}
               onClear={() => { setWq(""); setWClient(""); setWShow(""); }}
               filters={[
-                { id: "show", label: "Work", all: "All my work", icon: Filter, value: wShow, onChange: setWShow,
-                  options: [["reply", "Waiting on my reply"], ["quotes", "Quotes"], ["upcoming", "Upcoming"],
-                    ["completed", "Completed"], ["declined", "Declined"]] },
-                { id: "client", label: "Clients", icon: Building2, value: wClient, onChange: setWClient,
+                { id: "show", label: tt("Work"), all: tt("All my work"), icon: Filter, value: wShow, onChange: setWShow,
+                  options: [["reply", tt("Waiting on my reply")], ["quotes", tt("Quotes")], ["upcoming", tt("Upcoming")],
+                    ["completed", tt("Completed")], ["declined", tt("Declined")]] },
+                { id: "client", label: tt("Clients"), all: tt("All clients"), icon: Building2, value: wClient, onChange: setWClient,
                   options: workClients.map((c) => [c, c]) },
               ]} />
           )}
 
           {timeAsks.length > 0 && (
-            <section className="dash-sec sec-yt" aria-label="Waiting on you">
-              <h3><ActDot /><Bell size={15} /> Waiting on you — {timeAsks.every((m) => crewAction(m, now)?.kind === "arrange")
-                  ? "set a time" : timeAsks.some((m) => crewAction(m, now)?.kind === "arrange") ? "confirm or set a time" : "confirm the time"}
+            <section className="dash-sec sec-yt" aria-label={tt("Waiting on you")}>
+              <h3><ActDot /><Bell size={15} />{" "}{tt("Waiting on you —")}{" "}{timeAsks.every((m) => crewAction(m, now)?.kind === "arrange")
+                  ? tt("set a time") : timeAsks.some((m) => crewAction(m, now)?.kind === "arrange") ? tt("confirm or set a time") : tt("confirm the time")}
                 <span className="sec-count amber">{timeAsks.length}</span></h3>
               {timeAsks.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
             </section>
@@ -31987,11 +31997,10 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               and because a quote nobody sent is work that went elsewhere. */}
           {fOpenQuotes.length > 0 && (
             <section className="dash-sec">
-              <h3><FileText size={15} /> Asked to quote
+              <h3><FileText size={15} />{" "}{tt("Asked to quote")}
                 <span className="sec-count amber">{fOpenQuotes.length}</span></h3>
               <p className="portal-sec-note">
-                Nothing is committed by answering. If they pick you, you get a work
-                order at the price you gave and you still accept or decline it.
+                {tt("Nothing is committed by answering. If they pick you, you get a work order at the price you gave and you still accept or decline it.")}
               </p>
               {quoteGroups(fOpenQuotes).map((items) => (
                 <QuoteAskCard key={`${items[0].accountId}:${items[0].job.id}`} items={items}
@@ -32002,16 +32011,16 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
           {fPending.length > 0 && (
             <section className="dash-sec">
-              <h3><Clock size={15} /> Job requests <span className="sec-count amber">{fPending.length}</span></h3>
+              <h3><Clock size={15} />{" "}{tt("Job requests")}{" "}<span className="sec-count amber">{fPending.length}</span></h3>
               {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} showActions />)}
             </section>
           )}
 
           {showing("upcoming") && (
           <section className="dash-sec">
-            <h3><Calendar size={15} /> Current &amp; upcoming {fUpcoming.length > 0 && <span className="sec-count">{fUpcoming.length}</span>}</h3>
+            <h3><Calendar size={15} />{" "}{tt("Current & upcoming")}{" "}{fUpcoming.length > 0 && <span className="sec-count">{fUpcoming.length}</span>}</h3>
             {fUpcoming.length === 0
-              ? <div className="dash-empty"><ClipboardList size={24} /><p>{narrowed ? "No upcoming jobs match these filters." : "No upcoming jobs booked."}</p></div>
+              ? <div className="dash-empty"><ClipboardList size={24} /><p>{narrowed ? tt("No upcoming jobs match these filters.") : tt("No upcoming jobs booked.")}</p></div>
               : fUpcoming.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
           </section>
           )}
@@ -32021,7 +32030,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               price that?" is the question this list exists to answer. */}
           {fSentQuotes.length > 0 && (
             <section className="dash-sec">
-              <h3><FileText size={15} /> Quotes you sent
+              <h3><FileText size={15} />{" "}{tt("Quotes you sent")}
                 <span className="sec-count">{fSentQuotes.length}</span></h3>
               {fSentQuotes.map((q) => (
                 <div key={q.inviteId} className={`qs-row${q.wonIt ? " won" : ""}`}>
@@ -32033,16 +32042,16 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                     </span>
                   </div>
                   {q.status === "passed"
-                    ? <span className="qs-state">You passed</span>
+                    ? <span className="qs-state">{tt("You passed")}</span>
                     : <span className="qs-price">{formatMoney(q.priceCents / 100)}</span>}
                   {/* About us, never about who won. Who they picked and what
                       they paid is theirs and the winner's. */}
                   {q.requestStatus === "awarded" && (
                     <span className={`qs-out ${q.wonIt ? "won" : "lost"}`}>
-                      {q.wonIt ? "You won it" : "Not this time"}
+                      {q.wonIt ? tt("You won it") : tt("Not this time")}
                     </span>
                   )}
-                  {q.requestStatus === "cancelled" && <span className="qs-out">Withdrawn</span>}
+                  {q.requestStatus === "cancelled" && <span className="qs-out">{tt("Withdrawn")}</span>}
                 </div>
               ))}
             </section>
@@ -32050,14 +32059,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
           {fPast.length > 0 && (
             <section className="dash-sec">
-              <h3><CheckCircle2 size={15} /> Completed <span className="sec-count">{fPast.length}</span></h3>
+              <h3><CheckCircle2 size={15} />{" "}{tt("Completed")}{" "}<span className="sec-count">{fPast.length}</span></h3>
               {fPast.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} past />)}
             </section>
           )}
 
           {fDeclined.length > 0 && (
             <section className="dash-sec">
-              <h3><XCircle size={15} /> Declined <span className="sec-count">{fDeclined.length}</span></h3>
+              <h3><XCircle size={15} />{" "}{tt("Declined")}{" "}<span className="sec-count">{fDeclined.length}</span></h3>
               {fDeclined.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
             </section>
           )}
@@ -32098,8 +32107,8 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
       {pane === "settings" && (
         <>
-          <PageHead title="Job settings"
-            sub="What you work in, where you go, and when you are free" />
+          <PageHead title={tt("Job settings")}
+            sub={tt("What you work in, where you go, and when you are free")} />
           <div className="seg-tabs">
             {[["trades", "Trades"], ["coverage", "Coverage"], ["availability", "Availability"],
               ["overflow", "Overflow work"]].map(([id, l]) => (
@@ -32109,9 +32118,9 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
           {sub2 === "trades" && (
             <div className="portal-panel" style={{ marginBottom: 16 }}>
-              <h4>Your labor warranty</h4>
-              <p className="panel-note">How long you stand behind your workmanship. {brand.name}
-                uses this to decide whether a later issue is a warranty claim or chargeable work.</p>
+              <h4>{tt("Your labor warranty")}</h4>
+              <p className="panel-note">{tt("How long you stand behind your workmanship.")}{" "}{brand.name}
+                {tt("uses this to decide whether a later issue is a warranty claim or chargeable work.")}</p>
               <div className="pick-grid warranty-grid">
                 {WARRANTY_OPTIONS.map((w) => (
                   <button key={w.id} type="button"
@@ -32120,16 +32129,15 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 ))}
               </div>
               <p className="cov-hint">
-                {warrantyLabel(sub)}. Separately, defects reported within {CALLBACK_DAYS} days of
-                completing a job are treated as callbacks and always come back to you.
+                {warrantyLabel(sub)}{tt(". Separately, defects reported within")}{" "}{CALLBACK_DAYS}{" "}{tt("days of completing a job are treated as callbacks and always come back to you.")}
               </p>
             </div>
           )}
 
           {sub2 === "trades" && (
             <div className="portal-panel">
-              <h4>Trades you work in</h4>
-              <p className="panel-note">You'll only be matched to jobs in these trades.</p>
+              <h4>{tt("Trades you work in")}</h4>
+              <p className="panel-note">{tt("You'll only be matched to jobs in these trades.")}</p>
               <div className="pick-grid">
                 {CATEGORIES.map((c) => (
                   <button key={c.id} type="button" className={`pick ${sub.categories.includes(c.id) ? "on" : ""}`}
@@ -32141,7 +32149,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                     }}>{c.label}</button>
                 ))}
               </div>
-              <h4 style={{ marginTop: 20 }}>Specific capabilities</h4>
+              <h4 style={{ marginTop: 20 }}>{tt("Specific capabilities")}</h4>
               <div className="pick-grid">
                 {caps.map((c) => (
                   <button key={c} type="button" className={`pick ${sub.caps.includes(c) ? "on" : ""}`}
@@ -32170,14 +32178,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <div ref={autoRef} className={`auto-card my-auto ${sub.autoSchedule ? "on" : ""} ${autoRing ? "ringed" : ""}`}>
               <Zap size={18} />
               <div className="auto-card-main">
-                <span className="auto-title">Auto-schedule</span>
+                <span className="auto-title">{tt("Auto-schedule")}</span>
                 <span className="auto-desc">
                   {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
                 </span>
               </div>
               <label className="auto-toggle">
                 <input type="checkbox" checked={!!sub.autoSchedule} onChange={(e) => onSetAutoSchedule(e.target.checked)} />
-                <span>{sub.autoSchedule ? "On" : "Off"}</span>
+                <span>{sub.autoSchedule ? tt("On") : tt("Off")}</span>
               </label>
             </div>
           )}
@@ -32190,10 +32198,10 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
       {(pane === "passport" || pane === "connect") && (
         <>
-          <PageHead title="Passport"
+          <PageHead title={tt("Passport")}
             sub={connectRequests.some((r) => r.status === "pending")
               ? `${connectRequests.filter((r) => r.status === "pending").length} waiting on your answer`
-              : "The page you hand to a GC"} />
+              : tt("The page you hand to a GC")} />
           <ConnectAsks requests={connectRequests} onRespond={onRespondConnect} onReload={onReloadConnects} />
           <PassportPanel />
         </>
@@ -32201,7 +32209,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
 
       {pane === "docs" && (
         <>
-        <PageHead title="Compliance pack"
+        <PageHead title={tt("Compliance pack")}
           sub={miss.length === 0
             ? `All ${DOC_KINDS.length} on file`
             : `${DOC_KINDS.length - miss.length} of ${DOC_KINDS.length} on file`} />
@@ -32210,12 +32218,12 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <div className="doc-alert">
               <AlertTriangle size={16} />
               <div>
-                <strong>{miss.length} document{miss.length > 1 ? "s" : ""} outstanding.</strong>
-                <span> {brand.name} reviews each one — you'll be cleared for work once all {DOC_KINDS.length} are verified.</span>
+                <strong>{miss.length}{" "}{tt("document")}{miss.length > 1 ? "s" : ""}{" "}{tt("outstanding.")}</strong>
+                <span> {brand.name}{" "}{tt("reviews each one — you'll be cleared for work once all")}{" "}{DOC_KINDS.length}{" "}{tt("are verified.")}</span>
               </div>
             </div>
           ) : (
-            <div className="doc-ok-banner"><CheckCircle2 size={16} /> All documents on file — you're cleared for work.</div>
+            <div className="doc-ok-banner"><CheckCircle2 size={16} />{" "}{tt("All documents on file — you're cleared for work.")}</div>
           )}
           {/* The thing they are asked for several times a month, done once.
               Sits above the documents themselves because sending them is what
@@ -32232,7 +32240,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
             <div className={`lic-card ${licenseOk(sub) ? "ok" : "bad"}`} style={{ marginBottom: 16 }}>
               {licenseOk(sub) ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
               <div className="lic-main">
-                <span className="lic-num">WA registration {sub.license}
+                <span className="lic-num">{tt("WA registration")}{" "}{sub.license}
                   <span className={`lic-status ${licenseTone(sub.licenseCheck)}`}>
                     {licenseBadge(sub.licenseCheck)}
                   </span>
@@ -32240,16 +32248,16 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 <span className="lic-meta">
                   {licenseOk(sub)
                     ? `Active with L&I · expires ${sub.licenseCheck.expirationDate}`
-                    : "Renew with L&I to keep receiving work — this is checked against the state registry."}
+                    : tt("Renew with L&I to keep receiving work — this is checked against the state registry.")}
                 </span>
               </div>
             </div>
           )}
 
           <details className="req-box">
-            <summary><Shield size={14} /> What {brand.name} requires</summary>
+            <summary><Shield size={14} />{" "}{tt("What")}{" "}{brand.name}{" "}{tt("requires")}</summary>
             <div className="req-body">
-              <div className="req-sec">Certificate of insurance</div>
+              <div className="req-sec">{tt("Certificate of insurance")}</div>
               <table className="req-table">
                 <tbody>
                   {INSURANCE_LINES.map((l) => (
@@ -32258,25 +32266,21 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                       <td className="rt-amt">{formatMoney(l.min)}{l.optional ? "*" : ""}</td>
                     </tr>
                   ))}
-                  <tr><td>Workers' compensation</td><td className="rt-amt">WA L&amp;I active</td></tr>
+                  <tr><td>{tt("Workers' compensation")}</td><td className="rt-amt">{tt("WA L&I active")}</td></tr>
                 </tbody>
               </table>
               <ul className="req-list">
                 {checkItems("insurance", brand.name).map((a) =>
                   <li key={a.id}><Check size={12} /> {a.label}</li>)}
               </ul>
-              <div className="req-sec">Surety bond</div>
-              <p className="req-note">{formatMoney(BOND_MIN)} minimum, active, surety licensed in Washington.</p>
-              <div className="req-sec">Subcontractor agreement</div>
-              <p className="req-note">Signed and dated by you, current version.</p>
-              <div className="req-sec">IRS Form W-9</div>
-              <p className="req-note">Needed before we can pay you. Your TIN or EIN, tax
-                classification, and a signature in Part II. Current revision of the form.</p>
+              <div className="req-sec">{tt("Surety bond")}</div>
+              <p className="req-note">{formatMoney(BOND_MIN)}{" "}{tt("minimum, active, surety licensed in Washington.")}</p>
+              <div className="req-sec">{tt("Subcontractor agreement")}</div>
+              <p className="req-note">{tt("Signed and dated by you, current version.")}</p>
+              <div className="req-sec">{tt("IRS Form W-9")}</div>
+              <p className="req-note">{tt("Needed before we can pay you. Your TIN or EIN, tax classification, and a signature in Part II. Current revision of the form.")}</p>
               <p className="req-note">
-                * {OPTIONAL_LINES.map((l) => l.label).join(", ")} are asked for only
-                where they apply — a sub with no commercial vehicles, no employees or no
-                umbrella policy can leave them blank. Anything you do enter still has to
-                meet the minimum beside it.
+                * {OPTIONAL_LINES.map((l) => l.label).join(", ")}{" "}{tt("are asked for only where they apply — a sub with no commercial vehicles, no employees or no umbrella policy can leave them blank. Anything you do enter still has to meet the minimum beside it.")}
               </p>
             </div>
           </details>
@@ -32375,51 +32379,48 @@ function SignAgreement({ agreement, myName, onClose, onDone }) {
   return (
     <Modal onClose={onClose} wide>
       <div className="form">
-        <h2>{agreement.document?.title || "Subcontractor agreement"}</h2>
+        <h2>{agreement.document?.title || tt("Subcontractor agreement")}</h2>
         <p className="form-sub">
-          SubSub's standard form, with {agreement.accountName} filled in as the
-          hiring party. Read it, then sign at the bottom. Signing binds you to
-          these terms for work you take from {agreement.accountName} — and from
-          them only: every company that hires you asks separately.
+          {tt("SubSub's standard form, with")}{" "}{agreement.accountName}{" "}{tt("filled in as the hiring party. Read it, then sign at the bottom. Signing binds you to these terms for work you take from")}{" "}{agreement.accountName}{" "}{tt("— and from them only: every company that hires you asks separately.")}
         </p>
         <AgreementDoc document={agreement.document} />
 
         {!declining && <>
           <div className="agr-sign">
             <label>
-              Type your full name to sign
+              {tt("Type your full name to sign")}
               <input value={typed} onChange={(e) => setTyped(e.target.value)}
-                placeholder={myName || "Your name"} autoComplete="off" />
+                placeholder={myName || tt("Your name")} autoComplete="off" />
             </label>
             {/* A disabled control with no reason beside it is
                 indistinguishable from a broken one. */}
             {!matches && typed.trim() !== "" && (
-              <span className="cx-sub">That does not match {myName}, the name on your account.</span>
+              <span className="cx-sub">{tt("That does not match")}{" "}{myName}{tt(", the name on your account.")}</span>
             )}
           </div>
           {err && <div className="form-err">{err}</div>}
           <div className="form-actions">
             <button className="btn-ghost" type="button" onClick={() => setDeclining(true)}>
-              I can't sign this
+              {tt("I can't sign this")}
             </button>
             <button className="btn-solid" type="button" disabled={!matches || busy}
               onClick={() => go(false)}>
-              {busy ? "Signing…" : "Sign agreement"}
+              {busy ? tt("Signing…") : tt("Sign agreement")}
             </button>
           </div>
         </>}
 
         {declining && <>
           <label className="agr-decline">
-            Tell them why, so they can send a version you can sign
+            {tt("Tell them why, so they can send a version you can sign")}
             <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)}
-              placeholder="Our insurer will not agree to the additional insured wording in clause 5." />
+              placeholder={tt("Our insurer will not agree to the additional insured wording in clause 5.")} />
           </label>
           {err && <div className="form-err">{err}</div>}
           <div className="form-actions">
-            <button className="btn-ghost" type="button" onClick={() => setDeclining(false)}>Back</button>
+            <button className="btn-ghost" type="button" onClick={() => setDeclining(false)}>{tt("Back")}</button>
             <button className="btn-solid" type="button" disabled={busy} onClick={() => go(true)}>
-              {busy ? "Sending…" : "Send this back"}
+              {busy ? tt("Sending…") : tt("Send this back")}
             </button>
           </div>
         </>}
@@ -32876,11 +32877,9 @@ function MyAgreements({ myName }) {
 
   return (
     <div className="portal-panel agr-panel">
-      <h4>Agreements{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
+      <h4>{tt("Agreements")}{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
       <p className="cx-sub">
-        An agreement is between you and one company, so each of them asks
-        separately — and plenty never ask at all. Only the ones who have sent
-        you one appear here.
+        {tt("An agreement is between you and one company, so each of them asks separately — and plenty never ask at all. Only the ones who have sent you one appear here.")}
       </p>
       {err && <div className="form-err">{err}</div>}
       <ul className="agr-rows">
@@ -32896,7 +32895,7 @@ function MyAgreements({ myName }) {
             </div>
             {r.waitingOn === "sub_sign" && (
               <button className="btn-solid sm" type="button" onClick={() => setOpen(r)}>
-                Read and sign
+                {tt("Read and sign")}
               </button>
             )}
             {r.waitingOn === "sub_upload" && (
@@ -32905,11 +32904,11 @@ function MyAgreements({ myName }) {
               // upload lives -- there is no document here to sign, because
               // this one is theirs rather than SubSub's.
               <span className="cx-sub agr-row-note">
-                Sign their paper copy, then upload it as the signed agreement above
+                {tt("Sign their paper copy, then upload it as the signed agreement above")}
               </span>
             )}
             {r.waitingOn === null && r.document && (
-              <button className="btn-ghost sm" type="button" onClick={() => setOpen(r)}>View</button>
+              <button className="btn-ghost sm" type="button" onClick={() => setOpen(r)}>{tt("View")}</button>
             )}
           </li>
         ))}
@@ -32919,9 +32918,9 @@ function MyAgreements({ myName }) {
             onClose={() => setOpen(null)} onDone={load} />
         : <Modal onClose={() => setOpen(null)} wide>
             <div className="form">
-              <h2>{open.document?.title || "Subcontractor agreement"}</h2>
+              <h2>{open.document?.title || tt("Subcontractor agreement")}</h2>
               <p className="form-sub">
-                With {open.accountName}. {agreementStateText(open, { subName: "You", hiringName: open.accountName })}
+                {tt("With")}{" "}{open.accountName}. {agreementStateText(open, { subName: "You", hiringName: open.accountName })}
                 {open.signedAt ? ` Signed by ${open.signedByName} on ${formatExpiry(String(open.signedAt).slice(0, 10))}.` : ""}
               </p>
               <AgreementDoc document={open.document} />
@@ -33099,15 +33098,15 @@ function WaiverSigner({ waiver, myName = "", token = null, onDone }) {
     return (
       <div className="wv-signer">
         <label className="agr-decline">
-          Tell them why, so they can sort it out
+          {tt("Tell them why, so they can sort it out")}
           <textarea rows={3} value={note} maxLength={1000} onChange={(e) => setNote(e.target.value)}
-            placeholder="The check hasn't cleared yet." />
+            placeholder={tt("The check hasn't cleared yet.")} />
         </label>
         {err && <div className="form-err">{err}</div>}
         <div className="form-actions">
-          <button className="btn-ghost" type="button" onClick={() => setDeclining(false)}>Back</button>
+          <button className="btn-ghost" type="button" onClick={() => setDeclining(false)}>{tt("Back")}</button>
           <button className="btn-solid" type="button" disabled={busy} onClick={refuse}>
-            {busy ? "Sending…" : "Decline this waiver"}
+            {busy ? tt("Sending…") : tt("Decline this waiver")}
           </button>
         </div>
       </div>
@@ -33119,22 +33118,21 @@ function WaiverSigner({ waiver, myName = "", token = null, onDone }) {
       {upload ? (
         <div className="wv-upload-note">
           <p>{formsReasonText(waiver.forms?.reason, waiver.governingState)
-            || "This one is signed on paper and uploaded."}</p>
+            || tt("This one is signed on paper and uploaded.")}</p>
           <p className="cx-sub">
-            Use the {KIND_WORDS[waiver.kind]?.title || "lien waiver"} form
-            {waiver.governingState ? ` for ${stateName(waiver.governingState)}` : ""}, for
-            {waiver.amountCents ? ` ${formatCents(waiver.amountCents)}` : " the amount you are owed"}
+            {tt("Use the")}{" "}{KIND_WORDS[waiver.kind]?.title || tt("lien waiver")}{" "}{tt("form")}
+            {waiver.governingState ? ` for ${stateName(waiver.governingState)}` : ""}{tt(", for")}
+            {waiver.amountCents ? ` ${formatCents(waiver.amountCents)}` : tt(" the amount you are owed")}
             {waiver.kind?.endsWith("_progress") ? `, through ${niceDay(waiver.throughDate)}` : ""}.
           </p>
         </div>
       ) : (
         <>
           {!isConditional(waiver.kind) && (
-            <p className="wv-warn"><AlertTriangle size={14} /> This waiver is unconditional: it takes effect
-              when you sign, whether or not the payment clears. Sign it only if the money has arrived.</p>
+            <p className="wv-warn"><AlertTriangle size={14} />{" "}{tt("This waiver is unconditional: it takes effect when you sign, whether or not the payment clears. Sign it only if the money has arrived.")}</p>
           )}
           <AgreementDoc document={doc} />
-          <p className="fld-note">A starting point, not legal advice. Have your own lawyer read it before you rely on it.</p>
+          <p className="fld-note">{tt("A starting point, not legal advice. Have your own lawyer read it before you rely on it.")}</p>
         </>
       )}
 
@@ -33142,7 +33140,7 @@ function WaiverSigner({ waiver, myName = "", token = null, onDone }) {
 
       {upload && (
         <label className="meas-upload">
-          <Upload size={14} /> {file ? file.name : "Choose the signed waiver (PDF or photo)"}
+          <Upload size={14} /> {file ? file.name : tt("Choose the signed waiver (PDF or photo)")}
           <input type="file" hidden accept="application/pdf,image/*"
             onChange={(e) => { setFile(e.target.files?.[0] || null); e.target.value = ""; }} />
         </label>
@@ -33150,29 +33148,29 @@ function WaiverSigner({ waiver, myName = "", token = null, onDone }) {
 
       <div className="agr-sign">
         <label>
-          {token ? "Type your full name to sign" : "Type your full name to sign"}
+          {token ? tt("Type your full name to sign") : tt("Type your full name to sign")}
           <input value={typed} onChange={(e) => setTyped(e.target.value)}
-            placeholder={myName || "First and last name"} autoComplete="off" />
+            placeholder={myName || tt("First and last name")} autoComplete="off" />
         </label>
         {!token && !nameOk && typed.trim() !== "" && (
-          <span className="cx-sub">That does not match {myName}, the name on your account.</span>
+          <span className="cx-sub">{tt("That does not match")}{" "}{myName}{tt(", the name on your account.")}</span>
         )}
       </div>
       {/* A disabled control with no reason beside it is indistinguishable
           from a broken one, so the button says what it is waiting for. */}
       {!ready && !busy && (
         <p className="cov-hint">
-          {!decl.scopeKind ? "Answer who else worked on this job to carry on."
-            : !declarationOk(decl, tier, declared) ? "Name who supplied this job, or choose labor only."
-            : upload && !file ? "Choose the signed waiver to upload."
-            : "Type your name to sign."}
+          {!decl.scopeKind ? tt("Answer who else worked on this job to carry on.")
+            : !declarationOk(decl, tier, declared) ? tt("Name who supplied this job, or choose labor only.")
+            : upload && !file ? tt("Choose the signed waiver to upload.")
+            : tt("Type your name to sign.")}
         </p>
       )}
       {err && <div className="form-err" role="alert">{err}</div>}
       <div className="form-actions">
-        <button className="btn-ghost" type="button" onClick={() => setDeclining(true)}>I can't sign this</button>
+        <button className="btn-ghost" type="button" onClick={() => setDeclining(true)}>{tt("I can't sign this")}</button>
         <button className="btn-solid" type="button" disabled={!ready || busy} onClick={go}>
-          {busy ? (upload ? "Uploading…" : "Signing…") : upload ? "Upload signed waiver" : "Sign waiver"}
+          {busy ? (upload ? tt("Uploading…") : tt("Signing…")) : upload ? tt("Upload signed waiver") : tt("Sign waiver")}
         </button>
       </div>
     </div>
@@ -33198,8 +33196,8 @@ function MyWaivers({ myName }) {
   const waiting = rows.filter((r) => r.status === "requested");
   return (
     <section className="portal-panel wv-panel">
-      <h4>Lien waivers{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
-      <p className="cx-sub">Each one is for a single payment. Signing is what lets it go out.</p>
+      <h4>{tt("Lien waivers")}{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
+      <p className="cx-sub">{tt("Each one is for a single payment. Signing is what lets it go out.")}</p>
       {err && <div className="form-err">{err}</div>}
       <ul className="agr-rows">
         {rows.map((r) => (
@@ -33207,7 +33205,7 @@ function MyWaivers({ myName }) {
             <div className="agr-row-main">
               <b>{r.accountName} · {formatCents(r.amountCents)}</b>
               <span className="cx-sub">
-                {kindShort(r.kind)} · {r.job || "Job"}
+                {kindShort(r.kind)} · {r.job || tt("Job")}
                 {r.kind?.endsWith("_progress") ? ` · through ${niceDay(r.throughDate)}` : ""}
               </span>
               <span className="cx-sub">{waiverStateText(r, { asSigner: true })}</span>
@@ -33220,7 +33218,7 @@ function MyWaivers({ myName }) {
                     <li key={k.id}>
                       {k.name} — {k.status === "signed" ? "signed"
                         : k.status === "declined" ? `declined${k.declinedNote ? `: ${k.declinedNote}` : ""}`
-                        : k.email ? "asked, not signed yet" : "no email — collect theirs on paper"}
+                        : k.email ? tt("asked, not signed yet") : tt("no email — collect theirs on paper")}
                     </li>
                   ))}
                 </ul>
@@ -33228,7 +33226,7 @@ function MyWaivers({ myName }) {
             </div>
             {r.status === "requested" && (
               <button className="btn-solid sm" type="button" onClick={() => setOpen(r)}>
-                {r.source === "uploaded" ? "Upload signed waiver" : "Read and sign"}
+                {r.source === "uploaded" ? tt("Upload signed waiver") : tt("Read and sign")}
               </button>
             )}
           </li>
@@ -33239,7 +33237,7 @@ function MyWaivers({ myName }) {
           <div className="form">
             <h2>{open.title}</h2>
             <p className="form-sub">
-              {open.accountName} asked for this before paying you {formatCents(open.amountCents)}.
+              {open.accountName}{" "}{tt("asked for this before paying you")}{" "}{formatCents(open.amountCents)}.
             </p>
             <WaiverSigner waiver={open} myName={myName} onDone={() => { setOpen(null); load(); }} />
           </div>
@@ -33524,34 +33522,34 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
         <span className="dm-label">{label}</span>
         {has && <span className="dm-file">{sub.docFiles?.[kind] || "document.pdf"}</span>}
         <span className={`doc-state s-${st}`}>
-          {st === "verified" && <><CheckCircle2 size={11} /> Verified</>}
-          {st === "pending" && <><Clock size={11} /> {brandName} is reviewing this</>}
+          {st === "verified" && <><CheckCircle2 size={11} />{" "}{tt("Verified")}</>}
+          {st === "pending" && <><Clock size={11} /> {brandName}{" "}{tt("is reviewing this")}</>}
           {st === "rejected" && (() => {
             const rv = docReview(sub, kind);
             const probs = problemsIn(rv, kind, brandName);
             if (!probs.length) {
-              return <><XCircle size={11} /> Needs a new copy{rv?.note ? <> — {rv.note}</> : null}</>;
+              return <><XCircle size={11} />{" "}{tt("Needs a new copy")}{rv?.note ? <> — {rv.note}</> : null}</>;
             }
-            return <><XCircle size={11} /> {probs.length} thing{probs.length === 1 ? "" : "s"} to fix</>;
+            return <><XCircle size={11} /> {tt(probs.length === 1 ? "{n} thing to fix" : "{n} things to fix", { n: probs.length })}</>;
           })()}
-          {st === "missing" && <><AlertTriangle size={11} /> Not uploaded</>}
+          {st === "missing" && <><AlertTriangle size={11} />{" "}{tt("Not uploaded")}</>}
         </span>
       </div>
       {busy ? (
-        <span className="dm-busy">Working{"\u2026"}</span>
+        <span className="dm-busy">{tt("Working")}{"\u2026"}</span>
       ) : has ? (
         <div className="dm-actions">
           <button type="button" className="dm-view" onClick={() => setOpen((v) => !v)}>
-            <FileText size={12} /> {open ? "Hide" : "View"}
+            <FileText size={12} /> {open ? tt("Hide") : tt("View")}
           </button>
-          <label className="dm-replace"><Upload size={12} /> Replace
+          <label className="dm-replace"><Upload size={12} />{" "}{tt("Replace")}
             <input type="file" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = "";
               if (file) run(() => onUploadDoc(kind, file)); }} /></label>
           <button type="button" className="dm-delete"
-            onClick={() => run(() => onDeleteDoc(kind))}><Trash2 size={12} /> Delete</button>
+            onClick={() => run(() => onDeleteDoc(kind))}><Trash2 size={12} />{" "}{tt("Delete")}</button>
         </div>
       ) : (
-        <label className="dm-upload"><Upload size={13} /> Upload
+        <label className="dm-upload"><Upload size={13} />{" "}{tt("Upload")}
           <input type="file" hidden onChange={(e) => { const file = e.target.files?.[0]; e.target.value = "";
             if (file) run(() => onUploadDoc(kind, file)); }} /></label>
       )}
@@ -33569,14 +33567,14 @@ function MyDocRow({ sub, kind, label, Icon, brandName, onUploadDoc, onDeleteDoc 
         if (!probs.length) return null;
         return (
           <div className="dm-fixes">
-            <strong>{brandName} needs these corrected:</strong>
+            <strong>{brandName}{" "}{tt("needs these corrected:")}</strong>
             <ul>
               {probs.map((p) => (
                 <li key={p.id}><b>{p.label}</b>{p.fix ? <> — {p.fix}</> : null}</li>
               ))}
             </ul>
-            {rv?.note ? <p className="dm-fix-note">Their note: {rv.note}</p> : null}
-            <span className="fld-note">Upload the corrected copy here — it replaces the one on file.</span>
+            {rv?.note ? <p className="dm-fix-note">{tt("Their note:")}{" "}{rv.note}</p> : null}
+            <span className="fld-note">{tt("Upload the corrected copy here — it replaces the one on file.")}</span>
           </div>
         );
       })()}
@@ -33683,11 +33681,11 @@ function VisitAnswer({ when, job, canAnswer, lapsed = false, onAnswer, onPropose
   if (lapsed) {
     return (
       <div className="vans vans-gone">
-        <p className="vans-head"><Clock size={16} /> <b>The proposed time has passed</b></p>
+        <p className="vans-head"><Clock size={16} /> <b>{tt("The proposed time has passed")}</b></p>
         <p className="vans-when"><s>{visitWhen(when)}</s></p>
-        <p className="vans-q">Nobody booked it before it went by. Propose a time you can make.</p>
+        <p className="vans-q">{tt("Nobody booked it before it went by. Propose a time you can make.")}</p>
         <VisitActs acts={[
-          { kind: "yes", label: "Propose a different time", icon: <Calendar size={16} />, onClick: onPropose },
+          { kind: "yes", label: tt("Propose a different time"), icon: <Calendar size={16} />, onClick: onPropose },
         ]} />
       </div>
     );
@@ -33696,22 +33694,22 @@ function VisitAnswer({ when, job, canAnswer, lapsed = false, onAnswer, onPropose
     <div className="vans">
       <p className="vans-head">
         <Clock size={16} />
-        <b>{moved ? "The time has changed" : "A time has been proposed"}</b>
+        <b>{moved ? tt("The time has changed") : tt("A time has been proposed")}</b>
       </p>
       <p className="vans-when">{visitWhen(when)}</p>
-      {moved && <p className="vans-was">The job was first set for {niceDay(job.date)}.</p>}
+      {moved && <p className="vans-was">{tt("The job was first set for")}{" "}{niceDay(job.date)}.</p>}
       {when.note && <p className="vans-note">“{when.note}”</p>}
       {canAnswer ? (
         <>
-          <p className="vans-q">Can you make it?</p>
+          <p className="vans-q">{tt("Can you make it?")}</p>
           {saying ? (
             <>
               <input className="vans-why" value={note} onChange={(e) => setNote(e.target.value)}
-                placeholder="Why not? e.g. already booked that morning (optional)" />
+                placeholder={tt("Why not? e.g. already booked that morning (optional)")} />
               <VisitActs acts={[
-                { kind: "quiet", label: "Back", disabled: !!busy,
+                { kind: "quiet", label: tt("Back"), disabled: !!busy,
                   onClick: () => { setSaying(false); setErr(""); } },
-                { kind: "no", label: "Send — I can't make it", disabled: !!busy,
+                { kind: "no", label: tt("Send — I can't make it"), disabled: !!busy,
                   busy: busy === "declined" ? "Sending…" : null,
                   onClick: () => answer("declined") },
               ]} />
@@ -33725,12 +33723,12 @@ function VisitAnswer({ when, job, canAnswer, lapsed = false, onAnswer, onPropose
                not a window, and matching the wording there would name the
                wrong thing. */
             <VisitActs acts={[
-              { kind: "yes", label: "Yes, I'll be there", icon: <CheckCircle2 size={17} />,
+              { kind: "yes", label: tt("Yes, I'll be there"), icon: <CheckCircle2 size={17} />,
                 disabled: !!busy, busy: busy === "confirmed" ? "Confirming…" : null,
                 onClick: () => answer("confirmed") },
-              { kind: "alt", label: "Propose a different time", icon: <Calendar size={16} />,
+              { kind: "alt", label: tt("Propose a different time"), icon: <Calendar size={16} />,
                 disabled: !!busy, onClick: onPropose },
-              { kind: "no", label: "Can't make it", disabled: !!busy,
+              { kind: "no", label: tt("Can't make it"), disabled: !!busy,
                 onClick: () => setSaying(true) },
             ]} />
           )}
@@ -33742,8 +33740,7 @@ function VisitAnswer({ when, job, canAnswer, lapsed = false, onAnswer, onPropose
            wearing-instructions failure on the one screen where it costs a
            missed appointment. One tap, into the seat that can answer. */
         <>
-          <p className="vans-q">This time has to be answered
-            on {clientName ? `${clientName}'s` : "their"} account.</p>
+          <p className="vans-q">{tt("This time has to be answered on")}{" "}{clientName ? `${clientName}'s` : "their"}{" "}{tt("account.")}</p>
           <VisitActs acts={[
             { kind: "yes", icon: <ArrowUpDown size={16} />,
               label: `Open ${clientName || "that account"} to answer`, onClick: onOpenClient },
@@ -33771,7 +33768,7 @@ function crewAction(m, now) {
   if (job.status === "completed" || job.status === "cancelled") return null;
   if (a.status === "pending" && !a.auto) {
     if (isExpired(a, now)) return null;
-    return { kind: "reply", text: `Reply · ${countdown(msLeft(a, now))} left` };
+    return { kind: "reply", text: tt("Reply · {t} left", { t: countdown(msLeft(a, now)) }) };
   }
   if (a.status !== "accepted" && !a.auto) return null;
   const w = workWhen(job);
@@ -33850,21 +33847,21 @@ function ClientWorkPanel({ rows, now, onOpenAll, cardProps }) {
       showActions={m.a.status === "pending" && !m.a.auto} />
   );
   return (
-    <section className={`dash-sec sec-cw ${need.length ? "cw-need" : ""}`} aria-label="Work from your clients">
-      <h3>{need.length > 0 && <ActDot />}<Building2 size={15} /> Work from your clients
+    <section className={`dash-sec sec-cw ${need.length ? "cw-need" : ""}`} aria-label={tt("Work from your clients")}>
+      <h3>{need.length > 0 && <ActDot />}<Building2 size={15} />{" "}{tt("Work from your clients")}
         {need.length > 0
-          ? <span className="sec-count amber">{need.length} waiting on you</span>
+          ? <span className="sec-count amber">{need.length}{" "}{tt("waiting on you")}</span>
           : <span className="sec-count">{live.length}</span>}</h3>
       <p className="portal-sec-note">
         {clients.length === 1 ? `Jobs ${clients[0]} gave you.` : `Jobs from ${clients.length} companies.`}
-        {need.length > 0 ? " Answer them here; the office and the tenant are waiting until you do." : " Nothing is waiting on you."}
+        {need.length > 0 ? tt(" Answer them here; the office and the tenant are waiting until you do.") : tt(" Nothing is waiting on you.")}
       </p>
       {need.map(card)}
       {rest.slice(0, need.length ? 0 : SHOW).map(card)}
       <button className="dash-more" onClick={onOpenAll}>
         {rest.length > (need.length ? 0 : SHOW)
           ? `${rest.length - (need.length ? 0 : SHOW)} more booked — open My Jobs`
-          : "Open My Jobs"} <ChevronRight size={13} />
+          : tt("Open My Jobs")} <ChevronRight size={13} />
       </button>
     </section>
   );
@@ -33947,24 +33944,24 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
   const [open, setOpen] = useState(false);
   if (!open) {
     const asked = (showActions || away) && awaitingReply(a);
-    const flag = mustAnswer ? { tone: "warn", text: "Confirm the time", act: true }
-      : lapsed && canAct && onProposeVisit ? { tone: "warn", text: "Time passed" }
-      : !past && when.date && when.kind !== "proposed" && visitPassed(when) ? { tone: "bad", text: "Past due" }
-      : asked && expired ? { tone: "bad", text: "Expired" }
-      : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: `Reply · ${countdown(left)} left`, act: true }
-      : needsTime && onProposeVisit ? { tone: "arrange", text: "Set a time", act: true }
+    const flag = mustAnswer ? { tone: "warn", text: tt("Confirm the time"), act: true }
+      : lapsed && canAct && onProposeVisit ? { tone: "warn", text: tt("Time passed") }
+      : !past && when.date && when.kind !== "proposed" && visitPassed(when) ? { tone: "bad", text: tt("Past due") }
+      : asked && expired ? { tone: "bad", text: tt("Expired") }
+      : asked ? { tone: urgency === "ok" ? "wait" : "warn", text: tt("Reply · {t} left", { t: countdown(left) }), act: true }
+      : needsTime && onProposeVisit ? { tone: "arrange", text: tt("Set a time"), act: true }
       : null;
     const tone = flag?.tone === "arrange" ? "arrange" : W.tone;
     return (
       <div className={`job-card jr-card job-line ${past ? "past" : ""} ${away ? "jr-away" : ""}`}>
         <button type="button" className="jl-btn" aria-expanded="false" onClick={() => setOpen(true)}
-          title="Open this job">
+          title={tt("Open this job")}>
           <ChevronRight size={16} className="jl-chev" />
           <span className="jl-main">
             <span className="jl-title">{job.title}</span>
             <span className="jl-meta">
-              <span className={`jl-when jrw-${tone}`}><Calendar size={11} /> {needsTime ? "Time to be arranged" : when.date ? visitWhen(when) : "No date yet"}</span>
-              <span className="jl-where"><MapPin size={11} /> {[job.address, job.area].filter(Boolean).join(", ") || "No address"}</span>
+              <span className={`jl-when jrw-${tone}`}><Calendar size={11} /> {needsTime ? tt("Time to be arranged") : when.date ? visitWhen(when) : tt("No date yet")}</span>
+              <span className="jl-where"><MapPin size={11} /> {[job.address, job.area].filter(Boolean).join(", ") || tt("No address")}</span>
               {away && <span className="jl-client"><Building2 size={11} /> {elsewhere.name}</span>}
             </span>
           </span>
@@ -33985,10 +33982,10 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {away && (
         <div className="jr-client">
           <Building2 size={12} />
-          <span>For <strong>{elsewhere.name}</strong></span>
+          <span>{tt("For")}{" "}<strong>{elsewhere.name}</strong></span>
           {onGoClient && (
             <button type="button" className="jr-goto" onClick={() => onGoClient(elsewhere.accountId)}>
-              <ArrowUpDown size={12} /> Open
+              <ArrowUpDown size={12} />{" "}{tt("Open")}
             </button>
           )}
         </div>
@@ -34007,13 +34004,13 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
                     the two parties to one appointment come to read it
                     differently. */
                 ? <>{visitWhen(when)}</>
-                : "No date yet"}</span>
-            <span><MapPin size={12} /> {[job.address, job.area, job.zip].filter(Boolean).join(", ") || "No address"}</span>
-            {job.sqft && <span><Ruler size={12} /> {Number(job.sqft).toLocaleString()} sq ft</span>}
+                : tt("No date yet")}</span>
+            <span><MapPin size={12} /> {[job.address, job.area, job.zip].filter(Boolean).join(", ") || tt("No address")}</span>
+            {job.sqft && <span><Ruler size={12} /> {Number(job.sqft).toLocaleString()}{" "}{tt("sq ft")}</span>}
             {a.value && <span className="job-val">
-              {formatMoney(revisedValue(a, changeOrders, job.id, trade))} your pay
+              {formatMoney(revisedValue(a, changeOrders, job.id, trade))}{" "}{tt("your pay")}
               {cosFor(changeOrders, job.id, trade).some((c) => c.status === "accepted") &&
-                <em className="job-val-note"> · incl. change orders</em>}
+                <em className="job-val-note">{" "}{tt("· incl. change orders")}</em>}
             </span>}
           </div>
         </div>
@@ -34040,7 +34037,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {!mustAnswer && !needsTime && (
         <p className={`jr-whennote jrw-${W.tone}`}>
           {W.tone === "ok" ? <CheckCircle2 size={12} /> : <Clock size={12} />}
-          <span><b>{W.lead}.</b> {W.note}</span>
+          <span><b>{tt(W.lead)}.</b> {tt(W.note)}</span>
         </p>
       )}
       {when.note && !mustAnswer && <p className="jr-whenmsg">“{when.note}”</p>}
@@ -34055,12 +34052,12 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           panel above. */}
       {needsTime && !mustAnswer && onProposeVisit && (
         <div className="vans jr-notime">
-          <p className="vans-head"><ActDot tone="arrange" label="Waiting on you" /><Clock size={16} /> <b>Assigned — time to be arranged</b></p>
+          <p className="vans-head"><ActDot tone="arrange" label={tt("Waiting on you")} /><Clock size={16} /> <b>{tt("Assigned — time to be arranged")}</b></p>
           <p className="vans-q">{away
             ? `${elsewhere.name} is waiting on you to say when you can come. Propose a time and they confirm it.`
-            : "Nobody is booked to go yet. Say when you can come and the office confirms it."}</p>
+            : tt("Nobody is booked to go yet. Say when you can come and the office confirms it.")}</p>
           <VisitActs acts={[
-            { kind: "yes", label: "Propose a time", icon: <Calendar size={16} />,
+            { kind: "yes", label: tt("Propose a time"), icon: <Calendar size={16} />,
               onClick: () => onProposeVisit({ job, trade, a, first: true, elsewhere: elsewhere || null }) },
           ]} />
         </div>
@@ -34079,9 +34076,8 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           tenant" whatever the parties were, and on plenty of jobs the tenant
           is not one at all. */}
       {canAct && !past && when.kind === "proposed" && when.mine && !mustAnswer && (
-        <p className="jr-vis-wait"><Clock size={12} /> You confirmed this time. Waiting
-          on {partyWords((when.waitingOn || []).filter((pp) => pp !== "contractor"))
-            || "the others"} to confirm.</p>
+        <p className="jr-vis-wait"><Clock size={12} />{" "}{tt("You confirmed this time. Waiting on")}{" "}{partyWords((when.waitingOn || []).filter((pp) => pp !== "contractor"))
+            || tt("the others")}{" "}{tt("to confirm.")}</p>
       )}
       {/* WHO OPENS THE DOOR. The contractor is the one person who physically
           turns up, and "will anybody be there" is the question they ask on the
@@ -34094,7 +34090,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
       {plan
         ? <AccessPanel plan={plan} viewer="crew" jobId={job.id} />
         : ACCESS_KINDS[job.access] && (
-          <p className="jr-access"><Key size={12} /> {ACCESS_KINDS[job.access].forContractor}</p>
+          <p className="jr-access"><Key size={12} /> {tt(ACCESS_KINDS[job.access].forContractor)}</p>
         )}
       {/* 079. HOW LONG, which is the question somebody asks before saying
           yes to a job: a day off a roof and a fortnight on one are different
@@ -34112,48 +34108,47 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           <div className="jr-span" data-trade={trade}>
             <CalendarRange size={13} />
             <span className="jr-span-txt">{sp
-              ? <>Estimated <b>{spanLine(sp)}</b>{prop
-                ? <span className="jr-span-wait"> · your suggestion of {spanLine(prop)} is with the office</span> : null}</>
-              : "No length on this yet."}</span>
+              ? <>{tt("Estimated")}{" "}<b>{spanLine(sp)}</b>{prop
+                ? <span className="jr-span-wait">{" "}{tt("· your suggestion of")}{" "}{spanLine(prop)}{" "}{tt("is with the office")}</span> : null}</>
+              : tt("No length on this yet.")}</span>
             {canSuggest && (
               <button className="sh-link jr-span-btn" onClick={() => onSuggestSpan({ job, trade, a })}>
-                {sp ? "Suggest a different length" : "Say how long it takes"}</button>
+                {sp ? tt("Suggest a different length") : tt("Say how long it takes")}</button>
             )}
           </div>
         );
       })()}
       {(a.tradeScope || job.scope) && <p className="job-scope">{a.tradeScope || job.scope}</p>}
-      {a.crewName && <p className="portal-crew"><Users size={12} /> Your crew: {a.crewName}</p>}
-      {job.materialSource && <p className="portal-crew"><Layers size={12} /> Materials: {job.materialSource} ({job.materialsPaidBy})</p>}
+      {a.crewName && <p className="portal-crew"><Users size={12} />{" "}{tt("Your crew:")}{" "}{a.crewName}</p>}
+      {job.materialSource && <p className="portal-crew"><Layers size={12} />{" "}{tt("Materials:")}{" "}{job.materialSource} ({job.materialsPaidBy})</p>}
       {!away && (
         <button className="wo-open-btn" onClick={() => onViewWO({ job, trade, a })}>
-          <ScrollText size={13} /> View work order {a.wo}
-          {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length} measurement doc{job.measurementDocs.length > 1 ? "s" : ""}</span>}
+          <ScrollText size={13} />{" "}{tt("View work order")}{" "}{a.wo}
+          {(job.measurementDocs || []).length > 0 && <span className="wo-open-meas">+{job.measurementDocs.length}{" "}{tt("measurement doc")}{job.measurementDocs.length > 1 ? "s" : ""}</span>}
         </button>
       )}
       {/* 081. A question about this job goes to whoever gave it, beside the
           job -- from this account, or from home for a client's row. */}
       {canAct && (a.status === "pending" || a.status === "accepted" || a.auto) && (
         <MessageAboutJob job={job} kind="crew" className="wo-open-btn"
-          label={away ? `Message ${elsewhere.name || "the client"}` : "Message the client"}
+          label={away ? tt("Message {name}", { name: elsewhere.name || tt("the client") }) : tt("Message the client")}
           accountId={away ? elsewhere.accountId : null} />
       )}
       {!away && !past && (a.status === "accepted" || a.auto) && onRequestChange && (
         <button className="wo-open-btn wo-change-btn" onClick={() => onRequestChange(job, trade, a)}>
-          <FilePlus2 size={13} /> Request a change to this work order
+          <FilePlus2 size={13} />{" "}{tt("Request a change to this work order")}
         </button>
       )}
       {a.rating ? (
-        <p className="portal-crew"><Star size={12} fill="currentColor" /> Rated {a.rating}.0 by the GC</p>
+        <p className="portal-crew"><Star size={12} fill="currentColor" />{" "}{tt("Rated")}{" "}{a.rating}{tt(".0 by the GC")}</p>
       ) : null}
       {/* The countdown still shows on a row from elsewhere -- it is the whole
           reason to surface it at all -- but the buttons below do not. */}
       {(showActions || away) && awaitingReply(a) && (
         <div className={`ddl ddl-${urgency}`}>
-          {expired ? <><XCircle size={14} /> <b>Expired</b> — this offer has been withdrawn.
-            Contact the office if you still want the work.</>
-            : <><Clock size={14} /> <b>{countdown(left)}</b> left to respond
-              <span className="ddl-when">by {new Date(a.respondBy).toLocaleString(undefined,
+          {expired ? <><XCircle size={14} /> <b>{tt("Expired")}</b>{" "}{tt("— this offer has been withdrawn. Contact the office if you still want the work.")}</>
+            : <><Clock size={14} /> <b>{countdown(left)}</b>{" "}{tt("left to respond")}
+              <span className="ddl-when">{tt("by")}{" "}{new Date(a.respondBy).toLocaleString(uiLocale(),
                 { weekday: "short", hour: "numeric", minute: "2-digit" })}</span></>}
         </div>
       )}
@@ -34166,16 +34161,16 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           </span>
           {onGoClient && (
             <button type="button" className="resp go" onClick={() => onGoClient(elsewhere.accountId)}>
-              <ArrowUpDown size={13} /> Go to {elsewhere.name}
+              <ArrowUpDown size={13} />{" "}{tt("Go to")}{" "}{elsewhere.name}
             </button>
           )}
         </div>
       ) : showActions && !expired ? (
         <div className="portal-respond">
-          <span className="respond-label">Do you accept this job?</span>
+          <span className="respond-label">{tt("Do you accept this job?")}</span>
           <div className="respond-btns">
-            <button className="resp accept" onClick={() => onRespond(job.id, trade, "accepted", ctx)}><Check size={13} /> Accept</button>
-            <button className="resp decline" onClick={() => onRespond(job.id, trade, "declined", ctx)}><X size={13} /> Decline</button>
+            <button className="resp accept" onClick={() => onRespond(job.id, trade, "accepted", ctx)}><Check size={13} />{" "}{tt("Accept")}</button>
+            <button className="resp decline" onClick={() => onRespond(job.id, trade, "declined", ctx)}><X size={13} />{" "}{tt("Decline")}</button>
           </div>
         </div>
       ) : showActions && expired ? null : (
@@ -34184,11 +34179,11 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
               work order was accepted for them; it said nothing about a day,
               and the line claimed one over a card reading "No date yet". */}
           {a.auto ? <><Zap size={15} /> {when.kind === "confirmed"
-              ? "Auto-scheduled — booked to your calendar"
-              : untimed ? "Auto-scheduled — no time set yet"
-              : "Auto-scheduled — time proposed, not confirmed yet"}</>
-            : a.status === "accepted" ? <><CheckCircle2 size={15} /> You accepted this job</>
-            : <><XCircle size={15} /> You declined this job</>}
+              ? tt("Auto-scheduled — booked to your calendar")
+              : untimed ? tt("Auto-scheduled — no time set yet")
+              : tt("Auto-scheduled — time proposed, not confirmed yet")}</>
+            : a.status === "accepted" ? <><CheckCircle2 size={15} />{" "}{tt("You accepted this job")}</>
+            : <><XCircle size={15} />{" "}{tt("You declined this job")}</>}
         </div>
       )}
     </div>
@@ -34222,12 +34217,12 @@ function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
 
   return (
     <>
-    {!embedded && <PageHead title="My crews"
-      sub={crews.length === 0 ? "No crews yet."
+    {!embedded && <PageHead title={tt("My crews")}
+      sub={crews.length === 0 ? tt("No crews yet.")
         : `${crews.length} crew${crews.length === 1 ? "" : "s"} \u00b7 ${
             crews.reduce((n, c) => n + (c.members || []).length, 0)} people`} />}
     <div className="portal-panel">
-      <p className="panel-note">Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs.</p>
+      <p className="panel-note">{tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs.")}</p>
       <div className="crew-edit">
         {list.map((cr, ci) => (
           <div key={cr.id} className="crew-edit-card">
@@ -34237,23 +34232,23 @@ function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
             </div>
             {cr.members.map((m, mi) => (
               <div key={mi} className="member-row">
-                <input value={m.name} onChange={(e) => setMember(ci, mi, "name", e.target.value)} placeholder="Member name" />
-                <input value={m.role} onChange={(e) => setMember(ci, mi, "role", e.target.value)} placeholder="Role" />
+                <input value={m.name} onChange={(e) => setMember(ci, mi, "name", e.target.value)} placeholder={tt("Member name")} />
+                <input value={m.role} onChange={(e) => setMember(ci, mi, "role", e.target.value)} placeholder={tt("Role")} />
                 {cr.members.length > 1 && <button type="button" className="icon-x" onClick={() => removeMember(ci, mi)}><X size={12} /></button>}
               </div>
             ))}
-            <button type="button" className="add-line" onClick={() => addMember(ci)}><Plus size={12} /> Member</button>
+            <button type="button" className="add-line" onClick={() => addMember(ci)}><Plus size={12} />{" "}{tt("Member")}</button>
           </div>
         ))}
-        <button type="button" className="add-crew" onClick={addCrew}><Plus size={13} /> Add crew</button>
+        <button type="button" className="add-crew" onClick={addCrew}><Plus size={13} />{" "}{tt("Add crew")}</button>
       </div>
       {saveErr && !busy && <p className="fld-err" role="alert"><AlertTriangle size={13} /> {saveErr}</p>}
       <div className="panel-actions">
-        <span className="panel-count">{clean.length} {clean.length === 1 ? "crew" : "crews"} · {total} people</span>
+        <span className="panel-count">{clean.length} {clean.length === 1 ? "crew" : "crews"} · {total}{" "}{tt("people")}</span>
         {saved
-          ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+          ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
           : <button className="btn-solid" disabled={!clean.length || busy} onClick={() => save(clean)}>
-              <Check size={15} /> {busy ? "Saving…" : "Save crews"}
+              <Check size={15} /> {busy ? tt("Saving…") : tt("Save crews")}
             </button>}
       </div>
     </div>
@@ -34289,17 +34284,17 @@ function MyCoverage({ sub, onSave }) {
 
   return (
     <div className="portal-panel">
-      <h4>Where you'll work</h4>
-      <p className="panel-note">Choose named cities or set travel radii from ZIP codes — one or the other. You'll only be matched to jobs inside your coverage.</p>
+      <h4>{tt("Where you'll work")}</h4>
+      <p className="panel-note">{tt("Choose named cities or set travel radii from ZIP codes — one or the other. You'll only be matched to jobs inside your coverage.")}</p>
 
       <div className="cov-toggle">
-        <button type="button" className={mode === "cities" ? "on" : ""} onClick={() => touch(() => setMode("cities"))}>Specific cities</button>
-        <button type="button" className={mode === "radius" ? "on" : ""} onClick={() => touch(() => setMode("radius"))}>ZIP radius</button>
+        <button type="button" className={mode === "cities" ? "on" : ""} onClick={() => touch(() => setMode("cities"))}>{tt("Specific cities")}</button>
+        <button type="button" className={mode === "radius" ? "on" : ""} onClick={() => touch(() => setMode("radius"))}>{tt("ZIP radius")}</button>
       </div>
 
       {mode === "cities" ? (
         <>
-          <div className="cov-sub" style={{ marginTop: 16 }}>Cities you cover</div>
+          <div className="cov-sub" style={{ marginTop: 16 }}>{tt("Cities you cover")}</div>
           <div className="pick-grid">
             {AREAS.map((a) => (
               <button key={a} type="button" className={`pick ${cities.includes(a) ? "on" : ""}`} onClick={() => toggleCity(a)}>{a}</button>
@@ -34307,7 +34302,7 @@ function MyCoverage({ sub, onSave }) {
           </div>
           {custom.length > 0 && (
             <>
-              <div className="cov-sub" style={{ marginTop: 14 }}>Cities you added</div>
+              <div className="cov-sub" style={{ marginTop: 14 }}>{tt("Cities you added")}</div>
               <div className="pick-grid">
                 {custom.map((c) => (
                   <button key={c} type="button" className="pick on" onClick={() => toggleCity(c)}>
@@ -34318,32 +34313,32 @@ function MyCoverage({ sub, onSave }) {
             </>
           )}
           <div className="add-city-row">
-            <input value={newCity} placeholder="Add another city…"
+            <input value={newCity} placeholder={tt("Add another city…")}
               onChange={(e) => setNewCity(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && addCity()} />
             <button type="button" className="btn-solid" disabled={!newCity.trim()} onClick={addCity}>
-              <Plus size={14} /> Add
+              <Plus size={14} />{" "}{tt("Add")}
             </button>
           </div>
         </>
       ) : (
         <>
-          <div className="cov-sub" style={{ marginTop: 16 }}>Radius areas</div>
+          <div className="cov-sub" style={{ marginTop: 16 }}>{tt("Radius areas")}</div>
           <div className="radii-edit">
             {radii.map((r, i) => (
               <div key={i} className="radius-row">
-                <input inputMode="numeric" value={r.zip} placeholder="ZIP (e.g. 98101)"
+                <input inputMode="numeric" value={r.zip} placeholder={tt("ZIP (e.g. 98101)")}
                   onChange={(e) => setRadius(i, "zip", e.target.value.trim())} />
-                <span>within</span>
+                <span>{tt("within")}</span>
                 <input type="number" min="1" value={r.miles}
                   onChange={(e) => setRadius(i, "miles", e.target.value)} />
-                <span>mi</span>
+                <span>{tt("mi")}</span>
                 {radii.length > 1 && (
                   <button type="button" className="icon-x" onClick={() => removeRadius(i)}><X size={12} /></button>
                 )}
               </div>
             ))}
-            <button type="button" className="add-line" onClick={addRadius}><Plus size={12} /> Add another radius</button>
+            <button type="button" className="add-line" onClick={addRadius}><Plus size={12} />{" "}{tt("Add another radius")}</button>
           </div>
         </>
       )}
@@ -34355,7 +34350,7 @@ function MyCoverage({ sub, onSave }) {
             ? (mode === "cities"
                 ? <strong>{cities.join(", ")}</strong>
                 : <strong>{cleanRadii.map((r) => `${r.miles} mi of ${r.zip}`).join(" · ")}</strong>)
-            : <em>No coverage set — you won't be matched to any jobs.</em>}
+            : <em>{tt("No coverage set — you won't be matched to any jobs.")}</em>}
         </span>
       </div>
 
@@ -34366,7 +34361,7 @@ function MyCoverage({ sub, onSave }) {
             : `${cleanRadii.length} radius ${cleanRadii.length === 1 ? "area" : "areas"}`}
         </span>
         {saved
-          ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+          ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
           : <button className="btn-solid" disabled={!valid}
               onClick={() => {
                 onSave(mode === "cities"
@@ -34374,7 +34369,7 @@ function MyCoverage({ sub, onSave }) {
                   : { mode: "radius", cities: [], radii: cleanRadii });
                 setSaved(true);
               }}>
-              <Check size={15} /> Save coverage
+              <Check size={15} />{" "}{tt("Save coverage")}
             </button>}
       </div>
     </div>
@@ -34409,18 +34404,18 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable, onG
   if (crews.length === 0) {
     return (
       <div className="portal-panel">
-        <h4>My availability</h4>
+        <h4>{tt("My availability")}</h4>
         <div className="dash-empty"><Users size={24} />
-          <p>Add a crew under My Crews first — availability is set per crew.</p>
-          {onGoCrews && <button className="btn-solid" onClick={onGoCrews}><Plus size={14} /> Add a crew</button>}</div>
+          <p>{tt("Add a crew under My Crews first — availability is set per crew.")}</p>
+          {onGoCrews && <button className="btn-solid" onClick={onGoCrews}><Plus size={14} />{" "}{tt("Add a crew")}</button>}</div>
       </div>
     );
   }
 
   return (
     <div className="portal-panel">
-      <h4>My availability</h4>
-      <p className="panel-note">Availability is set per crew. Pick a crew, then tap days it can't work.</p>
+      <h4>{tt("My availability")}</h4>
+      <p className="panel-note">{tt("Availability is set per crew. Pick a crew, then tap days it can't work.")}</p>
 
       <div className="crew-picker">
         {crews.map((c) => {
@@ -34430,29 +34425,29 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable, onG
               onClick={() => setCrewId(c.id)}>
               <span className="cp-name">{c.name}</span>
               <span className="cp-meta">
-                {c.available === false ? "Paused" : off > 0 ? `${off} day${off === 1 ? "" : "s"} off` : "Fully open"}
-                {" · "}{c.members.length} ppl
+                {c.available === false ? tt("Paused") : off > 0 ? tt(off === 1 ? "{n} day off" : "{n} days off", { n: off }) : tt("Fully open")}
+                {" · "}{c.members.length}{" "}{tt("ppl")}
               </span>
             </button>
           );
         })}
         <button className={`cp-btn all ${isAll ? "on" : ""}`} onClick={() => setCrewId("__all")}>
-          <span className="cp-name">All crews</span>
-          <span className="cp-meta">Overview</span>
+          <span className="cp-name">{tt("All crews")}</span>
+          <span className="cp-meta">{tt("Overview")}</span>
         </button>
       </div>
 
       {isAll ? (
         <>
           <div className="cal-legend">
-            <span><span className="lg up" /> At least one crew free</span>
-            <span><span className="lg down" /> No crews free</span>
+            <span><span className="lg up" />{" "}{tt("At least one crew free")}</span>
+            <span><span className="lg down" />{" "}{tt("No crews free")}</span>
           </div>
           <div className="all-crew-grid">
-            <div className="acg-head">Crew</div>
+            <div className="acg-head">{tt("Crew")}</div>
             {days.slice(0, 14).map((d) => (
               <div key={fmt(d)} className="acg-day">
-                <span className="dow">{d.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+                <span className="dow">{d.toLocaleDateString(uiLocale(), { weekday: "narrow" })}</span>
                 <span className="dom">{d.getDate()}</span>
               </div>
             ))}
@@ -34487,21 +34482,21 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable, onG
           {crew.available === false && (
             <div className="doc-block">
               <AlertTriangle size={15} />
-              <div><strong>{crew.name} is paused.</strong> It won't be offered for any job until you switch it back on.</div>
+              <div><strong>{crew.name}{" "}{tt("is paused.")}</strong>{" "}{tt("It won't be offered for any job until you switch it back on.")}</div>
             </div>
           )}
 
           <div className="cal-legend">
-            <span><span className="lg up" /> Available</span>
-            <span><span className="lg down" /> Marked off</span>
-            <span><span className="lg booked" /> Booked</span>
-            <span className="cal-hint">{crewOffDays(crew).length} day{crewOffDays(crew).length === 1 ? "" : "s"} off</span>
+            <span><span className="lg up" />{" "}{tt("Available")}</span>
+            <span><span className="lg down" />{" "}{tt("Marked off")}</span>
+            <span><span className="lg booked" />{" "}{tt("Booked")}</span>
+            <span className="cal-hint">{tt(crewOffDays(crew).length === 1 ? "{n} day off" : "{n} days off", { n: crewOffDays(crew).length })}</span>
           </div>
 
           <div className="mini-cal-nav">
-            <button onClick={() => setOffset((o) => Math.max(0, o - 1))} disabled={offset === 0}>← Earlier</button>
-            <span>{days[0].toLocaleDateString(undefined, { month: "long", day: "numeric" })} – {days[27].toLocaleDateString(undefined, { month: "long", day: "numeric" })}</span>
-            <button onClick={() => setOffset((o) => o + 1)}>Later →</button>
+            <button onClick={() => setOffset((o) => Math.max(0, o - 1))} disabled={offset === 0}>{tt("← Earlier")}</button>
+            <span>{days[0].toLocaleDateString(uiLocale(), { month: "long", day: "numeric" })} – {days[27].toLocaleDateString(uiLocale(), { month: "long", day: "numeric" })}</span>
+            <button onClick={() => setOffset((o) => o + 1)}>{tt("Later →")}</button>
           </div>
           <div className="mini-cal">
             {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <div key={d} className="mc-dow">{d}</div>)}
@@ -34517,7 +34512,7 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable, onG
                   disabled={booked || paused}
                   title={booked ? `${crew.name} has a job this day`
                     : paused ? `${crew.name} is paused`
-                    : off ? "Marked off — tap to free up" : "Available — tap to mark off"}
+                    : off ? tt("Marked off — tap to free up") : tt("Available — tap to mark off")}
                   onClick={() => !booked && !paused && onToggleCrewDay(crew.id, key)}>
                   <span className="mc-num">{d.getDate()}</span>
                   {booked && <Hammer size={10} />}
@@ -36165,14 +36160,14 @@ function QuoteAskCard({ items, onAnswer }) {
     return (
       <div className="job-card jr-card qask job-line">
         <button type="button" className="jl-btn" aria-expanded="false" onClick={() => setShown(true)}
-          title="Open this quote request">
+          title={tt("Open this quote request")}>
           <ChevronRight size={16} className="jl-chev" />
           <span className="jl-main">
             <span className="jl-title">{q0.job.title}</span>
             <span className="jl-meta">
               <span className="jl-client"><Building2 size={11} /> {q0.accountName}</span>
-              <span className="jl-where"><MapPin size={11} /> {[q0.job.address, q0.job.area].filter(Boolean).join(", ") || "No address"}</span>
-              {dueAt && <span className="jl-when">Wanted by {dueAt}</span>}
+              <span className="jl-where"><MapPin size={11} /> {[q0.job.address, q0.job.area].filter(Boolean).join(", ") || tt("No address")}</span>
+              {dueAt && <span className="jl-when">{tt("Wanted by")}{" "}{dueAt}</span>}
             </span>
           </span>
           <span className="jl-side">
@@ -36180,7 +36175,7 @@ function QuoteAskCard({ items, onAnswer }) {
               const M = catMeta(q.trade);
               return <span key={q.inviteId} className={`cat-badge cat-${q.trade}`}><M.icon size={11} /> {M.label}</span>;
             })}
-            <span className="jl-flag jl-warn">{many ? `Price ${items.length} items` : "Price it"}</span>
+            <span className="jl-flag jl-warn">{many ? `Price ${items.length} items` : tt("Price it")}</span>
           </span>
         </button>
       </div>
@@ -36191,8 +36186,8 @@ function QuoteAskCard({ items, onAnswer }) {
     <div className="job-card jr-card qask">
       <div className="jr-client">
         <Building2 size={12} />
-        <span>For <strong>{q0.accountName}</strong></span>
-        {dueAt && <span className="qask-due">Wanted by {dueAt}</span>}
+        <span>{tt("For")}{" "}<strong>{q0.accountName}</strong></span>
+        {dueAt && <span className="qask-due">{tt("Wanted by")}{" "}{dueAt}</span>}
       </div>
       <div className="job-card-head">
         <div>
@@ -36200,11 +36195,11 @@ function QuoteAskCard({ items, onAnswer }) {
             <h3>{q0.job.title}</h3>
           </div>
           <div className="job-meta">
-            <span><Calendar size={12} /> {formatWhen(q0.job.date, q0.job.time) || q0.job.date || "No date"}</span>
-            <span><MapPin size={12} /> {[q0.job.address, q0.job.area, q0.job.zip].filter(Boolean).join(", ") || "No address"}</span>
+            <span><Calendar size={12} /> {formatWhen(q0.job.date, q0.job.time) || q0.job.date || tt("No date")}</span>
+            <span><MapPin size={12} /> {[q0.job.address, q0.job.area, q0.job.zip].filter(Boolean).join(", ") || tt("No address")}</span>
           </div>
         </div>
-        {many && <span className="qask-count">{items.length} items to price</span>}
+        {many && <span className="qask-count">{items.length}{" "}{tt("items to price")}</span>}
       </div>
 
       {items.map((q) => (
@@ -36214,40 +36209,39 @@ function QuoteAskCard({ items, onAnswer }) {
 
       {!open ? (
         <div className="portal-respond">
-          <span className="respond-label">{many ? "What would you charge for each?" : "What would you charge for this?"}</span>
+          <span className="respond-label">{many ? tt("What would you charge for each?") : tt("What would you charge for this?")}</span>
           <div className="respond-btns">
             <button className="resp accept" onClick={() => setOpen(true)}>
-              <FileText size={13} /> {many ? "Price these" : "Send a quote"}
+              <FileText size={13} /> {many ? tt("Price these") : tt("Send a quote")}
             </button>
             <button className="resp decline" disabled={busy} onClick={() => send(true)}>
-              <X size={13} /> {many ? "Pass on all" : "Pass"}
+              <X size={13} /> {many ? tt("Pass on all") : tt("Pass")}
             </button>
           </div>
         </div>
       ) : (
         <div className="qask-form">
           <label className="fld">
-            <span>Earliest you could start <em className="opt">(optional)</em></span>
+            <span>{tt("Earliest you could start")}{" "}<em className="opt">{tt("(optional)")}</em></span>
             <input type="date" value={canStart} onChange={(e) => setCanStart(e.target.value)} />
-            <em className="fld-note">Often what decides it. The cheapest quote that starts in
-              March is not the cheapest.</em>
+            <em className="fld-note">{tt("Often what decides it. The cheapest quote that starts in March is not the cheapest.")}</em>
           </label>
           <label className="fld">
-            <span>Anything they should know <em className="opt">(optional)</em></span>
+            <span>{tt("Anything they should know")}{" "}<em className="opt">{tt("(optional)")}</em></span>
             <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
-              placeholder="Price assumes we can park on site." />
+              placeholder={tt("Price assumes we can park on site.")} />
           </label>
           {err && <p className="form-err">{err}</p>}
           {unanswered.length > 0 && (
             <p className="fld-note">{many
               ? `Give a price, or mark "Can't do this one", for: ${unanswered.map((q) => catMeta(q.trade).label).join(", ")}.`
-              : "Give a price to send."}</p>
+              : tt("Give a price to send.")}</p>
           )}
           <div className="form-actions">
-            <button className="btn-ghost" onClick={() => setOpen(false)}>Back</button>
+            <button className="btn-ghost" onClick={() => setOpen(false)}>{tt("Back")}</button>
             <button className="btn-solid" disabled={busy || unanswered.length > 0 || priced.length === 0}
               onClick={() => send(false)}>
-              {busy ? "Sending\u2026" : priced.length > 1 ? `Send ${priced.length} quotes` : "Send quote"}
+              {busy ? tt("Sending…") : priced.length > 1 ? `Send ${priced.length} quotes` : tt("Send quote")}
             </button>
           </div>
         </div>
@@ -36486,7 +36480,7 @@ function QuickSend({ inline = false }) {
               it opens -- `QuickSend` -- and the panel under it says what
               goes in one sentence. It sits beside My QR code for the reason
               both exist: give somebody your details without a conversation. */}
-          <Send size={14} /> Quick send
+          <Send size={14} />{" "}{tt("Quick send")}
           <ChevronDown size={13} className={`um-caret ${open ? "up" : ""}`} />
         </button>
       )}
@@ -36496,34 +36490,31 @@ function QuickSend({ inline = false }) {
             <div className="qsend-done">
               <CheckCircle2 size={15} />
               <div>
-                <strong>Sent to {sentTo}</strong>
-                <span>They can open it for {SHARE_DAYS} days. It shows what your cover
-                  actually says, and stays right when you renew.</span>
+                <strong>{tt("Sent to")}{" "}{sentTo}</strong>
+                <span>{tt("They can open it for")}{" "}{SHARE_DAYS}{" "}{tt("days. It shows what your cover actually says, and stays right when you renew.")}</span>
               </div>
-              <button className="qsend-again" onClick={() => setSentTo("")}>Send another</button>
+              <button className="qsend-again" onClick={() => setSentTo("")}>{tt("Send another")}</button>
             </div>
           ) : (
             <>
               <p className="qsend-what">
-                Sends your {PACK_KINDS.filter(inLink).map((k) => DOC_LABELS_INLINE[k]).join(", ")}
-                {" "}as a live page &mdash; carrier, policy number, cover and expiry, not an
-                attachment that goes stale.
+                {tt("Sends your")}{" "}{PACK_KINDS.filter(inLink).map((k) => DOC_LABELS_INLINE[k]).join(", ")}
+                {" "}{tt("as a live page — carrier, policy number, cover and expiry, not an attachment that goes stale.")}
               </p>
               <div className="qsend-row">
                 <input type="email" value={email} autoComplete="email"
-                  placeholder="their@email.com" aria-label="Where to send it"
+                  placeholder={tt("their@email.com")} aria-label={tt("Where to send it")}
                   onChange={(e) => setEmail(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") send(); }} />
                 <button className="btn-solid" disabled={busy || !email.trim()} onClick={send}>
-                  {busy ? "Sending\u2026" : "Send"}
+                  {busy ? tt("Sending…") : tt("Send")}
                 </button>
               </div>
               {/* Said before they send, not discovered after. It carries a tax
                   number, and for a sole proprietor that is their social
                   security number. */}
               <p className="qsend-w9">
-                <Lock size={11} /> Your {DOC_LABELS.w9} shows as on file but stays behind a
-                sign-in.
+                <Lock size={11} />{" "}{tt("Your")}{" "}{DOC_LABELS.w9}{" "}{tt("shows as on file but stays behind a sign-in.")}
               </p>
               {err && <p className="qsend-err">{err}</p>}
             </>
@@ -37045,9 +37036,9 @@ const msgTime = (iso) => {
   if (!Number.isFinite(t)) return "";
   const d = new Date(t), now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
-  return sameDay ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
-    : d.toLocaleDateString("en-US", { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) })
-      + ", " + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return sameDay ? d.toLocaleTimeString(uiLocale() || "en-US", { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleDateString(uiLocale() || "en-US", { month: "short", day: "numeric", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) })
+      + ", " + d.toLocaleTimeString(uiLocale() || "en-US", { hour: "numeric", minute: "2-digit" });
 };
 
 // The inbox, its refresh and who is signed in, for the places a
@@ -37706,8 +37697,8 @@ function UnreadMessages() {
   if (!rows.length) return null;
   const name = (t) => t.side === "home" ? (t.partyName || "Somebody") : (t.accountName || "The office");
   return (
-    <section className="dash-sec sec-yt sec-msgs" aria-label="New messages">
-      <h3><ActDot /><MessageSquareText size={15} /> New messages
+    <section className="dash-sec sec-yt sec-msgs" aria-label={tt("New messages")}>
+      <h3><ActDot /><MessageSquareText size={15} />{" "}{tt("New messages")}
         <span className="sec-count amber">{rows.reduce((n, t) => n + t.unread, 0)}</span></h3>
       <DashRows id="messages">
         {rows.map((t) => (
@@ -37719,9 +37710,9 @@ function UnreadMessages() {
             aria-label={`Open the conversation with ${name(t)}`} data-thread={t.id}>
             <span className="dash-row-main">
               <span className="yt-lede">{name(t)}{t.jobTitle ? ` · ${t.jobTitle}` : ""}</span>
-              <span className="dr-title">{t.lastBody || (t.lastHasPhoto ? "Sent a photo" : "")}</span>
+              <span className="dr-title">{t.lastBody || (t.lastHasPhoto ? tt("Sent a photo") : "")}</span>
             </span>
-            <span className="btn-solid msg-reply" aria-hidden="true">Reply</span>
+            <span className="btn-solid msg-reply" aria-hidden="true">{tt("Reply")}</span>
           </button>
         ))}
       </DashRows>
@@ -41409,14 +41400,35 @@ const THEME_ROWS = [
 ];
 function ThemePicker({ ctl, drawer = false }) {
   return (
-    <div className={`theme-pick${drawer ? " in-drawer" : ""}`} role="radiogroup" aria-label="Theme">
-      <div className="theme-head">Theme</div>
+    <div className={`theme-pick${drawer ? " in-drawer" : ""}`} role="radiogroup" aria-label={tt("Theme")}>
+      <div className="theme-head">{tt("Theme")}</div>
       {THEME_ROWS.map(({ id, label, icon: Icon }) => (
         <button key={id} type="button" role="radio" aria-checked={ctl.pref === id}
           className={`theme-opt${ctl.pref === id ? " on" : ""}`}
           onClick={(e) => { e.stopPropagation(); ctl.setPref(id); }}>
-          <Icon size={drawer ? 15 : 14} /> <span>{label}</span>
+          <Icon size={drawer ? 15 : 14} /> <span>{tt(label)}</span>
           {ctl.pref === id && <Check size={14} className="theme-tick" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// English or Español, each named in its own language, because somebody who
+// cannot read the menu cannot find their way out of it in the other one.
+// Offered to the people whose screens are translated: contractor and handyman
+// seats, and a subcontractor account's own team.
+const LANG_ROWS = [{ id: "en", label: "English" }, { id: "es", label: "Español" }];
+function LangPicker({ ctl, drawer = false }) {
+  return (
+    <div className={`theme-pick${drawer ? " in-drawer" : ""}`} role="radiogroup" aria-label={tt("Language")}>
+      <div className="theme-head">{tt("Language")}</div>
+      {LANG_ROWS.map(({ id, label }) => (
+        <button key={id} type="button" role="radio" aria-checked={ctl.lang === id} lang={id}
+          className={`theme-opt lang-opt${ctl.lang === id ? " on" : ""}`}
+          onClick={(e) => { e.stopPropagation(); ctl.setLang(id); }}>
+          <Languages size={drawer ? 15 : 14} /> <span>{label}</span>
+          {ctl.lang === id && <Check size={14} className="theme-tick" />}
         </button>
       ))}
     </div>
