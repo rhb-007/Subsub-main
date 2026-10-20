@@ -201,7 +201,7 @@ console.log("\nthe index integrations section");
   // that leaves the link to it dangling here.
   ck("and the inspections paragraph is gone from it", !/inspection/i.test(sec),
     (sec.match(/.{0,60}inspection.{0,60}/i) || [""])[0]);
-  ck("the section still points at the developer page", sec.includes('href="developers.html"'));
+  ck("the section still points at the developer page", /href="developers\.html(#[a-z]+)?"/.test(sec));
   // The guard that protects the positioning rather than the sentence. Every
   // name in the "Built in" card must have a preset behind it, so a later pass
   // cannot add an inspection app -- or a CRM -- to the one tier that claims

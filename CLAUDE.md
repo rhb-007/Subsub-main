@@ -14699,6 +14699,32 @@ refactor.
   `test:jobspanui` adds a UA-weight rule standing in for Safari's and
   checks the window's CSS wins at 820px and 1024px; the old CSS fails six.
 
+- **THE DEVELOPER PAGE IS AN INTEGRATIONS HOME WITH TABS, AND IT IS CALLED
+  "SUBSUB INTEGRATIONS & API".** Asked for as *"it currently says connect your
+  CRM, but it's much more ... tabs for specific tasks"*. The page covered jobs
+  from a CRM, inspections, Postman, Zapier and the reads in one long scroll
+  under a heading naming only the first. This reverses the earlier "the page is
+  deliberately not renamed" decision, at the owner's word. Connect your CRM is
+  now the name of its **tab** and its heading, which is where the app's panel
+  of that name sends people (`test:apiingest` reads the tab, not the H1).
+
+  **Six tabs: Overview, Connect your CRM, Send inspections, Postman, Zapier,
+  Make & n8n, and Reference** (reads, errors, keeping a key safe). Every panel
+  is in the HTML. Without script they all show, so crawlers and the static
+  suites read the whole page. With script, one shows at a time. **Any anchor
+  opens the tab holding it** (`closest('.dev-panel')`), so `#inspections`,
+  `#postman`, `#zapier` (the app's link) and `#start` still land. The tab bar is
+  sticky under the header and scrolls sideways inside itself on a phone.
+
+  The overview leads with **What you can connect**, then **Will it work with
+  mine?** (Postman and cURL added under *Everything else*; the tier names and
+  `data-src` are unchanged), then **Ways to start**, which has five ways now,
+  not two: Postman, Zapier, Make or n8n, a CRM's own webhook step, and your own
+  code. Three of them need nothing from SubSub but the address and the key.
+  Every footer link reads the new name, and the generated pages were rebuilt.
+  `test:devtabs` (27); two mutations fire (panels never hidden: 13 failures;
+  the anchor's panel ignored: 9).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

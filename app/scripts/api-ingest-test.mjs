@@ -376,7 +376,7 @@ console.log("\n-- a token reaches its own account and no other --");
   // customers are told to use `generic` and map fields by hand for nothing.
   // Scoped to the receivers table: prose mentioning a source is not a row
   // saying what it is for.
-  const sec = docs.slice(docs.indexOf("<h2>No header?"));
+  const sec = docs.slice(docs.search(/<h2[^>]*>No header\?/));
   const recvTable = sec.slice(0, sec.indexOf("</table>") + 8);
   for (const src of Object.keys(SOURCE_PRESETS)) {
     ck(`every receiver has a row of its own: ${src}`,
@@ -420,10 +420,16 @@ console.log("\n-- a token reaches its own account and no other --");
   // a fourth name here would put that reading straight back.
   const NAME = "Connect your CRM";
   ck("the app's panel is still called that", app2.includes(`<h4>${NAME}</h4>`), NAME);
-  ck("and so is the docs page", docsName() === NAME, String(docsName()));
-  function docsName() {
-    return (readFileSync(new URL("../../developers.html", import.meta.url), "utf8")
-      .match(/<h1>([^<]+)<\/h1>/) || [])[1];
+  // The docs page itself is now the integrations home (its H1 is general,
+  // because it also covers inspections, Postman and automation tools), so the
+  // name lives on its CRM TAB and that tab's heading, which is where the
+  // panel in the app sends somebody.
+  ck("and so is the docs page's CRM tab", docsTab() === NAME, String(docsTab()));
+  function docsTab() {
+    const d = readFileSync(new URL("../../developers.html", import.meta.url), "utf8");
+    const tab = (d.match(/<a class="dev-tab" data-tab="crm" href="#crm">([^<]+)<\/a>/) || [])[1];
+    const head = (d.match(/data-tab="crm" id="crm">\s*<h2>([^<]+)<\/h2>/) || [])[1];
+    return tab === head ? tab : `${tab} / ${head}`;
   }
 
   // Read the ROW, not the page. The words appear in the plan card and in the

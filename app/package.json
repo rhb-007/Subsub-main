@@ -231,6 +231,7 @@
     "tools": "node --no-warnings scripts/build-tools.mjs",
     "assets": "node --no-warnings scripts/build-assets.mjs",
     "test:licensing": "node scripts/licensing-test.mjs",
+    "test:devtabs": "node --no-warnings scripts/dev-tabs-test.mjs",
     "test:discover": "node scripts/discover-test.mjs",
     "test:embedplace": "node scripts/embed-place-test.mjs",
     "test:resetflow": "node scripts/reset-flow-test.mjs",
