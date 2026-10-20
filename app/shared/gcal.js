@@ -169,6 +169,30 @@ export function companyBusyAt(people, dayKey, start, end) {
   });
 }
 
+// A JOB THAT TAKES SEVERAL DAYS IS CHECKED ON EVERY ONE OF THEM. Checking
+// only the first day books a crew on day three of a roof straight over the
+// appointment their calendar already shows -- over-booking them, which is the
+// one thing this check exists to stop. On a multi-day job the crew is on site
+// for the working day, not only for the arrival window, so day one is checked
+// from the proposed start to the end of the working day and every later day
+// for the whole working day. A single day is exactly the window, as before.
+export const WORK_DAY_START = "08:00";
+export const WORK_DAY_END = "17:00";
+
+// The first day of `dates` it clashes on, or null. `dates` is the job's
+// working days in order (spanDates), the first being the visit's own day.
+export function companyBusyOnSpan(people, dates, { start, end } = {}) {
+  const list = (dates || []).filter((d) => DAY_RE.test(String(d)));
+  if (!people?.length || !list.length) return null;
+  if (list.length === 1) return companyBusyAt(people, list[0], start, end) ? list[0] : null;
+  for (let i = 0; i < list.length; i += 1) {
+    const from = i === 0 && TIME_RE.test(String(start || "")) ? start : WORK_DAY_START;
+    const to = i === 0 && TIME_RE.test(String(end || "")) && end > WORK_DAY_END ? end : WORK_DAY_END;
+    if (companyBusyAt(people, list[i], from, to)) return list[i];
+  }
+  return null;
+}
+
 // The days in [from, from + days) a window from `start` to `end` cannot go,
 // for the auto-scheduler's list of busy days.
 export function companyBusyDays(people, { from, days = GCAL_BUSY_DAYS, start, end }) {

@@ -98,7 +98,7 @@ import { visitParties, waitingOn as visitWaitingOn,
 // the first and two copies of that arithmetic is two records of one fact.
 import { windowEnd, othersMustAgree, workWhen, windowSurelyPast } from "../shared/schedule.js";
 import { AUTO_TRIES, AUTO_START, AUTO_END, autoPickText, isTurnaroundKind,
-  rankCandidates, slotFor, whyNotAuto, AUTO_SKIP } from "../shared/autopick.js";
+  rankCandidates, slotFor, busyFor, whyNotAuto, AUTO_SKIP } from "../shared/autopick.js";
 // Whether a job is finished with. The browser's `isClosed` was the only copy,
 // so the three routes that commit a contractor read the job row and none of
 // them read `status` -- a work order could be issued against a job closed out
@@ -172,7 +172,7 @@ import { googleConfigured, authUrl, exchangeCode, refreshAccess, refreshDead, re
   createCalendar, deleteCalendar, insertEvent, patchEvent, deleteEvent, freeBusy } from "./gcal.js";
 import { GCAL_SCOPES, GCAL_CALENDAR_NAME, GCAL_PAST_DAYS, GCAL_AHEAD_DAYS, GCAL_BUSY_DAYS,
   validTimeZone, wallToUtc, eventFor, eventFingerprint, companyBusyAt, companyBusyDays,
-  scopesGranted, gcalReturnTo } from "../shared/gcal.js";
+  companyBusyOnSpan, WORK_DAY_START, WORK_DAY_END, scopesGranted, gcalReturnTo } from "../shared/gcal.js";
 import { ccGet, ccRefused, ccDownload } from "./companycam.js";
 import { ccProjectView, ccPhotoView, ccDocView, ccPhotoUsable, ccImageUrl, ccHttps,
   cleanCcImport, ccPhotoFileName, CC_PHOTO_PAGE, CC_PROJECT_PAGE } from "../shared/companycam.js";
@@ -11399,7 +11399,8 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   // work, because only they are a party to the time.
   if (myLeg !== "contractor" && parties.includes("contractor")) {
     const clash = await crewCalendarConflict(c.env, jobId, { date, start, end });
-    if (clash) return c.json({ error: "crew_busy", company: clash.company }, 409);
+    if (clash) return c.json({ error: "crew_busy", company: clash.company, date: clash.date,
+      firstDay: clash.date === date }, 409);
   }
   const crewGranted = myLeg === "manager" && parties.includes("contractor")
     && await crewGrantedBooking(c.env, { jobId, accountId: auth.accountId, date });
@@ -19467,12 +19468,19 @@ async function autoCandidates(env, accountId, trade, companyState, { exceptJobId
     // booked over it. Nothing connected, or Google unreachable, adds nothing.
     const people = await companyCalendarPeople(env, r.company_id, dayKeyUtc());
     const calBusy = companyBusyDays(people, { from: dayKeyUtc(), start: AUTO_START, end: AUTO_END });
+    // And the days their calendar is taken at ANY point in the working day,
+    // for a job that runs several days: they are on site all day, every day,
+    // so an afternoon appointment on day three is a clash too.
+    const calBusyDay = people.length
+      ? companyBusyDays(people, { from: dayKeyUtc(), start: WORK_DAY_START, end: WORK_DAY_END }) : [];
     out.push({
       companyId: r.company_id, company: r.company,
       categories: parseJson(r.categories, []), engagedAs: r.engaged_as,
       rating: r.rating, blockers, shape,
       busy: [...new Set([...(busy || []).map((x) => x.date),
         ...busyFromSpans(held || [], { off: o.days }), ...calBusy])].sort(),
+      busyAllDay: [...new Set([...(busy || []).map((x) => x.date),
+        ...busyFromSpans(held || [], { off: o.days }), ...calBusyDay])].sort(),
       calendarPeople: people,
       unavailable: o.days, paused: o.allPaused,
       notOnSubsub: !(await companyAnswersForItself(env, r.company_id)),
@@ -19503,7 +19511,8 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
   const from = (job?.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
   const trade = trades[0];
   const cands = await autoCandidates(c.env, auth.accountId, trade, null, { exceptJobId: jobId });
-  const { picked, skipped } = rankCandidates(cands, { trade, from });
+  const length = await tradeSpanLength(c.env, jobId, trade);
+  const { picked, skipped } = rankCandidates(cands, { trade, from, length });
   if (!picked) {
     await logActivity(c.env, auth.accountId, auth.userId, "auto_turnaround",
       `Nobody on the roster could take the ${trade} turnaround — assign it by hand.`
@@ -19598,23 +19607,26 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
         WHERE s.job_id = ? AND w.company_id = ? AND w.voided_at IS NULL LIMIT 1`
     ).bind(jobId, companyId).first().catch(() => null);
     const length = spanDaysFrom(span?.work_days) || 1;
-    const busySet = new Set(mine?.busy || []);
+    const busySet = new Set(mine ? busyFor(mine, length) : []);
     const off = new Set([...busySet, ...(mine?.unavailable || [])]);
     const free = (k) => !off.has(k) && (length === 1 || spanDates({ start: k, days: length,
       off: mine?.unavailable || [] }).every((d) => !busySet.has(d)));
     const jd = String((isDayKey(span?.start_date) ? span.start_date : job?.date) || "").slice(0, 10);
     let day = DATE_RE.test(jd) && jd >= today && free(jd) ? jd
       : slotFor({ from: DATE_RE.test(jd) && jd > today ? jd : today,
-        busy: mine?.busy, unavailable: mine?.unavailable, length });
+        busy: mine ? busyFor(mine, length) : [], unavailable: mine?.unavailable, length });
     if (!day) return { proposed: false, reason: "no_slot" };
     // The time on the job when the window lands on the job's own day, because
     // somebody typed it; the standing morning otherwise.
     let keep = day === jd && TIME_RE.test(String(job?.time || "")) ? job.time : null;
     // The job's own time on its own day only when their calendar is free
     // then; otherwise the next free day in the standing morning.
-    if (keep && companyBusyAt(mine?.calendarPeople, day, keep, windowEnd(keep))) {
+    // Every day of the work, not only the first.
+    if (keep && companyBusyOnSpan(mine?.calendarPeople,
+      length > 1 ? spanDates({ start: day, days: length, off: mine?.unavailable || [] }) : [day],
+      { start: keep, end: windowEnd(keep) })) {
       keep = null;
-      day = slotFor({ from: day, busy: mine?.busy, unavailable: mine?.unavailable, length });
+      day = slotFor({ from: day, busy: mine ? busyFor(mine, length) : [], unavailable: mine?.unavailable, length });
       if (!day) return { proposed: false, reason: "no_slot" };
     }
     const startTime = keep || AUTO_START;
@@ -19679,7 +19691,9 @@ async function autoProposeOnAccept(c, wo) {
   const mine = cands.find((x) => x.companyId === wo.company_id);
   if (mine?.paused) return { stopped: "paused" };
   const from = (job.date || "").slice(0, 10) || new Date().toISOString().slice(0, 10);
-  const day = slotFor({ from, busy: mine?.busy, unavailable: mine?.unavailable });
+  // As many free days in a row as their trade takes, not just the first.
+  const length = await tradeSpanLength(c.env, job.id, wo.trade);
+  const day = slotFor({ from, busy: mine ? busyFor(mine, length) : [], unavailable: mine?.unavailable, length });
   if (!day) return { stopped: "no_slot" };
   // AS THE ACCOUNT, NOT AS THE CONTRACTOR WHOSE PRESS GOT US HERE. This runs
   // inside their accept, so relaying their headers made the propose route read
@@ -19733,7 +19747,7 @@ async function autoRepropose(c, visit) {
     return { stopped: "out_of_tries" };
   }
   const wo = await c.env.DB.prepare(
-    `SELECT company_id FROM work_orders WHERE job_id = ? AND voided_at IS NULL LIMIT 1`)
+    `SELECT company_id, trade FROM work_orders WHERE job_id = ? AND voided_at IS NULL LIMIT 1`)
     .bind(job.id).first().catch(() => null);
   if (!wo?.company_id) return null;
   const cands = await autoCandidates(c.env, job.account_id, null, null, { exceptJobId: job.id });
@@ -19742,7 +19756,9 @@ async function autoRepropose(c, visit) {
   // rather than from the job's target -- otherwise the next try offers the
   // same week again.
   if (mine?.paused) return { stopped: "paused" };
-  const day = slotFor({ from: visit.date, busy: mine?.busy, unavailable: mine?.unavailable });
+  const length = await tradeSpanLength(c.env, job.id, wo.trade);
+  const day = slotFor({ from: visit.date, busy: mine ? busyFor(mine, length) : [],
+    unavailable: mine?.unavailable, length });
   if (!day) return { stopped: "no_slot" };
   // AS THE ACCOUNT, for the reason `autoProposeOnAccept` is: this runs inside
   // the DECLINE of whoever could not make the last window -- a tenant or a
@@ -27194,18 +27210,51 @@ async function companyCalendarPeople(env, companyId, fromKey, days = GCAL_BUSY_D
   return people;
 }
 
+// The working days a company's trade on this job takes, from `start`: every
+// day of its estimate, or just `start` when the trade has none. Read off the
+// trade the company holds a live work order for.
+async function companySpanDates(env, { jobId, companyId, start, off = [] }) {
+  const span = await env.DB.prepare(
+    `SELECT s.work_days, s.weekends FROM job_trade_spans s
+       JOIN work_orders w ON w.job_id = s.job_id AND w.trade = s.trade
+      WHERE s.job_id = ? AND w.company_id = ? AND w.voided_at IS NULL LIMIT 1`
+  ).bind(jobId, companyId).first().catch(() => null);
+  const n = spanDaysFrom(span?.work_days) || 1;
+  if (n === 1) return [start];
+  const dates = spanDates({ start, days: n, weekends: !!span?.weekends, off });
+  return dates.length ? dates : [start];
+}
+
+// How many working days a trade's estimate on this job takes; 1 with none.
+async function tradeSpanLength(env, jobId, trade) {
+  const s = await env.DB.prepare(
+    `SELECT work_days FROM job_trade_spans WHERE job_id = ? AND trade = ?`
+  ).bind(jobId, trade).first().catch(() => null);
+  return spanDaysFrom(s?.work_days) || 1;
+}
+
+
 // Is any company that holds accepted work on this job shown busy for this
-// window? Named, so the screen can say who.
+// window, on any day of the work? Named, so the screen can say who and when.
 async function crewCalendarConflict(env, jobId, { date, start, end }) {
   try {
     const { results } = await env.DB.prepare(
-      `SELECT DISTINCT w.company_id, co.company FROM work_orders w
+      `SELECT DISTINCT w.company_id, co.company, co.crews, co.unavailable_days FROM work_orders w
          JOIN companies co ON co.id = w.company_id
         WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'`
     ).bind(jobId).all();
     for (const r of results || []) {
-      const people = await companyCalendarPeople(env, r.company_id, date, 1);
-      if (companyBusyAt(people, date, start, end)) return { companyId: r.company_id, company: r.company };
+      // EVERY DAY OF THEIR TRADE'S ESTIMATE, not only the first. Laid out by
+      // the same rule the timeline draws it with -- working days, the days
+      // their crews are off pushing the end rather than being worked -- and
+      // starting on the day proposed.
+      const off = offDays({ unavailableDays: parseJson(r.unavailable_days, []),
+        crews: parseJson(r.crews, []) }).days;
+      const dates = await companySpanDates(env, { jobId, companyId: r.company_id, start: date, off });
+      const reach = dates.length > 1 ? daysBetween(date, dates[dates.length - 1]) + 1 : 1;
+      const people = await companyCalendarPeople(env, r.company_id, date, reach);
+      const clash = companyBusyOnSpan(people, dates, { start, end });
+      if (clash) return { companyId: r.company_id, company: r.company, date: clash, days: dates.length };
     }
   } catch (err) {
     if (!missingSchema(err)) console.warn("[gcal] busy check:", err?.message || err);

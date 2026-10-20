@@ -15852,7 +15852,11 @@ function proposeErrText(e) {
   if (code === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration || "019_visits"}.sql and try again.`;
   if (code === "not_approved") return "Approve the request first.";
   // 094. Their own Google Calendar shows them taken then.
-  if (code === "crew_busy") return `${e.body.company || "The contractor"}'s calendar shows them busy then. Pick another time.`;
+  // A job that runs several days is checked on every one of them, so the clash
+  // may be on a later day than the one typed -- named, or it reads as wrong.
+  if (code === "crew_busy") return e.body.firstDay === false && e.body.date
+    ? `${e.body.company || "The contractor"}'s calendar shows them busy on ${formatDay(e.body.date)}, while they'd still be on this job. Pick another start.`
+    : `${e.body.company || "The contractor"}'s calendar shows them busy then. Pick another time.`;
   if (code === "forbidden") return "You don't hold a live work order on this job any more, so you can't set its time. Reload to see where it stands.";
   if (code === "job_not_found") return "This job isn't on this account any more. Reload to see where it stands.";
   if (code === "no_tenant_needed") return "Nobody needs to be in for this one, so there's no time for you to set.";

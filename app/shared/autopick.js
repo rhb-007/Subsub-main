@@ -71,6 +71,15 @@ const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || ""));
 // trade's estimate in working days; the span skips the days they marked off,
 // the way it does on every screen, and none of its days may be one they are
 // already on site for.
+// The busy days that apply to a job of `length` working days. A one-day visit
+// is the morning slot, so `busy` holds the days their calendar is taken then;
+// a longer job has them on site the whole working day of every day, so it
+// reads `busyAllDay`, which also holds days their calendar is taken in the
+// afternoon. A candidate built without it (no calendar connected) has only
+// `busy`, which is then the whole answer.
+export const busyFor = (cnd, length = 1) =>
+  (Number(length) > 1 && Array.isArray(cnd?.busyAllDay) ? cnd.busyAllDay : cnd?.busy) || [];
+
 export function slotFor({ from, busy = [], unavailable = [], skip = 0, days = WORK_DAYS, length = 1 } = {}) {
   if (!isDay(from)) return null;
   const busySet = new Set((busy || []).filter(isDay));
@@ -159,7 +168,7 @@ export function rankCandidates(cands = [], { trade, from, length = 1 } = {}) {
       skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "paused" });
       continue;
     }
-    const day = slotFor({ from, busy: cnd.busy, unavailable: cnd.unavailable, length });
+    const day = slotFor({ from, busy: busyFor(cnd, length), unavailable: cnd.unavailable, length });
     if (!day) {
       skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "no_slot" });
       continue;

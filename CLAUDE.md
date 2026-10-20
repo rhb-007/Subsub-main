@@ -14524,8 +14524,8 @@ refactor.
 
   **Still open:** a hiring account's admin gets every visit on the account,
   which on a large portfolio is a full calendar; a "only mine" choice is the
-  obvious next step. And the busy check reads the crew's calendar for the
-  window proposed, not for every day of a multi-day trade estimate.
+  obvious next step. The busy check now reads every day of a multi-day trade
+  estimate; see the entry on that.
 
 - **ZAPIER AND POSTMAN ARE TWO CARDS OF THEIR OWN ON ACCOUNT -> INTEGRATIONS,
   BECAUSE THEY ARE FOR TWO DIFFERENT PEOPLE.** Asked for with Hover's developer
@@ -14604,6 +14604,34 @@ refactor.
   `test:quotes` (95) and `test:quotesui` (92). Five mutations fire: no invite
   sent, the contact check removed, the quote words dropped from the email, the
   window closing straight away, and the tag removed.
+
+- **A MULTI-DAY JOB IS CHECKED AGAINST THE CALENDAR ON EVERY DAY, NOT ONLY
+  THE FIRST.** Asked for as *"it needs to check every day of the job, not just
+  the first day, if not it will over book jobs"*. A three-day plumbing job
+  proposed for Monday passed when the crew's Google Calendar was free on
+  Monday, even if Wednesday was taken.
+
+  `companyBusyOnSpan` in `shared/gcal.js` walks the trade's working days
+  (`spanDates`, with weekends and crew days off skipped the same way the
+  estimate's finish is worked out). Day one is checked for the proposed window
+  (to the end of the working day, if the window runs later). Every later day is
+  checked for the whole working day, 8 AM to 5 PM, because a crew on a
+  multi-day job is on site all day. A one-day job is unchanged: an afternoon
+  appointment does not block a morning visit. The refusal names the day that
+  clashes, and the screen says *busy on Wednesday, while they'd still be on
+  this job* when it is not the first day.
+
+  **The auto-scheduler agrees.** `busyFor(candidate, length)` hands
+  `slotFor` the whole-day busy list for a multi-day trade and the morning list
+  for a one-day one, so a start is placed only where every day of the work is
+  free. This applies on issue, after a crew accepts, on a re-proposal and in
+  the turnaround ranking. The same rule as before still holds: a company is
+  busy only when every connected person there is, and an unreadable calendar
+  is left out.
+
+  `test:gcal` (77). Three mutations fire: the span ignored (3), the morning
+  window used for whole days (1), and `busyFor` always returning the morning
+  list (2).
 
 ## Working here
 

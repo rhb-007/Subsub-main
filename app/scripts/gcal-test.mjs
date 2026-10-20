@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { openSecret } from "../worker/secretbox.js";
+import { rankCandidates, busyFor } from "../shared/autopick.js";
 import { eventFor, wallToUtc, companyBusyAt, gcalReturnTo, scopesGranted, GCAL_REQUIRED_SCOPES }
   from "../shared/gcal.js";
 
@@ -47,6 +48,12 @@ let W = dayAhead(44);
 for (let i = 45; [0, 6].includes(new Date(`${W}T12:00:00Z`).getUTCDay()); i += 1) W = dayAhead(i);
 let Z = dayAhead(37);
 for (let i = 38; [0, 6].includes(new Date(`${Z}T12:00:00Z`).getUTCDay()); i += 1) Z = dayAhead(i);
+
+// A Monday two months out, for a job that takes three working days: M, M+1, M+2.
+let M = dayAhead(60);
+for (let i = 61; new Date(`${M}T12:00:00Z`).getUTCDay() !== 1; i += 1) M = dayAhead(i);
+const plusDays = (k, n) => new Date(Date.parse(`${k}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const M2 = plusDays(M, 2);
 
 // ---- Google, as its discovery document describes it -------------------------
 const G = { calls: [], busy: {}, down: false, dead: new Set(), events: new Map(), calendars: new Map(), n: 0 };
@@ -136,10 +143,15 @@ const seed = () => {
       ('j1','acc_pm','p1','Leaking sink','100 Main St, Unit 4','["plumbing"]','${X}','10:00','active','u_ten',CURRENT_TIMESTAMP),
       ('j3','acc_pm','p1','Offer not taken','100 Main St','["plumbing"]','${X}',NULL,'active',NULL,NULL),
       ('j4','acc_pm','p1','Repaint hall','100 Main St','["painting"]','${Z}','14:00','active',NULL,NULL),
-      ('j5','acc_pm','p1','Swap a tap','100 Main St','["plumbing"]','${W}',NULL,'active',NULL,NULL);
+      ('j5','acc_pm','p1','Swap a tap','100 Main St','["plumbing"]','${W}',NULL,'active',NULL,NULL),
+      ('j6','acc_pm','p1','Re-pipe the bathroom','100 Main St','["plumbing"]','${M}',NULL,'active',NULL,NULL),
+      ('j7','acc_pm','p1','Repaint three rooms','100 Main St','["painting"]','${plusDays(M, 7)}',NULL,'active',NULL,NULL);
+    INSERT INTO job_trade_spans(job_id,trade,start_date,work_days) VALUES
+      ('j6','plumbing','${M}',3), ('j7','painting','${plusDays(M, 7)}',3);
     INSERT INTO work_orders(id,wo_number,job_id,trade,company_id,engagement_id,status) VALUES
       ('wo1','WO-1','j1','plumbing','cmp_crew','en_crew','accepted'),
-      ('wo3','WO-3','j3','plumbing','cmp_crew','en_crew','pending');
+      ('wo3','WO-3','j3','plumbing','cmp_crew','en_crew','pending'),
+      ('wo6','WO-6','j6','plumbing','cmp_crew','en_crew','accepted');
     INSERT INTO visits(id,account_id,job_id,proposed_by,date,start_time,end_time,status) VALUES
       ('v1','acc_pm','j1','u_mgr','${X}','13:00','14:00','proposed'),
       ('v3','acc_pm','j3','u_mgr','${X}','08:00','09:00','proposed');
@@ -325,6 +337,89 @@ try {
     const [s8] = await call("mgr", "/api/jobs/j1/visits", { method: "POST", body: { date: X, startTime: "10:15", endTime: "10:45" } });
     ck("a calendar Google would not read is left out, not counted as free", s8 === 409, String(s8));
     G.downFor = null;
+  }
+
+  console.log("\n-- a job that takes three days is checked on all three --");
+  {
+    // Both people at the crew have an afternoon appointment on day three of
+    // the re-pipe. A window on day one, 9 to 10, clears day one -- and would
+    // book them over that appointment, which is what checking only the first
+    // day did.
+    const later = [{ start: iso(wallToUtc(M2, "14:00", TZ)), end: iso(wallToUtc(M2, "15:00", TZ)) }];
+    const keepCrew = G.busy.crew, keepCrew2 = G.busy.crew2;
+    G.busy.crew = [...(G.busy.crew || []), ...later];
+    G.busy.crew2 = [...(G.busy.crew2 || []), ...later];
+    const [s, b] = await call("mgr", "/api/jobs/j6/visits", { method: "POST",
+      body: { date: M, startTime: "09:00", endTime: "10:00" } });
+    ck("a window on day one is refused when day three is taken", s === 409 && b.error === "crew_busy",
+      `${s} ${JSON.stringify(b)}`);
+    ck("and the refusal names day three, so the screen can say when", b.date === M2 && b.firstDay === false,
+      JSON.stringify(b));
+
+    // The same appointment with the estimate cut to one day: nothing clashes.
+    DB.prepare(`UPDATE job_trade_spans SET work_days = 1 WHERE job_id = 'j6'`).run();
+    const [s1] = await call("mgr", "/api/jobs/j6/visits", { method: "POST",
+      body: { date: M, startTime: "09:00", endTime: "10:00" } });
+    ck("a one-day job is checked on its own day only", s1 === 201, String(s1));
+
+    // On a multi-day job they are on site the whole working day, so an
+    // afternoon appointment on DAY ONE clashes with a 9 o'clock start too --
+    // where a one-hour visit at 9 does not.
+    DB.prepare(`UPDATE visits SET status = 'superseded' WHERE job_id = 'j6'`).run();
+    const pm1 = [{ start: iso(wallToUtc(M, "15:00", TZ)), end: iso(wallToUtc(M, "16:00", TZ)) }];
+    G.busy.crew = [...keepCrew, ...pm1]; G.busy.crew2 = [...keepCrew2, ...pm1];
+    const [s2] = await call("mgr", "/api/jobs/j6/visits", { method: "POST",
+      body: { date: M, startTime: "09:00", endTime: "10:00" } });
+    ck("a one-hour visit at 9 is not blocked by a 3 o'clock appointment", s2 === 201, String(s2));
+    DB.prepare(`UPDATE visits SET status = 'superseded' WHERE job_id = 'j6'`).run();
+    DB.prepare(`UPDATE job_trade_spans SET work_days = 3 WHERE job_id = 'j6'`).run();
+    const [s3, b3] = await call("mgr", "/api/jobs/j6/visits", { method: "POST",
+      body: { date: M, startTime: "09:00", endTime: "10:00" } });
+    ck("a three-day job starting at 9 is, because they would be there at 3", s3 === 409 && b3.firstDay === true,
+      `${s3} ${JSON.stringify(b3)}`);
+
+    // Starting the day after day three's appointment clears all three days.
+    G.busy.crew = [...keepCrew, ...later]; G.busy.crew2 = [...keepCrew2, ...later];
+    const [s4] = await call("mgr", "/api/jobs/j6/visits", { method: "POST",
+      body: { date: plusDays(M2, 1), startTime: "09:00", endTime: "10:00" } });
+    ck("starting after it goes", s4 === 201, String(s4));
+    DB.prepare(`UPDATE visits SET status = 'superseded' WHERE job_id = 'j6'`).run();
+    G.busy.crew = keepCrew; G.busy.crew2 = keepCrew2;
+  }
+
+  {
+    // The auto-scheduler: a candidate whose calendar is free in the morning
+    // and taken on the afternoon of day three. A one-day job takes Monday; a
+    // three-day job needs three clear working days in a row, so Monday and
+    // Tuesday are out (each run reaches day three) and it starts Thursday.
+    const sunday = plusDays(M, -1);
+    const cand = { companyId: "c", company: "Crew", categories: ["plumbing"], blockers: [],
+      busy: [], busyAllDay: [M2], unavailable: [] };
+    const one = rankCandidates([cand], { trade: "plumbing", from: sunday, length: 1 }).picked;
+    const three = rankCandidates([cand], { trade: "plumbing", from: sunday, length: 3 }).picked;
+    ck("a one-day job takes the first free morning", one?.day === M, JSON.stringify(one));
+    ck("a three-day job waits for three clear working days in a row", three?.day === plusDays(M, 3),
+      JSON.stringify(three));
+    ck("a candidate with no calendar connected reads its ordinary busy days at any length",
+      busyFor({ busy: ["x"] }, 3).join() === "x");
+  }
+
+  {
+    // And through the real assign route. The crew has granted auto-schedule,
+    // so issuing the three-day repaint puts a window forward by itself. Its
+    // planned start is a Monday; both people have an afternoon appointment on
+    // the Wednesday, day three. The morning slot alone is free every day, so
+    // only reading the WHOLE working day of every day keeps it off that week.
+    const keepCrew = G.busy.crew, keepCrew2 = G.busy.crew2;
+    const wed = plusDays(M, 9);
+    const pm = [{ start: iso(wallToUtc(wed, "14:00", TZ)), end: iso(wallToUtc(wed, "15:00", TZ)) }];
+    G.busy.crew = [...(keepCrew || []), ...pm]; G.busy.crew2 = [...(keepCrew2 || []), ...pm];
+    const [st, b] = await call("mgr", "/api/jobs/j7/assign", { method: "POST",
+      body: { trade: "painting", companyId: "cmp_crew", payKind: "fixed", value: "900", responseWindow: "24h" } });
+    const v = DB.prepare(`SELECT * FROM visits WHERE job_id = 'j7' AND status IN ('proposed','confirmed')`).get();
+    ck("auto-booking a three-day job starts after the clash, not on a day whose run reaches it",
+      st === 201 && v && v.date > wed, `${st} ${JSON.stringify(v || b)}`);
+    G.busy.crew = keepCrew; G.busy.crew2 = keepCrew2;
   }
 
   console.log("\n-- the auto-scheduler steps round it --");
