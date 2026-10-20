@@ -14448,6 +14448,85 @@ refactor.
   who cannot answer one. **Not verified here:** the full-stack suites, which
   need the local stack; their seed contractors may lack logins.
 
+- **GOOGLE CALENDAR: A PERSON'S SUBSUB JOBS ON A CALENDAR CALLED "SUBSUB
+  JOBS", AND NO TIME PUT FORWARD THAT THEIR OWN CALENDAR SHOWS TAKEN.** Asked
+  for as *"sync jobs with their Google Calendar - labeled as SubSub Jobs"* and
+  *"should not schedule in SubSub if their Google Calendar is showing as
+  already scheduled with something else"*. Migration 094 (`gcal_connections`,
+  `gcal_events`, `gcal_states`), `app/shared/gcal.js` (the rules),
+  `app/worker/gcal.js` (Google), and a panel in My account -> Settings.
+
+  **Every field name is from Google's own discovery document** for Calendar
+  v3, read from this environment (`googleapis.com/discovery/v1/apis/calendar/v3/rest`);
+  the developer site is blocked here and the discovery document is what it is
+  generated from. The OAuth addresses are from accounts.google.com's OpenID
+  configuration.
+
+  **Two narrow scopes.** `calendar.app.created` lets SubSub make one calendar
+  of its own and write only to it, never to an event the person made.
+  `calendar.freebusy` answers *busy from 9 to 11* and nothing else: no titles,
+  no attendees, no places. A consent with either unticked is refused and what
+  it did grant is revoked, because a half connection would push nothing or
+  block nothing under a panel saying connected.
+
+  **Per person, not per account**, because a calendar belongs to whoever
+  carries the phone and one person sits on several accounts. The refresh
+  token is sealed with `INTEGRATION_SECRET_KEY`, as CompanyCam's is. The trip
+  to Google and back is a one-use, fifteen-minute state row, and the callback
+  is a public route because Google sends the browser back with no session.
+  The return address is checked to be a SubSub address.
+
+  **What goes on it is each seat's own work**: a contractor seat gets visits
+  on work its company ACCEPTED (an offer is not theirs yet); a seat on an
+  account with its own company gets that company's accepted work anywhere; an
+  admin or pm gets the account's visits, narrowed to its buildings or jobs; a
+  tenant gets their own repairs. Live visits only, a week back to four months
+  ahead. **A proposed time is on it, marked "(proposed)" and transparent**, so
+  it does not show them busy for a time nobody agreed. The event carries the
+  job, the trade, the address and who it is for, and **no phone number or
+  tenant name**: a calendar is shared with a spouse or a dispatcher far more
+  often than a login is. Synced straight after a time is proposed or answered,
+  and by the ten-minute cron as a backstop; a fingerprint means an unchanged
+  visit is never written again; an event they delete in Google is written
+  again. Turning the push off deletes the SubSub Jobs calendar.
+
+  **The busy check reads the PRIMARY calendar only, never SubSub's own**, or
+  every job would block itself. It applies where the hiring side or a tenant
+  proposes a window to a crew that has taken the work (`crew_busy`, naming the
+  company), and in the auto-scheduler, which steps round busy mornings and
+  moves a job's own time when that is taken. **The crew's own proposal is
+  exempt**, because they know their calendar and proposing is agreeing.
+
+  **A company is busy only when everybody connected there is**, the rule
+  `offDays` already runs on for crews: one person's dentist appointment is not
+  the company booked. A calendar Google will not read is **left out, not
+  counted as free**, and nobody readable blocks nothing, so a Google outage
+  never stops a job being scheduled. Somebody who turns the check off is left
+  out the same way.
+
+  **Access removed in Google is noticed** on the next call Google refuses with
+  a 401: the cached token is dropped, a refresh answers `invalid_grant`, and
+  the panel says to disconnect and connect again.
+
+  `test:gcal` (67) and `test:gcalui` (24). Thirteen server mutations and four
+  browser ones fire, each on its own assertion. Three needed a fixture to
+  earn: a busy check on the job's own time was covered by the ranking's busy
+  mornings until the job's time moved to the afternoon; counting an
+  unreadable calendar as free needed one person's calendar to fail alone; and
+  deleting stale events needed a superseded window to look for.
+
+  **Not verified here:** a live Google round trip. Setting it up needs a
+  Google Cloud OAuth client with `https://api.subsub.work/api/google-calendar/callback`
+  as its redirect URI, `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` on the
+  API Worker, and **Google's verification of the app**, because both scopes
+  are sensitive; until then only test users added on the consent screen can
+  connect. **Pasting 094 is required.**
+
+  **Still open:** a hiring account's admin gets every visit on the account,
+  which on a large portfolio is a full calendar; a "only mine" choice is the
+  obvious next step. And the busy check reads the crew's calendar for the
+  window proposed, not for every day of a multi-day trade estimate.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -5442,6 +5442,21 @@ export default function SubSub() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 094. Back from Google's consent screen (?gcal=connected, or the reason it
+  // was not). Opens My account -> Settings, where the panel says which.
+  const [gcalLanded] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("gcal") || null; }
+    catch { return null; }
+  });
+  const gcalAimed = useRef(false);
+  useEffect(() => {
+    if (!gcalLanded || gcalAimed.current || !loggedIn) return;
+    gcalAimed.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    setTab("account"); setOpenPane({ pane: "settings", n: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gcalLanded, loggedIn]);
+
   // Arriving from the auto-schedule request email (?open=auto-schedule). The
   // mail names the path -- Menu > Job Settings > Availability > Auto-schedule
   // -- and this link lands on it, rung. Held until somebody is signed in,
@@ -7948,6 +7963,7 @@ export default function SubSub() {
           onSetMyAvatar={setMyAvatar} added={addedUser} onDismissAdded={() => setAddedUser(null)}
           openPane={openPane}
           payoutsLanded={payoutsLanded} onPayoutsHandled={() => setPayoutsLanded(false)}
+          gcalLanded={gcalLanded}
           onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
@@ -15681,6 +15697,150 @@ function impEndsText(v) {
 // write after that is refused with impersonation_expired, and the screen went
 // on looking exactly as it did. So each refusal names its cause and the one
 // thing that works, and an unknown one names its code rather than nothing.
+// 094. GOOGLE CALENDAR, per person. Two promises, each its own switch: SubSub
+// jobs go onto a calendar of their own in this person's Google account (called
+// SubSub Jobs, so nothing of theirs is touched), and SubSub does not put them
+// forward for a time their own calendar already shows taken.
+//
+// The second switch is only offered to somebody who does the work -- a tenant
+// is not booked by anybody -- and the panel says which Google account it is,
+// because a person with a work and a personal account will want to know.
+const GCAL_LANDED_TEXT = {
+  connected: "Google Calendar is connected. Your SubSub jobs will appear on a calendar called SubSub Jobs.",
+  denied: "Google Calendar was not connected. You can try again whenever you like.",
+  missing_scope: "Google Calendar needs both permissions ticked: making the SubSub Jobs calendar and seeing when you're busy. Try again and leave both ticked.",
+  no_refresh: "Google didn't give SubSub lasting access. Remove SubSub from your Google account's third-party access, then connect again.",
+  expired: "That took too long, so the link expired. Press Connect again.",
+  failed: "Google Calendar could not be connected just now. Try again in a minute.",
+  not_configured: "Google Calendar isn't set up on SubSub yet.",
+};
+const GCAL_ERROR_TEXT = {
+  revoked: "Google stopped letting SubSub in (access was removed, or it expired). Disconnect, then connect again.",
+  sealed: "SubSub can't read this connection any more. Disconnect, then connect again.",
+  google_unreachable: "Google didn't answer the last time SubSub tried. It will try again on its own.",
+  calendar_refused: "Google wouldn't let SubSub make the SubSub Jobs calendar. Disconnect, then connect again.",
+  write_refused: "Google refused some of the jobs. SubSub will try them again on its own.",
+};
+function gcalErrText(e) {
+  const code = e?.body?.error || "";
+  if (code === "not_configured") return "Google Calendar isn't set up on SubSub yet.";
+  if (code === "migration_needed") return `The database isn't migrated yet: run ${e.body.migration || "094_google_calendar"}.sql.`;
+  if (code === "rate_limited") return "That was pressed a lot just now. Wait a few minutes and try again.";
+  if (code === "not_connected") return "Google Calendar isn't connected any more. Reload the page.";
+  if (e?.status === 401) return "You've been signed out. Sign in again and try again.";
+  if (!e?.status) return "Couldn't reach SubSub. Check your connection and try again.";
+  return `That didn't work (${code || `error ${e.status}`}). Try again.`;
+}
+
+function GoogleCalendarPanel({ landed = null, crewSide = true }) {
+  const [s, setS] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState(landed ? GCAL_LANDED_TEXT[landed] || GCAL_LANDED_TEXT.failed : "");
+  const [asking, setAsking] = useState(false);
+  const load = () => api.googleCalendar().then(setS).catch((e) => setS({ failed: true, status: e?.status }));
+  // The note stays for as long as the screen does: the address bar has
+  // already been tidied, so a reload is what clears it.
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  // A seat that may not use it (a building owner's) is refused by the route,
+  // and a panel over a refusal is a control that lies.
+  if (!s || (s.failed && s.status === 403)) return null;
+  const run = async (what, fn) => {
+    setBusy(what); setErr("");
+    try { await fn(); } catch (e) { setErr(gcalErrText(e)); }
+    finally { setBusy(""); }
+  };
+  const connect = () => run("connect", async () => {
+    let tz = "UTC";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { /* keep UTC */ }
+    const r = await api.googleCalendarStart({
+      returnTo: `${window.location.origin}${window.location.pathname}`, timeZone: tz });
+    window.location.assign(r.url);
+  });
+  const set = (body) => run("set", async () => { await api.setGoogleCalendar(body); await load(); });
+  const ok = landed === "connected";
+  return (
+    <div className="portal-panel settings-panel gcal-panel">
+      <h4><CalendarCheck size={16} /> {tt("Google Calendar")}</h4>
+      {note && <p className={`gcal-landed ${ok ? "ok" : "warn"}`} role="status">{tt(note)}</p>}
+      {s.failed ? (
+        <p className="panel-note">{tt("Couldn't load your Google Calendar connection.")}
+          {" "}<button className="link-btn" onClick={load}>{tt("Try again")}</button></p>
+      ) : s.migration ? (
+        <p className="panel-note">{tt("The database isn't migrated yet: run")} {s.migration}.sql.</p>
+      ) : !s.configured ? (
+        <p className="panel-note">{tt("Google Calendar isn't set up on SubSub yet.")}</p>
+      ) : !s.connected ? (
+        <>
+          <p className="panel-note">
+            {tt("Put your SubSub jobs on your own Google Calendar, on a calendar called SubSub Jobs, and stop SubSub booking you when your calendar shows you're busy.")}
+          </p>
+          <p className="panel-note gcal-what">
+            {tt("SubSub only adds to its own SubSub Jobs calendar and never changes your other events. For the rest of your calendar it only sees when you're busy, not what you're doing.")}
+          </p>
+          <button className="btn-solid gcal-connect" disabled={!!busy} onClick={connect}>
+            <CalendarCheck size={16} /> {busy === "connect" ? tt("Opening Google…") : tt("Connect Google Calendar")}
+          </button>
+        </>
+      ) : (
+        <>
+          <p className="panel-note gcal-who">
+            {tt("Connected to")} <b>{s.email || tt("your Google account")}</b>.{" "}
+            {s.events === 1 ? tt("1 job is on your SubSub Jobs calendar.")
+              : `${s.events} ${tt("jobs are on your SubSub Jobs calendar.")}`}
+            {s.lastSyncedAt && <> {tt("Last updated")} {relTime(s.lastSyncedAt)}.</>}
+          </p>
+          {s.lastError && GCAL_ERROR_TEXT[s.lastError] && (
+            <p className="gcal-landed warn">{tt(GCAL_ERROR_TEXT[s.lastError])}</p>
+          )}
+          <div className="notify-opts">
+            <label className={`notify-opt ${s.syncOn ? "on" : ""}`}>
+              <input type="checkbox" checked={s.syncOn} disabled={!!busy}
+                onChange={(e) => set({ syncOn: e.target.checked })} />
+              <Calendar size={17} />
+              <span className="no-txt">
+                <span className="no-name">{tt("Put my SubSub jobs on Google Calendar")}</span>
+                <span className="no-sub">{tt("Proposed times show as free until they're confirmed. Turning this off removes the SubSub Jobs calendar.")}</span>
+              </span>
+            </label>
+            {crewSide && (
+              <label className={`notify-opt ${s.blockOn ? "on" : ""}`}>
+                <input type="checkbox" checked={s.blockOn} disabled={!!busy}
+                  onChange={(e) => set({ blockOn: e.target.checked })} />
+                <CalendarRange size={17} />
+                <span className="no-txt">
+                  <span className="no-name">{tt("Don't book me when my calendar is busy")}</span>
+                  <span className="no-sub">{tt("SubSub won't propose or auto-schedule a time your Google Calendar already shows taken. If several people at your company connect, a time counts as taken only when all of them are busy.")}</span>
+                </span>
+              </label>
+            )}
+          </div>
+          <div className="gcal-acts">
+            <button className="btn-ghost" disabled={!!busy || !s.syncOn}
+              onClick={() => run("sync", async () => { await api.syncGoogleCalendar(); await load(); setNote(""); })}>
+              <RefreshCw size={15} className={busy === "sync" ? "spin" : ""} /> {tt("Update now")}
+            </button>
+            <button className="btn-ghost danger" disabled={!!busy} onClick={() => setAsking(true)}>
+              <Trash2 size={15} /> {tt("Disconnect")}
+            </button>
+          </div>
+          {asking && (
+            <ConfirmRemove name={tt("Google Calendar")} verb={tt("Disconnect")}
+              what="google calendar" explain={gcalErrText}
+              consequence={tt("The SubSub Jobs calendar comes off your Google account, and SubSub stops checking when you're busy. Your own events are not touched. You can connect again any time.")}
+              onCancel={() => setAsking(false)}
+              onConfirm={async () => {
+                await api.disconnectGoogleCalendar();
+                setAsking(false); setNote(""); await load();
+              }} />
+          )}
+        </>
+      )}
+      {err && <p className="form-err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 function proposeErrText(e) {
   const code = e?.body?.error || "";
   if (code === "impersonation_expired") {
@@ -15688,6 +15848,8 @@ function proposeErrText(e) {
   }
   if (code === "migration_needed") return `The database isn't migrated yet — run ${e.body.migration || "019_visits"}.sql and try again.`;
   if (code === "not_approved") return "Approve the request first.";
+  // 094. Their own Google Calendar shows them taken then.
+  if (code === "crew_busy") return `${e.body.company || "The contractor"}'s calendar shows them busy then. Pick another time.`;
   if (code === "forbidden") return "You don't hold a live work order on this job any more, so you can't set its time. Reload to see where it stands.";
   if (code === "job_not_found") return "This job isn't on this account any more. Reload to see where it stands.";
   if (code === "no_tenant_needed") return "Nobody needs to be in for this one, so there's no time for you to set.";
@@ -23127,7 +23289,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   autoTurnaround = false, onSetAutoTurnaround,
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
   added = null, onDismissAdded, openPane = null,
-  payoutsLanded = false, onPayoutsHandled,
+  payoutsLanded = false, onPayoutsHandled, gcalLanded = null,
   themeCtl = null, langCtl = null, langEligible = false }) {
   // Only set when the in-app card form could not be drawn at all.
   const [billingFellBack, setBillingFellBack] = useState(false);
@@ -23367,6 +23529,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           the menu the longest thing on a phone. One tab, one place to look. */}
       {pane === "settings" && (
         <>
+          <GoogleCalendarPanel landed={gcalLanded} crewSide={role !== "tenant"} />
           {themeCtl && (
             <div className="portal-panel settings-panel">
               <h4>{tt("Theme")}</h4>
@@ -45654,6 +45817,14 @@ a.meas-dl{text-decoration:none}
 /* notification preferences */
 .notify-opts{display:flex;flex-direction:column;gap:9px;margin-top:10px}
 .notify-opts.compact{flex-direction:row;gap:8px;margin-top:8px}
+.gcal-panel h4{display:flex;align-items:center;gap:7px}
+.gcal-landed{margin:6px 0 10px;padding:9px 12px;border-radius:9px;font-size:13.5px;line-height:1.4;border:1px solid}
+.gcal-landed.ok{background:#e8f4ec;border-color:#b9dcc4;color:#1d5a34}
+.gcal-landed.warn{background:#fdf3e1;border-color:#ecd29a;color:#7a5410}
+.gcal-what{color:var(--ink-soft)}
+.gcal-connect{display:inline-flex;align-items:center;gap:8px;margin-top:6px}
+.gcal-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.gcal-acts button{display:inline-flex;align-items:center;gap:6px}
 .notify-opt{display:flex;align-items:center;gap:11px;background:var(--card);border:1px solid var(--line);
   border-radius:11px;padding:13px 15px;cursor:pointer}
 .notify-opts.compact .notify-opt{flex:1;padding:10px 12px;gap:8px}

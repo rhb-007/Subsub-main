@@ -2606,3 +2606,34 @@ CREATE TABLE IF NOT EXISTS held_assignments (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_held_open
   ON held_assignments(job_id, trade) WHERE released_at IS NULL AND cancelled_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_held_company ON held_assignments(account_id, company_id);
+
+-- 094: Google Calendar connections, the events written for each visit, and
+-- the one-use state for the consent screen.
+CREATE TABLE IF NOT EXISTS gcal_connections (
+  user_id        TEXT PRIMARY KEY,
+  google_email   TEXT,
+  refresh_enc    TEXT NOT NULL,
+  calendar_id    TEXT,
+  time_zone      TEXT NOT NULL DEFAULT 'UTC',
+  sync_on        INTEGER NOT NULL DEFAULT 1,
+  block_on       INTEGER NOT NULL DEFAULT 1,
+  connected_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_synced_at TEXT,
+  last_error     TEXT
+);
+CREATE TABLE IF NOT EXISTS gcal_events (
+  user_id     TEXT NOT NULL,
+  visit_id    TEXT NOT NULL,
+  event_id    TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  synced_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, visit_id)
+);
+CREATE TABLE IF NOT EXISTS gcal_states (
+  state      TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  return_to  TEXT,
+  time_zone  TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  used_at    TEXT
+);

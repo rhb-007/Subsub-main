@@ -319,6 +319,10 @@ WITH spec(j) AS (SELECT
   -- 093. A job held for a contractor who is not on SubSub yet. Until it is
   -- run, assigning one is refused with the reason and nothing is held.
   ',["m093_held_assignments","col","held_assignments",["id","account_id","job_id","trade","company_id","payload","created_by","created_at","released_at","work_order_id","release_error","cancelled_at"]]' ||
+  -- 094. Google Calendar.
+  ',["m094_gcal_connections","col","gcal_connections",["user_id","google_email","refresh_enc","calendar_id","time_zone","sync_on","block_on","connected_at","last_synced_at","last_error"]]' ||
+  ',["m094_gcal_events","col","gcal_events",["user_id","visit_id","event_id","fingerprint","synced_at"]]' ||
+  ',["m094_gcal_states","col","gcal_states",["state","user_id","return_to","time_zone","created_at","used_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

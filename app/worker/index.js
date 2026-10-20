@@ -167,6 +167,11 @@ import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
 import { INTEGRATIONS, integrationById, hookIntegration, integrationApplies,
   integrationEnabled } from "../shared/integrations.js";
 import { sealSecret, openSecret, sealingConfigured } from "./secretbox.js";
+import { googleConfigured, authUrl, exchangeCode, refreshAccess, refreshDead, revoke, idTokenEmail,
+  createCalendar, deleteCalendar, insertEvent, patchEvent, deleteEvent, freeBusy } from "./gcal.js";
+import { GCAL_SCOPES, GCAL_CALENDAR_NAME, GCAL_PAST_DAYS, GCAL_AHEAD_DAYS, GCAL_BUSY_DAYS,
+  validTimeZone, wallToUtc, eventFor, eventFingerprint, companyBusyAt, companyBusyDays,
+  scopesGranted, gcalReturnTo } from "../shared/gcal.js";
 import { ccGet, ccRefused, ccDownload } from "./companycam.js";
 import { ccProjectView, ccPhotoView, ccDocView, ccPhotoUsable, ccImageUrl, ccHttps,
   cleanCcImport, ccPhotoFileName, CC_PHOTO_PAGE, CC_PROJECT_PAGE } from "../shared/companycam.js";
@@ -392,6 +397,10 @@ app.use("/api/*", async (c, next) => {
     // matters: /api/work-orders/:id/claim-link is a signed-in read and stays
     // behind this middleware.
     || c.req.path.startsWith("/api/claim/")
+    // 094. Google sends the browser back here from its consent screen with no
+    // SubSub session on it. The one-use, fifteen-minute state row is the whole
+    // of what says whose calendar it is, the same shape as an invite token.
+    || c.req.path === "/api/google-calendar/callback"
     // The tenant equivalent, and public for the same reason: somebody
     // holding the link has no account yet -- getting one is the point. The
     // trailing slash matters: /api/tenants, the manager's roster, stays
@@ -790,6 +799,10 @@ const TENANT_ALLOWED = [
   // Who runs their building: the account's own managers, by name and how to
   // reach them. Read-only, and it answers nothing about anybody else here.
   [/^\/api\/my-manager$/, ["GET"]],
+  // 094. Their own Google Calendar connection. Every route reads and writes
+  // only the caller's own row, so nothing here reaches anybody else's.
+  [/^\/api\/google-calendar$/, ["GET", "PATCH", "DELETE"]],
+  [/^\/api\/google-calendar\/(start|sync)$/, ["POST"]],
   // 073. How the crew gets in to their own repair: the meeting point, the
   // window and the first name and number of whoever is coming. The routes
   // check they are the tenant who has to be let in; the PUT is the sentence
@@ -9674,6 +9687,7 @@ export function missingSchema(err) {
   // the comment above gives.
   if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
   if (/\bheld_assignments\b/i.test(m)) return "093_held_assignments";
+  if (/\bgcal_(connections|events|states)\b/i.test(m)) return "094_google_calendar";
   if (/\baccount_integrations\b/i.test(m)) return "090_account_integrations";
   if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
   if (/\bportfolio_estimates\b/i.test(m)) return "086_portfolio_estimates";
@@ -11367,6 +11381,17 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   const nowIso = new Date().toISOString();
   const myLeg = auth.role === "contractor" ? "contractor"
     : auth.role === "tenant" ? "tenant" : "manager";
+  // 094. NOT OVER SOMETHING ALREADY ON THE CREW'S OWN CALENDAR. A company
+  // whose people connected Google Calendar and left "don't book me when I'm
+  // busy" on is not put forward for a window their calendar shows taken --
+  // asking them to confirm a time they already have something at is a round
+  // trip that ends in a no. The crew's own proposal is exempt: they know
+  // their calendar, and proposing is agreeing. Only a crew that has taken the
+  // work, because only they are a party to the time.
+  if (myLeg !== "contractor" && parties.includes("contractor")) {
+    const clash = await crewCalendarConflict(c.env, jobId, { date, start, end });
+    if (clash) return c.json({ error: "crew_busy", company: clash.company }, 409);
+  }
   const crewGranted = myLeg === "manager" && parties.includes("contractor")
     && await crewGrantedBooking(c.env, { jobId, accountId: auth.accountId, date });
   const mineNow = myLeg === "contractor" || crewGranted ? nowIso : null;
@@ -11465,6 +11490,7 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   if (needsTenant && myLeg !== "tenant") await notifyTenant(c, jobId, "visit", when);
   await touchJob(c.env, jobId);
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(id).first();
+  gcalSoon(c, jobId);
   return c.json({ ...visitRowToJs(row), parties, waitingOn: visitWaitingOn(visitRowToJs(row), parties),
     turn: nextToAnswer(visitRowToJs(row), parties) }, 201);
 });
@@ -11631,6 +11657,7 @@ app.post("/api/visits/:id/respond", async (c) => {
   }
   const row = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(v.id).first();
   await touchJob(c.env, v.job_id);
+  gcalSoon(c, v.job_id);
   // `turn` as well, because the screen replaces its row with this one and a
   // row with no turn reads as "the tenant's to answer" -- which would put the
   // question straight back in front of a tenant who has just answered it.
@@ -19394,12 +19421,18 @@ async function autoCandidates(env, accountId, trade, companyState, { exceptJobId
     // reading it alone booked a crew on a day every crew had marked off.
     const o = offDays({ unavailableDays: parseJson(r.unavailable_days, []),
       crews: parseJson(r.crews, []) });
+    // 094. AND THE DAYS THEIR OWN CALENDAR IS TAKEN for the standing window,
+    // where the people there connected Google Calendar and asked not to be
+    // booked over it. Nothing connected, or Google unreachable, adds nothing.
+    const people = await companyCalendarPeople(env, r.company_id, dayKeyUtc());
+    const calBusy = companyBusyDays(people, { from: dayKeyUtc(), start: AUTO_START, end: AUTO_END });
     out.push({
       companyId: r.company_id, company: r.company,
       categories: parseJson(r.categories, []), engagedAs: r.engaged_as,
       rating: r.rating, blockers, shape,
       busy: [...new Set([...(busy || []).map((x) => x.date),
-        ...busyFromSpans(held || [], { off: o.days })])].sort(),
+        ...busyFromSpans(held || [], { off: o.days }), ...calBusy])].sort(),
+      calendarPeople: people,
       unavailable: o.days, paused: o.allPaused,
       notOnSubsub: !(await companyAnswersForItself(env, r.company_id)),
       openJobs: (open || [])[0]?.n || 0,
@@ -19529,13 +19562,20 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
     const free = (k) => !off.has(k) && (length === 1 || spanDates({ start: k, days: length,
       off: mine?.unavailable || [] }).every((d) => !busySet.has(d)));
     const jd = String((isDayKey(span?.start_date) ? span.start_date : job?.date) || "").slice(0, 10);
-    const day = DATE_RE.test(jd) && jd >= today && free(jd) ? jd
+    let day = DATE_RE.test(jd) && jd >= today && free(jd) ? jd
       : slotFor({ from: DATE_RE.test(jd) && jd > today ? jd : today,
         busy: mine?.busy, unavailable: mine?.unavailable, length });
     if (!day) return { proposed: false, reason: "no_slot" };
     // The time on the job when the window lands on the job's own day, because
     // somebody typed it; the standing morning otherwise.
-    const keep = day === jd && TIME_RE.test(String(job?.time || "")) ? job.time : null;
+    let keep = day === jd && TIME_RE.test(String(job?.time || "")) ? job.time : null;
+    // The job's own time on its own day only when their calendar is free
+    // then; otherwise the next free day in the standing morning.
+    if (keep && companyBusyAt(mine?.calendarPeople, day, keep, windowEnd(keep))) {
+      keep = null;
+      day = slotFor({ from: day, busy: mine?.busy, unavailable: mine?.unavailable, length });
+      if (!day) return { proposed: false, reason: "no_slot" };
+    }
     const startTime = keep || AUTO_START;
     const endTime = keep ? windowEnd(keep) : AUTO_END;
     const auth = c.get("auth");
@@ -26823,6 +26863,475 @@ app.get("/api/notify/log", async (c) => {
   })));
 });
 
+// ---------------------------------------------------------------------------
+// 094. GOOGLE CALENDAR. A person's SubSub jobs on their own Google Calendar,
+// on a calendar of SubSub's called "SubSub Jobs", and their busy times read
+// so SubSub does not book them over something else. Rules in shared/gcal.js,
+// Google in worker/gcal.js.
+// ---------------------------------------------------------------------------
+
+// The address Google sends somebody back to. It has to be registered on the
+// Google OAuth client exactly, so it is set rather than guessed when it can
+// be; otherwise it is this Worker's own address.
+const gcalRedirect = (c) => String(c.env.GOOGLE_CALENDAR_REDIRECT_URI || "").trim()
+  || `${new URL(c.req.url).origin}/api/google-calendar/callback`;
+
+const addDaysKey = (k, n) => {
+  const d = new Date(`${k}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+
+const gcalReady = (env) => googleConfigured(env) && sealingConfigured(env);
+
+// One access token per connection, for its hour. Keyed on the sealed refresh
+// token as well as the person, so a reconnect is never answered with the old
+// connection's token.
+const GCAL_ACCESS = new Map();
+async function gcalAccess(env, conn, { fresh = false } = {}) {
+  const key = `${conn.user_id}:${conn.refresh_enc}`;
+  const hit = GCAL_ACCESS.get(key);
+  // A 401 from Google on a cached token is the person having removed SubSub
+  // in their Google account within the hour: ask again rather than keep
+  // sending a token Google has stopped honoring.
+  if (fresh) GCAL_ACCESS.delete(key);
+  else if (hit && hit.exp > Date.now() + 60000) return { token: hit.token };
+  const refresh = await openSecret(env, conn.refresh_enc).catch(() => null);
+  if (!refresh) return { error: "sealed" };
+  const r = await refreshAccess(env, refresh);
+  if (!r.ok || !r.data?.access_token) {
+    return { error: refreshDead(r) ? "revoked" : "google_unreachable" };
+  }
+  GCAL_ACCESS.set(key, { token: r.data.access_token,
+    exp: Date.now() + (Number(r.data.expires_in) || 3600) * 1000 });
+  return { token: r.data.access_token };
+}
+
+async function gcalConnection(env, userId) {
+  return env.DB.prepare(`SELECT * FROM gcal_connections WHERE user_id = ?`).bind(userId).first();
+}
+
+const gcalNote = (env, userId, error) => env.DB.prepare(
+  `UPDATE gcal_connections SET last_error = ? WHERE user_id = ?`).bind(error, userId).run().catch(() => null);
+
+// WHAT GOES ON THEIR CALENDAR: the live visits on their own work, worked out
+// per seat the way each screen already decides what is theirs.
+//   - a contractor seat: visits on that account's jobs where their company
+//     holds ACCEPTED work (an offer they have not taken is not theirs yet);
+//   - a seat on an account with a company of its own: visits on any job that
+//     company holds accepted work on, whoever's account it is;
+//   - an admin or project manager: their account's visits, narrowed to the
+//     buildings or jobs the seat is narrowed to;
+//   - a tenant: visits on the repairs they reported or have to be in for.
+// An owner's seat has nothing to attend, so it adds nothing.
+async function gcalItemsFor(env, userId) {
+  const today = dayKeyUtc();
+  const lo = addDaysKey(today, -GCAL_PAST_DAYS);
+  const hi = addDaysKey(today, GCAL_AHEAD_DAYS);
+  const { results: seats } = await env.DB.prepare(
+    `SELECT m.account_id, m.role, m.company_id, a.company_id AS own_company
+       FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
+  ).bind(userId).all();
+  const base = `SELECT v.id AS visit_id, v.date, v.start_time, v.end_time, v.status,
+                       j.id AS job_id, j.title, j.address, j.property_id, j.trades,
+                       a.name AS client
+                  FROM visits v JOIN jobs j ON j.id = v.job_id JOIN accounts a ON a.id = j.account_id
+                 WHERE v.status IN ('proposed','confirmed') AND v.date BETWEEN ? AND ?
+                   AND j.status = 'active'`;
+  const out = new Map();
+  const add = (rows, trades) => {
+    for (const r of rows || []) {
+      if (out.has(r.visit_id)) continue;
+      out.set(r.visit_id, {
+        visitId: r.visit_id, jobId: r.job_id, title: r.title, address: r.address,
+        date: r.date, start: r.start_time, end: r.end_time, status: r.status,
+        client: r.client,
+        trades: (trades ? String(r.my_trades || "").split(",") : parseJson(r.trades, []))
+          .filter(Boolean).map((t) => tradeLabel(t) || t),
+        link: `${APP_ORIGIN}/`,
+      });
+    }
+  };
+  const crewSql = `${base.replace("a.name AS client", "a.name AS client, (SELECT GROUP_CONCAT(w2.trade) FROM work_orders w2 WHERE w2.job_id = j.id AND w2.company_id = ? AND w2.voided_at IS NULL AND w2.status = 'accepted') AS my_trades")}
+        AND EXISTS (SELECT 1 FROM work_orders w WHERE w.job_id = j.id AND w.company_id = ?
+                      AND w.voided_at IS NULL AND w.status = 'accepted')`;
+  for (const s of seats || []) {
+    if (s.role === "contractor" && s.company_id) {
+      const { results } = await env.DB.prepare(`${crewSql} AND j.account_id = ?`)
+        .bind(s.company_id, lo, hi, s.company_id, s.account_id).all();
+      add(results, true);
+    }
+    if (["admin", "pm"].includes(s.role) && s.own_company) {
+      const { results } = await env.DB.prepare(crewSql)
+        .bind(s.own_company, lo, hi, s.own_company).all();
+      add(results, true);
+    }
+    if (["admin", "pm"].includes(s.role)) {
+      const auth = await teamSeatAuth(env, userId, s.account_id);
+      const { results } = await env.DB.prepare(`${base} AND j.account_id = ?`)
+        .bind(lo, hi, s.account_id).all();
+      add((results || []).filter((r) => maySeeProperty(auth || {}, r.property_id)
+        && maySeeJob(auth || {}, r.job_id)), false);
+    }
+    if (s.role === "tenant") {
+      const rows = await (async () => {
+        for (const who of ["(j.requested_by = ? OR j.access_user_id = ?)", "(j.requested_by = ? OR j.requested_by = ?)"]) {
+          try {
+            return (await env.DB.prepare(`${base} AND j.account_id = ? AND ${who}`)
+              .bind(lo, hi, s.account_id, userId, userId).all()).results;
+          } catch (err) { if (!missingSchema(err)) throw err; }
+        }
+        return [];
+      })();
+      add(rows, false);
+    }
+  }
+  return [...out.values()];
+}
+
+// KEEP ONE PERSON'S SUBSUB JOBS CALENDAR IN STEP. Writes what changed,
+// deletes what is no longer live, and makes the calendar again if they
+// deleted it in Google. Answers what it did; never throws.
+async function gcalSync(env, userId) {
+  const res = { inserted: 0, updated: 0, deleted: 0, error: null };
+  try {
+    const conn = await gcalConnection(env, userId);
+    if (!conn) return { ...res, error: "not_connected" };
+    if (!conn.sync_on) return { ...res, skipped: "sync_off" };
+    const acc = await gcalAccess(env, conn);
+    if (acc.error) { await gcalNote(env, userId, acc.error); return { ...res, error: acc.error }; }
+    let calendarId = conn.calendar_id;
+    const ensureCalendar = async () => {
+      const made = await createCalendar(env, acc.token, {
+        summary: GCAL_CALENDAR_NAME,
+        description: "Jobs from SubSub. Kept up to date by SubSub; changes made here are replaced.",
+        timeZone: conn.time_zone,
+      });
+      if (!made.ok || !made.data?.id) return null;
+      calendarId = made.data.id;
+      await env.DB.prepare(`UPDATE gcal_connections SET calendar_id = ? WHERE user_id = ?`)
+        .bind(calendarId, userId).run();
+      await env.DB.prepare(`DELETE FROM gcal_events WHERE user_id = ?`).bind(userId).run();
+      return calendarId;
+    };
+    if (!calendarId && !(await ensureCalendar())) {
+      await gcalNote(env, userId, "calendar_refused");
+      return { ...res, error: "calendar_refused" };
+    }
+    const items = await gcalItemsFor(env, userId);
+    const { results: have } = await env.DB.prepare(
+      `SELECT visit_id, event_id, fingerprint FROM gcal_events WHERE user_id = ?`).bind(userId).all();
+    const known = new Map((have || []).map((r) => [r.visit_id, r]));
+    let remade = false;
+    for (const item of items) {
+      const ev = eventFor(item, conn.time_zone);
+      const fp = eventFingerprint(ev);
+      const row = known.get(item.visitId);
+      known.delete(item.visitId);
+      if (row && row.fingerprint === fp) continue;
+      let r = row ? await patchEvent(env, acc.token, calendarId, row.event_id, ev) : null;
+      // Gone from Google (they deleted the event, or the calendar): write it
+      // again rather than leave a visit missing from their day.
+      if (!r || r.status === 404 || r.status === 410) {
+        r = await insertEvent(env, acc.token, calendarId, ev);
+        if ((r.status === 404 || r.status === 410) && !remade) {
+          remade = true;
+          if (await ensureCalendar()) r = await insertEvent(env, acc.token, calendarId, ev);
+        }
+        if (r.ok) res.inserted += 1;
+      } else if (r.ok) res.updated += 1;
+      if (r.status === 401) {
+        const again = await gcalAccess(env, conn, { fresh: true });
+        await gcalNote(env, userId, again.error || "write_refused");
+        return { ...res, error: again.error || "write_refused" };
+      }
+      if (!r.ok || !r.data?.id) { res.error = "write_refused"; continue; }
+      await env.DB.prepare(
+        `INSERT INTO gcal_events (user_id, visit_id, event_id, fingerprint, synced_at)
+         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id, visit_id) DO UPDATE SET event_id = excluded.event_id,
+           fingerprint = excluded.fingerprint, synced_at = excluded.synced_at`
+      ).bind(userId, item.visitId, r.data.id, fp).run();
+    }
+    // What is left was on the calendar and is no longer a live visit of
+    // theirs: superseded, declined, or work they no longer hold.
+    for (const row of known.values()) {
+      const r = await deleteEvent(env, acc.token, calendarId, row.event_id);
+      if (r.ok || r.status === 404 || r.status === 410) {
+        await env.DB.prepare(`DELETE FROM gcal_events WHERE user_id = ? AND visit_id = ?`)
+          .bind(userId, row.visit_id).run();
+        res.deleted += 1;
+      }
+    }
+    await env.DB.prepare(
+      `UPDATE gcal_connections SET last_synced_at = CURRENT_TIMESTAMP, last_error = ? WHERE user_id = ?`
+    ).bind(res.error, userId).run();
+    return res;
+  } catch (err) {
+    if (missingSchema(err)) return { ...res, error: "migration_needed" };
+    console.error("[gcal] sync failed:", err?.message || err);
+    return { ...res, error: "failed" };
+  }
+}
+
+// Everybody connected who might have this job on their calendar, kept in step
+// straight after a time is proposed or answered rather than at the next
+// sweep. Best effort and in the background: it never holds up the reply.
+async function gcalSyncJob(env, jobId) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT DISTINCT g.user_id FROM gcal_connections g
+         JOIN memberships m ON m.user_id = g.user_id
+         JOIN jobs j ON j.id = ?
+         LEFT JOIN accounts a ON a.id = m.account_id
+        WHERE g.sync_on = 1 AND (m.account_id = j.account_id
+          OR EXISTS (SELECT 1 FROM work_orders w WHERE w.job_id = j.id AND w.voided_at IS NULL
+                      AND (w.company_id = m.company_id OR w.company_id = a.company_id)))`
+    ).bind(jobId).all();
+    for (const r of results || []) await gcalSync(env, r.user_id);
+  } catch (err) {
+    if (!missingSchema(err)) console.warn("[gcal] job sync:", err?.message || err);
+  }
+}
+const gcalSoon = (c, jobId) => {
+  const run = gcalSyncJob(c.env, jobId);
+  try { c.executionCtx.waitUntil(run); } catch { /* no context in tests */ }
+  return run;
+};
+
+// THE COMPANY'S PEOPLE WHO SAID "DO NOT BOOK ME OVER MY CALENDAR", with their
+// busy periods for [fromKey, fromKey + days). Only calendars that could be
+// read: one that could not answers nothing rather than "busy", because a
+// Google outage must never stop a job being scheduled.
+async function companyCalendarPeople(env, companyId, fromKey, days = GCAL_BUSY_DAYS) {
+  if (!companyId || !googleConfigured(env)) return [];
+  let conns = [];
+  try {
+    ({ results: conns } = await env.DB.prepare(
+      `SELECT DISTINCT g.* FROM gcal_connections g
+         JOIN memberships m ON m.user_id = g.user_id
+         LEFT JOIN accounts a ON a.id = m.account_id
+        WHERE g.block_on = 1
+          AND ((m.role = 'contractor' AND m.company_id = ?)
+            OR (m.role IN ('admin','pm') AND a.company_id = ?))`
+    ).bind(companyId, companyId).all());
+  } catch (err) {
+    if (missingSchema(err)) return [];
+    throw err;
+  }
+  const people = [];
+  for (const conn of conns || []) {
+    const acc = await gcalAccess(env, conn);
+    if (acc.error) { await gcalNote(env, conn.user_id, acc.error); continue; }
+    const timeMin = new Date(wallToUtc(addDaysKey(fromKey, -1), "00:00", conn.time_zone)).toISOString();
+    const timeMax = new Date(wallToUtc(addDaysKey(fromKey, days + 1), "00:00", conn.time_zone)).toISOString();
+    let fb = await freeBusy(env, acc.token, { timeMin, timeMax });
+    if (fb.status === 401) {
+      const again = await gcalAccess(env, conn, { fresh: true });
+      if (again.error) { await gcalNote(env, conn.user_id, again.error); continue; }
+      fb = await freeBusy(env, again.token, { timeMin, timeMax });
+    }
+    if (fb.ok) people.push({ tz: conn.time_zone, busy: fb.busy });
+  }
+  return people;
+}
+
+// Is any company that holds accepted work on this job shown busy for this
+// window? Named, so the screen can say who.
+async function crewCalendarConflict(env, jobId, { date, start, end }) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT DISTINCT w.company_id, co.company FROM work_orders w
+         JOIN companies co ON co.id = w.company_id
+        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'`
+    ).bind(jobId).all();
+    for (const r of results || []) {
+      const people = await companyCalendarPeople(env, r.company_id, date, 1);
+      if (companyBusyAt(people, date, start, end)) return { companyId: r.company_id, company: r.company };
+    }
+  } catch (err) {
+    if (!missingSchema(err)) console.warn("[gcal] busy check:", err?.message || err);
+  }
+  return null;
+}
+
+app.get("/api/google-calendar", async (c) => {
+  const { userId } = c.get("auth");
+  const configured = gcalReady(c.env);
+  let conn = null;
+  try { conn = await gcalConnection(c.env, userId); }
+  catch (err) {
+    const m = missingSchema(err);
+    if (m) return c.json({ configured, connected: false, migration: m });
+    throw err;
+  }
+  let events = 0;
+  if (conn) {
+    const n = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM gcal_events WHERE user_id = ?`)
+      .bind(userId).first().catch(() => null);
+    events = Number(n?.n || 0);
+  }
+  return c.json({
+    configured,
+    connected: !!conn,
+    email: conn?.google_email || null,
+    calendarName: GCAL_CALENDAR_NAME,
+    timeZone: conn?.time_zone || null,
+    syncOn: conn ? !!conn.sync_on : true,
+    blockOn: conn ? !!conn.block_on : true,
+    lastSyncedAt: conn?.last_synced_at || null,
+    lastError: conn?.last_error || null,
+    events,
+  });
+});
+
+app.post("/api/google-calendar/start", async (c) => {
+  const { userId } = c.get("auth");
+  if (!gcalReady(c.env)) return c.json({ error: "not_configured" }, 501);
+  if (!(await rateLimit(c.env, "gcal-start", userId, { limit: 10, windowMinutes: 60 })).ok) return c.json({ error: "rate_limited" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  const tz = validTimeZone(b.timeZone);
+  if (!tz) return c.json({ error: "bad_time_zone" }, 400);
+  const returnTo = gcalReturnTo(b.returnTo) || `${APP_ORIGIN}/`;
+  const state = [...crypto.getRandomValues(new Uint8Array(32))]
+    .map((x) => x.toString(16).padStart(2, "0")).join("");
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO gcal_states (state, user_id, return_to, time_zone) VALUES (?, ?, ?, ?)`
+    ).bind(state, userId, returnTo, tz).run();
+  } catch (err) {
+    const m = missingSchema(err);
+    if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+    throw err;
+  }
+  const me = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first().catch(() => null);
+  return c.json({ url: authUrl(c.env, { redirectUri: gcalRedirect(c), state, scopes: GCAL_SCOPES,
+    loginHint: me?.email && !String(me.email).endsWith(".invalid") ? me.email : null }) });
+});
+
+// Google sends the browser here, with no SubSub session on it -- which is why
+// this route is public and why the state row, one use and fifteen minutes,
+// is the whole of what says whose calendar this is.
+app.get("/api/google-calendar/callback", async (c) => {
+  const q = c.req.query();
+  const back = (to, why) => {
+    const u = new URL(to || `${APP_ORIGIN}/`);
+    u.searchParams.set("gcal", why);
+    return c.redirect(u.toString(), 302);
+  };
+  const st = q.state ? await c.env.DB.prepare(
+    `SELECT * FROM gcal_states WHERE state = ?`).bind(String(q.state)).first().catch(() => null) : null;
+  if (!st) return back(null, "expired");
+  const claimed = await c.env.DB.prepare(
+    `UPDATE gcal_states SET used_at = CURRENT_TIMESTAMP
+      WHERE state = ? AND used_at IS NULL AND created_at > datetime('now', '-15 minutes')`
+  ).bind(st.state).run();
+  if (!claimed.meta?.changes) return back(st.return_to, "expired");
+  if (q.error) return back(st.return_to, "denied");
+  if (!gcalReady(c.env)) return back(st.return_to, "not_configured");
+  const r = await exchangeCode(c.env, { code: String(q.code || ""), redirectUri: gcalRedirect(c) });
+  if (!r.ok || !r.data?.access_token) return back(st.return_to, "failed");
+  if (!scopesGranted(r.data.scope)) {
+    await revoke(c.env, r.data.access_token);
+    return back(st.return_to, "missing_scope");
+  }
+  if (!r.data.refresh_token) return back(st.return_to, "no_refresh");
+  const sealed = await sealSecret(c.env, r.data.refresh_token);
+  await c.env.DB.prepare(
+    `INSERT INTO gcal_connections (user_id, google_email, refresh_enc, time_zone, connected_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(user_id) DO UPDATE SET google_email = excluded.google_email,
+       refresh_enc = excluded.refresh_enc, time_zone = excluded.time_zone,
+       calendar_id = NULL, connected_at = excluded.connected_at, last_error = NULL`
+  ).bind(st.user_id, idTokenEmail(r.data.id_token), sealed, st.time_zone || "UTC").run();
+  // A new connection starts a new calendar, so nothing old is pointed at.
+  await c.env.DB.prepare(`DELETE FROM gcal_events WHERE user_id = ?`).bind(st.user_id).run();
+  GCAL_ACCESS.set(`${st.user_id}:${sealed}`, { token: r.data.access_token,
+    exp: Date.now() + (Number(r.data.expires_in) || 3600) * 1000 });
+  const run = gcalSync(c.env, st.user_id);
+  try { c.executionCtx.waitUntil(run); } catch { await run; }
+  return back(st.return_to, "connected");
+});
+
+app.patch("/api/google-calendar", async (c) => {
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const sets = []; const vals = [];
+  for (const [k, col] of [["syncOn", "sync_on"], ["blockOn", "block_on"]]) {
+    if (b[k] === undefined) continue;
+    if (typeof b[k] !== "boolean") return c.json({ error: "bad_value", field: k }, 400);
+    sets.push(`${col} = ?`); vals.push(b[k] ? 1 : 0);
+  }
+  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
+  const done = await c.env.DB.prepare(
+    `UPDATE gcal_connections SET ${sets.join(", ")} WHERE user_id = ?`).bind(...vals, userId).run()
+    .catch((err) => { if (missingSchema(err)) return null; throw err; });
+  if (!done?.meta?.changes) return c.json({ error: "not_connected" }, 404);
+  // Turning the push off takes SubSub's events off their calendar now rather
+  // than leaving last week's jobs sitting there, wrong, for good.
+  if (b.syncOn === false) await gcalClear(c.env, userId, { deleteCalendar: true });
+  if (b.syncOn === true) await gcalSync(c.env, userId);
+  return c.json({ ok: true });
+});
+
+app.post("/api/google-calendar/sync", async (c) => {
+  const { userId } = c.get("auth");
+  if (!(await rateLimit(c.env, "gcal-sync", userId, { limit: 20, windowMinutes: 60 })).ok) return c.json({ error: "rate_limited" }, 429);
+  const r = await gcalSync(c.env, userId);
+  if (r.error === "not_connected") return c.json({ error: "not_connected" }, 404);
+  if (r.error === "migration_needed") return c.json({ error: "migration_needed", migration: "094_google_calendar" }, 503);
+  return c.json(r);
+});
+
+// Take SubSub's calendar off their Google account: deleting the one calendar
+// removes every event on it, which is the whole of what SubSub ever wrote.
+async function gcalClear(env, userId, { deleteCalendar: drop } = {}) {
+  const conn = await gcalConnection(env, userId).catch(() => null);
+  if (!conn) return null;
+  const acc = await gcalAccess(env, conn);
+  if (drop && conn.calendar_id && !acc.error) {
+    await deleteCalendar(env, acc.token, conn.calendar_id);
+    await env.DB.prepare(`UPDATE gcal_connections SET calendar_id = NULL WHERE user_id = ?`).bind(userId).run();
+  }
+  await env.DB.prepare(`DELETE FROM gcal_events WHERE user_id = ?`).bind(userId).run();
+  return { conn, acc };
+}
+
+app.delete("/api/google-calendar", async (c) => {
+  const { userId } = c.get("auth");
+  const got = await gcalClear(c.env, userId, { deleteCalendar: true }).catch((err) => {
+    if (missingSchema(err)) return null; throw err;
+  });
+  if (!got) return c.json({ error: "not_connected" }, 404);
+  const refresh = await openSecret(c.env, got.conn.refresh_enc).catch(() => null);
+  if (refresh) await revoke(c.env, refresh);
+  await c.env.DB.prepare(`DELETE FROM gcal_connections WHERE user_id = ?`).bind(userId).run();
+  return c.json({ ok: true });
+});
+
+// Every connection, oldest sync first, a few at a time: the ten-minute cron
+// is the backstop for anything the immediate sync after a change missed.
+export async function gcalSweep(env) {
+  if (!gcalReady(env)) return { skipped: "not_configured" };
+  let rows = [];
+  try {
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT user_id FROM gcal_connections WHERE sync_on = 1
+        ORDER BY COALESCE(last_synced_at, '') LIMIT 40`).all());
+  } catch (err) {
+    if (missingSchema(err)) return { skipped: "migration_needed" };
+    throw err;
+  }
+  const out = { synced: 0, failed: 0 };
+  for (const r of rows || []) {
+    const s = await gcalSync(env, r.user_id);
+    if (s.error) out.failed += 1; else out.synced += 1;
+  }
+  // State rows are one-use and fifteen minutes; nothing reads an old one.
+  await env.DB.prepare(`DELETE FROM gcal_states WHERE created_at < datetime('now', '-1 day')`).run().catch(() => null);
+  return out;
+}
+
 export default {
   fetch: app.fetch,
 
@@ -26854,7 +27363,7 @@ export default {
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
          ["unit-billing", unitBillingSweep], ["bbb", bbbSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep],
-         ["held", heldSweep]];
+         ["held", heldSweep], ["gcal", gcalSweep]];
 
     ctx.waitUntil((async () => {
       for (const [name, run] of jobs) {

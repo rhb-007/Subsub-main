@@ -652,6 +652,14 @@ export const api = {
     { method: "DELETE" }),
   // Browsing a CompanyCam project and importing from it into a job. The
   // import answers measurement-document entries the job form appends.
+  // 094. Google Calendar, per person: SubSub jobs on their own calendar and
+  // their busy times respected. Starting a connection answers Google's consent
+  // address; the browser goes there and Google sends it back with ?gcal=.
+  googleCalendar: () => request("/google-calendar"),
+  googleCalendarStart: (body) => request("/google-calendar/start", { method: "POST", body: JSON.stringify(body) }),
+  setGoogleCalendar: (body) => request("/google-calendar", { method: "PATCH", body: JSON.stringify(body) }),
+  syncGoogleCalendar: () => request("/google-calendar/sync", { method: "POST" }),
+  disconnectGoogleCalendar: () => request("/google-calendar", { method: "DELETE" }),
   companycamStatus: () => request("/companycam/status"),
   companycamProjects: (q, page = 1) =>
     request(`/companycam/projects?q=${encodeURIComponent(q || "")}&page=${page}`),

@@ -85,6 +85,19 @@ const GROUPS = [
       + "refused by name and nothing else changes. Changing it disconnects every account.",
   },
   {
+    id: "gcal", label: "Google Calendar sync",
+    vars: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "INTEGRATION_SECRET_KEY"],
+    matters: "Putting SubSub jobs on a person's own Google Calendar and not booking them over something "
+      + "already on it. The OAuth client is made in Google Cloud; its refresh tokens are sealed with "
+      + "INTEGRATION_SECRET_KEY. Unset, the Google Calendar panel says it is not set up and nothing else changes.",
+  },
+  {
+    id: "gcal-redirect", label: "Google Calendar return address (only if not the default)",
+    vars: ["GOOGLE_CALENDAR_REDIRECT_URI"],
+    matters: "Only needed when the API is not served from api.subsub.work. It must match the Authorized "
+      + "redirect URI on the Google OAuth client exactly. Off is normal.",
+  },
+  {
     id: "wallet", label: "Apple Wallet Passport card",
     vars: ["APPLE_PASS_TYPE_ID", "APPLE_TEAM_ID", "APPLE_PASS_CERT", "APPLE_PASS_KEY", "APPLE_WWDR_CERT"],
     matters: "The Add to Apple Wallet button on a subcontractor's Passport tab. The Pass Type ID and Team ID "
