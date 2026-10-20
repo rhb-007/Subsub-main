@@ -10062,11 +10062,57 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   }, {}));
 
   const open = rows.find((r) => r.a.id === openId);
-  // The team seats on the open account, and whether any of them can administer
-  // it. Read through the shared predicate rather than a second `=== "admin"`
-  // here, so this panel and the impersonate route cannot hold two opinions
-  // about the same account -- which is exactly the disagreement that produced
-  // "1 Team users" over "nobody to sign in as".
+  // ONE reset panel, drawn in whichever panel the person is listed in, so
+  // pressing Reset password on a tenant does not open it in the Team panel.
+  const resetPanel = open && resetFor && (
+                <div className="pf-reset">
+                  {!resetLink || resetLink.email !== resetFor.email ? (
+                    <>
+                      <p>Send a password reset link to <b>{resetFor.name}</b> ({resetFor.email})?
+                        You will not see or set their password — only they can choose a new one, from a
+                        link that expires and can be used once.</p>
+                      {resetErr && <p className="pf-host-err">{resetErr}</p>}
+                      <div className="form-actions">
+                        <button className="btn-ghost" onClick={() => { setResetFor(null); setResetErr(""); }}>Cancel</button>
+                        <button className="btn-solid" disabled={sending}
+                          onClick={async () => {
+                            setSending(true); setResetErr("");
+                            try { setResetLink(await onResetPassword(resetFor.userId, resetFor.accountId)); }
+                            catch (err) {
+                              // The console-wide banner for this sits at the
+                              // top of the page, which is nowhere near the
+                              // button that was pressed -- so a failed send
+                              // read as a button that did nothing at all.
+                              setResetErr(resetFailureText(err));
+                            }
+                            finally { setSending(false); }
+                          }}>
+                          <Key size={14} /> {sending ? "Sending…" : "Send reset link"}
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* No link is shown, because none comes back. The token
+                          exists only inside the email -- which is exactly what
+                          makes sending one on somebody's behalf safe. */}
+                      <p><Check size={14} style={{ display: "inline", verticalAlign: -2 }} /> Reset email sent to <b>{resetLink.email}</b>.
+                        The link is in that email, expires, and works once.</p>
+                      {resetLink.created && (
+                        <p className="pf-note">They had no sign-in yet, so one was created first — they may
+                          also get a "confirm your email" message. The reset link is the one that lets them
+                          choose a password.</p>
+                      )}
+                      <div className="form-actions">
+                        <button className="btn-ghost" onClick={() => { setResetFor(null); setResetLink(null); }}>Done</button>
+                      </div>
+                    </>
+                  )}
+                </div>
+  );
+  // The team seats on the open account, and whether any can administer it. Read through the shared
+  // predicate, so this panel and the impersonate route agree, which is the
+  // disagreement that produced "1 Team users" over "nobody to sign in as".
   const teamSeats = open
     ? memberships.filter((m) => m.accountId === open.a.id && m.role !== "contractor")
     : [];
@@ -10671,53 +10717,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   <button className="pf-mini" onClick={() => setAddUser(null)}>Cancel</button>
                 </div>
               )}
-              {resetFor && resetFor.accountId === open.a.id && (
-                <div className="pf-reset">
-                  {!resetLink || resetLink.email !== resetFor.email ? (
-                    <>
-                      <p>Send a password reset link to <b>{resetFor.name}</b> ({resetFor.email})?
-                        You will not see or set their password — only they can choose a new one, from a
-                        link that expires and can be used once.</p>
-                      {resetErr && <p className="pf-host-err">{resetErr}</p>}
-                      <div className="form-actions">
-                        <button className="btn-ghost" onClick={() => { setResetFor(null); setResetErr(""); }}>Cancel</button>
-                        <button className="btn-solid" disabled={sending}
-                          onClick={async () => {
-                            setSending(true); setResetErr("");
-                            try { setResetLink(await onResetPassword(resetFor.userId, resetFor.accountId)); }
-                            catch (err) {
-                              // The console-wide banner for this sits at the
-                              // top of the page, which is nowhere near the
-                              // button that was pressed -- so a failed send
-                              // read as a button that did nothing at all.
-                              setResetErr(resetFailureText(err));
-                            }
-                            finally { setSending(false); }
-                          }}>
-                          <Key size={14} /> {sending ? "Sending…" : "Send reset link"}
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      {/* No link is shown, because none comes back. The token
-                          exists only inside the email -- which is exactly what
-                          makes sending one on somebody's behalf safe. */}
-                      <p><Check size={14} style={{ display: "inline", verticalAlign: -2 }} /> Reset email sent to <b>{resetLink.email}</b>.
-                        The link is in that email, expires, and works once.</p>
-                      {resetLink.created && (
-                        <p className="pf-note">They had no sign-in yet, so one was created first — they may
-                          also get a "confirm your email" message. The reset link is the one that lets them
-                          choose a password.</p>
-                      )}
-                      <div className="form-actions">
-                        <button className="btn-ghost" onClick={() => { setResetFor(null); setResetLink(null); }}>Done</button>
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-              {memberships.filter((m) => m.accountId === open.a.id && m.role !== "contractor").map((m) => {
+              {resetFor && resetFor.accountId === open.a.id && !resetFor.guest && resetPanel}
+              {memberships.filter((m) => m.accountId === open.a.id && isTeamSeat(m.role)).map((m) => {
                 const u = users.find((x) => x.id === m.userId);
                 return u ? (
                   <div key={m.userId} className="pf-line">
@@ -10768,6 +10769,42 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               })}
               {roleErr && <p className="pf-host-err">{roleErr}</p>}
             </div>
+
+            {/* TENANTS AND OWNERS ARE NOT THE TEAM. Reported as "John Smith is
+                a tenant not a teammate": the Team panel listed every seat that
+                was not a contractor, so a tenant of one of the account's
+                buildings sat under the account's admin as though they worked
+                there. They are guests scoped to their own buildings, so they
+                get their own panel, drawn only when there are any. The reset
+                link here still opens the same password-reset panel above. */}
+            {memberships.some((m) => m.accountId === open.a.id && m.role !== "contractor" && !isTeamSeat(m.role)) && (
+              <div className="pf-panel pf-guests">
+                <div className="pf-panel-hd">
+                  <h3>Tenants and owners</h3>
+                </div>
+                <p className="pf-note">Guests on this account, each scoped to their own buildings. Not part of the team.</p>
+                {resetFor && resetFor.accountId === open.a.id && resetFor.guest && resetPanel}
+              {(() => {
+                const guests = memberships.filter((m) => m.accountId === open.a.id
+                  && m.role !== "contractor" && !isTeamSeat(m.role));
+                return guests.length > 0 && guests.map((m) => {
+                  const u = users.find((x) => x.id === m.userId);
+                  return u ? (
+                    <div key={m.userId} className="pf-line">
+                      <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                      <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}{m.unit ? ` \u00b7 unit ${m.unit}` : ""}</span></span>
+                      <span className={`role-badge r-${m.role}`} title="A guest seat, scoped to their own buildings">
+                        {roleLabelIn(kindOf(open.a), m.role)}
+                      </span>
+                      <button className="pf-mini" onClick={() => { setResetErr(""); setResetLink(null); setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id, guest: true }); }}>
+                        <Key size={12} /> Reset password
+                      </button>
+                    </div>
+                  ) : null;
+                });
+              })()}
+            </div>
+            )}
 
             <MailLog accountId={open.a.id} load={onMailLog} />
 

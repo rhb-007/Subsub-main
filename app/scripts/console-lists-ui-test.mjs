@@ -73,6 +73,9 @@ const BOOT = {
     // admin also holds a CONTRACTOR seat on Sound for Outerhome's own row.
     // Before, that was the only way in the company window offered.
     { userId: "u_a1", accountId: "acc_pm", role: "contractor", companyId: "cmp_own_acc_gc" },
+    // A TENANT ON SOUND, reported as "John Smith is a tenant not a teammate":
+    // the Team panel listed every seat that was not a contractor.
+    { userId: "u_a5", accountId: "acc_pm", role: "tenant", companyId: null, unit: "53" },
   ],
   companies: [
     { id: "cmp_own_acc_gc", company: "Outerhome", contact: "Rae Admin", accountName: "Outerhome",
@@ -443,6 +446,44 @@ try {
   await wait(400);
   t.ck("closing it leaves the list where it was", await page.evaluate(() =>
     !document.querySelector(".modal-acct") && document.querySelectorAll(".pf-rows .pf-row").length === 7));
+
+  console.log("\n-- a tenant is not on the Team --");
+  await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row")]
+    .find((r) => /Sound Property/.test(r.innerText))?.click());
+  await wait(900);
+  const panels = await page.evaluate(() => {
+    const m = document.querySelector(".modal.modal-acct");
+    if (!m) return null;
+    const ps = [...m.querySelectorAll(".pf-panel")];
+    const names = (p) => p ? [...p.querySelectorAll(".pf-line b")].map((b) => b.innerText.trim()) : null;
+    const team = ps.find((p) => p.querySelector("h3")?.innerText.trim() === "Team");
+    const guests = ps.find((p) => p.querySelector("h3")?.innerText.trim() === "Tenants and owners");
+    return { team: names(team), guests: names(guests),
+      guestRole: guests?.querySelector(".role-badge")?.innerText.trim() || null,
+      guestUnit: /unit 53/.test(guests?.innerText || "") };
+  });
+  t.ck("Sound opened, with a Team panel", !!panels?.team, JSON.stringify(panels));
+  t.ck("the Team is the admin alone", JSON.stringify(panels?.team) === '["Sam Sound"]', JSON.stringify(panels?.team));
+  t.ck("the tenant is in Tenants and owners", JSON.stringify(panels?.guests) === '["Ruth Owner"]', JSON.stringify(panels?.guests));
+  t.ck("labelled as a tenant, with their unit", /tenant/i.test(panels?.guestRole || "") && panels?.guestUnit,
+    JSON.stringify(panels));
+  await page.evaluate(() => [...document.querySelectorAll(".modal-acct .pf-guests button")]
+    .find((b) => /Reset password/.test(b.innerText))?.click());
+  await wait(300);
+  t.ck("resetting a tenant's password asks inside their own panel", await page.evaluate(() =>
+    !!document.querySelector(".modal-acct .pf-guests .pf-reset")
+    && !document.querySelector(".modal-acct .pf-panel:not(.pf-guests) .pf-reset")));
+  await page.evaluate(() => document.querySelector(".modal-acct .modal-close")?.click());
+  await wait(400);
+  const outer = await page.evaluate(() => {
+    [...document.querySelectorAll(".pf-rows .pf-row")].find((r) => /Outerhome/.test(r.innerText))?.click();
+    return true;
+  });
+  await wait(800);
+  t.ck("an account with no guests draws no guests panel", outer && await page.evaluate(() =>
+    !!document.querySelector(".modal-acct") && !document.querySelector(".modal-acct .pf-guests")));
+  await page.evaluate(() => document.querySelector(".modal-acct .modal-close")?.click());
+  await wait(400);
 
   console.log("\n-- Companies: rows, a window, and filters --");
   t.ck("there is no Not arrived page any more", await page.evaluate(() =>

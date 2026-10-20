@@ -14269,6 +14269,16 @@ refactor.
   **Cards view keeps the whole card**, because it is for reading many jobs at
   once. `test:jobtabs` (15); two mutations fire.
 
+- **THE CONSOLE'S TEAM PANEL LISTS THE TEAM; TENANTS AND OWNERS HAVE THEIR
+  OWN.** Reported as *"John Smith is a tenant not a teammate"*. The account
+  window's Team panel listed every seat that was not a contractor, so a tenant
+  sat under the account's admin as though they worked there. Team now reads
+  `isTeamSeat`. A **Tenants and owners** panel under it lists the guest seats
+  with their role badge and unit, and is drawn only when there are any. One
+  password-reset panel (`resetPanel`) opens inside whichever of the two the
+  person is listed in. `teamHasAdmin` is unchanged (it already read admin only).
+  `test:consolelists` (122); putting the old filter back fails one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
