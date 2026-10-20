@@ -392,5 +392,65 @@ console.log("\n-- awarding issues the work order at the number they gave --");
   ck("and the one who lost still does not", bayJobs.length === 0);
 }
 
+
+console.log("\n-- asking somebody who is not on SubSub --");
+{
+  // Volt Electric is on Alder's roster and nobody signs in as them anywhere.
+  // A quote is answered in SubSub, so the request goes AND they are invited
+  // to join, with what they are asked to price leading the email.
+  const { db, env } = seed();
+  db.exec(`INSERT INTO companies(id,company) VALUES ('cmp_mute','Mute Electric');
+    INSERT INTO engagements(id,account_id,company_id,status,categories)
+      VALUES ('en_mute','acc_a','cmp_mute','active','["electrical"]');`);
+  const mails = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).startsWith("https://resend.test/")) {
+      mails.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ id: "em_1" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return real(url, init);
+  };
+  const menv = { ...env, RESEND_API_KEY: "re_test", MAIL_FROM: "SubSub <hello@subsub.work>",
+    RESEND_API_BASE: "https://resend.test" };
+  try {
+    const before = one(db, `SELECT COUNT(*) AS n FROM quote_requests`).n;
+    const [noC, noBody] = await json(await call(menv, "u_boss", "acc_a", "/jobs/j_mill/quote-requests", "POST",
+      { items: [{ trade: "electrical" }], companyIds: ["cmp_mute"] }));
+    ck("one with no email or mobile is refused by name", noC === 400 && noBody.error === "no_contact"
+      && noBody.company === "Mute Electric", JSON.stringify(noBody));
+    ck("and nothing was written", one(db, `SELECT COUNT(*) AS n FROM quote_requests`).n === before);
+
+    const [st, made] = await json(await call(menv, "u_boss", "acc_a", "/jobs/j_mill/quote-requests", "POST",
+      { items: [{ trade: "roofing" }, { trade: "electrical" }], companyIds: ["cmp_bay", "cmp_volt"] }));
+    ck("the request still goes", st === 201, JSON.stringify(made));
+    ck("Volt is invited, and the reply says where it went",
+      made.invited?.length === 1 && made.invited[0].companyId === "cmp_volt" && made.invited[0].went === "val@volt.test",
+      JSON.stringify(made.invited));
+    ck("Bay, who signs in, is not invited", !made.invited?.some((i) => i.companyId === "cmp_bay"));
+    const inv = one(db, `SELECT * FROM sub_invites WHERE company_id = 'cmp_volt'`);
+    ck("the invite is bound to their company, so joining lands on this record", !!inv && inv.account_id === "acc_a");
+    const mail = mails.find((m) => [].concat(m.to).includes("val@volt.test"));
+    ck("the email says what they are asked to price, and on which job",
+      /price electrical/.test(mail?.subject || "") && /Re-roof the mill/.test(mail?.text || ""),
+      JSON.stringify(mail?.subject));
+    ck("and that answering happens once they join", /join SubSub to answer/.test(mail?.subject || "")
+      && /waiting for you once you're in/.test(mail?.text || ""));
+    ck("only once, for the one company", mails.length === 1, String(mails.length));
+
+    // They join: the invite becomes a contractor seat on this account. The
+    // request is waiting on their own screen and they can answer it.
+    db.exec(`INSERT INTO users(id,name,email) VALUES ('u_volt','Val Volt','val@volt.test');
+      INSERT INTO memberships(id,user_id,account_id,role,company_id)
+        VALUES ('m5','u_volt','acc_a','contractor','cmp_volt');`);
+    const [, theirs] = await json(await call(menv, "u_volt", "acc_a", "/my-quotes"));
+    ck("once they join, the request is waiting for them", theirs.length === 1 && theirs[0].trade === "electrical",
+      JSON.stringify(theirs).slice(0, 200));
+    const [ans] = await json(await call(menv, "u_volt", "acc_a", `/quotes/${theirs[0]?.inviteId}`, "POST",
+      { priceCents: 90000 }));
+    ck("and they can answer it", ans === 200, String(ans));
+  } finally { globalThis.fetch = real; }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

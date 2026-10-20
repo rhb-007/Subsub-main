@@ -3192,7 +3192,13 @@ const inviteKnownEnough = (co) => !!(co && co.company && co.contact && co.email)
 // The token is deliberately reused. Reissuing would quietly break the link
 // already sitting in somebody's inbox, which is the opposite of what
 // "resend" means to whoever pressed it.
-async function deliverSubInvite(env, { row, account, accountId, userId }) {
+// What a quote request adds to an invite: the trades, as words, and the job.
+const quoteInviteWords = (reason) => reason?.quote
+  ? { what: reason.quote.trades.map((t) => tradeLabel(t).toLowerCase()).join(" and "),
+      jobTitle: reason.quote.jobTitle || null }
+  : null;
+
+async function deliverSubInvite(env, { row, account, accountId, userId, reason = null }) {
   const link = inviteUrl(account, row.token);
   const email = row.email || null, phone = row.phone || null;
   // Raised from a contractor already on the roster, so the account typed all
@@ -3204,14 +3210,16 @@ async function deliverSubInvite(env, { row, account, accountId, userId }) {
   const known = inviteKnownEnough(bound);
   let mailResult = null, smsResult = null;
   if (email) {
-    const mail = subInviteEmail({ contact: row.contact, companyName: row.company_name, account, link, known });
+    const mail = subInviteEmail({ contact: row.contact, companyName: row.company_name, account, link, known,
+      quote: quoteInviteWords(reason) });
     mailResult = await sendEmail(env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(env, { accountId, companyId: null, to: email, kind: "sub_invite",
       subject: mail.subject, result: mailResult, sentBy: userId });
   }
   if (phone) {
     smsResult = await sendAccountSms(env, { accountId, to: phone, kind: "sub_invite",
-      body: subInviteSms({ companyName: row.company_name, account, link, known }) });
+      body: subInviteSms({ companyName: row.company_name, account, link, known,
+        quote: quoteInviteWords(reason) }) });
   }
   const emailed = !!mailResult?.ok, texted = !!smsResult?.ok;
   return {
@@ -3558,7 +3566,7 @@ app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) =>
 // The invite raised from a contractor's own card, as a function, because 093's
 // held assignment sends the same one: a second copy would be a second set of
 // rules about resending rather than replacing.
-async function inviteRosterCompany(env, { accountId, userId, companyId, email: wantEmail, phone: wantPhone }) {
+async function inviteRosterCompany(env, { accountId, userId, companyId, email: wantEmail, phone: wantPhone, reason = null }) {
   const ok = (body) => ({ status: 200, body });
   const no = (error, status) => ({ status, body: { error } });
 
@@ -3631,7 +3639,7 @@ async function inviteRosterCompany(env, { accountId, userId, companyId, email: w
   }
 
   const account = await env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
-  const sent = await deliverSubInvite(env, { row, account, accountId, userId });
+  const sent = await deliverSubInvite(env, { row, account, accountId, userId, reason });
   if (sent.emailed || sent.texted) {
     await env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .bind(row.id).run();
@@ -3644,7 +3652,7 @@ async function inviteRosterCompany(env, { accountId, userId, companyId, email: w
   return ok({
     ...inviteRowToJs(after, account),
     resent: !!open,
-    emailed: sent.emailed, texted: sent.texted,
+    emailed: sent.emailed, texted: sent.texted, went: sent.went,
     emailError: sent.emailError, textError: sent.textError,
   });
 }
@@ -14941,6 +14949,25 @@ app.post("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) =
       it.companyIds = picked.companyIds;
     }
 
+    // A COMPANY NOBODY SIGNS IN AS IS STILL ASKED, AND IS INVITED TO JOIN SO
+    // IT CAN ANSWER. A quote is answered from SubSub and nowhere else, so
+    // without the invite the request reached a company that could never see
+    // it. Checked before anything is written: one with no email or mobile on
+    // its card cannot be told, so the press is refused by name rather than
+    // sending a question to a company that will never hear it.
+    const everyone = [...new Set(items.flatMap((it) => it.companyIds))];
+    const toInvite = [];
+    for (const companyId of everyone) {
+      if (await companyAnswersForItself(c.env, companyId)) continue;
+      const co = await c.env.DB.prepare(
+        `SELECT company, email, phone FROM companies WHERE id = ?`).bind(companyId).first();
+      if (!String(co?.email || "").trim() && !String(co?.phone || "").trim()) {
+        return c.json({ error: "no_contact", companyId, company: co?.company || null }, 400);
+      }
+      toInvite.push({ companyId, company: co.company,
+        trades: items.filter((it) => it.companyIds.includes(companyId)).map((it) => it.trade) });
+    }
+
     const made = [];
     for (const it of items) {
       const id = uid();
@@ -14962,9 +14989,22 @@ app.post("/api/jobs/:id/quote-requests", requireRole("admin", "pm"), async (c) =
       `Asked ${people} contractor${people === 1 ? "" : "s"} to price ${
         items.map((it) => tradeLabel(it.trade)).join(", ")} on "${job.title}"`);
     await touchJob(c.env, jobId);
+
+    // After the request is written, so the quote is waiting for them the
+    // moment they sign up. The invite is the one raised from their card:
+    // resent rather than replaced if one is already out. A failed send does
+    // not undo the request; the reply says who was and was not reached.
+    const invited = [];
+    for (const t of toInvite) {
+      const r = await inviteRosterCompany(c.env, { accountId, userId, companyId: t.companyId,
+        reason: { quote: { trades: t.trades, jobTitle: job.title } } });
+      invited.push({ companyId: t.companyId, company: t.company,
+        went: r.status < 300 ? (r.body.went || "") : "",
+        error: r.status < 300 ? (r.body.emailError || r.body.textError || null) : r.body.error });
+    }
     return batch
-      ? c.json({ requests: made, asked: people }, 201)
-      : c.json({ id: made[0].id, asked: made[0].asked }, 201);
+      ? c.json({ requests: made, asked: people, invited }, 201)
+      : c.json({ id: made[0].id, asked: made[0].asked, invited }, 201);
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;

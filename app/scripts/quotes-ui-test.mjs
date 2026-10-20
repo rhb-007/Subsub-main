@@ -62,6 +62,8 @@ const JOB = {
 let JOBS = [JOB];
 let REQS = [];
 let MY_QUOTES = [];
+// What the server says it invited, for the ask to a company not on SubSub.
+let INVITED = [];
 const asks = [], awards = [], answers = [], answerPaths = [];
 
 // WHAT THEY ARE BEING ASKED TO PRICE, WITH THE PICTURES. Narrowed by the
@@ -112,7 +114,8 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   if (path === "/api/my-work") return [200, { work: [] }];
   if (path === "/api/my-quotes") return [200, MY_QUOTES];
   if (/^\/api\/jobs\/[^/]+\/quote-requests$/.test(path)) {
-    if (method === "POST") { asks.push(body); return [201, { id: "qr1", asked: (body.companyIds || []).length }]; }
+    if (method === "POST") { asks.push(body); return [201, { id: "qr1", asked: (body.companyIds || []).length,
+      invited: INVITED }]; }
     return [200, REQS];
   }
   if (/^\/api\/quote-requests\/[^/]+\/award$/.test(path)) {
@@ -507,6 +510,59 @@ try {
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
     JOBS = [JOB];
+  }
+
+
+  console.log("\n-- somebody not on SubSub is asked, and invited to sign up to answer --");
+  {
+    JOBS = [UNIT]; REQS = []; asks.length = 0;
+    const volt = SUBS.find((x) => x.id === "cmp_volt");
+    volt.answersForItself = false; volt.hasPortal = false;
+    INVITED = [{ companyId: "cmp_volt", company: "Volt Electric", went: "cmp_volt@test.test", error: null }];
+    const { ctx, page, crashes } = await open("u_boss");
+    await wait(3000);
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Jobs/.test(b.innerText.trim()))?.click());
+    await wait(1200);
+    await openCards(page);
+    await page.evaluate(() => [...document.querySelectorAll(".job-card h3, .job-card button")]
+      .find((e) => /unit 32/i.test(e.innerText))?.click());
+    await wait(900);
+    await page.evaluate(() => [...document.querySelectorAll(".trade-actions button")]
+      .find((b) => /Ask for quotes/i.test(b.innerText))?.click());
+    await wait(800);
+    const tags = await page.evaluate(() => [...document.querySelectorAll(".qa-pick:not(.qa-trade)")]
+      .map((b) => ({ name: b.querySelector(".qa-name")?.firstChild?.textContent.trim(), notss: !!b.querySelector(".qa-notss") })));
+    t.ck("the one not on SubSub is tagged before anybody is picked",
+      tags.find((x) => /Volt/.test(x.name || ""))?.notss === true, JSON.stringify(tags));
+    t.ck("and nobody who is on it is", tags.filter((x) => x.notss).length === 1, JSON.stringify(tags));
+    for (const who of ["Bay Roofing", "Volt Electric"]) {
+      await page.evaluate((w) => [...document.querySelectorAll(".qa-pick:not(.qa-trade)")]
+        .find((b) => b.innerText.includes(w))?.click(), who);
+      await wait(250);
+    }
+    const note = await page.evaluate(() => document.querySelector(".qa-invite-note")?.innerText || null);
+    t.ck("picking them says, before the press, that they'll be invited to sign up and answer",
+      /Volt Electric/.test(note || "") && /invite to sign up/.test(note || ""), String(note));
+    await page.evaluate(() => [...document.querySelectorAll(".form-actions .btn-solid")]
+      .find((b) => /^Ask 2 contractors/.test(b.innerText.trim()))?.click());
+    await wait(900);
+    t.ck("the request still goes to both", (asks[0]?.companyIds || []).length === 2, JSON.stringify(asks));
+    const done = await page.evaluate(() => {
+      const ms = [...document.querySelectorAll(".modal")];
+      const m = ms.find((x) => x.querySelector(".qa-invited")) || ms[ms.length - 1];
+      return m ? { title: m.querySelector("h3")?.innerText, list: m.querySelector(".qa-invited")?.innerText || "" } : null;
+    });
+    t.ck("afterwards the window stays, saying who was invited and where it went",
+      done?.title === "Quote request sent" && /Volt Electric/.test(done.list) && /cmp_volt@test\.test/.test(done.list),
+      JSON.stringify(done));
+    await page.evaluate(() => [...document.querySelectorAll(".modal .btn-solid")]
+      .find((b) => b.innerText.trim() === "Done")?.click());
+    await wait(500);
+    t.ck("and Done closes it", !!done?.list && await page.evaluate(() => !document.querySelector(".qa-invited")));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+    volt.answersForItself = true; volt.hasPortal = true; INVITED = []; JOBS = [JOB];
   }
 
   console.log("\n-- the company asked about both gets one card, a price per item --");

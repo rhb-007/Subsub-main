@@ -8333,9 +8333,12 @@ export default function SubSub() {
               tradeScopes={tradeScopes} openTrades={openTrades}
               onCancel={() => setAskQuotes(null)}
               onSend={async (body) => {
-                await api.askForQuotes(askQuotes.job.id, body);
-                setAskQuotes(null);
+                const r = await api.askForQuotes(askQuotes.job.id, body);
+                // Somebody had to be invited: the modal stays up to say so,
+                // and its Done closes it.
+                if (!r?.invited?.length) setAskQuotes(null);
                 await refreshQuotes();
+                return r;
               }} />
           </Modal>
         );
@@ -8348,7 +8351,7 @@ export default function SubSub() {
         if (!req) return null;
         return (
           <Modal onClose={() => setQuotePanel(null)} wide>
-            <QuotePanel req={req} job={quotePanel.job}
+            <QuotePanel req={req} job={quotePanel.job} subs={subs}
               onAward={async (companyId) => {
                 await api.awardQuote(req.id, companyId);
                 setQuotePanel(null);
@@ -36250,6 +36253,33 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {}, openT
     return sb && covers(sb, t);
   }));
   const label = (t) => catMeta(t).label;
+  const notOn = picked.map((id) => subs.find((x) => x.id === id))
+    .filter((sb) => sb && sb.answersForItself === false);
+  // After the press, when somebody had to be invited: who, and where it went.
+  // Closing straight away would leave the account believing a company had the
+  // request in front of it when it has an invite in its inbox.
+  const [done, setDone] = useState(null);
+  if (done) {
+    return (
+      <>
+        <h3>Quote request sent</h3>
+        <p className="panel-note">Everybody on SubSub can answer it now. These aren't on SubSub
+          yet, so they were invited to sign up, and the request is waiting for them:</p>
+        <ul className="qa-invited">
+          {done.map((i) => (
+            <li key={i.companyId}>
+              <strong>{i.company}</strong>{" "}
+              {i.went ? <>— invite sent to {i.went}</>
+                : <span className="form-err">— the invite couldn't be sent{i.error ? ` (${i.error})` : ""}. Resend it from their card.</span>}
+            </li>
+          ))}
+        </ul>
+        <div className="form-actions">
+          <button className="btn-solid" onClick={onCancel}>Done</button>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
@@ -36298,6 +36328,9 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {}, openT
                 <button key={sb.id} type="button" disabled={full}
                   className={`qa-pick${on ? " on" : ""}`} onClick={() => toggle(sb.id)}>
                   <span className="qa-name">{sb.company}
+                    {sb.answersForItself === false && (
+                      <em className="qa-notss"><UserPlus size={11} /> Not on SubSub</em>
+                    )}
                     {ticked.length > 1 && (
                       <em className="qa-covers">{theirs.length === ticked.length
                         ? "prices all of it" : theirs.map(label).join(", ")}</em>
@@ -36335,6 +36368,15 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {}, openT
             <em className="fld-note">A date to chase against. A late quote is still a quote.</em>
           </label>
 
+          {/* A quote is answered in SubSub, so somebody not on it is invited to
+              join with the request. Said before the press, naming them. */}
+          {notOn.length > 0 && (
+            <p className="fld-note qa-invite-note">
+              <UserPlus size={12} /> {notOn.map((sb) => sb.company).join(", ")}{" "}
+              {notOn.length === 1 ? "isn't" : "aren't"} on SubSub yet. We'll send the request
+              with an invite to sign up, free, and it'll be waiting for them to answer.
+            </p>
+          )}
           {err && <p className="form-err">{err}</p>}
           {picked.length > 0 && orphan && (
             <p className="fld-note">Nobody you picked does {label(orphan).toLowerCase()} &mdash;
@@ -36346,12 +36388,15 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {}, openT
               onClick={async () => {
                 setBusy(true); setErr("");
                 try {
-                  await onSend({ items: ticked.map((t) => ({ trade: t, scope: scopes[t] || "" })),
+                  const r = await onSend({ items: ticked.map((t) => ({ trade: t, scope: scopes[t] || "" })),
                     companyIds: picked, dueAt: dueAt || null });
+                  if (r?.invited?.length) { setDone(r.invited); setBusy(false); }
                 } catch (ex) {
                   console.error("[quotes] ask failed:", ex);
                   const t = ex?.body?.trade ? ` (${label(ex.body.trade)})` : "";
-                  setErr(ex?.body?.error === "already_issued"
+                  setErr(ex?.body?.error === "no_contact"
+                    ? `${ex.body.company || "One of them"} isn't on SubSub and has no email or mobile on their card, so nobody could tell them. Add one on their card, or leave them out.`
+                    : ex?.body?.error === "already_issued"
                     ? `Somebody has already been issued that trade${t}.`
                     : ex?.body?.error === "already_asking"
                       ? `Quotes are already out for that trade${t}.`
@@ -36374,8 +36419,10 @@ function AskQuotes({ job, trade, subs, onSend, onCancel, tradeScopes = {}, openT
 // What came back. Cheapest first, a pass shown rather than hidden, and the
 // spread only once two people have answered -- one quote is a price, not a
 // comparison, and "lowest of 1" invites reading it as one.
-function QuotePanel({ req, job, onAward, onCancelRequest }) {
+function QuotePanel({ req, job, onAward, onCancelRequest, subs = [] }) {
   const M = catMeta(req.trade);
+  // Asked, and not on SubSub yet: their answer waits on them signing up.
+  const notOnSubsub = (id) => subs.find((sb) => sb.id === id)?.answersForItself === false;
   const [busy, setBusy] = useState(null);
   const ranked = rankQuotes(req.invites || []);
   const spread = quoteSpread(req.invites || []);
@@ -36428,7 +36475,8 @@ function QuotePanel({ req, job, onAward, onCancelRequest }) {
               </>
             ) : (
               <span className={`qp-state ${i.status}`}>
-                {i.status === "passed" ? "Passed" : "Waiting"}
+                {i.status === "passed" ? "Passed"
+                  : notOnSubsub(i.companyId) ? "Invited to SubSub" : "Waiting"}
               </span>
             )}
           </div>
@@ -43056,6 +43104,9 @@ p.fld-note{margin:6px 0 0}
 .rec-dup{font-size:10.5px;font-weight:700;color:#a86a18;background:#fbf0dd;padding:3px 7px;border-radius:5px}
 /* 093. Not on SubSub: a fact about the row, not a fault, so a quiet violet
    tag rather than the amber that means "waiting on you". */
+.qa-notss{display:inline-flex;align-items:center;gap:4px;margin-left:6px;font-style:normal;font-size:10.5px;font-weight:700;color:#5b3fa0;background:#efe9fb;padding:2px 6px;border-radius:5px}
+.qa-invite-note{display:flex;gap:6px;align-items:flex-start;color:#5b3fa0}
+.qa-invited{margin:6px 0 14px;padding-left:18px;font-size:14px;line-height:1.6}
 .rec-notss{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;color:#5b3fa0;background:#efe9fb;padding:3px 7px;border-radius:5px}
 .not-on-ss{border:1px solid #d8cdf3;background:#f6f2fd;border-radius:10px;padding:12px 14px;margin:4px 0 12px}
 .not-on-ss .nos-top{display:flex;align-items:center;gap:7px;color:#4a2f8a;font-size:14.5px}

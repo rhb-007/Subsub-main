@@ -14444,8 +14444,8 @@ refactor.
   own account as it was. **Pasting 093 is required**; until then holding
   answers `migration_needed` (the invite still goes) and refusing works.
 
-  **Still open:** quote requests can still be sent to a company with no login,
-  who cannot answer one. **Not verified here:** the full-stack suites, which
+  **Quote requests to a company with no login** are now sent with an invite to
+  join; see the entry on that. **Not verified here:** the full-stack suites, which
   need the local stack; their seed contractors may lack logins.
 
 - **GOOGLE CALENDAR: A PERSON'S SUBSUB JOBS ON A CALENDAR CALLED "SUBSUB
@@ -14569,6 +14569,41 @@ refactor.
 
   **Still open:** the invite link itself, which only the owner can copy from
   Zapier (Manage -> Sharing).
+
+- **A QUOTE REQUEST TO A COMPANY NOT ON SUBSUB IS SENT, AND IT COMES WITH AN
+  INVITE TO SIGN UP AND ANSWER.** 093 closed the work-order door to a company
+  nobody signs in as and left this one open: the request was written and
+  nobody could ever see it, because a quote is answered in SubSub and nowhere
+  else. Asked for as *"should be sent and for them to answer they need to sign
+  up to SubSub"*.
+
+  **The request still goes, unlike a work order**, because asking for a price
+  commits nobody to anything. Each invited company that `companyAnswersForItself`
+  says has no login anywhere is sent the invite raised from their card
+  (`inviteRosterCompany`, so an invite already out is resent rather than
+  replaced). The email and the text lead with what they are asked to price and
+  the job (`subInviteEmail` / `subInviteSms` take `quote`), because that is the
+  reason to open the link. The invite carries `company_id`, so joining lands
+  the seat on that record, and `/api/my-quotes` then shows them the request,
+  which they can answer. The suite drives that whole path.
+
+  **Checked before anything is written.** One with no email or mobile on their
+  card cannot be told, so the press is refused by name (`no_contact`, with the
+  company), rather than sending a question to somebody who will never hear it.
+  The invites go **after** the request is written, so it is waiting when they
+  arrive, and a failed send does not undo it: the reply's `invited` says who was
+  reached and where.
+
+  **On screen:** the picker tags *Not on SubSub*. Picking them says, before the
+  press, that they will be invited to sign up and answer. After the press the
+  window stays up with who was invited and where it went, because closing it
+  would leave the account believing they have the request in front of them. On
+  the comparison panel their row reads *Invited to SubSub* instead of
+  *Waiting*.
+
+  `test:quotes` (95) and `test:quotesui` (92). Five mutations fire: no invite
+  sent, the contact check removed, the quote words dropped from the email, the
+  window closing straight away, and the tag removed.
 
 ## Working here
 

@@ -564,8 +564,30 @@ Need another time? Reply to the calendar invite or pick one at https://subsub.wo
 // a fresh application and went unopened. One predicate decides which wording
 // runs and which screen renders (`inviteKnownEnough` in the Worker), because
 // the email and the page disagreeing about it is the whole bug.
-export function subInviteEmail({ contact, companyName, account, link, known = false }) {
+export function subInviteEmail({ contact, companyName, account, link, known = false, quote = null }) {
   const who = account?.name || "A general contractor";
+  // Sent with a quote request. What they are asked to price leads, because it
+  // is the reason to open the link, and answering happens in SubSub.
+  if (quote) {
+    const job = quote.jobTitle ? ` on "${quote.jobTitle}"` : "";
+    const text = `Hi ${contact || "there"},
+
+${who} has asked ${companyName || "you"} to price ${quote.what || "some work"}${job}. To see the job and send your price, ${known ? "choose a password" : "set up your free SubSub account"} here:
+  ${link}
+
+The request is waiting for you once you're in. It's free for you.
+
+The link works once and expires in 30 days.
+
+-- ${who}, through SubSub
+
+${NOREPLY}`;
+    return {
+      subject: `${who} asked you to price ${quote.what || "a job"} — join SubSub to answer`,
+      text,
+      html: textToHtml(text, link),
+    };
+  }
   const text = known ? `Hi ${contact || "there"},
 
 ${who} added ${companyName || "your company"} to SubSub, where they send work orders and keep paperwork. Your details are in; just choose a password:
@@ -668,8 +690,10 @@ ${NOREPLY}`;
 
 // The same invite, short enough to survive one text message. Written to be
 // read on a lock screen on a roof: who is asking, what it is, the link.
-export function subInviteSms({ companyName, account, link, known = false }) {
+export function subInviteSms({ companyName, account, link, known = false, quote = null }) {
   const who = account?.name || "A contractor";
+  if (quote) return `${who} asked ${companyName || "you"} to price ${quote.what || "a job"} on SubSub. `
+    + `Join free to see the job and send your price: ${link}`;
   // Same split as the email: a text telling somebody to set up an account,
   // over a link that asks for a password, sends them looking for a form.
   if (known) return `${who} has added ${companyName || "you"} to SubSub. `
