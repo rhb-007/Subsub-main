@@ -39613,7 +39613,7 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
           <label className="auto-toggle">
             <input type="checkbox" checked={on} disabled={busy}
               onChange={(e) => flip(e.target.checked)} />
-            <span>Book automatically</span>
+            <span>Count jobs as accepted</span>
           </label>
         ) : (
           <button className="mini" disabled={busy} onClick={onAsk}>
@@ -39626,9 +39626,9 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
       )}
       {!on && verdict.ok && !portal && (
         <p className="auto-note">
-          Turn on <b>Book automatically</b> and their jobs are booked straight
-          away, with nobody needing to accept. You can set this for them
-          because they have no SubSub login of their own.
+          Turn on <b>Count jobs as accepted</b> if you've agreed the work with
+          them yourself. Or invite them to SubSub so they can accept jobs and
+          see them on their own calendar.
         </p>
       )}
       {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}

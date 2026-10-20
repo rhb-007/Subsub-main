@@ -205,7 +205,7 @@ try {
     t.ck("it is off", card?.toggleOn === false, String(card?.toggleOn));
     t.ck("and the card says nobody can accept, and why it can be set here",
       /no SubSub login/i.test(card?.desc || "") && /expires unanswered/i.test(card?.desc || "")
-        && /book automatically/i.test(card?.note || ""), JSON.stringify(card));
+        && /count jobs as accepted/i.test(card?.note || "") && /invite them/i.test(card?.note || ""), JSON.stringify(card));
     t.ck("and it names the company rather than \"them\"",
       /Ace Gutters/.test(card?.desc || ""), card?.desc);
     t.ck("and \"Off\" is said once, not three times",
@@ -221,7 +221,7 @@ try {
     const after = await readCard(page);
     t.ck("and the card now reads on", after?.title === "On", String(after?.title));
     t.ck("and says the account is telling them itself",
-      /let them know about each job yourself/i.test(after?.desc || ""), after?.desc);
+      /counts as accepted/i.test(after?.desc || "") && /call or text them/i.test(after?.desc || ""), after?.desc);
   }
 
   console.log("\n-- a contractor who agreed can still be switched off --");

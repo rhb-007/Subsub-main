@@ -7951,6 +7951,17 @@ refactor.
   The contractor's own card reads the same function and is now in Spanish.
   `test:autoschedui` pins that Off appears once and that the company is named.
 
+  **AND "BOOKED ONTO THEIR SCHEDULE" WAS FALSE FOR THE ONE CASE THIS BOX IS
+  FOR.** *"Someone can't get a job put into their calendar without an account
+  or a SubSub login."* Right: the hiring side only ever sets this for a
+  contractor with no login, and they have no calendar here to book onto. What
+  it really does is issue the work order already accepted, so it does not sit
+  waiting and expire. So the switch reads **Count jobs as accepted**, on says
+  *counts as accepted right away... they won't see it, so call or text them*,
+  and the note offers the real way out: invite them to SubSub so they can
+  accept jobs and see them on their own calendar (the invite panel sits just
+  above it on the card).
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

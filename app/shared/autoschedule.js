@@ -74,9 +74,9 @@ export function autoStateText({ on, portal, side = "hiring", name = "" }) {
   if (on) {
     return portal
       ? `${name || "They"} turned this on, so jobs you send are booked onto their schedule right away. They don't need to accept them.`
-      : `Jobs you send ${who} are booked right away. They have no SubSub login, so let them know about each job yourself, by phone or text.`;
+      : `Every job you send ${who} counts as accepted right away, so nothing sits waiting or expires. They have no SubSub login and won't see it, so call or text them with the details.`;
   }
   return portal
     ? `Jobs you send ${who} wait for them to accept or decline.`
-    : `Jobs you send ${who} wait for them to accept. They have no SubSub login, so nobody can, and each job expires unanswered.`;
+    : `${name || "They"} ${name ? "has" : "have"} no SubSub login, so they can't accept jobs here. Each job you send waits for an answer that can't come, then expires unanswered.`;
 }

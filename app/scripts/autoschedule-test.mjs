@@ -128,7 +128,7 @@ console.log("\n-- the rule, before any of it reaches a database --");
     autoStateText({ on: true, portal: true, side: "hiring" })
       !== autoStateText({ on: true, portal: true, side: "contractor" }));
   ck("off, with nobody behind the record, warns that nothing will answer",
-    /nobody can/i.test(autoStateText({ on: false, portal: false, side: "hiring" })),
+    /can.t accept jobs here/i.test(autoStateText({ on: false, portal: false, side: "hiring" })),
     autoStateText({ on: false, portal: false, side: "hiring" }));
 }
 
