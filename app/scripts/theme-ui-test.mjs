@@ -22,7 +22,7 @@ const t = tally();
 const ACCOUNT = {
   id: "acc_s", name: "Sound Property Management", subdomain: "sound", kind: "property_manager",
   plan: "scale", billing: "monthly", useDefaultMark: true, theme: null, trades: ["roofing", "plumbing"],
-  logoKey: null, subscriptionStatus: "active", hostnameStatus: null,
+  logoKey: "logos/acc_s.png", subscriptionStatus: "active", hostnameStatus: null,
   user: { id: "usr_c", name: "Chris Lee", email: "chris@sound.test", role: "admin" },
 };
 const today = new Date().toISOString().slice(0, 10);
@@ -32,6 +32,10 @@ const JOBS = [{
   propertyId: null, severity: null, notes: "", measurementDocs: [],
 }];
 
+const markFilter = (page) => page.evaluate(() => {
+  const i = document.querySelector(".header-top .brand-logo img");
+  return i ? getComputedStyle(i).filter : null;
+});
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACCOUNT];
@@ -92,6 +96,9 @@ try {
   let r = await read(page);
   t.ck("the app is really drawn", !!r.page, JSON.stringify(r));
   t.ck("System on a light device is light", r.theme === "" && lum(r.page) > 0.8, JSON.stringify(r));
+  // The account's own uploaded mark keeps its colors in light...
+  const lightMark = await markFilter(page);
+  t.ck("the account's own mark is in the header, in its own colors", lightMark === "none", String(lightMark));
   await shot(page, "light-dash");
   // Where the seat lands, so the test can come back to it after Settings.
   const home = await page.evaluate(() => document.querySelector("nav.tabs button.on")?.innerText.trim().split("\n")[0] || "");
@@ -115,6 +122,9 @@ try {
   r = await read(page);
   t.ck("the page goes dark", r.theme === "dark" && lum(r.page) < 0.03, JSON.stringify(r));
   t.ck("the header goes dark", lum(r.header) < 0.05, r.header);
+  // ...and goes white in dark, because a dark mark on a dark bar disappears.
+  const darkMark = await markFilter(page);
+  t.ck("and the account's mark goes white", /brightness\(0\).*invert\(1\)/.test(darkMark || ""), String(darkMark));
   t.ck("the text goes light, readable at AA", contrast(r.text, r.page) >= 7, `${r.text} on ${r.page}`);
   t.ck("native controls are told it is dark", /dark/.test(r.scheme), r.scheme);
   const on = await page.evaluate(() => [...document.querySelectorAll(".set-opt")]

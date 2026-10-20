@@ -48556,9 +48556,16 @@ button.job-insp:hover{border-color:#2f5577}
 // core tokens are set by hand: the page a step darker than a card so a card
 // reads as raised, the text brighter than an inversion makes it, and the brand
 // green lifted so it reads as a link and carries dark text as a button.
+// AN ACCOUNT'S OWN MARK IS WHITE IN THE DARK HEADER. Asked for as "brand
+// marks monochrome when dark mode is on, ie. the Outerhome mark white": an
+// uploaded logo is usually dark ink on nothing, which vanishes on a dark bar.
+// brightness(0) then invert(1) draws any image as a white silhouette. Only in
+// the signed-in header: the sign-in page, the Branding preview and anything a
+// stranger sees keep the company's real colors.
 const DARK_TOKENS = `:root[data-theme="dark"]{color-scheme:dark;--paper:#121311;--card:#1c1a17;
   --ink:#e8ece9;--ink-soft:#a9b6af;--line:#33302a;--brand:#4fae80;--brand-dk:#6cc095;
   --amber-ink:#e0a64a;--shadow:0 1px 2px rgba(0,0,0,.4)}
 :root[data-theme="dark"] img{color-scheme:light}
+:root[data-theme="dark"] .header-top .brand-logo img{filter:brightness(0) invert(1)}
 `;
 const CSS = withDark(BASE_CSS) + DARK_TOKENS;

@@ -14279,6 +14279,15 @@ refactor.
   person is listed in. `teamHasAdmin` is unchanged (it already read admin only).
   `test:consolelists` (122); putting the old filter back fails one.
 
+- **IN DARK MODE AN ACCOUNT'S OWN MARK IS WHITE IN THE HEADER.** Asked for as
+  *"brand marks for each account monochrome when dark mode on, ie. Outerhome
+  mark I'd like to be white"*. An uploaded logo is usually dark ink on nothing,
+  so it vanished on the dark bar. `filter:brightness(0) invert(1)` on
+  `.header-top .brand-logo img`, in `DARK_TOKENS`, draws it as a white
+  silhouette. **Only the signed-in header**: the sign-in page, the Branding
+  preview and everything a stranger sees keep the company's real colors, and a
+  color logo becomes a white silhouette there by design. `test:themeui` (26).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
