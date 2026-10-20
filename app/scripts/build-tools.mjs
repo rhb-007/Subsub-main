@@ -21,7 +21,7 @@
 // to go above it; or its registry, its licensing body and whether it can be
 // checked live), so no two pages say the same thing with a name swapped.
 
-import { GTAG } from "../../content/gtag.mjs";
+import { HEAD_TAGS } from "../../content/gtag.mjs";
 import { writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -153,7 +153,7 @@ function shell({ chrome, depth, title, description, canonical, h1, eyebrow, lede
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-${GTAG}
+${HEAD_TAGS}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>

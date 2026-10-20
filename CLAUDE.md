@@ -14441,8 +14441,8 @@ refactor.
   its own assertion. Fourteen suites whose subject is assigning had fixture
   contractors with no login; they now get a seat on a separate account
   (`scripts/lib/onsubsub.mjs`), which leaves every check scoped to the suite's
-  own account as it was. **Pasting 093 is required**; until then holding
-  answers `migration_needed` (the invite still goes) and refusing works.
+  own account as it was. **093 is pasted on the live database.** On a database without it, holding
+  answers `migration_needed` (the invite still goes) and refusing still works.
 
   **Quote requests to a company with no login** are now sent with an invite to
   join; see the entry on that. **Not verified here:** the full-stack suites, which
@@ -14648,11 +14648,43 @@ refactor.
   tag, which keeps this file's rule that nothing about who is looking at SubSub
   leaves our origin from inside the product.
 
-  **Still open, and the owner's call:** `privacy-policy.html` says the only
-  cookies are the ones that keep somebody signed in and remember preferences.
-  Google Analytics sets its own (`_ga`), so that sentence is now incomplete,
-  and visitors from the EU or UK would need a consent banner before the tag
-  runs. Neither was written here, because both are legal text.
+  **AND IT ASKS FIRST IN THE EU, THE UK AND SWITZERLAND, WHICH THE POLICY NOW
+  SAYS.** Asked for as *"update both of these items - google analytics and
+  consent banner to EU UK"*. `CONSENT` in `content/gtag.mjs` runs before the
+  tag on every page (`HEAD_TAGS`), because Consent Mode reads its defaults
+  before the config:
+  - **Ads storage is denied everywhere**, because SubSub runs no advertising.
+  - **Analytics is denied by default in the EU's 27, Iceland, Liechtenstein,
+    Norway, the UK and Switzerland** (`CONSENT_REGIONS`), by Consent Mode's
+    `region` default. Google decides the region from the visitor's address, so
+    that half holds whatever the banner does.
+  - **The banner is drawn when the device's clock is set to a European zone**,
+    which is the only location a static page can read without asking a server.
+    A visitor whose clock says otherwise gets no banner, and Google's regional
+    default still keeps analytics off for them until they say yes.
+  - **Accept analytics and Decline are the same button** (color, size,
+    weight), because a quieter Decline is the dark pattern regulators name.
+    Declining also deletes any `_ga` cookie already set.
+  - The choice is `ss_consent` in localStorage, applied on every later page
+    before the config, so the banner is asked once.
+
+  **`privacy-policy.html` has an *Analytics on subsub.work* section**
+  (`#cookies`, which the banner links to). It names Google Analytics, the
+  `_ga` cookies and what Google receives, says it is the public site and not
+  the app, and says advertising features are off. It has a **Change your cookie
+  choice** button that reopens the banner (`window.ssConsent.open()`) for
+  anybody anywhere, which is the opt-out outside Europe. Section 3 lists website
+  analytics among the providers. **The wording has not been read by a lawyer.**
+
+  `test:consent` (24) drives it in a browser with Google's script blocked:
+  Berlin, London and Paris clocks draw it, Los Angeles does not, and Accept,
+  Decline, the stored choice and the policy's button each do what they say.
+  Four mutations fire, each on its own assertion: the regional default dropped,
+  the banner drawn everywhere, a quieter Decline, and the cookies not cleared.
+  `test:discover` now requires `HEAD_TAGS`, not the tag alone.
+
+- **MIGRATION 093 IS PASTED ON THE LIVE DATABASE**, confirmed by the owner, so
+  holding a job for a contractor who is not on SubSub works there.
 
 ## Working here
 

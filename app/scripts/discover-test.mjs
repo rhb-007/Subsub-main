@@ -440,7 +440,7 @@ console.log("\n-- the integrations tiers say what is true of each tier --");
 // generated pages count, because they are most of the site. Two tags on a page
 // double-count every visit, and a tag lower down misses visitors who leave first.
 {
-  const { GTAG, GTAG_ID } = await import("../../content/gtag.mjs");
+  const { HEAD_TAGS, GTAG_ID } = await import("../../content/gtag.mjs");
   const skip = new Set(["app", "node_modules", "marketing", ".git", "zapier", "content"]);
   const pages = [];
   const walk = (dir) => {
@@ -455,9 +455,9 @@ console.log("\n-- the integrations tiers say what is true of each tier --");
     const html = read(p);
     if (html.split(src).length !== 2) return true;
     const at = html.indexOf("<head>");
-    return at < 0 || !html.slice(at + 6).trimStart().startsWith(GTAG);
+    return at < 0 || !html.slice(at + 6).trimStart().startsWith(HEAD_TAGS);
   });
-  ck(`the Google tag is on all ${pages.length} pages once, first in <head>`,
+  ck(`the consent script and the Google tag are on all ${pages.length} pages once, first in <head>`,
     pages.length > 150 && !wrong.length, wrong.slice(0, 5).join(", "));
 }
 

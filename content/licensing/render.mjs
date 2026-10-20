@@ -10,7 +10,7 @@
 // subcontractor checking what they need, and a hiring contractor checking what
 // to ask for. Same facts, different door.
 
-import { GTAG } from "../gtag.mjs";
+import { HEAD_TAGS } from "../gtag.mjs";
 import { LEVEL_LABEL, answerFor, baselineOf, earnsPage, ASKED_ANYWAY, pageUrl }
   from "../../app/shared/licensing.js";
 
@@ -163,7 +163,7 @@ export function page({ chrome, title, description, canonical, crumbs, body,
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
-${GTAG}
+${HEAD_TAGS}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
