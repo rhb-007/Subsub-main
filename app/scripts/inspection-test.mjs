@@ -199,9 +199,12 @@ try {
     [s, after] = await json(await call(env, `/api/inspections/${id}/job`,
       { method: "POST", body: { trades: ["painting"] } }));
     ck("so the job is raised first", s === 201 && !!after.jobId, `${s} ${JSON.stringify(after)}`);
-    [s, after] = await json(await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } }));
-    ck("once every room is marked and the work raised, it finishes", s === 200 && after.status === "finished",
-      `${s} ${after.status}`);
+    // Raising the job is now what finishes it, every room being answered: the
+    // Finish press afterwards finds it already done.
+    ck("once every room is marked and the work raised, it finishes", after.finished === true,
+      JSON.stringify({ finished: after.finished, stillOpen: after.stillOpen }));
+    [s, after] = await json(await call(env, `/api/inspections/${id}`));
+    ck("and it reads as finished", s === 200 && after.status === "finished", `${s} ${after.status}`);
 
     // ONE-WAY. This is the half that makes it worth anything in an argument.
     [s, after] = await json(await call(env, `/api/inspections/${id}/rooms/${kitchen}`,
@@ -377,6 +380,11 @@ try {
       { method: "POST", body: { trades: ["plumbing", "painting"], date: "2026-10-09" } }));
     ck("the job is raised", s === 201 && !!b.jobId, `${s} ${JSON.stringify(b)}`);
     ck("and says how many rooms it is for", b.flagged === 2, String(b.flagged));
+    // RAISING THE WORK FINISHES THE WALK. Reported as an inspection still
+    // reading Draft after its job was assigned, scheduled and done.
+    ck("raising the job finishes the walk, every room answered", b.finished === true
+      && db.prepare(`SELECT status FROM inspections WHERE id = ?`).get(insp.id).status === "finished",
+      JSON.stringify({ finished: b.finished, stillOpen: b.stillOpen }));
 
     const job = db.prepare(`SELECT * FROM jobs WHERE id = ?`).get(b.jobId);
     ck("it lands on this account at the right building",
@@ -420,6 +428,39 @@ try {
     [s, b] = await json(await call(env, `/api/inspections/${clean.id}/job`,
       { method: "POST", body: { trades: ["plumbing"] } }));
     ck("an all-clear inspection raises nothing", s === 409 && b.error === "nothing_flagged", `${s} ${b.error}`);
+
+    // A ROOM NOBODY HAS ANSWERED HOLDS IT OPEN. That walk is not done, and
+    // closing it would turn "not checked" into a record that says it was.
+    const [, half] = await json(await call(env, "/api/inspections", { method: "POST",
+      body: { kind: "move_out", propertyId: "p_press", unit: "4C" } }));
+    const [, h1] = await json(await call(env, `/api/inspections/${half.id}/rooms`, { method: "POST", body: { name: "Kitchen" } }));
+    await call(env, `/api/inspections/${half.id}/rooms/${h1.rooms[0].id}`, { method: "PATCH", body: { status: "fail", note: "Burned counter" } });
+    await call(env, `/api/inspections/${half.id}/rooms`, { method: "POST", body: { name: "Bedroom 1" } });
+    [s, b] = await json(await call(env, `/api/inspections/${half.id}/job`, { method: "POST", body: { trades: ["cabinets_counters"] } }));
+    ck("a walk with a room unchecked is raised but stays a draft",
+      s === 201 && b.finished === false && b.stillOpen === "rooms_unchecked"
+      && db.prepare(`SELECT status FROM inspections WHERE id = ?`).get(half.id).status === "draft",
+      `${s} ${JSON.stringify({ f: b.finished, o: b.stillOpen })}`);
+
+    // 092 AND ITS CHECK, against real rows (057's lesson). A walk raised before
+    // this change: job set, every room answered, still a draft.
+    const { runCheck } = await import("./lib/check-sql.mjs");
+    const raisedId = insp.id;
+    db.prepare(`UPDATE inspections SET status = 'draft', finished_at = NULL WHERE id = ?`).run(raisedId);
+    ck("the check counts a raised, fully answered draft", runCheck(db).m092_inv_raised_still_draft === 1,
+      String(runCheck(db).m092_inv_raised_still_draft));
+    db.exec(readFileSync(new URL("../worker/migrations/092_inspection_finish_raised.sql", import.meta.url), "utf8"));
+    ck("092 finishes it", db.prepare(`SELECT status FROM inspections WHERE id = ?`).get(raisedId).status === "finished");
+    ck("and leaves the one with a room unchecked alone",
+      db.prepare(`SELECT status FROM inspections WHERE id = ?`).get(half.id).status === "draft");
+    ck("and the check reads zero after it", runCheck(db).m092_inv_raised_still_draft === 0,
+      String(runCheck(db).m092_inv_raised_still_draft));
+    // A REOPENED WALK IS LEFT A DRAFT: reopening is a deliberate act.
+    db.prepare(`UPDATE inspections SET status = 'draft' WHERE id = ?`).run(raisedId);
+    db.prepare(`INSERT INTO events (account_id, actor_id, kind, subject_id, payload) VALUES ('acc1','u_admin','inspection.reopened',?, '{}')`).run(raisedId);
+    db.exec(readFileSync(new URL("../worker/migrations/092_inspection_finish_raised.sql", import.meta.url), "utf8"));
+    ck("092 leaves a reopened walk a draft", db.prepare(`SELECT status FROM inspections WHERE id = ?`).get(raisedId).status === "draft");
+    ck("and the check does not count it", runCheck(db).m092_inv_raised_still_draft === 0);
   }
 
   console.log("\n-- who may do any of it --");
@@ -688,8 +729,10 @@ console.log("\n-- sending the finished report to the building's owner --");
       { method: "PATCH", body: { status: "fail", note: "Cracked basin" } });
     // The flagged room's job is raised first, because that is now what
     // finishing a flagged walk takes -- through the route, as a person would.
+    // Raising it finishes it now. A fixture that needs a DRAFT reopens it,
+    // which is the only way an answered, raised walk is a draft.
     await call(env, `/api/inspections/${insp.id}/job`, { method: "POST", body: { trades: ["plumbing"] } });
-    if (finish) await call(env, `/api/inspections/${insp.id}`, { method: "PATCH", body: { finish: true } });
+    if (!finish) await call(env, `/api/inspections/${insp.id}/reopen`, { method: "POST", body: { reason: "Still walking it" } });
     return insp.id;
   };
 

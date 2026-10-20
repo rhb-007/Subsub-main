@@ -834,6 +834,14 @@ WITH inv(j) AS (SELECT '['
   || (',' || json_array('m087_inv_account_no_created', (SELECT COUNT(*) FROM accounts a
     WHERE NOT EXISTS (SELECT 1 FROM subscription_events e
                        WHERE e.account_id = a.id AND e.kind = 'created'))))
+  -- 092. An inspection whose job is raised and every room answered, still a
+  -- draft, and never reopened. Reads non-zero until 092 is pasted and zero
+  -- after, because raising the job now finishes the walk.
+  || (',' || json_array('m092_inv_raised_still_draft', (SELECT COUNT(*) FROM inspections i
+    WHERE i.status = 'draft' AND i.job_id IS NOT NULL
+      AND EXISTS (SELECT 1 FROM inspection_rooms r WHERE r.inspection_id = i.id)
+      AND NOT EXISTS (SELECT 1 FROM inspection_rooms r WHERE r.inspection_id = i.id AND r.status = 'unchecked')
+      AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'inspection.reopened' AND e.subject_id = i.id))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

@@ -19531,6 +19531,27 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
   await logActivity(c.env, auth.accountId, auth.userId, "inspection_job",
     `Raised a job from the inspection${row.unit ? ` of unit ${row.unit}` : ""}: ${flagged.length} room${flagged.length === 1 ? "" : "s"} to put right`);
 
+  // RAISING THE WORK FINISHES THE WALK, when every room has an answer.
+  // Reported as an inspection still reading Draft after its job had been
+  // assigned, scheduled and done: finishing was a separate press, and once
+  // the work was out nobody had a reason to come back and make it. Since a
+  // flagged walk can only be finished once its job exists, raising the job is
+  // the last thing the walk is waiting on -- so it closes it, through the same
+  // gate the Finish press uses. A room nobody has answered still holds it
+  // open: that walk genuinely is not done, and the list says so. Guarded on
+  // the status in the UPDATE, so a walk already finished is left alone.
+  let finished = false;
+  if (row.status === "draft" && !whyNotFinish(rooms, { jobId })) {
+    const r = await c.env.DB.prepare(
+      `UPDATE inspections SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'draft'`
+    ).bind(row.id).run();
+    finished = (r.meta?.changes || 0) > 0;
+    if (finished) {
+      await logActivity(c.env, auth.accountId, auth.userId, "inspection_finished",
+        `Finished the ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${row.unit ? ` of unit ${row.unit}` : ""} by raising its job`);
+    }
+  }
+
   // THE SUMMARY, WRITTEN AUTOMATICALLY, AND NEVER ALLOWED TO BLOCK THE RAISE.
   // *"Combine the comments and summarize automatically"* -- so there is no
   // button for the ordinary case: raising the job is the press.
@@ -19577,6 +19598,7 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
   // nothing to summarise" from "the call failed" cannot offer the one of those
   // that is worth a second press.
   return c.json({ ok: true, jobId, flagged: flagged.length,
+    finished, stillOpen: finished ? null : whyNotFinish(rooms, { jobId }),
     access: access || null, accessUserId: accessUser,
     summary: made.ok ? made.summary : null, summaryError: made.error || null,
     // Said rather than left to be inferred: a screen that cannot tell "the

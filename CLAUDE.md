@@ -14324,6 +14324,23 @@ refactor.
   **Still open:** a subcontractor account's hiring screens (Jobs, the roster,
   Availability) and the emails.
 
+- **RAISING THE JOB FINISHES THE INSPECTION, WHEN EVERY ROOM HAS AN ANSWER.**
+  Reported as an inspection still reading Draft after its job had been
+  assigned, scheduled and done. Finishing was a separate press, and once the
+  work was out nobody came back to make it. A flagged walk can only be
+  finished once its job exists, so raising the job is the last thing it waits
+  on. `POST /api/inspections/:id/job` now finishes it through the same
+  `whyNotFinish` gate, guarded on `status = 'draft'` in the UPDATE, and the
+  reply carries `finished` and `stillOpen`. **A room nobody answered still
+  holds it open**, because that walk genuinely is not done. **A reopened walk
+  stays a draft**, because reopening is deliberate and on the record.
+
+  **Migration 092 finishes the ones raised before this**, by the same rule,
+  skipping any that were reopened. `m092_inv_raised_still_draft` reads non-zero
+  until it is pasted and zero after, and both are run against real rows in
+  `test:inspection` (231). The **summary** is unaffected: raising already
+  writes it. Removing the finishing block fails five assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
