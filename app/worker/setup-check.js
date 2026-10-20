@@ -144,6 +144,13 @@ const GROUPS = [
       + "where SubSub reads them (Washington) and links every other state's board.",
   },
   {
+    id: "zapier", label: "Zapier app invite link",
+    vars: ["ZAPIER_INVITE_URL"],
+    matters: "The link (from Zapier's Manage -> Sharing) that the Zapier card in Account -> "
+      + "Integrations opens, while the app is private. Unset, the card shows how to use a "
+      + "Webhooks by Zapier step instead, which works today.",
+  },
+  {
     id: "leads", label: "Leads from the free tools",
     vars: ["LEADS_EMAIL"],
     matters: "Where a lead from subsub.work/check or /handyman-limits is emailed. Unset, leads "

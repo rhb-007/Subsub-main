@@ -29,6 +29,7 @@ import { monthStart, previousMonth, smsAllowance, smsVerdict, smsOverageBlocks, 
 // be labelled urgent and call somebody out at the account's expense.
 import { severityOf } from "../shared/emergency.js";
 import { validateIngest, SOURCES } from "../shared/ingest.js";
+import { postmanCollection, POSTMAN_FILENAME } from "../shared/postman.js";
 import { TRADES, TRADE_IDS, tradeLabel } from "../shared/trades.js";
 import { claimUrl, validClaimToken, claimPhoneProblem, claimState, maskPhone,
   footerText, footerSms, claimFunnel, cleanEmail, maskEmail, claimEmailProblem } from "../shared/claim.js";
@@ -165,7 +166,7 @@ import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 import { bbbLive, fetchBbbRating } from "./bbb.js";
 import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
 import { INTEGRATIONS, integrationById, hookIntegration, integrationApplies,
-  integrationEnabled } from "../shared/integrations.js";
+  integrationEnabled, zapierInviteUrl } from "../shared/integrations.js";
 import { sealSecret, openSecret, sealingConfigured } from "./secretbox.js";
 import { googleConfigured, authUrl, exchangeCode, refreshAccess, refreshDead, revoke, idTokenEmail,
   createCalendar, deleteCalendar, insertEvent, patchEvent, deleteEvent, freeBusy } from "./gcal.js";
@@ -23697,6 +23698,20 @@ app.get("/api/v1/me", async (c) => {
     subdomain: a.subdomain, kind: a.kind, plan: a.plan } });
 });
 
+// The Postman collection for this API, for a developer to import. PUBLIC and
+// unauthenticated on purpose: it describes the API, carries no account data
+// and no token, and is what Postman's Import -> Link asks for. Built per
+// request from the lists the routes validate against (shared/postman.js), so
+// it cannot drift from them.
+app.get("/api/v1/postman.json", (c) => {
+  return c.body(JSON.stringify(postmanCollection(), null, 2), 200, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${POSTMAN_FILENAME}"`,
+    "Access-Control-Allow-Origin": "*",
+    "Cache-Control": "public, max-age=3600",
+  });
+});
+
 // The trades, so a dropdown can be a dropdown.
 //
 // Without it an integration asks somebody to type `windows_doors` from memory,
@@ -23821,6 +23836,9 @@ async function integrationsFor(env, accountId) {
 const integrationsReply = (env, r) => ({
   integrations: r.list, onScale: accountOnScale(r.acct), migration: r.migration,
   connMigration: r.connMigration, sealing: sealingConfigured(env),
+  // The private Zapier app's invite link, when one is set. Null otherwise,
+  // and the Zapier card then offers the webhook step instead of a dead button.
+  zapierInvite: zapierInviteUrl(env?.ZAPIER_INVITE_URL),
 });
 
 app.get("/api/integrations", requireRole("admin"), async (c) => {

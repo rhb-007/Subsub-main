@@ -360,6 +360,13 @@ body.nav-open{overflow:hidden}
 .dev-wrap h1{font-size:clamp(30px,4.4vw,44px);letter-spacing:-.02em;margin:0 0 12px}
 .dev-lede{font-size:17px;line-height:1.6;color:#4a5550;margin:0 0 30px}
 .dev-wrap h2{font-size:21px;letter-spacing:-.01em;margin:38px 0 10px}
+.dev-start{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:14px 0 6px}
+@media (max-width:700px){.dev-start{grid-template-columns:1fr}}
+.dev-start-card{display:flex;flex-direction:column;gap:10px;background:#fff;border:1px solid #e3e9e6;border-radius:12px;padding:20px}
+.dev-start-card h3{margin:0;font-size:19px}
+.dev-start-card p{margin:0}
+.dev-start-tag{font-size:11.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#1f6b4a}
+.dev-start-card .dev-start-btn{margin-top:auto;align-self:flex-start;display:inline-block;background:#1f6b4a;color:#fff;font-weight:700;font-size:14.5px;padding:10px 16px;border-radius:9px;text-decoration:none}
 .dev-wrap h3{font-size:15px;margin:26px 0 8px}
 .dev-wrap p,.dev-wrap li{font-size:15px;line-height:1.65}
 .dev-wrap p,.dev-wrap li{color:#3c4744}
@@ -466,6 +473,29 @@ body.nav-open{overflow:hidden}
   real payload from it in front of them. That is the whole difference, and it is the difference
   that decides whether anything needs mapping.
 </p>
+
+<!-- TWO WAYS TO START, as cards of their own, because they are for two
+     different people: Postman for the developer who wants to send a real
+     request first, Zapier for somebody who is not a developer at all. The
+     collection is served by the API from the same field lists the routes
+     validate against (app/shared/postman.js), so it cannot drift. -->
+<h2 id="start">Two ways to start</h2>
+<div class="dev-start">
+  <div class="dev-start-card" data-start="postman">
+    <span class="dev-start-tag">For developers</span>
+    <h3>Using Postman</h3>
+    <p>Every SubSub API call, ready to send. Import the collection, paste your API key into its
+      <code>token</code> variable, and post a test job before you write any code.</p>
+    <a class="dev-start-btn" href="#postman">Try Postman + SubSub</a>
+  </div>
+  <div class="dev-start-card" data-start="zapier">
+    <span class="dev-start-tag">Not a developer?</span>
+    <h3>Zapier</h3>
+    <p>Connect SubSub to thousands of apps with Zapier's drag-and-drop editor. When something
+      happens in your CRM, a form or a spreadsheet, a job lands in SubSub. No code.</p>
+    <a class="dev-start-btn" href="#zapier">Zapier</a>
+  </div>
+</div>
 
 <h2>The endpoint</h2>
 <pre class="dev-pre"><code>POST https://api.subsub.work/api/v1/jobs
@@ -606,7 +636,23 @@ Content-Type: application/json</code></pre>
   </tr>
 </table>
 
-<h2>Zapier</h2>
+<h2 id="postman">Using Postman</h2>
+<p>
+  The <strong>SubSub API collection</strong> holds every call on this page with a working example
+  body: the three reads, posting a job, posting an inspection, and the webhook-address versions of
+  both. In Postman, choose <strong>Import</strong>, then <strong>Link</strong>, and paste:
+</p>
+<pre class="dev-pre"><code>https://api.subsub.work/api/v1/postman.json</code></pre>
+<p>
+  Or <a href="https://api.subsub.work/api/v1/postman.json">download the collection</a> and import
+  the file. Then open the collection's <strong>Variables</strong>, paste your API key into
+  <code>token</code>, and send <em>Who this token belongs to</em> first: it is a read, so it tests
+  the key without creating anything. Make the key in SubSub under <strong>My account →
+  Integrations → Connect your CRM</strong>.
+</p>
+
+<h2 id="zapier">Zapier</h2>
+<p><strong>Not a developer?</strong> This is the way in.</p>
 <p>
   <strong>SubSub has a Zapier app</strong>, so a Zap can create a job without anybody pasting a URL:
   the token is a Zapier connection, and <em>Trades</em> and <em>Property</em> are dropdowns rather

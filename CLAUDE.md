@@ -14527,6 +14527,49 @@ refactor.
   obvious next step. And the busy check reads the crew's calendar for the
   window proposed, not for every day of a multi-day trade estimate.
 
+- **ZAPIER AND POSTMAN ARE TWO CARDS OF THEIR OWN ON ACCOUNT -> INTEGRATIONS,
+  BECAUSE THEY ARE FOR TWO DIFFERENT PEOPLE.** Asked for with Hover's developer
+  page as the model: a *Using Postman* card and a *Zapier: Not a developer?*
+  card. Before this, both lived in one switch row reading *Zapier, Make and
+  your own scripts*, which told a non-developer nothing about where to start.
+
+  **The cards sit above the switches** (`IntegrationStarters`), side by side
+  on an iPad and stacked on a phone. **The switch underneath is still one**,
+  renamed *Your API key*, because the server cannot tell a Zap from a script
+  (both arrive with the same bearer token), so two switches would leave one of
+  them doing nothing.
+
+  **The Zapier button opens the private app's invite link when one is set**
+  (`ZAPIER_INVITE_URL` on the API Worker, returned as `zapierInvite` on
+  `/api/integrations`, and on the setup check). Only an https zapier.com
+  address is accepted (`zapierInviteUrl`). With none set, the card says to use
+  a Webhooks by Zapier step and links to `developers.html#zapier`, rather than
+  offering a button onto nothing.
+
+  **The Postman collection is served by the API, `GET /api/v1/postman.json`,
+  built per request by `shared/postman.js` from the field lists the routes
+  validate with**, so it cannot drift from them. It is public on purpose: it
+  carries no account data, its `token` variable is blank, and Postman's
+  *Import -> Link* fetches it. It is not a file on subsub.work, which publishes
+  no .json by design. The format was read from Postman's own SDK
+  (`postman-collection` 5.3.1, pinned as a dev dependency) and the bearer key
+  (`token`) from `postman-runtime`'s authorizer, because the schema site is
+  blocked here. `test:postman` reads the result back through that SDK. Both
+  example bodies are also run through the real validators.
+
+  **developers.html carries the same two cards** under *Two ways to start*,
+  with `#postman` and `#zapier` sections for them to point at.
+
+  `test:postman` (37) and `test:integstartui` (16). Five mutations fire: the
+  cards drawn in one column, the invite link ignored, an example body field the
+  route does not read, the webhook requests sending a header, and a look-alike
+  Zapier host accepted. Two older suites found the token panel by "the panel
+  mentioning Connect your CRM", which the Zapier card now mentions too, so
+  they match its heading instead.
+
+  **Still open:** the invite link itself, which only the owner can copy from
+  Zapier (Manage -> Sharing).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

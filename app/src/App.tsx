@@ -20696,6 +20696,7 @@ function IntegrationSwitches() {
       )}
       {failed && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {failed}</p>}
       {!data && !failed && <p className="panel-note">Loading…</p>}
+      {data && <IntegrationStarters zapierInvite={data.zapierInvite || null} />}
       <div className="integ-list">
         {list.map((it) => (
           <div key={it.id} className={`open-hire integ-row ${it.enabled ? "on" : ""} ${it.soon ? "soon" : ""}`}
@@ -20765,6 +20766,74 @@ function IntegrationSwitches() {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// THE TWO WAYS TO START, each its own card, because they are for two
+// different people. Zapier is for somebody who is not a developer: thousands
+// of apps and a drag-and-drop editor, no code. Postman is for the developer
+// who wants to send a real request before writing anything. Both run on the
+// API key made under Connect your CRM below, so both cards say so, and both
+// are governed by the one "Your API key" switch underneath -- the server
+// cannot tell a Zap from a script, so two switches would be one lying.
+//
+// The Zapier app is private while it is new and joined by invitation, so the
+// button opens the invite link when the API Worker has one (ZAPIER_INVITE_URL)
+// and otherwise says how to do it with a Webhooks by Zapier step, which works
+// today -- never a button onto nothing.
+function IntegrationStarters({ zapierInvite }) {
+  const base = /^https?:/.test(API_BASE) ? API_BASE : `${window.location.origin}${API_BASE}`;
+  const collectionUrl = `${base}/v1/postman.json`;
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="integ-start">
+      <div className="integ-card" data-start="zapier">
+        <span className="integ-eyebrow">Not a developer?</span>
+        <h5>Zapier</h5>
+        <p>
+          Connect SubSub to thousands of apps — your CRM, a form, a spreadsheet — with Zapier's
+          drag-and-drop editor. When something happens there, a job or an inspection lands here.
+          No code.
+        </p>
+        {zapierInvite ? (
+          <a className="btn-solid integ-card-btn" href={zapierInvite} target="_blank" rel="noopener noreferrer">
+            Add SubSub to Zapier <ExternalLink size={14} />
+          </a>
+        ) : (
+          <>
+            <p className="cov-hint">
+              Use a <b>Webhooks by Zapier</b> step pointed at your webhook address. Make an API key
+              under <b>Connect your CRM</b> below and the address is printed beside it.
+            </p>
+            <a className="btn-solid integ-card-btn" href="https://subsub.work/developers#zapier"
+              target="_blank" rel="noopener noreferrer">
+              How to set it up <ExternalLink size={14} />
+            </a>
+          </>
+        )}
+      </div>
+      <div className="integ-card" data-start="postman">
+        <span className="integ-eyebrow">For developers</span>
+        <h5>Using Postman</h5>
+        <p>
+          Every SubSub API call, ready to send. Import the collection, paste your API key into its
+          <code> token</code> variable, and post a test job before you write any code.
+        </p>
+        <p className="cov-hint">
+          In Postman, Import → Link, and paste <code className="integ-url">{collectionUrl}</code>
+          <button type="button" className="link-btn" onClick={() => {
+            navigator.clipboard?.writeText(collectionUrl); setCopied(true);
+          }}>{copied ? "Copied" : "Copy"}</button>
+        </p>
+        <div className="integ-card-acts">
+          <a className="btn-solid integ-card-btn" href={collectionUrl} download>
+            <Download size={14} /> Download the collection
+          </a>
+          <a className="btn-ghost integ-card-btn" href="https://subsub.work/developers"
+            target="_blank" rel="noopener noreferrer">API docs</a>
+        </div>
       </div>
     </div>
   );
@@ -42213,6 +42282,17 @@ body{background:var(--paper)}
 .oh-knob{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
   background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s ease}
 .open-hire.on .oh-knob{transform:translateX(18px)}
+.integ-start{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 0 16px}
+@media (max-width:720px){.integ-start{grid-template-columns:1fr}}
+.integ-card{display:flex;flex-direction:column;gap:8px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);min-width:0}
+.integ-card h5{margin:0;font-size:17px;font-weight:700;color:var(--ink)}
+.integ-card p{margin:0;font-size:13.5px;line-height:1.45;color:var(--ink-soft)}
+.integ-card .integ-eyebrow{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--brand)}
+.integ-card .integ-url{word-break:break-all}
+.integ-card .link-btn{margin-left:6px}
+.integ-card-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto}
+.integ-card > .integ-card-btn{margin-top:auto;align-self:flex-start}
+.integ-card-btn{display:inline-flex;align-items:center;gap:6px;text-decoration:none}
 .integ-list{display:flex;flex-direction:column;gap:10px}
 .integ-row{margin:0}
 .integ-row.soon{background:var(--paper);border-style:dashed}

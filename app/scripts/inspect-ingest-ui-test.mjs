@@ -350,7 +350,7 @@ try {
     const { ctx, page, crashes } = await openPanel();
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /Connect your CRM/i.test(p.textContent || ""));
+        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       const i = el.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(i, "Our inspection app");
@@ -359,7 +359,7 @@ try {
     await wait(300);
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /Connect your CRM/i.test(p.textContent || ""));
+        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       [...el.querySelectorAll("button")].find((b) => /Create token/i.test(b.innerText))?.click();
     });
     for (let n = 0; n < 40 && !minted.length; n++) await wait(150);
@@ -401,7 +401,7 @@ try {
     // an absence.
     t.ck("the account screen really opened", await page.evaluate(() =>
       [...document.querySelectorAll(".portal-panel")]
-        .some((x) => /Connect your CRM/i.test(x.textContent || ""))));
+        .some((x) => /^Connect your CRM$/i.test(x.querySelector("h4")?.textContent.trim() || ""))));
     t.ck("and there is no inspections panel on it", (await panelOf(page)) === null);
 
     // Nor the second address in the token box: a general contractor has no
@@ -410,7 +410,7 @@ try {
     // clipboard.
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /Connect your CRM/i.test(p.textContent || ""));
+        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       const i = el.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(i, "Our CRM");
@@ -419,7 +419,7 @@ try {
     await wait(300);
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /Connect your CRM/i.test(p.textContent || ""));
+        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       [...el.querySelectorAll("button")].find((b) => /Create token/i.test(b.innerText))?.click();
     });
     for (let n = 0; n < 40 && !minted.length; n++) await wait(150);

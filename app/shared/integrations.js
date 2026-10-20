@@ -30,8 +30,8 @@
 export const INTEGRATIONS = [
   {
     id: "api",
-    name: "Zapier, Make and your own scripts",
-    what: "Jobs and inspections posted with your API key, from Zapier, Make, n8n or code you write.",
+    name: "Your API key",
+    what: "Anything that posts with your API key: the Zapier app, Make, n8n, Postman or code you write.",
     uses: "An API key",
   },
   {
@@ -112,4 +112,14 @@ export function integrationEnabled(rows, id) {
   const row = (rows || []).find((r) => r.provider === id);
   if (!row) return true;
   return Number(row.enabled) !== 0;
+}
+
+// The Zapier app's invite link, or null. While the app is private, Zapier
+// hands out a link (Manage -> Sharing) that adds it to somebody's Zapier
+// account; it is set as ZAPIER_INVITE_URL on the API Worker. Only a zapier.com
+// address is accepted: a typo or a pasted page from somewhere else must not
+// become the button every account presses.
+export function zapierInviteUrl(raw) {
+  const s = String(raw || "").trim();
+  return /^https:\/\/(?:[a-z0-9-]+\.)*zapier\.com\/[^\s"'<>]*$/i.test(s) ? s : null;
 }

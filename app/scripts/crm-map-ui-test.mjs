@@ -409,7 +409,7 @@ try {
     const { ctx, page, crashes } = await openPanel();
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((x) => /Connect your CRM/i.test(x.textContent || ""));
+        .find((x) => /^Connect your CRM$/i.test(x.querySelector("h4")?.textContent.trim() || ""));
       const i = el?.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(i, "Our CRM");
@@ -470,7 +470,7 @@ try {
       before.find((r) => r.id === "hover")?.soon && !before.find((r) => r.id === "hover")?.hasSwitch);
     t.ck("the switches sit above the token panel", await page.evaluate(() => {
       const a = document.querySelector(".integ-panel")?.getBoundingClientRect().top;
-      const b = [...document.querySelectorAll(".portal-panel")].find((p) => /Connect your CRM/i.test(p.textContent || ""))
+      const b = [...document.querySelectorAll(".portal-panel")].find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""))
         ?.getBoundingClientRect().top;
       return a != null && b != null && a < b;
     }));
