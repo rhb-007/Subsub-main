@@ -7199,7 +7199,7 @@ export default function SubSub() {
                               {j.fromInspection.unit && <span className="ji-unit">{" \u00b7 "}unit {j.fromInspection.unit}</span>}
                             </span>
                           )}
-                          <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
+                          <span className={`job-phase ${done ? "done" : ""} ${done ? `jp-${jobClosure(j).reason}` : ""}`}>{jobClosure(j).reason === "completed" && <CheckCircle2 size={11} />}{phase}</span>
                           {flag && <span className={`jl-flag jl-${flag.tone}`}>{flag.text}</span>}
                           {j.trades.length
                             ? <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length}</span>
@@ -7289,7 +7289,7 @@ export default function SubSub() {
                               never say -- and "active" over a cancelled one.
                               A held job keeps its phase: it is not finished
                               with, which is the whole difference. */}
-                          <span className={`job-phase ${done ? "done" : ""}`}>{phase}</span>
+                          <span className={`job-phase ${done ? "done" : ""} ${done ? `jp-${jobClosure(j).reason}` : ""}`}>{jobClosure(j).reason === "completed" && <CheckCircle2 size={11} />}{phase}</span>
                           {/* The walk it came from, and the way back to it. */}
                           {j.fromInspection && (can("inspections") ? (
                             <button type="button" className="job-insp" title="Open the inspection this job was raised from"
@@ -45297,6 +45297,14 @@ button.mc-title:hover{text-decoration:underline}
 .job-phase{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;
   background:#e9f0f6;color:#2b5c85;padding:3px 8px;border-radius:20px}
 .job-phase.done{background:#e8f2ea;color:#1f6b4a}
+/* COMPLETED IS THE ONE THAT HAS TO STAND OUT. Asked for as "a completed job
+   should stand out a bit more", over a list where it wore the same pale pill
+   as every other chip. It is solid green with a tick; the other closures
+   (cancelled, closed with no work done, withdrawn) are quiet gray, because
+   they are not an achievement and must not read as one. */
+.job-phase.jp-completed{display:inline-flex;align-items:center;gap:4px;background:#1f7a4f;color:#fff;
+  box-shadow:0 0 0 1px #1f7a4f}
+.job-phase.jp-cancelled,.job-phase.jp-no_work,.job-phase.jp-withdrawn,.job-phase.jp-declined{background:#ecebe8;color:#6b675f}
 /* The role control in the console's Team panel, and the warning above it when
    nobody on the account can administer it. */
 .pf-forced{font-size:11.5px;font-weight:700;color:#1f6b4a;background:#eef5f1;
@@ -48567,5 +48575,6 @@ const DARK_TOKENS = `:root[data-theme="dark"]{color-scheme:dark;--paper:#121311;
   --amber-ink:#e0a64a;--shadow:0 1px 2px rgba(0,0,0,.4)}
 :root[data-theme="dark"] img{color-scheme:light}
 :root[data-theme="dark"] .header-top .brand-logo img{filter:brightness(0) invert(1)}
+:root[data-theme="dark"] .job-phase.jp-completed{background:#4fae80;color:#0f1a14;box-shadow:0 0 0 1px #4fae80}
 `;
 const CSS = withDark(BASE_CSS) + DARK_TOKENS;

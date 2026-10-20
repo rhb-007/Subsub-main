@@ -14288,6 +14288,16 @@ refactor.
   preview and everything a stranger sees keep the company's real colors, and a
   color logo becomes a white silhouette there by design. `test:themeui` (26).
 
+- **A COMPLETED JOB'S CHIP IS SOLID GREEN WITH A TICK; THE OTHER CLOSURES ARE
+  GRAY.** Asked for as *"a completed job should stand out a bit more"*: it wore
+  the same pale pill as Active and as *Closed, no work done*. The chip now
+  carries `jp-<reason>` from `jobClosure`. **Completed** is solid green with
+  white words and a tick. Cancelled, closed with no work done, withdrawn and
+  declined are a quiet gray, because they are not an achievement and must not
+  read as one. **Dark mode sets its own colors** in `DARK_TOKENS`: the generated
+  twin put dark text on a mid green, under AA. `test:jobtabs` (21) measures the
+  chip in both themes; removing the colors fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

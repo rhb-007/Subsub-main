@@ -61,6 +61,9 @@ const JOBS = [
     { plumbing: wo("1", "cmp_pac", "Pacific apartment maintenance") }),
   // A time everybody agreed, ahead: nothing waits, so the window opens on Work.
   base("j_calm", "Gutter run at the back", ["gutters"], { gutters: wo("2", "cmp_bay", "Bay Roofing") }),
+  // Finished: its status chip is the one that has to stand out.
+  { ...base("j_done", "Move-out work — unit 10A", ["gutters"], { gutters: wo("3", "cmp_bay", "Bay Roofing") }),
+    status: "completed", completedAt: "2026-10-16" },
 ];
 const VISITS = [
   { id: "v_ask", jobId: "j_ask", date: "2026-11-20", startTime: "10:45", endTime: "11:45", status: "proposed",
@@ -138,6 +141,41 @@ try {
   await wait(2800);
   await nav(page, "^Jobs");
   await wait(1200);
+
+  console.log("\n-- a completed job's chip stands out --");
+  await page.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+    .find((x) => /^All/i.test(x.innerText.trim()))?.click());
+  await wait(500);
+  const chips = await page.evaluate(() => {
+    const at = (id) => {
+      const c = document.querySelector(`.job-line[data-job-id="${id}"] .job-phase`);
+      if (!c) return null;
+      const cs = getComputedStyle(c);
+      return { text: c.innerText.trim(), bg: cs.backgroundColor, fg: cs.color, tick: !!c.querySelector("svg") };
+    };
+    return { done: at("j_done"), live: at("j_calm") };
+  });
+  const rgb = (c) => (c || "").match(/[\d.]+/g)?.slice(0, 3).map(Number) || [0, 0, 0];
+  const lumOf = (c) => { const [r, g, b] = rgb(c).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+  const ratio = (a, b) => { const [x, y] = [lumOf(a), lumOf(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+  t.ck("both chips are drawn", !!chips.done && !!chips.live, JSON.stringify(chips));
+  t.ck("the completed chip is not the active chip's color", chips.done?.bg !== chips.live?.bg, JSON.stringify(chips));
+  t.ck("it is solid, not a pale pill", lumOf(chips.done?.bg) < 0.25, chips.done?.bg);
+  t.ck("with a tick", chips.done?.tick === true);
+  t.ck("and its words read at AA", ratio(chips.done?.fg, chips.done?.bg) >= 4.5, `${chips.done?.fg} on ${chips.done?.bg}`);
+  // And in dark mode, which is where it was reported from: the generated twin
+  // put dark text on a mid green, under AA, so dark sets its own.
+  await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
+  await wait(200);
+  const dk = await page.evaluate(() => {
+    const c = document.querySelector('.job-line[data-job-id="j_done"] .job-phase');
+    const cs = c && getComputedStyle(c);
+    return cs ? { bg: cs.backgroundColor, fg: cs.color } : null;
+  });
+  t.ck("in dark mode it still reads at AA", !!dk && ratio(dk.fg, dk.bg) >= 4.5, JSON.stringify(dk));
+  await page.evaluate(() => document.documentElement.removeAttribute("data-theme"));
+  await wait(200);
 
   console.log("\n-- a job waiting on this side opens on Schedule --");
   await openJob(page, "j_ask");
