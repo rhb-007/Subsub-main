@@ -43,6 +43,7 @@
 //
 //   node --no-warnings scripts/job-end-test.mjs
 
+import { onSubsubSql, markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +113,7 @@ const seed = () => {
     INSERT INTO jobs(id,account_id,title,trades,status,created_at)
       VALUES ('job_theirs','acc_other','Their boiler','["hvac"]','active','2026-10-01');
   `);
+  markAllOnSubsub(db);
   return { db, env: { DB: makeD1(db) } };
 };
 

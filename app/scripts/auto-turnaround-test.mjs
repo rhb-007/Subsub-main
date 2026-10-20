@@ -28,6 +28,7 @@
 //
 //   node --no-warnings scripts/auto-turnaround-test.mjs
 
+import { markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -98,6 +99,7 @@ const seed = ({ auto = 1, docs = true } = {}) => {
       ('r1','ins_out','Walls and floors','fail','Scuffed throughout, needs a clean',0);
   `);
   if (!docs) db.prepare(`UPDATE engagements SET doc_review = '{}' WHERE id = 'en_fast'`).run();
+  markAllOnSubsub(db);
   return { db, env: { DB: makeD1(db), FILES: { put: async () => {}, get: async () => null } } };
 };
 

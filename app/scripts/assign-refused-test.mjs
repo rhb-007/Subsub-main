@@ -32,6 +32,11 @@ let REPLY = [201, { id: "wo_1", woNumber: "WO-1", status: "pending", notified: {
 // Every assign call the browser actually made, so "it did not draw it" can be
 // told apart from "it never asked".
 let CALLS = 0;
+// 093. Whether the contractor is on SubSub, the body the browser sent, and
+// what the account is holding.
+let ONSS = true;
+let LAST = null;
+let HELD = [];
 
 const acct = () => ({
   id: "acc_x", name: "Cascade Management", subdomain: "cascade", kind: "property_manager",
@@ -74,7 +79,7 @@ const SUBS = () => [{
   notify: { email: true, sms: false },
   docReview: reviewFor(),
   categories: ["painting"], caps: [], rating: 4.5, ratedJobs: 4, accepted: 4, declined: 0,
-  notes: "", status: "active", propertyIds: [], hasPortal: false, answersForItself: false,
+  notes: "", status: "active", propertyIds: [], hasPortal: ONSS, answersForItself: ONSS,
   autoSchedule: AUTO, engagedAs: "subcontractor",
   docs: { insurance: { fileName: "coi.pdf", expiresOn: "2030-01-01" },
     bond: { fileName: "bond.pdf", expiresOn: "2030-01-01" },
@@ -92,13 +97,14 @@ const JOBS = () => [{
 }];
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path, method) => {
+const api = serveApi({ port: API, routes: (path, method, sent) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
   if (path === "/api/account") return [200, acct()];
   if (path === "/api/account-users") return [200, USERS()];
   if (path === "/api/subs") return [200, SUBS()];
   if (path === "/api/jobs" && method === "GET") return [200, JOBS()];
-  if (/\/assign$/.test(path) && method === "POST") { CALLS += 1; return REPLY; }
+  if (/\/assign$/.test(path) && method === "POST") { CALLS += 1; LAST = sent; return REPLY; }
+  if (path === "/api/held-assignments") return [200, { held: HELD }];
   if (path === "/api/properties") return [200, [{ id: "prop_1", accountId: "acc_x",
     name: "Press Apartments", address: "1620 Belmont Ave", city: "Seattle", state: "WA",
     zip: "98122", units: 141, notes: "", ownedByAnother: false, ownerDeclared: false }]];
@@ -126,7 +132,7 @@ const typeMoney = (page, text) => page.evaluate((v) => {
 
 // Open Jobs, open the empty trade slot, pick the contractor, price it, press
 // Issue. Returns what the JOBS screen reads afterwards.
-const pressIssue = async () => {
+const pressIssue = async (label = /^Issue/i) => {
   CALLS = 0;
   const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
     seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1340, height: 1500 } });
@@ -150,13 +156,16 @@ const pressIssue = async () => {
     deadline: [...document.querySelectorAll(".modal label")]
       .some((l) => /Response deadline/i.test(l.innerText || "") && l.querySelector("select")),
     autoNote: (document.querySelector(".modal .wo-auto-note")?.innerText || "").replace(/\s+/g, " ").trim(),
+    notOnSs: (document.querySelector(".modal .not-on-ss")?.innerText || "").replace(/\s+/g, " ").trim(),
+    actions: [...document.querySelectorAll(".modal .form-actions button")].map((x) => (x.innerText || "").trim()),
   }));
-  const pressed = await page.evaluate(() => {
+  const pressed = await page.evaluate((src) => {
+    const re = new RegExp(src, "i");
     const b = [...document.querySelectorAll(".modal .form-actions button")]
-      .find((x) => /^Issue/i.test((x.innerText || "").trim()));
+      .find((x) => re.test((x.innerText || "").trim()));
     if (!b || b.disabled) return false;
     b.click(); return true;
-  });
+  }, label.source);
   await wait(1400);
   const seen = await page.evaluate(() => ({
     // The trade row as it now reads. A refused assignment must leave the slot
@@ -176,6 +185,8 @@ const pressIssue = async () => {
     modalOpen: !!document.querySelector(".modal"),
     refused: (document.querySelector(".modal .assign-refused")?.innerText || "").replace(/\s+/g, " ").trim(),
     refusedReview: !!document.querySelector(".modal .assign-refused button"),
+    held: (document.querySelector(".trade-held")?.innerText || "").replace(/\s+/g, " ").trim(),
+    assignLabel: (document.querySelector(".trade-assign")?.innerText || "").trim(),
   }));
   await ctx.close();
   return { opened, picked, pressed, ...form, ...seen };
@@ -369,6 +380,73 @@ try {
       /Auto-schedule is on/i.test(r.autoNote) && /Pacific apartment maintenance/.test(r.autoNote), r.autoNote);
     t.ck("auto-schedule: Issue still works", r.pressed === true && CALLS === 1, `${r.pressed} ${CALLS}`);
     AUTO = false;
+  }
+
+  console.log("\n-- a contractor who is not on SubSub (093) --");
+  {
+    // Nobody can accept a work order for a company nobody signs in as, so the
+    // window says so before the press and offers the one thing that works:
+    // hold the job and invite them.
+    ONSS = false;
+    REPLY = [202, { held: true, hold: { id: "h1", jobId: "job_1", trade: "painting", companyId: "sub_1" },
+      invite: { email: "juan@pacific.test", emailed: true } }];
+    HELD = [];
+    // The list says it on the row, before the pick.
+    {
+      const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
+        seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1024, height: 1366 } });
+      await wait(2600);
+      await page.evaluate(() => [...document.querySelectorAll("nav button")]
+        .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
+      await wait(800);
+      await openCards(page);
+      await page.evaluate(() => document.querySelector(".trade-assign")?.click());
+      await wait(800);
+      const tag = await page.evaluate(() => (document.querySelector(".modal .pick-row .rec-notss")?.innerText || "").trim());
+      t.ck("notss: the row says Not on SubSub before the pick", /Not on SubSub/i.test(tag), tag);
+      await ctx.close();
+    }
+    // The stub answers the held list with the hold once it exists, the way
+    // the server does after the press.
+    const press = pressIssue(/^Invite and hold/i);
+    await wait(5200);
+    HELD = [{ id: "h1", jobId: "job_1", trade: "painting", companyId: "sub_1", company: NAME, heldAt: "2030-01-01" }];
+    const r = await press;
+    t.ck("notss: the window says they are not on SubSub, and what happens instead",
+      /isn.t on SubSub/i.test(r.notOnSs) && /hold this job/i.test(r.notOnSs) && /accept or decline/i.test(r.notOnSs), r.notOnSs);
+    t.ck("notss: the button is Invite and hold, not Issue",
+      r.actions.some((x) => /^Invite and hold this job/i.test(x)) && !r.actions.some((x) => /^Issue/i.test(x)),
+      JSON.stringify(r.actions));
+    t.ck("notss: pressing it asks the route to hold, not issue", r.pressed === true && CALLS === 1 && LAST?.hold === true,
+      JSON.stringify({ pressed: r.pressed, CALLS, LAST }));
+    t.ck("notss: the slot is not drawn as assigned", r.stillOpen === true,
+      JSON.stringify({ open: r.stillOpen }));
+    t.ck("notss: the note says they were invited and the work order follows",
+      /isn.t on SubSub yet/i.test(r.note) && /juan@pacific\.test/.test(r.note) && /accept or decline/i.test(r.note), r.note);
+    ONSS = true; HELD = [];
+  }
+
+  console.log("\n-- a slot held for them --");
+  {
+    HELD = [{ id: "h1", jobId: "job_1", trade: "painting", companyId: "sub_1", company: NAME, heldAt: "2030-01-01" }];
+    const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
+      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1024, height: 1366 } });
+    await wait(2600);
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Jobs/i.test((b.innerText || "").trim()))?.click());
+    await wait(800);
+    await openCards(page);
+    const row = await page.evaluate(() => ({
+      held: (document.querySelector(".trade-held")?.innerText || "").replace(/\s+/g, " ").trim(),
+      assign: (document.querySelector(".trade-assign")?.innerText || "").trim(),
+      stop: !![...document.querySelectorAll(".trade-held button")].find((b) => /Stop holding/i.test(b.innerText || "")),
+    }));
+    t.ck("held: the trade row says who it is waiting on", /Held for Pacific apartment maintenance/i.test(row.held)
+      && /join SubSub/i.test(row.held), row.held);
+    t.ck("held: with a way to stop holding it", row.stop === true);
+    t.ck("held: and Assign reads Assign someone else", /Assign someone else/i.test(row.assign), row.assign);
+    await ctx.close();
+    HELD = [];
   }
 } finally {
   await browser.close(); web.close(); api.close();

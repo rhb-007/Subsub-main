@@ -20,6 +20,7 @@
 //
 //   node --no-warnings scripts/referral-test.mjs
 
+import { withLogin } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
@@ -397,7 +398,9 @@ try {
       INSERT INTO jobs(id,account_id,title,address,zip,date,trades,status) VALUES
         ('j1','acc_gc','Reroof','12 Elm St','98101','2026-11-20','["roofing"]','active');
     `);
-    const [sa, a] = await json(await call(C.env, "/api/jobs/j1/assign", { method: "POST", body: { trade: "roofing", companyId: "cmp_new", value: 1200 } }));
+    // 093: on SubSub for the issue, as a work order issued before 093 was not.
+    const [sa, a] = await withLogin(C.env.DB, ["cmp_new"], async () =>
+      json(await call(C.env, "/api/jobs/j1/assign", { method: "POST", body: { trade: "roofing", companyId: "cmp_new", value: 1200 } })));
     const tok = C.db.prepare(`SELECT token FROM wo_claim_links`).get()?.token;
     ck("the work order went out with a claim link", sa < 300 && !!tok, JSON.stringify(a).slice(0, 200));
     await call(C.env.__live, `/api/claim/${tok}/code`, { method: "POST", who: null, body: { email: "nora@newroof.test" } });

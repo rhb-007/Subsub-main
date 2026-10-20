@@ -2558,6 +2558,8 @@ export default function SubSub() {
   const [myWork, setMyWork] = useState([]);
   // Quotes. The account's outstanding questions, and the ones put to us.
   const [quoteReqs, setQuoteReqs] = useState([]);
+  // 093. Slots held for a contractor who is not on SubSub yet.
+  const [held, setHeld] = useState([]);
   const [myQuotes, setMyQuotes] = useState([]);
   const [askQuotes, setAskQuotes] = useState(null);      // { job, trade }
   // The inspection's per-trade scope for whichever of those two is open. One
@@ -3332,12 +3334,25 @@ export default function SubSub() {
       ? details.trades
       : [{ trade, tradeScope: details.tradeScope || "", value: details.value || "" }];
     let made;
+    // 093. NOT ON SUBSUB: nobody can accept a work order for a company nobody
+    // signs in as, so the route refuses one. The form says so before the press
+    // and offers to hold the job and invite them instead, which is `hold`:
+    // the work order goes to them, pending, when they accept the invite.
+    // One at a time, so the invite goes once rather than once per trade.
+    const holding = !!details.hold;
     try {
-      made = await Promise.all(wanted.map((ln) => api.assign(jobId, {
+      const body = (ln) => ({
         trade: ln.trade, companyId: sub.id, tradeScope: ln.tradeScope, value: ln.value,
         payKind: ln.payKind || "fixed", rate: ln.rate || "", capHours: ln.capHours ?? null,
         crewName: details.crewName, responseWindow: details.responseWindow,
-      })));
+        ...(holding ? { hold: true } : {}),
+      });
+      if (holding) {
+        made = [];
+        for (const ln of wanted) made.push(await api.assign(jobId, body(ln)));
+      } else {
+        made = await Promise.all(wanted.map((ln) => api.assign(jobId, body(ln))));
+      }
     } catch (err) {
       console.error("[persist] assign failed:", err);
       // Name the reason. "Try again" is the wrong instruction for a refusal
@@ -3369,6 +3384,11 @@ export default function SubSub() {
             + ENGAGED_REFUSALS.trade_not_handyman
         : e === "not_approved"
           ? "No work order was issued. This job is still a request nobody has approved."
+        : e === "not_on_subsub"
+          ? `No work order was issued. ${sub.company} isn't on SubSub, so nobody could accept it. `
+            + "Assign it again and choose Invite and hold the job."
+        : e === "no_contact"
+          ? `Nothing was held. ${sub.company} has no email or mobile on file to invite — add one on their card.`
         : "Could not issue that work order. It has not been sent — try again.");
       // From the assign window, the window stays open and says it there, with
       // Review on the document the route is waiting on.
@@ -3385,6 +3405,10 @@ export default function SubSub() {
             : e === "trade_not_handyman"
               ? `${sub.company} is on your roster as a handyman. ${ENGAGED_REFUSALS.trade_not_handyman}`
             : e === "not_approved" ? "This job is still a request nobody has approved."
+            : e === "not_on_subsub"
+              ? `${sub.company} isn't on SubSub, so nobody could accept this work order. Invite them and hold the job instead.`
+            : e === "no_contact"
+              ? `${sub.company} has no email or mobile on file to send an invite to. Add one on their card first.`
             : "It has not been sent — try again.",
           sub, review: e === "documents_incomplete" ? (unreviewed[0] || null) : null,
         });
@@ -3392,6 +3416,21 @@ export default function SubSub() {
       }
       setAssigning(null);
       setAssignSub(null);
+      return;
+    }
+
+    if (holding) {
+      // Nothing is on the job yet: the slot is held, not filled, so the job is
+      // not patched. The trade row reads the held list.
+      const inv = made[0]?.invite || {};
+      const to = inv.email || inv.phone;
+      setBillingNote(`${sub.company} isn't on SubSub yet. `
+        + (inv.emailed || inv.texted || inv.recent
+          ? `We invited them${to ? ` at ${to}` : ""}, and the work order goes to them to accept or decline when they join.`
+          : "The job is held for them, but the invite could not be sent — check their email and mobile."));
+      setAssigning(null);
+      setAssignSub(null);
+      refreshHeld();
       return;
     }
 
@@ -4781,6 +4820,16 @@ export default function SubSub() {
     catch (err) { console.warn("[my-quotes] load failed:", err); setMyQuotes([]); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loggedIn, currentAccountId, role, jobs]);
+
+  const refreshHeld = useCallback(async () => {
+    if (!loggedIn || !can("jobs") || !["admin", "pm"].includes(role)) { setHeld([]); return; }
+    try { setHeld((await api.heldAssignments())?.held || []); }
+    catch (err) { console.warn("[held] load failed:", err); setHeld([]); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, currentAccountId, role]);
+  useEffect(() => { refreshHeld(); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [loggedIn, currentAccountId, role, jobs.length]);
 
   useEffect(() => { if (loggedIn) refreshMyWork(); else setMyWork([]); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -7613,8 +7662,32 @@ export default function SubSub() {
                               </div>
                             ) : (
                               <div className="trade-actions">
+                                {/* 093. HELD FOR SOMEBODY NOT ON SUBSUB YET. The
+                                    slot is not filled -- nothing was sent --
+                                    so it says who it is waiting on, and the
+                                    two ways out: stop holding it, or assign
+                                    somebody else, which cancels the hold. */}
+                                {(() => {
+                                  const h = held.find((x) => x.jobId === j.id && x.trade === t);
+                                  if (!h) return null;
+                                  return (
+                                    <div className="trade-held">
+                                      <UserPlus size={13} />
+                                      <span>Held for <strong>{h.company || "a contractor"}</strong>, waiting on them
+                                        to join SubSub. The work order goes to them when they do.</span>
+                                      <button className="trade-swap" onClick={async () => {
+                                        try { await api.cancelHeld(h.id); } catch (err) {
+                                          console.warn("[held] cancel failed:", err);
+                                          setBillingNote("That hold could not be stopped. Try again.");
+                                        }
+                                        refreshHeld();
+                                      }}>Stop holding</button>
+                                    </div>
+                                  );
+                                })()}
                                 <button className="trade-assign" onClick={() => setAssigning({ job: j, trade: t })}>
-                                  <Plus size={13} /> Assign &amp; issue WO
+                                  <Plus size={13} /> {held.some((x) => x.jobId === j.id && x.trade === t)
+                                    ? "Assign someone else" : <>Assign &amp; issue WO</>}
                                 </button>
                                 {/* The other way to fill it from your own roster,
                                     next to Assign because the two are one choice:
@@ -27750,6 +27823,9 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
   const pool = replacing ? subs.filter((x) => x.id !== replacing) : subs;
   const lapsed = replacing ? subs.find((x) => x.id === replacing) : null;
   const [chosen, setChosen] = useState(null);
+  // 093. Only a definite no: a row from an older reply carries no answer, and
+  // treating that as "not on SubSub" would hold jobs for people who are.
+  const notOnSubsub = chosen?.answersForItself === false;
   // One scope + value PER TRADE. Bundling a sub across two trades must not
   // copy the same money onto both.
   const [lines, setLines] = useState({});        // { [trade]: { on, scope, value } }
@@ -28091,11 +28167,27 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
           </div>
         )}
 
+        {/* 093. NOT ON SUBSUB. A work order for a company nobody signs in as
+            cannot be accepted, so the route refuses one. Said here, before the
+            press, with the one thing that works instead: hold the job and
+            invite them, and the work order goes to them when they join. */}
+        {notOnSubsub && (
+          <div className="not-on-ss" role="status">
+            <div className="nos-top"><UserPlus size={15} />
+              <strong>{chosen.company} isn&rsquo;t on SubSub</strong></div>
+            <p>Nobody can accept a work order for them here, so it won&rsquo;t be sent. Invite them instead: we&rsquo;ll hold this job for them, and when they join, the work order goes to them to accept or decline.</p>
+            {!chosen.email && !chosen.phone && (
+              <p className="nos-warn">There&rsquo;s no email or mobile on their card to invite. Add one on their card first.</p>
+            )}
+          </div>
+        )}
+
         <div className="form-actions">
           <button className="btn-ghost" onClick={() => setChosen(null)}>Back</button>
           <button className="btn-solid"
-            disabled={openLines.some((t) => !lineReady(t))}
+            disabled={openLines.some((t) => !lineReady(t)) || (notOnSubsub && !chosen.email && !chosen.phone)}
             onClick={() => onPick(chosen, {
+              ...(notOnSubsub ? { hold: true } : {}),
               crewName: crewPick || freeForDay[0]?.name || null,
               responseWindow: respWindow,
               trades: openLines.map((t) => ({
@@ -28108,7 +28200,9 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                 capHours: payKindOf(t) === "hourly" ? Number(lines[t]?.capHours) : null,
               })),
             })}>
-            <Send size={15} /> Issue {openLines.length > 1 ? `${openLines.length} work orders` : "work order"}
+            {notOnSubsub
+              ? <><UserPlus size={15} /> Invite and hold this job</>
+              : <><Send size={15} /> Issue {openLines.length > 1 ? `${openLines.length} work orders` : "work order"}</>}
           </button>
         </div>
         {openLines.some((t) => !lineReady(t)) && (
@@ -28197,7 +28291,13 @@ function PickContractor({ job, trade, subs, jobs, allJobs, accountId, replacing,
                 </div>
                 <div className="rec-tags">
                   <span className="cap">{crewCount(sub)} crews · {headCount(sub)} ppl</span>
-                  {sub.autoSchedule && <span className="auto-badge"><Zap size={11} /> Auto-schedule</span>}
+                  {sub.autoSchedule && sub.answersForItself !== false && <span className="auto-badge"><Zap size={11} /> Auto-schedule</span>}
+                  {/* 093. Said on the row, before the pick: a work order for
+                      them cannot be accepted, so picking them holds the job
+                      and invites them rather than sending it. */}
+                  {sub.answersForItself === false && (
+                    <span className="rec-notss"><UserPlus size={11} /> Not on SubSub</span>
+                  )}
                   {prox && prox.distance != null && (
                     <span className={`prox-badge ${prox.inRange ? "in" : "out"}`}><Target size={11} /> {prox.distance} mi{prox.inRange ? "" : " · out"}</span>
                   )}
@@ -39047,6 +39147,7 @@ function AutoMissPanel({ miss, onAssign, onOpenJob, onDismiss }) {
     if (x.why === "documents") return `documents not verified yet (${docs(x.kinds)})`;
     if (x.why === "no_slot") return "no free working day in the next few weeks";
     if (x.why === "paused") return "every one of their crews is paused";
+    if (x.why === "not_on_subsub") return "not on SubSub yet, so nobody could accept it";
     return x.why;
   };
   let head = "Auto-schedule could not place this one, so it needs you.";
@@ -39598,6 +39699,27 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
     } finally { setBusy(false); }
   };
 
+  // 093. NOT ON SUBSUB. A work order for a company nobody signs in as is
+  // refused, so there is nothing to auto-schedule and no switch to offer. It
+  // used to offer "count jobs as accepted", which booked work onto a calendar
+  // nobody could see. A flag left on from then can still be switched off.
+  if (sub.answersForItself === false && !on) {
+    return (
+      <section>
+        <h4><Zap size={13} /> Auto-schedule</h4>
+        <div className="auto-card notss">
+          <UserPlus size={18} />
+          <div className="auto-card-main">
+            <span className="auto-title">Not on SubSub</span>
+            <span className="auto-desc">{sub.company || "They"} {sub.company ? "has" : "have"} no SubSub login,
+              so jobs can&rsquo;t be sent to them yet. Invite them from this card. A job you assign
+              them is held until they join, then sent for them to accept or decline.</span>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section>
       <h4><Zap size={13} /> Auto-schedule</h4>
@@ -39605,7 +39727,10 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
         <Zap size={18} />
         <div className="auto-card-main">
           <span className="auto-title">{on ? "On" : "Off"}</span>
-          <span className="auto-desc">{autoStateText({ on, portal, side: "hiring", name: sub.company })}</span>
+          {/* The words follow whether they are on SubSub at all (a login on
+              another account answers from there), not this account's seat. */}
+          <span className="auto-desc">{autoStateText({ on, portal: portal || sub.answersForItself === true,
+            side: "hiring", name: sub.company })}</span>
         </div>
         {/* Off is always ours to choose; on is only ours when there is nobody
             on the other side who could have answered. */}
@@ -39623,13 +39748,6 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
       </div>
       {!on && !verdict.ok && (
         <p className="auto-note">{AUTO_DENY_TEXT[verdict.reason]}</p>
-      )}
-      {!on && verdict.ok && !portal && (
-        <p className="auto-note">
-          Turn on <b>Count jobs as accepted</b> if you've agreed the work with
-          them yourself. Or invite them to SubSub so they can accept jobs and
-          see them on their own calendar.
-        </p>
       )}
       {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}
     </section>
@@ -42693,6 +42811,17 @@ p.fld-note{margin:6px 0 0}
 .pick-list{display:flex;flex-direction:column;gap:9px;margin-bottom:16px;max-height:54vh;overflow-y:auto}
 .pick-row{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:11px;padding:12px 13px;background:var(--card)}
 .rec-dup{font-size:10.5px;font-weight:700;color:#a86a18;background:#fbf0dd;padding:3px 7px;border-radius:5px}
+/* 093. Not on SubSub: a fact about the row, not a fault, so a quiet violet
+   tag rather than the amber that means "waiting on you". */
+.rec-notss{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;color:#5b3fa0;background:#efe9fb;padding:3px 7px;border-radius:5px}
+.not-on-ss{border:1px solid #d8cdf3;background:#f6f2fd;border-radius:10px;padding:12px 14px;margin:4px 0 12px}
+.not-on-ss .nos-top{display:flex;align-items:center;gap:7px;color:#4a2f8a;font-size:14.5px}
+.not-on-ss p{margin:6px 0 0;font-size:13.5px;line-height:1.45;color:var(--ink)}
+.not-on-ss .nos-warn{color:var(--red);font-weight:600}
+.trade-held{flex:1 1 100%;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px;color:#4a2f8a;background:#f6f2fd;border:1px solid #d8cdf3;border-radius:8px;padding:7px 10px}
+.trade-held span{flex:1 1 220px;color:var(--ink)}
+.auto-card.notss{background:#f6f2fd;border-color:#d8cdf3}
+.auto-card.notss svg{color:#5b3fa0}
 
 /* header right: add + user switcher */
 .header-right{display:flex;align-items:center;gap:10px;flex:none}

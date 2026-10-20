@@ -54,7 +54,7 @@ const sub = (over) => ({
   notify: { email: true, sms: false },
   docReview: { insurance: verified, bond: verified, contract: verified, w9: verified },
   categories: ["painting"], caps: [], rating: 4.5, ratedJobs: 4, accepted: 4, declined: 0,
-  notes: "", status: "active", propertyIds: [], hasPortal: false, answersForItself: false,
+  notes: "", status: "active", propertyIds: [], hasPortal: true, answersForItself: true,
   autoSchedule: false, engagedAs: "subcontractor",
   docs: { insurance: { fileName: "coi.pdf", expiresOn: "2030-01-01" },
     bond: { fileName: "bond.pdf", expiresOn: "2030-01-01" },

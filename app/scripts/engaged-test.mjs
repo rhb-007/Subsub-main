@@ -27,6 +27,7 @@
 //
 //   node --no-warnings scripts/engaged-test.mjs
 
+import { onSubsubSql, markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { ENGAGED_AS, engagedAs, isEngagedAs, isHandyman, mayEngageHandyman,
@@ -87,6 +88,7 @@ const seed = () => {
       ('m_pm','u_pm','acc_pm','admin'),
       ('m_gc','u_gc','acc_gc','admin');
   `);
+  db.exec(onSubsubSql(["cmp_fix", "cmp_roof"]));
   return { db, env: { DB: makeD1(db), FILES: { put: async () => {}, get: async () => null } } };
 };
 

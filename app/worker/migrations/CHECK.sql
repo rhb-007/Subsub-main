@@ -316,6 +316,9 @@ WITH spec(j) AS (SELECT
   -- 091. An account's connection to an outside system (CompanyCam first).
   -- Until it is run connecting names the file and nothing else changes.
   ',["m091_account_connections","col","account_connections",["account_id","provider","secret_enc","label","connected_at","connected_by","last_ok_at","last_error"]]' ||
+  -- 093. A job held for a contractor who is not on SubSub yet. Until it is
+  -- run, assigning one is refused with the reason and nothing is held.
+  ',["m093_held_assignments","col","held_assignments",["id","account_id","job_id","trade","company_id","payload","created_by","created_at","released_at","work_order_id","release_error","cancelled_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -842,6 +845,10 @@ WITH inv(j) AS (SELECT '['
       AND EXISTS (SELECT 1 FROM inspection_rooms r WHERE r.inspection_id = i.id)
       AND NOT EXISTS (SELECT 1 FROM inspection_rooms r WHERE r.inspection_id = i.id AND r.status = 'unchecked')
       AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'inspection.reopened' AND e.subject_id = i.id))))
+  -- 093. A hold that says it was released has either the work order it became
+  -- or the reason the assign route refused it, never neither.
+  || (',' || json_array('m093_inv_held_released_nothing', (SELECT COUNT(*) FROM held_assignments
+    WHERE released_at IS NOT NULL AND work_order_id IS NULL AND release_error IS NULL)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

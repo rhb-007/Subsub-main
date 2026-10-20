@@ -32,6 +32,7 @@
 //
 //   node --no-warnings scripts/handycap-test.mjs
 
+import { onSubsubSql, markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { HANDYMAN_CAPS, HANDYCAP_AS_OF, HANDYCAP_DISCLAIMER, CAP_BASES, isCapBasis,
@@ -307,6 +308,7 @@ const seed = () => {
     INSERT INTO users(id,name,email) VALUES ('u_pm','Chris Lane','chris@cascade.test');
     INSERT INTO memberships(id,user_id,account_id,role) VALUES ('m_pm','u_pm','acc_pm','admin');
   `);
+  markAllOnSubsub(db);
   return { db, env: { DB: makeD1(db), FILES: { put: async () => {}, get: async () => null } } };
 };
 
@@ -410,7 +412,9 @@ console.log("\n-- the screen and the route read one rule --");
   // refusal in one of the two places.
   ck("the route never answers an error for it",
     !/handyman_cap|cap_exceeded|over_cap/.test(W));
-  const issueGate = /disabled=\{openLines\.some\(\(t\) => !lineReady\(t\)\)\}/.test(APP);
+  // 093 added the one other thing that disables it: a contractor not on SubSub
+  // with no email or mobile to invite. Still nothing about the cap.
+  const issueGate = /disabled=\{openLines\.some\(\(t\) => !lineReady\(t\)\)( \|\| \(notOnSubsub && !chosen\.email && !chosen\.phone\))?\}/.test(APP);
   ck("Issue is gated on the value being filled in and nothing else", issueGate);
   ck("and the cap never reaches a disabled attribute",
     !/disabled=\{[^}]*cap(Chk|Say|Warning)/.test(APP));

@@ -1699,8 +1699,11 @@ app.post("/api/apply/:subdomain", async (c) => {
   const password = String(body.password || "");
   if (password && password.length < 8) return c.json({ error: "weak_password" }, 400);
 
-  const { userId } = await createApplication(c.env, account, body,
+  const { userId, companyId } = await createApplication(c.env, account, body,
     "Applied through the public application form.");
+  // 093. The public form can land on a company this account already holds a
+  // job for (deduped by licence or email), so its holds go too.
+  await releaseHeldAssignments(c.env, { accountId: account.id, companyId });
   // Same as the invited path. Applying already creates this person a
   // contractor membership on the account, so letting them choose a password
   // while they are here grants nothing the application did not already
@@ -3532,33 +3535,43 @@ app.patch("/api/invites/:id", requireRole("admin", "pm"), async (c) => {
 // one. Same column, one step earlier; no migration.
 app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
-  const companyId = c.req.param("companyId");
+  const body = await c.req.json().catch(() => ({}));
+  const r = await inviteRosterCompany(c.env, { accountId, userId, companyId: c.req.param("companyId"),
+    email: body?.email, phone: body?.phone });
+  return c.json(r.body, r.status);
+});
+
+// The invite raised from a contractor's own card, as a function, because 093's
+// held assignment sends the same one: a second copy would be a second set of
+// rules about resending rather than replacing.
+async function inviteRosterCompany(env, { accountId, userId, companyId, email: wantEmail, phone: wantPhone }) {
+  const ok = (body) => ({ status: 200, body });
+  const no = (error, status) => ({ status, body: { error } });
 
   // Their own roster only. A company this account has no engagement with reads
   // as missing rather than forbidden, the same answer mayWriteCompanyDocs
   // gives, so this cannot be walked to find out which company ids are real.
-  const engaged = await c.env.DB.prepare(
+  const engaged = await env.DB.prepare(
     `SELECT 1 AS yes FROM engagements
       WHERE account_id = ? AND company_id = ? AND status <> 'ended'`
   ).bind(accountId, companyId).first();
-  if (!engaged) return c.json({ error: "not_found" }, 404);
+  if (!engaged) return no("not_found", 404);
 
-  const company = await c.env.DB.prepare(
+  const company = await env.DB.prepare(
     `SELECT id, company, contact, email, phone FROM companies WHERE id = ?`).bind(companyId).first();
-  if (!company) return c.json({ error: "not_found" }, 404);
+  if (!company) return no("not_found", 404);
 
   // Already has somebody who can sign in as them here. Sending another invite
   // would be inviting a company that has already arrived.
-  const seat = await c.env.DB.prepare(
+  const seat = await env.DB.prepare(
     `SELECT 1 AS yes FROM memberships
       WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
   ).bind(accountId, companyId).first();
-  if (seat) return c.json({ error: "already_has_login" }, 409);
+  if (seat) return no("already_has_login", 409);
 
-  const body = await c.req.json().catch(() => ({}));
-  const email = String(body?.email ?? company.email ?? "").trim() || null;
-  const phone = normalizePhone(String(body?.phone ?? company.phone ?? "").trim()) || null;
-  if (!email && !phone) return c.json({ error: "no_contact" }, 400);
+  const email = String(wantEmail ?? company.email ?? "").trim() || null;
+  const phone = normalizePhone(String(wantPhone ?? company.phone ?? "").trim()) || null;
+  if (!email && !phone) return no("no_contact", 400);
 
   // An invite already out to this company is RESENT, not replaced. A second
   // live token for one contractor is two links in one inbox and a list that
@@ -3570,7 +3583,7 @@ app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) =>
   // company id would have missed every one of them and minted a second live
   // token for a contractor who already had one sitting in their inbox -- which
   // is the exact thing this route refuses to do.
-  const open = await c.env.DB.prepare(
+  const open = await env.DB.prepare(
     `SELECT * FROM sub_invites
       WHERE account_id = ? AND used_at IS NULL AND revoked_at IS NULL
         AND datetime(expires_at) > datetime('now')
@@ -3584,7 +3597,7 @@ app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) =>
   // redeeming it attaches the seat to this record rather than deduping its way
   // back to it.
   if (open && !open.company_id) {
-    await c.env.DB.prepare(`UPDATE sub_invites SET company_id = ? WHERE id = ?`)
+    await env.DB.prepare(`UPDATE sub_invites SET company_id = ? WHERE id = ?`)
       .bind(companyId, open.id).run();
     open.company_id = companyId;
   }
@@ -3594,33 +3607,33 @@ app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) =>
     const id = uid();
     const token = newInviteToken();
     const expires = new Date(Date.now() + INVITE_TTL_DAYS * 864e5).toISOString();
-    await c.env.DB.prepare(
+    await env.DB.prepare(
       `INSERT INTO sub_invites (id, account_id, token, label, email, phone, contact,
                                 company_name, company_id, created_by, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).bind(id, accountId, token, company.company, email, phone,
       company.contact || null, company.company, companyId, userId, expires).run();
-    row = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
+    row = await env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
   }
 
-  const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
-  const sent = await deliverSubInvite(c.env, { row, account, accountId, userId });
+  const account = await env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  const sent = await deliverSubInvite(env, { row, account, accountId, userId });
   if (sent.emailed || sent.texted) {
-    await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
+    await env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .bind(row.id).run();
   }
-  await logActivity(c.env, accountId, userId, open ? "invite_resent" : "invite_created",
+  await logActivity(env, accountId, userId, open ? "invite_resent" : "invite_created",
     sent.went ? `Invite to ${company.company} sent to ${sent.went}`
       : `Invite to ${company.company} could not be sent`);
 
-  const after = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
-  return c.json({
+  const after = await env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
+  return ok({
     ...inviteRowToJs(after, account),
     resent: !!open,
     emailed: sent.emailed, texted: sent.texted,
     emailError: sent.emailError, textError: sent.textError,
   });
-});
+}
 
 app.delete("/api/invites/:id", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
@@ -3761,6 +3774,10 @@ app.post("/api/invite/:token", async (c) => {
 
   await logActivity(c.env, account.id, null, "invite_accepted",
     `${body.company} joined through an invite link`);
+
+  // 093. Anything this account held for them until they joined goes now, as a
+  // work order they can accept or decline.
+  await releaseHeldAssignments(c.env, { accountId: account.id, companyId });
 
   return c.json({ ok: true,
     ...(await applicantWayIn(c, { account, userId: applicantId, email: body.email, password })) });
@@ -9656,6 +9673,7 @@ export function missingSchema(err) {
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
   if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
+  if (/\bheld_assignments\b/i.test(m)) return "093_held_assignments";
   if (/\baccount_integrations\b/i.test(m)) return "090_account_integrations";
   if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
   if (/\bportfolio_estimates\b/i.test(m)) return "086_portfolio_estimates";
@@ -12758,11 +12776,193 @@ async function withWoNumber(run) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 093. A job held for a contractor who is not on SubSub yet
+// ---------------------------------------------------------------------------
+// The assign route refuses a company nobody signs in as (`not_on_subsub`). With
+// `hold` it lands here instead: the contractor is invited from their card, and
+// the assign request is kept, as it was sent, to be issued when they join.
+
+async function holdForInvite(c, { job, trade, companyId, companyName, body }) {
+  const { accountId, userId } = c.get("auth");
+  // A slot with a live work order on it is not a slot to hold. The screen does
+  // not offer this; the route says so rather than holding a second answer.
+  const live = await c.env.DB.prepare(
+    `SELECT 1 AS yes FROM work_orders WHERE job_id = ? AND trade = ?
+        AND voided_at IS NULL AND status <> 'declined'`).bind(job.id, trade).first();
+  if (live) return c.json({ error: "slot_taken" }, 409);
+
+  // The invite first: a hold with nobody asked to join is a job waiting on
+  // nothing. A refusal here (no email or mobile on the card) holds nothing.
+  //
+  // An invite sent to them in the last few minutes is not sent again: holding
+  // three trades for one contractor is three requests, and three identical
+  // emails in a minute read as a fault.
+  const recent = await c.env.DB.prepare(
+    `SELECT email, phone FROM sub_invites
+      WHERE account_id = ? AND company_id = ? AND used_at IS NULL AND revoked_at IS NULL
+        AND sent_at IS NOT NULL AND datetime(sent_at) > datetime('now', '-10 minutes')
+      ORDER BY created_at DESC LIMIT 1`).bind(accountId, companyId).first().catch(() => null);
+  const inv = recent
+    ? { status: 200, body: { recent: true, email: recent.email || null, phone: recent.phone || null } }
+    : await inviteRosterCompany(c.env, { accountId, userId, companyId,
+      email: body.inviteEmail, phone: body.invitePhone });
+  if (inv.status >= 300) return c.json({ ...inv.body, company: companyName }, inv.status);
+
+  const { hold: _h, inviteEmail: _e, invitePhone: _p, ...payload } = body;
+  const id = uid();
+  try {
+    // One open hold per slot. Holding it again, for them or somebody else,
+    // replaces the last one rather than queueing a second answer behind it.
+    await c.env.DB.prepare(
+      `UPDATE held_assignments SET cancelled_at = CURRENT_TIMESTAMP
+        WHERE job_id = ? AND trade = ? AND released_at IS NULL AND cancelled_at IS NULL`
+    ).bind(job.id, trade).run();
+    await c.env.DB.prepare(
+      `INSERT INTO held_assignments (id, account_id, job_id, trade, company_id, payload, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, accountId, job.id, trade, companyId, JSON.stringify(payload), userId).run();
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    // The invite already went, which is still worth having; only the hold is
+    // lost, and the reply says so by name.
+    return c.json({ error: "migration_needed", migration, invite: inv.body }, 503);
+  }
+  await logActivity(c.env, accountId, userId, "job_held",
+    `Held ${tradeLabel(trade)} for ${companyName || "a contractor"} until they join SubSub`);
+  return c.json({ held: true, hold: { id, jobId: job.id, trade, companyId, company: companyName },
+    invite: inv.body }, 202);
+}
+
+// The auth a team seat on the account would carry, for a request made on the
+// account's behalf. Null when that person no longer holds an admin or pm seat.
+async function teamSeatAuth(env, userId, accountId) {
+  if (!userId) return null;
+  const m = await env.DB.prepare(
+    `SELECT * FROM memberships WHERE user_id = ? AND account_id = ?`).bind(userId, accountId).first();
+  if (!m || !["admin", "pm"].includes(m.role)) return null;
+  return {
+    userId, accountId, role: m.role, companyId: m.company_id, membershipId: m.id,
+    propertyIds: await propertyScope(env.DB, m), jobIds: await jobScope(env.DB, m),
+  };
+}
+
+// Issue every open hold for this company, through the real assign route, as
+// the person who held it (or the account's own admin when they have gone).
+// Every check runs again, so a certificate that lapsed in the meantime is
+// refused rather than slipped through, and a refusal closes the hold with its
+// reason so the slot frees and the hiring side is told.
+//
+// Never throws: it runs inside somebody accepting an invite, and losing their
+// application over a held job would be the worse outcome by far.
+async function releaseHeldAssignments(env, { accountId = null, companyId = null } = {}) {
+  const out = { released: 0, refused: 0 };
+  let rows = [];
+  try {
+    const where = ["h.released_at IS NULL", "h.cancelled_at IS NULL"];
+    const args = [];
+    if (accountId) { where.push("h.account_id = ?"); args.push(accountId); }
+    if (companyId) { where.push("h.company_id = ?"); args.push(companyId); }
+    ({ results: rows } = await env.DB.prepare(
+      `SELECT h.*, co.company FROM held_assignments h LEFT JOIN companies co ON co.id = h.company_id
+        WHERE ${where.join(" AND ")} ORDER BY h.created_at`).bind(...args).all());
+  } catch (err) {
+    if (!missingSchema(err)) console.error("[held] read failed:", err?.message || err);
+    return out;
+  }
+  for (const h of rows || []) {
+    try {
+      if (!(await companyAnswersForItself(env, h.company_id))) continue;
+      // The hiring side could switch auto-schedule on only while nobody could
+      // answer for them. Now somebody can, and auto-schedule is theirs to
+      // grant, so it goes off before the work order is issued: it reaches them
+      // as an offer to accept or decline, which is what they were promised.
+      await env.DB.prepare(`UPDATE engagements SET auto_schedule = 0 WHERE account_id = ? AND company_id = ?`)
+        .bind(h.account_id, h.company_id).run().catch(() => {});
+      let as = await teamSeatAuth(env, h.created_by, h.account_id);
+      if (!as) {
+        const seat = await accountSeat(env, h.account_id);
+        as = seat ? await teamSeatAuth(env, seat.userId, h.account_id) : null;
+      }
+      let status = 409, body = { error: "nobody_to_send_it" };
+      if (as) {
+        const req = new Request(`https://api.subsub.work/api/jobs/${h.job_id}/assign`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...parseJson(h.payload, {}), trade: h.trade, companyId: h.company_id }),
+        });
+        ACTING_AS.set(req, as);
+        const res = await app.fetch(req, env, undefined);
+        status = res.status;
+        body = await res.json().catch(() => ({}));
+      }
+      if (status < 300) {
+        out.released += 1;
+        await logActivity(env, h.account_id, null, "held_released",
+          `${h.company || "A contractor"} joined SubSub, so the held ${tradeLabel(h.trade)} work order was sent to them`);
+      } else {
+        out.refused += 1;
+        await env.DB.prepare(
+          `UPDATE held_assignments SET released_at = CURRENT_TIMESTAMP, release_error = ?
+            WHERE id = ? AND released_at IS NULL AND cancelled_at IS NULL`
+        ).bind(String(body?.error || `http_${status}`), h.id).run();
+        await logActivity(env, h.account_id, null, "held_refused",
+          `${h.company || "A contractor"} joined SubSub, but the held ${tradeLabel(h.trade)} work order could not be sent (${body?.error || status}). Assign it again from the job.`);
+      }
+    } catch (err) {
+      console.error("[held] release failed:", h.id, err?.message || err);
+    }
+  }
+  return out;
+}
+
+// The sweep, for a contractor who joined some other way than this account's
+// invite -- another account's, or a login made from the console.
+export async function heldSweep(env) {
+  return releaseHeldAssignments(env, {});
+}
+
+app.get("/api/held-assignments", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT h.id, h.job_id, h.trade, h.company_id, h.created_at, co.company
+         FROM held_assignments h LEFT JOIN companies co ON co.id = h.company_id
+        WHERE h.account_id = ? AND h.released_at IS NULL AND h.cancelled_at IS NULL`
+    ).bind(accountId).all();
+    return c.json({ held: (results || []).filter((r) => maySeeJob(c.get("auth"), r.job_id)).map((r) => ({
+      id: r.id, jobId: r.job_id, trade: r.trade, companyId: r.company_id,
+      company: r.company || null, heldAt: r.created_at,
+    })) });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ held: [], migration });
+  }
+});
+
+app.post("/api/held-assignments/:id/cancel", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const row = await c.env.DB.prepare(
+    `SELECT h.job_id, h.trade, co.company FROM held_assignments h
+       LEFT JOIN companies co ON co.id = h.company_id
+      WHERE h.id = ? AND h.account_id = ? AND h.released_at IS NULL AND h.cancelled_at IS NULL`
+  ).bind(c.req.param("id"), accountId).first().catch(() => null);
+  if (!row || !maySeeJob(c.get("auth"), row.job_id)) return c.json({ error: "not_found" }, 404);
+  await c.env.DB.prepare(
+    `UPDATE held_assignments SET cancelled_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND released_at IS NULL AND cancelled_at IS NULL`).bind(c.req.param("id")).run();
+  await logActivity(c.env, accountId, userId, "held_cancelled",
+    `Stopped holding ${tradeLabel(row.trade)} for ${row.company || "a contractor"}`);
+  return c.json({ ok: true });
+});
+
 app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const jobId = c.req.param("jobId");
+  const assignBody = await c.req.json();
   const { trade, companyId, crewName, tradeScope, value, responseWindow,
-    payKind, rate, capHours, autoBook } = await c.req.json();
+    payKind, rate, capHours, autoBook, hold } = assignBody;
 
   const job = await jobWithEnding(c.env, await c.env.DB.prepare(
     `SELECT id, requested_by, approved_at, date, status, withdrawn_at, declined_at
@@ -12885,6 +13085,25 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     console.warn("[assign] expiry check unavailable:", err?.message || err);
   }
 
+  // 093. NOBODY CAN ACCEPT A WORK ORDER FOR A COMPANY NOBODY SIGNS IN AS.
+  // A contractor somebody typed in, or invited and who never opened the link,
+  // has no login: a work order for them sits unanswered until it expires, and
+  // nothing on the hiring side says why. So it is refused, by name, AFTER every
+  // other check -- the price, the trade and the documents are this account's
+  // to settle now, and the same checks run again when it is released.
+  //
+  // UNSCOPED, deliberately: a roofer whose only login is on another account is
+  // on SubSub, and their own account reads the work order through /api/my-work.
+  //
+  // With `hold`, the job is kept for them and they are invited instead. When
+  // they accept the invite the work order is issued through this same route,
+  // pending, so they accept or decline it and its window starts then.
+  if (!(await companyAnswersForItself(c.env, companyId))) {
+    const co = await c.env.DB.prepare(`SELECT company FROM companies WHERE id = ?`).bind(companyId).first();
+    if (!hold) return c.json({ error: "not_on_subsub", company: co?.company || null }, 409);
+    return holdForInvite(c, { job, trade, companyId, companyName: co?.company || null, body: assignBody });
+  }
+
   const autoScheduled = !!engagement.auto_schedule;
   const id = uid();
   const cents = (v) => (v || v === 0) && String(v).trim() !== ""
@@ -12928,6 +13147,23 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
     if (!migration) throw err;
     console.error("[assign] schema not migrated:", err?.message || err);
     return c.json({ error: "migration_needed", migration }, 503);
+  }
+
+  // 093. The slot is filled, so a hold on it is settled here, in one place:
+  // the same company's hold became this work order (its release, or the
+  // hiring side assigning them once they had joined), and anybody else's is
+  // cancelled, because assigning somebody else is the answer to it.
+  try {
+    await c.env.DB.prepare(
+      `UPDATE held_assignments SET released_at = CURRENT_TIMESTAMP, work_order_id = ?
+        WHERE job_id = ? AND trade = ? AND company_id = ?
+          AND released_at IS NULL AND cancelled_at IS NULL`).bind(id, jobId, trade, companyId).run();
+    await c.env.DB.prepare(
+      `UPDATE held_assignments SET cancelled_at = CURRENT_TIMESTAMP
+        WHERE job_id = ? AND trade = ? AND company_id <> ?
+          AND released_at IS NULL AND cancelled_at IS NULL`).bind(jobId, trade, companyId).run();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
   }
 
   // THE HANDYMAN CEILING, RECORDED RATHER THAN ENFORCED.
@@ -13193,6 +13429,8 @@ async function dispatchEmergency(c, jobId, accountId) {
     if (!verified("insurance") || !verified("bond") || !verified("contract")) {
       return say("documents_incomplete", { companyId });
     }
+    // 093. Nobody can answer a call-out to a company nobody signs in as.
+    if (!(await companyAnswersForItself(c.env, companyId))) return say("not_on_subsub", { companyId });
 
     const job = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(jobId).first();
     if (!job) return say("job_not_found");
@@ -19089,10 +19327,19 @@ const asSelf = async (c, path, body, as = null) => {
   // all, and a self-call does not need to wait on anything after it anyway.
   let ctx;
   try { ctx = c.executionCtx; } catch { ctx = undefined; }
-  const res = await app.fetch(
-    new Request(new URL(path, c.req.url), {
-      method: "POST", headers: relayHeaders(c, as), body: JSON.stringify(body),
-    }), c.env, ctx);
+  const req = new Request(new URL(path, c.req.url), {
+    method: "POST", headers: relayHeaders(c, as), body: JSON.stringify(body),
+  });
+  // 093. ACTING AS THE ACCOUNT goes through ACTING_AS, not a header pair. The
+  // headers `relayHeaders` sets are only read when Supabase is NOT configured
+  // (local and tests); in production the middleware wants a bearer token and
+  // answers 401 to a request with none -- so every "as the account" call
+  // since 067 was refused live while passing every suite.
+  if (as?.userId) {
+    const auth = await teamSeatAuth(c.env, as.userId, as.accountId);
+    if (auth) ACTING_AS.set(req, auth);
+  }
+  const res = await app.fetch(req, c.env, ctx);
   return { status: res.status, body: await res.json().catch(() => ({})) };
 };
 
@@ -19154,6 +19401,7 @@ async function autoCandidates(env, accountId, trade, companyState, { exceptJobId
       busy: [...new Set([...(busy || []).map((x) => x.date),
         ...busyFromSpans(held || [], { off: o.days })])].sort(),
       unavailable: o.days, paused: o.allPaused,
+      notOnSubsub: !(await companyAnswersForItself(env, r.company_id)),
       openJobs: (open || [])[0]?.n || 0,
     });
   }
@@ -26605,7 +26853,8 @@ export default {
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
          ["unit-billing", unitBillingSweep], ["bbb", bbbSweep]]
-      : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep]];
+      : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep],
+         ["held", heldSweep]];
 
     ctx.waitUntil((async () => {
       for (const [name, run] of jobs) {

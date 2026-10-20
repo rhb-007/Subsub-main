@@ -2586,3 +2586,23 @@ CREATE TABLE IF NOT EXISTS account_connections (
   last_error    TEXT,
   PRIMARY KEY (account_id, provider)
 );
+
+-- 093: a job held for a contractor who is not on SubSub yet, issued when they
+-- accept the invite.
+CREATE TABLE IF NOT EXISTS held_assignments (
+  id            TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL,
+  job_id        TEXT NOT NULL,
+  trade         TEXT NOT NULL,
+  company_id    TEXT NOT NULL,
+  payload       TEXT NOT NULL DEFAULT '{}',
+  created_by    TEXT,
+  created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  released_at   TEXT,
+  work_order_id TEXT,
+  release_error TEXT,
+  cancelled_at  TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_held_open
+  ON held_assignments(job_id, trade) WHERE released_at IS NULL AND cancelled_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_held_company ON held_assignments(account_id, company_id);

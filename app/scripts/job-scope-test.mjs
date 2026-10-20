@@ -30,6 +30,7 @@
 //
 //   node --no-warnings scripts/job-scope-test.mjs
 
+import { markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 
@@ -79,6 +80,7 @@ const seed = () => {
     INSERT INTO membership_jobs(membership_id,job_id) VALUES
       ('m_pm','j_mine1'), ('m_pm','j_mine2');
   `);
+  markAllOnSubsub(db);
   return db;
 };
 

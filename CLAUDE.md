@@ -14372,6 +14372,82 @@ refactor.
   `test:inspection` (231). The **summary** is unaffected: raising already
   writes it. Removing the finishing block fails five assertions.
 
+- **A WORK ORDER ONLY GOES TO A COMPANY SOMEBODY SIGNS IN AS. ANYBODY ELSE IS
+  INVITED, AND THE JOB IS HELD FOR THEM.** Asked for as *"it should not allow
+  something to be scheduled for somebody who is not on subsub ... invite them
+  to subsub instead ... once they accept, they would automatically get that
+  job scheduled, or at least presented to them so they can either accept or
+  decline."* Migration 093 (`held_assignments`).
+
+  **`POST /api/jobs/:jobId/assign` refuses `not_on_subsub`**, naming the
+  company, when `companyAnswersForItself` is false: no contractor seat
+  anywhere and no account of its own. It is unscoped on purpose, because a
+  roofer whose only login is on another account is on SubSub and reads the
+  work order from home. The refusal comes **after** every other check, so a
+  documents or lapse refusal the account can fix is never hidden behind it.
+  Emergency dispatch refuses the same (`not_on_subsub`), and the turnaround
+  ranking passes such a company over with that reason.
+
+  **With `hold`, the job is kept and they are invited instead** (202). The
+  invite is the one raised from their card (`inviteRosterCompany`, factored
+  out of `POST /api/subs/:companyId/invite`, so resending rather than
+  replacing is still one rule). It is sent **once** however many trades are
+  held: an invite sent to them in the last ten minutes is reused. No email or
+  mobile on the card holds nothing (`no_contact`). The assign request is
+  stored as it was sent, one open hold per job and trade.
+
+  **When they join, the work order goes out through the same route, pending.**
+  Accepting the invite (`POST /api/invite/:token`) or applying through the
+  public form releases their holds on that account. The ten-minute cron
+  (`heldSweep`) catches anybody who arrived another way. Each release:
+  - runs every check again, acting as the person who held it (or the
+    account's admin if they have gone), so a certificate sent back in the
+    meantime is refused rather than slipped through;
+  - starts the response window then, and clears a hiring-side auto-schedule
+    flag first, because auto-schedule is theirs to grant and they were
+    promised an offer to accept or decline;
+  - closes the hold with the route's reason when it is refused, so the slot
+    frees and the feed says why. `m093_inv_held_released_nothing` counts a
+    release with neither a work order nor a reason.
+
+  Assigning somebody else to the slot cancels the hold, and the assign route
+  settles holds in one place: the same company's hold becomes the work order,
+  anybody else's is cancelled.
+
+  **On screen:** the assign list tags the row *Not on SubSub*; picking them
+  says why nothing will be sent and the button is **Invite and hold this
+  job**; the trade row reads *Held for X, waiting on them to join SubSub* with
+  **Stop holding**, and Assign becomes *Assign someone else*. The
+  auto-schedule card offers no switch to somebody not on SubSub: it says to
+  invite them. **This retires "count jobs as accepted" for a contractor with
+  no login**, which the entries above record as the one case the hiring side
+  could set auto-schedule; a flag already on can still be switched off.
+
+  **And it found a live bug in the relay "as the account".** `asSelf` with a
+  seat dropped the bearer token and sent `X-User-Id`, which the middleware
+  only reads when Supabase is NOT configured. In production that is a 401, so
+  every auto-proposed turnaround window since 067 was refused live while
+  passing every suite, because the suites run without Supabase. It now goes
+  through `ACTING_AS` with the seat's own auth (`teamSeatAuth`), and
+  `test:held` drives it with Supabase configured and a stubbed sign-in.
+
+  **The cost, stated:** the claim link (074) can no longer recruit through a
+  new work order, because a new work order never reaches a company with no
+  login. It still works on every work order issued before this, and the
+  invite is now the way in. `test:claim` and `test:referral` give the company
+  a login for the issue and take it away after, which is the pre-093 shape.
+
+  `test:held` (45) and `test:assignref` (49). Eleven mutations fire, each on
+  its own assertion. Fourteen suites whose subject is assigning had fixture
+  contractors with no login; they now get a seat on a separate account
+  (`scripts/lib/onsubsub.mjs`), which leaves every check scoped to the suite's
+  own account as it was. **Pasting 093 is required**; until then holding
+  answers `migration_needed` (the invite still goes) and refusing works.
+
+  **Still open:** quote requests can still be sent to a company with no login,
+  who cannot answer one. **Not verified here:** the full-stack suites, which
+  need the local stack; their seed contractors may lack logins.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

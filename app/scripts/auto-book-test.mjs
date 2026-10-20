@@ -21,6 +21,7 @@
 //
 //   node --no-warnings scripts/auto-book-test.mjs
 
+import { onSubsubSql } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,6 +73,7 @@ const seed = () => {
     INSERT INTO visits(id,account_id,job_id,proposed_by,date,start_time,end_time,status,manager_at)
       VALUES ('v_kept','acc_pm','j_timed','u_mgr','${AHEAD}','08:00','09:00','proposed','2026-10-01 09:00:00');
   `);
+  db.exec(onSubsubSql(["cmp_auto", "cmp_ask"]));
   return { db, env: { DB: makeD1(db), FILES: { put: async () => {}, get: async () => null } } };
 };
 

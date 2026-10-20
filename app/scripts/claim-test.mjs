@@ -22,6 +22,7 @@
 //
 //   node --no-warnings scripts/claim-test.mjs
 
+import { withLogin } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { claimUrl, claimPathToken, footerText, footerSms, claimPhoneProblem, claimState,
@@ -127,9 +128,14 @@ const call = (env, path, { method = "GET", body, who = "u_gc", acct = "acc_gc", 
       ...(bearer ? { Authorization: `Bearer ${bearer}` } : { "X-User-Id": who, "X-Account-Id": acct }) },
   }), env);
 const json = async (r) => [r.status, await r.json().catch(() => ({}))];
+// 093. A work order can only be issued to a company somebody signs in as, so
+// the company is given a login for the issue and has it taken away after:
+// what is left is the shape every work order issued before 093 has, which is
+// the shape the claim link exists for.
 const issue = async (env, jobId, trade, companyId, who = "u_gc", acct = "acc_gc") =>
-  json(await call(env, `/api/jobs/${jobId}/assign`, { method: "POST", who, acct,
-    body: { trade, companyId, value: 1200 } }));
+  withLogin(env.DB, [companyId], async () =>
+    json(await call(env, `/api/jobs/${jobId}/assign`, { method: "POST", who, acct,
+      body: { trade, companyId, value: 1200 } })));
 const tokenOf = (db, woId) => db.prepare(`SELECT token FROM wo_claim_links WHERE work_order_id = ?`).get(woId)?.token;
 
 try {

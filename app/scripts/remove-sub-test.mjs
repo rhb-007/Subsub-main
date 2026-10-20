@@ -37,6 +37,7 @@
 //
 //   node --no-warnings scripts/remove-sub-test.mjs
 
+import { onSubsubSql, markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 
@@ -96,6 +97,7 @@ const seed = () => {
       ('inv1','${GC}','tok_live_1','${SUB_CO}','rae@bay.test','2099-01-01'),
       ('inv_other','acc_other','tok_other','${OTHER_CO}','kit@else.test','2099-01-01');
   `);
+  markAllOnSubsub(db);
   return db;
 };
 

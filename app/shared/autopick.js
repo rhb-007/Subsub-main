@@ -105,6 +105,8 @@ export const AUTO_SKIP = {
   // Every crew switched off in My Crews. Its own reason rather than no_slot,
   // because the way out is theirs and is one switch, not a day to free up.
   paused: "every crew is paused",
+  // 093. Nobody signs in as them, so nobody could accept the work order.
+  not_on_subsub: "not on SubSub",
 };
 
 // THE RANKING. Ordered, and each criterion is here for a reason rather than
@@ -145,6 +147,12 @@ export function rankCandidates(cands = [], { trade, from, length = 1 } = {}) {
     if ((cnd.blockers || []).length) {
       skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "documents",
         kinds: [...cnd.blockers] });
+      continue;
+    }
+    // 093. A work order to a company nobody signs in as is refused by the
+    // assign route, so it is not put forward here either.
+    if (cnd.notOnSubsub) {
+      skipped.push({ companyId: cnd.companyId, company: cnd.company, why: "not_on_subsub" });
       continue;
     }
     if (cnd.paused) {

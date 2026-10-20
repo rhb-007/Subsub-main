@@ -492,6 +492,9 @@ export const api = {
     { method: "POST", body: JSON.stringify(note ? { note } : {}) }),
   reopenJob: (jobId) => request(`/jobs/${jobId}/reopen`, { method: "POST" }),
   assign: (jobId, details) => request(`/jobs/${jobId}/assign`, { method: "POST", body: JSON.stringify(details) }),
+  // 093. Jobs held for a contractor who is not on SubSub yet.
+  heldAssignments: () => request(`/held-assignments`),
+  cancelHeld: (id) => request(`/held-assignments/${id}/cancel`, { method: "POST" }),
   unassignTrade: (jobId, trade) => request(`/jobs/${jobId}/unassign/${trade}`, { method: "POST" }),
   reissueWorkOrder: (woId, changes) => request(`/work-orders/${woId}/reissue`, { method: "POST", body: JSON.stringify(changes) }),
   respondToWorkOrder: (woId, status) => request(`/work-orders/${woId}/respond`, { method: "POST", body: JSON.stringify({ status }) }),

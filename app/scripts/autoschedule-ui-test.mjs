@@ -56,7 +56,7 @@ const SUBS = [
   sub({ id: "cmp_seat", company: "San Juan Exteriors", contact: "Richard Braun",
         email: "rb@sanjuan.test", hasPortal: true, autoSchedule: false }),
   sub({ id: "cmp_typed", company: "Ace Gutters", contact: "Danny Ace",
-        email: "danny@ace.test", hasPortal: false, autoSchedule: false }),
+        email: "danny@ace.test", hasPortal: false, answersForItself: false, autoSchedule: false }),
   sub({ id: "cmp_on", company: "Puget Electricity", contact: "Mega Slavo",
         email: "mega@puget.test", hasPortal: true, autoSchedule: true }),
 ];
@@ -196,32 +196,23 @@ try {
     await wait(500);
   }
 
-  console.log("\n-- for a record nobody is behind, it does offer one --");
+  console.log("\n-- for a record nobody is behind, no switch: invite them (093) --");
   {
     const ok = await openSub(page, "Ace Gutters");
     t.ck("their card opens", ok, String(ok));
     const card = await readCard(page);
-    t.ck("a toggle is drawn", card?.hasToggle === true, JSON.stringify(card));
-    t.ck("it is off", card?.toggleOn === false, String(card?.toggleOn));
-    t.ck("and the card says nobody can accept, and why it can be set here",
-      /no SubSub login/i.test(card?.desc || "") && /expires unanswered/i.test(card?.desc || "")
-        && /count jobs as accepted/i.test(card?.note || "") && /invite them/i.test(card?.note || ""), JSON.stringify(card));
+    // 093. A work order for a company nobody signs in as is refused, so there
+    // is nothing to auto-schedule and no switch. The card says why and what
+    // happens instead.
+    t.ck("no switch is drawn for somebody not on SubSub", card?.hasToggle === false, JSON.stringify(card));
+    t.ck("the card says they are not on SubSub", /Not on SubSub/i.test(card?.title || ""), JSON.stringify(card));
+    t.ck("and says to invite them, and that a job is held until they join",
+      /no SubSub login/i.test(card?.desc || "") && /Invite them/i.test(card?.desc || "")
+        && /held until they join/i.test(card?.desc || "") && /accept or decline/i.test(card?.desc || ""), card?.desc);
     t.ck("and it names the company rather than \"them\"",
       /Ace Gutters/.test(card?.desc || ""), card?.desc);
-    t.ck("and \"Off\" is said once, not three times",
-      ((card?.title || "") + " " + (card?.desc || "") + " " + (card?.toggleLabel || "")).match(/\boff\b/gi)?.length === 1,
-      JSON.stringify(card));
-
-    // Throw it, and confirm it actually went to the server and stuck.
-    t.ck("the switch can be pressed", await flip(page));
-    await wait(1200);
-    t.ck("the switch reached the server",
-      patched.some((p) => p.id === "cmp_typed" && p.body.autoSchedule === true),
-      JSON.stringify(patched));
-    const after = await readCard(page);
-    t.ck("and the card now reads on", after?.title === "On", String(after?.title));
-    t.ck("and says the account is telling them itself",
-      /counts as accepted/i.test(after?.desc || "") && /call or text them/i.test(after?.desc || ""), after?.desc);
+    t.ck("and says nothing about counting jobs as accepted",
+      !/count(s)? (jobs )?as accepted/i.test(JSON.stringify(card)), JSON.stringify(card));
   }
 
   console.log("\n-- a contractor who agreed can still be switched off --");

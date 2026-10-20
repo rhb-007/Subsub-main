@@ -25,6 +25,7 @@
 //
 //   node --no-warnings scripts/handover-test.mjs
 
+import { onSubsubSql, markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { canHandOver, awaitingFrom, canDecide, canCancel, MOVES, STAYS, inheritedShape, isOpenWork, canAppoint, seatDescription } from "../shared/handover.js";
@@ -765,6 +766,7 @@ console.log("\n-- and urgency does not let them spend the manager's money --");
        '{"insurance":{"status":"verified"},"bond":{"status":"verified"},"contract":{"status":"verified"}}');
     UPDATE accounts SET emergency_company_id='cmp_em' WHERE id='acc_pm';
   `);
+  db2.exec(onSubsubSql(["cmp_em"]));
   const [s2, b2] = await json(await call(env2, "u_ten", "acc_pm", "/jobs",
     { method: "POST", body: JSON.stringify({
       title: "Water coming in here too", propertyId: "p_cedar", trades: ["plumbing"],

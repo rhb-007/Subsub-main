@@ -23,6 +23,7 @@
 //
 //   node --no-warnings scripts/own-crews-test.mjs
 
+import { onSubsubSql, markAllOnSubsub } from "./lib/onsubsub.mjs";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,7 +76,7 @@ const seed = () => {
       ('j_both','acc_pm','Cracked pane','["windows_doors"]','${BOTH_OFF}','10:00','active'),
       ('j_one','acc_pm','Sash cord','["windows_doors"]','${ONE_OFF}','10:00','active'),
       ('j_hand','acc_pm','Sticky door','["windows_doors"]',NULL,NULL,'active');
-  `);
+  `); markAllOnSubsub(db);
   return { db, env: { DB: makeD1(db), FILES: { put: async () => {}, get: async () => null } } };
 };
 
@@ -235,7 +236,7 @@ try {
           VALUES ('ins_out','acc_pm','prop_1','3B','move_out','finished','2026-10-01 12:00:00');
         INSERT INTO inspection_rooms(id,inspection_id,name,status,note,position) VALUES
           ('r1','ins_out','Walls and floors','fail','Scuffed throughout, needs a clean',0);
-      `);
+      `); markAllOnSubsub(db);
       const env = { DB: makeD1(db), FILES: { put: async () => {}, get: async () => null } };
       const [s, b] = await json(await call(env, "/api/inspections/ins_out/job", { trades: ["cleaning"], date: MON }));
       const wo = db.prepare(`SELECT company_id FROM work_orders WHERE job_id = ?`).get(b.jobId);
