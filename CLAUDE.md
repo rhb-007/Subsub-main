@@ -14633,6 +14633,27 @@ refactor.
   window used for whole days (1), and `busyFor` always returning the morning
   list (2).
 
+- **THE MARKETING SITE CARRIES THE GOOGLE TAG (G-3ZHHKNP0F2) ON EVERY PAGE,
+  ONCE, IMMEDIATELY AFTER `<head>`.** Asked for in Google's own words: *"every
+  page ... immediately after the <head> element. Don't add more than one Google
+  tag to each page."* The text is Google's, unchanged, in `content/gtag.mjs`.
+  The three generators (licensing, compare, tools) import it, so the 184
+  generated pages cannot drift. The 16 hand-written root pages hold a copy,
+  because the site has no build step. `test:discover` walks every `.html` file
+  off disk (not `app/`, `marketing/`, `zapier/` or `content/`). It requires the
+  tag exactly once and first in `<head>`, so it gates `deploy-site.yml`. A
+  doubled tag and a missing one each fail it.
+
+  **Only the marketing site.** The app, the console and the Passport carry no
+  tag, which keeps this file's rule that nothing about who is looking at SubSub
+  leaves our origin from inside the product.
+
+  **Still open, and the owner's call:** `privacy-policy.html` says the only
+  cookies are the ones that keep somebody signed in and remember preferences.
+  Google Analytics sets its own (`_ga`), so that sentence is now incomplete,
+  and visitors from the EU or UK would need a consent banner before the tag
+  runs. Neither was written here, because both are legal text.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

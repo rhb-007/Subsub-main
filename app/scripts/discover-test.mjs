@@ -434,5 +434,32 @@ console.log("\n-- the integrations tiers say what is true of each tier --");
   }
 }
 
+
+// THE GOOGLE TAG IS ON EVERY MARKETING PAGE ONCE, RIGHT AFTER <head>, AND IS
+// GOOGLE'S OWN TEXT. Walked off disk, so a page added tomorrow is in scope; the
+// generated pages count, because they are most of the site. Two tags on a page
+// double-count every visit, and a tag lower down misses visitors who leave first.
+{
+  const { GTAG, GTAG_ID } = await import("../../content/gtag.mjs");
+  const skip = new Set(["app", "node_modules", "marketing", ".git", "zapier", "content"]);
+  const pages = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(join(root, dir), { withFileTypes: true })) {
+      if (e.isDirectory()) { if (!skip.has(e.name)) walk(join(dir, e.name)); }
+      else if (e.name.endsWith(".html")) pages.push(join(dir, e.name));
+    }
+  };
+  walk("");
+  const src = `googletagmanager.com/gtag/js?id=${GTAG_ID}`;
+  const wrong = pages.filter((p) => {
+    const html = read(p);
+    if (html.split(src).length !== 2) return true;
+    const at = html.indexOf("<head>");
+    return at < 0 || !html.slice(at + 6).trimStart().startsWith(GTAG);
+  });
+  ck(`the Google tag is on all ${pages.length} pages once, first in <head>`,
+    pages.length > 150 && !wrong.length, wrong.slice(0, 5).join(", "));
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -21,6 +21,7 @@
 // need, and a bigger surface to be quietly wrong on; the test asserts every
 // heading and every table cell in the source reaches the page, which is the
 // only thing that makes a hand-rolled renderer safe to use.
+import { GTAG } from "../gtag.mjs";
 
 const esc = (s) => String(s)
   .replace(/&(?!(?:[a-zA-Z]+|#\d+);)/g, "&amp;")
@@ -233,6 +234,7 @@ export function page({ meta, body, chrome, depth, rewrite, canonical, faq, revie
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
+${GTAG}
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(meta.title)} | SubSub</title>
