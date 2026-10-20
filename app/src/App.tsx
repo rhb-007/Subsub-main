@@ -2443,6 +2443,9 @@ export default function SubSub() {
   const [rosterCards, setRosterCards] = useState(false);
   // Jobs the same way: lines that open a window, or every card on the page.
   const [jobCards, setJobCards] = useState(false);
+  // Which tab each open job window is on. Not remembered past the window:
+  // every open starts where the work is (see jobTabFor).
+  const [jobTabs, setJobTabs] = useState({});
   const toggleJobCard = (id, on) => setOpenJobs((cur) => {
     const next = new Set(cur);
     if (on ?? !next.has(id)) next.add(id); else next.delete(id);
@@ -7206,6 +7209,31 @@ export default function SubSub() {
                     </div>
                   );
                 }
+                // TABS IN THE WINDOW, NOT IN THE CARDS VIEW. Asked for as
+                // *"a lot of information on one modal, overwhelming"*: the
+                // window is read one job at a time, so it splits into what the
+                // work is, when it happens, and how the crew gets in. Cards
+                // view is for reading many jobs at once and keeps it whole.
+                // The header and the footer stay on every tab, so the title
+                // and Mark complete are never a tab away.
+                const jv = visits.find((v) => v.jobId === j.id) || null;
+                const schedulable = !!j.approvedAt && !isClosed(j);
+                const hasVisitBlock = schedulable && j.trades.length > 0;
+                const jobTabList = [
+                  { id: "work", label: "Work" },
+                  ...(schedulable ? [{ id: "schedule", label: "Schedule" }] : []),
+                  ...(hasVisitBlock ? [{ id: "access", label: "Access" }] : []),
+                ];
+                // A QUESTION BEHIND A TAB IS THE STALL, so the Schedule tab
+                // carries the dot when something there is waiting on this
+                // side, and the window opens on it.
+                const schedAsk = hasVisitBlock && (!jv || jv.status === "declined" || jv.status === "missed"
+                  || (jv.status === "proposed" && (visitPassed(jv) || jv.turn === "manager"))
+                  || (jv.status === "confirmed" && visitPassed(jv)));
+                const jobTab = jobTabList.some((x) => x.id === jobTabs[j.id]) ? jobTabs[j.id]
+                  : schedAsk ? "schedule" : "work";
+                const tabbed = !jobCards && jobTabList.length > 1;
+                const onTab = (id) => !tabbed || jobTab === id;
                 const card = (
                   <div key={j.id} data-job-id={j.id}
                     className={`job-card ${done ? "done" : ""} ${moved ? "just-moved" : ""} ${focusJob === j.id ? "landed" : ""} ${j.readOnly ? "not-mine" : ""}`}>
@@ -7341,6 +7369,19 @@ export default function SubSub() {
                         ? <span className={`fill-badge ${allAssigned ? "full" : ""}`}>{filled}/{j.trades.length} trades</span>
                         : <span className="fill-badge none">No trade yet</span>}
                     </div>
+                    {tabbed && (
+                      <div className="job-tabs" role="tablist">
+                        {jobTabList.map((x) => (
+                          <button key={x.id} type="button" role="tab" aria-selected={jobTab === x.id}
+                            className={`job-tab ${jobTab === x.id ? "on" : ""}`} data-tab={x.id}
+                            onClick={() => setJobTabs((cur) => ({ ...cur, [j.id]: x.id }))}>
+                            {x.label}
+                            {x.id === "schedule" && schedAsk && <ActDot tone="warn" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    <div className={onTab("work") ? "jt-on" : "jt-off"} data-pane="work">
                     {j.scope && <p className="job-scope">{j.scope}</p>}
                     {(j.measurementDocs || []).length > 0 && (
                       <div className="job-meas">
@@ -7649,6 +7690,15 @@ export default function SubSub() {
                           ))}
                       </div>
                     )}
+                    {serviceCalls.filter((c) => c.jobId === j.id).length > 0 && (
+                      <div className="sc-block">
+                        <div className="form-sec">Callbacks &amp; warranty claims</div>
+                        {serviceCalls.filter((c) => c.jobId === j.id).map((c) => (
+                          <ServiceCallRow key={c.id} c={c} job={j} onResolve={resolveServiceCall} />
+                        ))}
+                      </div>
+                    )}
+                    </div>
                     {/* ANY OPEN JOB CAN BE GIVEN A TIME, OR GIVEN A NEW ONE.
                         This read `j.requestedBy && …`, so the whole scheduling
                         block existed only on a job a TENANT OR OWNER had asked
@@ -7669,12 +7719,13 @@ export default function SubSub() {
                         `approvedAt` stays, because an unapproved REQUEST is
                         not a job yet and scheduling one would book work
                         nobody has agreed to do. */}
-                    {j.approvedAt && !isClosed(j) && !j.trades.length && (
+                    {j.approvedAt && !isClosed(j) && !j.trades.length && onTab("schedule") && (
                       <p className="visit-state bad visit-notrade"><AlertTriangle size={14} /> Add a trade before
                         setting a time — there is nobody to send yet.</p>
                     )}
                     {j.approvedAt && !isClosed(j) && j.trades.length > 0 && (
-                      <VisitBlock job={j} visit={visits.find((v) => v.jobId === j.id) || null}
+                      <VisitBlock job={j} visit={jv}
+                        part={!tabbed ? "both" : jobTab === "schedule" ? "visit" : jobTab === "access" ? "access" : "none"}
                         /* 068. WHAT THIS ACCOUNT CALLS WHOEVER HOLDS THE WORK
                            on this job, which is not a constant. Reported as
                            *"it should actually say handyman since pacific is
@@ -7705,14 +7756,6 @@ export default function SubSub() {
                           const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
                           if (slot) setAssigning({ job: j, trade: slot });
                         }} />
-                    )}
-                    {serviceCalls.filter((c) => c.jobId === j.id).length > 0 && (
-                      <div className="sc-block">
-                        <div className="form-sec">Callbacks &amp; warranty claims</div>
-                        {serviceCalls.filter((c) => c.jobId === j.id).map((c) => (
-                          <ServiceCallRow key={c.id} c={c} job={j} onResolve={resolveServiceCall} />
-                        ))}
-                      </div>
                     )}
 
                     {canComplete && !j.readOnly && (
@@ -7770,7 +7813,10 @@ export default function SubSub() {
                 // window takes the line's place in the DOM, so there is one
                 // copy of each job on the page whichever way it is drawn.
                 return jobCards ? card : (
-                  <Modal key={j.id} className="modal-job" onClose={() => toggleJobCard(j.id, false)}>
+                  <Modal key={j.id} className="modal-job" onClose={() => {
+                    toggleJobCard(j.id, false);
+                    setJobTabs((cur) => { const n = { ...cur }; delete n[j.id]; return n; });
+                  }}>
                     {card}
                   </Modal>
                 );
@@ -15779,7 +15825,7 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
 }
 
 function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit, onVisitOutcome = null,
-  canSetAccess = false, hiresWord = "contractor" }) {
+  canSetAccess = false, hiresWord = "contractor", part = "both" }) {
   // 073. How the crew gets in, re-read whenever the answer or the window moves.
   const [accPlan, setAccPlan] = useJobAccess(job.id,
     `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}`);
@@ -15841,8 +15887,12 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   const askUs = outcomeAsker(parties) === "manager";
   const myTurn = visit?.status === "proposed" && !lapsed
     && visitMayAnswer(visit, parties, "manager") && !!onAnswerVisit;
+  // PART, for the job window's tabs: the time and the way in are read on
+  // two tabs, but they stay ONE mounted block, so a half-typed time is not
+  // lost by looking at the access details and the access plan is fetched once.
   return (
-    <div className="visit-block">
+    <div className={`visit-block vb-${part}`}>
+      <div className={part === "access" || part === "none" ? "jt-off" : "jt-on"}>
       <div className="form-sec">Visit</div>
       {/* The one thing this block never said. A visit and a contractor were
           unconnected facts, so a time could be agreed with a tenant for a
@@ -16050,7 +16100,10 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
             onClick: () => setOpen(true) },
         ]} />
       )}
-      <AccessPanel plan={accPlan} viewer="team" jobId={job.id} onSaved={setAccPlan} />
+      </div>
+      <div className={part === "visit" || part === "none" ? "jt-off" : "jt-on"}>
+        <AccessPanel plan={accPlan} viewer="team" jobId={job.id} onSaved={setAccPlan} />
+      </div>
     </div>
   );
 }
@@ -46101,6 +46154,16 @@ iframe.dv-frame{display:block}
 }
 /* and on the manager's job */
 .visit-block{margin-top:14px}
+.visit-block.vb-none{margin:0}
+.visit-block.vb-access .jt-on > .access-panel,.visit-block.vb-access .jt-on > *:first-child{margin-top:0}
+.jt-on{display:contents}
+.jt-off{display:none}
+.job-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:14px 0 4px;overflow-x:auto}
+.job-tab{flex:none;display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 16px;border:0;
+  border-bottom:3px solid transparent;margin-bottom:-1px;background:none;color:var(--ink-soft);
+  font:inherit;font-size:15px;font-weight:600;cursor:pointer}
+.job-tab.on{color:var(--ink);border-bottom-color:var(--brand)}
+.job-tab:hover{color:var(--ink)}
 /* A SENTENCE IS TEXT, NOT A ROW OF FLEX ITEMS.
    This was a flex row with a gap, so the icon, each run of text AND every
    <b> inside it became its own flex item -- each sized to its own content and

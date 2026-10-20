@@ -14247,6 +14247,28 @@ refactor.
   moved to the new places rather than loosened: each now also asserts the
   old place is empty.
 
+- **THE JOB WINDOW IS THREE TABS: WORK, SCHEDULE, ACCESS.** Reported as *"a
+  lot of information on one modal, overwhelming ... can we tab this page out"*.
+  The window drew the scope, the trades, the message row, change orders, the
+  visit block and the access panel in one column. Now **Work** is the scope,
+  measurement documents, trade rows, Message, change orders and callbacks;
+  **Schedule** is the visit block; **Access** is the access panel. The title row
+  and the footer (Cancel or hold, Mark job complete) are on every tab. A closed
+  or unapproved job has only Work, so it gets no tab bar.
+
+  **A question behind a tab is the stall**, so the Schedule tab carries the
+  pulsing dot, and the window opens on it, when the time is waiting on this side:
+  no visit yet, a proposed time it is the hiring side's turn on, one that passed
+  or was turned down, or a confirmed time gone by with no outcome. Otherwise it
+  opens on Work. The choice is not remembered past the window.
+
+  **The visit block stays one mounted component** with a `part` prop
+  (`both`, `visit`, `access`, `none`), hidden by class rather than unmounted, so
+  a half-typed time survives looking at Access and the access plan is fetched
+  once. `.jt-on` is `display:contents`, so wrapping a section changes no layout.
+  **Cards view keeps the whole card**, because it is for reading many jobs at
+  once. `test:jobtabs` (15); two mutations fire.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -215,6 +215,7 @@
     "test:quotesui": "node scripts/quotes-ui-test.mjs",
     "test:cardlines": "node scripts/card-lines-ui-test.mjs",
     "test:jobwho": "node scripts/job-who-ui-test.mjs",
+    "test:jobtabs": "node --no-warnings scripts/job-tabs-ui-test.mjs",
     "test:quicksend": "node scripts/quicksend-ui-test.mjs",
     "test:embed": "node scripts/embed-test.mjs",
     "test:growth": "node scripts/growth-test.mjs",
