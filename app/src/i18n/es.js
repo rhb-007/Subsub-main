@@ -286,6 +286,8 @@ export default {
   "Trades you work in": "Oficios en los que trabaja",
   "You'll only be matched to jobs in these trades.": "Solo le asignarán trabajos de estos oficios.",
   "Specific capabilities": "Capacidades específicas",
+  "Jobs that fit your availability are booked straight onto your schedule. You don't need to accept them.": "Los trabajos que coinciden con su disponibilidad se reservan directamente en su calendario. No necesita aceptarlos.",
+  "You accept or decline each job request yourself.": "Usted acepta o rechaza cada solicitud de trabajo.",
   "Auto-schedule": "Programación automática",
   "Passport": "Pasaporte",
   "The page you hand to a GC": "La página que le muestra a un GC",

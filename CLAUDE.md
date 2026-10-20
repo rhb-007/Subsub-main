@@ -7931,6 +7931,26 @@ refactor.
   more than a sliver clipped" to **nothing past the viewport and clear of the
   words**, and putting the overrun back fails four assertions.
 
+- **THE HIRING SIDE'S AUTO-SCHEDULE BOX SAYS WHAT HAPPENS, IN ORDER, AND
+  SAYS "OFF" ONCE.** Reported with a contractor card on screen: *"Off / Off --
+  every job you assign sits pending until the response window runs out, and
+  nobody is there to answer it / [ ] Off"*, then *"They have no SubSub account,
+  so no one is going to press accept. Turning this on schedules the work and
+  leaves telling them to you."* -- "doesn't currently make any sense". The title,
+  the sentence and the switch each said Off, and the note under it described the
+  consequence before saying what the switch does.
+
+  The title still carries the state. The sentence (`autoStateText`, now taking
+  the company's name) says what happens to a job sent to them, with no "On --"
+  prefix: off, *jobs you send Ace Gutters wait for them to accept; they have no
+  SubSub login, so nobody can, and each job expires unanswered*; on, *booked
+  right away; let them know about each job yourself, by phone or text*. The
+  switch is labelled for what it does, **Book automatically**, rather than
+  repeating the state. The note says what turning it on does and why the
+  account may set it here: no login of their own. The rule is unchanged.
+  The contractor's own card reads the same function and is now in Spanish.
+  `test:autoschedui` pins that Off appears once and that the company is named.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

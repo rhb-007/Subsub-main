@@ -32239,7 +32239,7 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               <div className="auto-card-main">
                 <span className="auto-title">{tt("Auto-schedule")}</span>
                 <span className="auto-desc">
-                  {autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" })}
+                  {tt(autoStateText({ on: !!sub.autoSchedule, portal: true, side: "contractor" }))}
                 </span>
               </div>
               <label className="auto-toggle">
@@ -39605,7 +39605,7 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
         <Zap size={18} />
         <div className="auto-card-main">
           <span className="auto-title">{on ? "On" : "Off"}</span>
-          <span className="auto-desc">{autoStateText({ on, portal, side: "hiring" })}</span>
+          <span className="auto-desc">{autoStateText({ on, portal, side: "hiring", name: sub.company })}</span>
         </div>
         {/* Off is always ours to choose; on is only ours when there is nobody
             on the other side who could have answered. */}
@@ -39613,7 +39613,7 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
           <label className="auto-toggle">
             <input type="checkbox" checked={on} disabled={busy}
               onChange={(e) => flip(e.target.checked)} />
-            <span>{on ? "On" : "Off"}</span>
+            <span>Book automatically</span>
           </label>
         ) : (
           <button className="mini" disabled={busy} onClick={onAsk}>
@@ -39626,8 +39626,9 @@ function AutoScheduleCard({ sub, onSet, onAsk }) {
       )}
       {!on && verdict.ok && !portal && (
         <p className="auto-note">
-          They have no SubSub account, so no one is going to press accept.
-          Turning this on schedules the work and leaves telling them to you.
+          Turn on <b>Book automatically</b> and their jobs are booked straight
+          away, with nobody needing to accept. You can set this for them
+          because they have no SubSub login of their own.
         </p>
       )}
       {err && <p className="auto-err"><AlertTriangle size={12} /> {err}</p>}

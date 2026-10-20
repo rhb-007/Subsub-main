@@ -139,6 +139,7 @@ const readCard = (page) => page.evaluate(() => {
     toggleOn: s.querySelector(".auto-toggle input")?.checked ?? null,
     askLabel: [...s.querySelectorAll("button")].map((b) => b.innerText.trim()).join("|"),
     note: s.querySelector(".auto-note")?.innerText.replace(/\s+/g, " ").trim() || "",
+    toggleLabel: s.querySelector(".auto-toggle span")?.innerText.trim() || "",
   };
 });
 
@@ -202,8 +203,14 @@ try {
     const card = await readCard(page);
     t.ck("a toggle is drawn", card?.hasToggle === true, JSON.stringify(card));
     t.ck("it is off", card?.toggleOn === false, String(card?.toggleOn));
-    t.ck("and the card warns that nobody will answer",
-      /no one is going to press accept/i.test(card?.note || ""), card?.note);
+    t.ck("and the card says nobody can accept, and why it can be set here",
+      /no SubSub login/i.test(card?.desc || "") && /expires unanswered/i.test(card?.desc || "")
+        && /book automatically/i.test(card?.note || ""), JSON.stringify(card));
+    t.ck("and it names the company rather than \"them\"",
+      /Ace Gutters/.test(card?.desc || ""), card?.desc);
+    t.ck("and \"Off\" is said once, not three times",
+      ((card?.title || "") + " " + (card?.desc || "") + " " + (card?.toggleLabel || "")).match(/\boff\b/gi)?.length === 1,
+      JSON.stringify(card));
 
     // Throw it, and confirm it actually went to the server and stuck.
     t.ck("the switch can be pressed", await flip(page));
@@ -214,7 +221,7 @@ try {
     const after = await readCard(page);
     t.ck("and the card now reads on", after?.title === "On", String(after?.title));
     t.ck("and says the account is telling them itself",
-      /tell them yourself/i.test(after?.desc || ""), after?.desc);
+      /let them know about each job yourself/i.test(after?.desc || ""), after?.desc);
   }
 
   console.log("\n-- a contractor who agreed can still be switched off --");

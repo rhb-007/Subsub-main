@@ -62,18 +62,21 @@ export const AUTO_DENY_TEXT = {
 };
 
 // What the card says, so the two sides read as one feature rather than two.
-export function autoStateText({ on, portal, side = "hiring" }) {
+// Plain sentences with no "On —" prefix: the card already shows the state,
+// and the first version said "Off" three times in one box.
+export function autoStateText({ on, portal, side = "hiring", name = "" }) {
   if (side === "contractor") {
     return on
-      ? "On — jobs matching your availability are booked directly, no approval needed."
-      : "Off — you review and accept or decline every job request.";
+      ? "Jobs that fit your availability are booked straight onto your schedule. You don't need to accept them."
+      : "You accept or decline each job request yourself.";
   }
+  const who = name || "them";
   if (on) {
     return portal
-      ? "On — they agreed to this. Jobs you assign are booked to their calendar immediately, with no response window."
-      : "On — jobs you assign are scheduled immediately. Nobody accepts on their side, so tell them yourself.";
+      ? `${name || "They"} turned this on, so jobs you send are booked onto their schedule right away. They don't need to accept them.`
+      : `Jobs you send ${who} are booked right away. They have no SubSub login, so let them know about each job yourself, by phone or text.`;
   }
   return portal
-    ? "Off — every job you assign waits for them to accept or decline."
-    : "Off — every job you assign sits pending until the response window runs out, and nobody is there to answer it.";
+    ? `Jobs you send ${who} wait for them to accept or decline.`
+    : `Jobs you send ${who} wait for them to accept. They have no SubSub login, so nobody can, and each job expires unanswered.`;
 }
