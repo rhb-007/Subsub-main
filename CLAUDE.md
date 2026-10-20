@@ -14298,6 +14298,32 @@ refactor.
   twin put dark text on a mid green, under AA. `test:jobtabs` (21) measures the
   chip in both themes; removing the colors fails two.
 
+- **A PROPOSED TIME STARTS AT TODAY OR LATER, AND MY ACCOUNT IS IN SPANISH.**
+  Two asks in one message.
+
+  **The propose form opened on the job's own date even when it had passed**
+  (Oct 15 at 9 AM, four days late). `visitSeed` keeps a job date still ahead at
+  9 AM. Otherwise it starts today at the next whole hour, never before 7 AM, and
+  after 9 PM it starts tomorrow at 9. The date box has `min` set to today. This
+  uses the reader's own clock. `test:jobeditui` checks it.
+
+  **Spanish now covers My account and every panel it opens**: the tab names,
+  heading, role line, Profile, Company, Branding, Compliance pack, Passport,
+  Users and Subscription. The plan cards, trade groups, document names and the
+  staff banner are covered too. The wrapping was done with Babel's parser over
+  the named components (`JSXText`, string attributes, and strings chosen in
+  JSX expressions), not by regex. That keeps it to screen text, never code.
+  About 450 strings were added. A sample name, a city, a street and the
+  `.subsub.work` fragments stay plain text, because `test:i18n` refuses a
+  "translation" identical to its English. Strings built from constants (plan
+  terms, the SMS price) are keyed by their current English. If a constant
+  changes, that line falls back to English, and no test catches it.
+  `test:spanishui` (24) opens My account in Spanish and reads the heading, the
+  tabs, Profile and Subscription for English.
+
+  **Still open:** a subcontractor account's hiring screens (Jobs, the roster,
+  Availability) and the emails.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

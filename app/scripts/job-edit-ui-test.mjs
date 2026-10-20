@@ -215,11 +215,20 @@ try {
     const before = await page.evaluate(() => {
       const f = document.querySelector(".visit-form");
       const ts = [...f.querySelectorAll("input[type=time]")];
-      return { start: ts[0]?.value, end: ts[1]?.value };
+      return { start: ts[0]?.value, end: ts[1]?.value, date: f.querySelector("input[type=date]")?.value,
+        min: f.querySelector("input[type=date]")?.min,
+        today: new Date().toLocaleDateString("en-CA") };
     });
     // One hour is the DEFAULT, which is where the request came from.
+    const hr = (v) => Number((v || "").slice(0, 2));
     t.ck("it opens on a one-hour window",
-      before.start === "09:00" && before.end === "10:00", JSON.stringify(before));
+      hr(before.end) - hr(before.start) === 1 && /:00$/.test(before.start || ""), JSON.stringify(before));
+    // NEVER IN THE PAST. Reported with the form opening on the job's own date,
+    // already gone, at 9 AM. It opens on today or later, and today's past
+    // dates cannot be picked.
+    t.ck("it opens on today or later, not the job's past date",
+      !!before.date && before.date >= before.today, JSON.stringify(before));
+    t.ck("and the date box will not go before today", before.min === before.today, JSON.stringify(before));
     await setVal(page, ".visit-form input[type=time]", "13:00");
     await wait(400);
     const after = await page.evaluate(() => {

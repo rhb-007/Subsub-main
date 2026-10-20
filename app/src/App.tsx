@@ -2976,8 +2976,8 @@ export default function SubSub() {
     if (role === "tenant") return ROLES[role].label;
     const kind = ACCOUNT_KINDS[kindOf(account)].label;
     const seat = roleLabelIn(kindOf(account), role);
-    if (kind.toLowerCase() === seat.toLowerCase()) return seat;
-    return `${kind} (${seat.toLowerCase()})`;
+    if (kind.toLowerCase() === seat.toLowerCase()) return tt(seat);
+    return `${tt(kind)} (${tt(seat).toLowerCase()})`;
   })();
 
   // REMOVED CONTRACTORS COME OFF THE LIST, and are kept where they can be
@@ -5982,8 +5982,8 @@ export default function SubSub() {
       {impersonating && !impersonating.expired && (
         <div className="imp-banner">
           <Shield size={14} />
-          <span>Viewing <b>{impersonating.account.name}</b> as superadmin ({impersonating.by}). Actions are recorded.
-            {impersonating.expiresAt && <> Session ends {impEndsText(impersonating.expiresAt)}.</>}
+          <span>{tt("Viewing")}{" "}<b>{impersonating.account.name}</b>{" "}{tt("as superadmin ({by}). Actions are recorded.", { by: impersonating.by })}
+            {impersonating.expiresAt && <>{" "}{tt("Session ends {when}.", { when: impEndsText(impersonating.expiresAt) }).replace(/\.\.$/, ".")}</>}
             {/* WHAT IS WRONG WITH THE ACCOUNT, which is a different
                 sentence from what is wrong with this session.
 
@@ -12901,7 +12901,7 @@ function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, on
         <p className="form-sub">{consequence}</p>
         {err && <div className="form-err">{err}</div>}
         <div className="form-actions">
-          <button className="btn-ghost" type="button" onClick={onCancel}>Cancel</button>
+          <button className="btn-ghost" type="button" onClick={onCancel}>{tt("Cancel")}</button>
           <button className="btn-danger" type="button" disabled={busy}
             onClick={async () => {
               setBusy(true); setErr("");
@@ -15597,7 +15597,7 @@ function impEndsAt(v) {
 function impEndsText(v) {
   const t = impEndsAt(v);
   return Number.isFinite(t)
-    ? `at ${new Date(t).toLocaleTimeString(uiLocale() || [], { hour: "numeric", minute: "2-digit" })}` : "soon";
+    ? tt("at {time}", { time: new Date(t).toLocaleTimeString(uiLocale() || [], { hour: "numeric", minute: "2-digit" }) }) : tt("soon");
 }
 
 // WHAT A REFUSED PROPOSAL SAYS, BY NAME. Reported as "tried to propose a time
@@ -15634,9 +15634,30 @@ function proposeErrText(e) {
 // copy is a second thing to keep in step, and the half that rots is whichever
 // side is used less often -- the same reason the apply form and the QR panel
 // are each one component with two ways in.
+// WHERE A NEW PROPOSAL STARTS: never in the past. Reported with the form
+// opening on Oct 15 at 9 AM four days after Oct 15 -- the job's own date,
+// already gone -- so the first thing to do was correct the date. A job date
+// still ahead is kept (it is the date somebody chose) at 9 AM; on today, or
+// with the job's date passed or missing, it is today at the next whole hour,
+// and after 9 PM it is tomorrow at 9. The reader's own clock, like every other
+// "today" on these screens.
+function visitSeed(startDate, now = new Date()) {
+  const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const today = key(now);
+  const hh = (h) => `${String(h).padStart(2, "0")}:00`;
+  if (startDate && startDate > today) return { date: startDate, startTime: "09:00", endTime: "10:00" };
+  const next = now.getHours() + 1;
+  if (next >= 22) {
+    const t = new Date(now); t.setDate(t.getDate() + 1);
+    return { date: key(t), startTime: "09:00", endTime: "10:00" };
+  }
+  const start = Math.max(next, 7);
+  return { date: today, startTime: hh(start), endTime: hh(start + 1) };
+}
+
 function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placeholder,
   onPropose, onDone, onCancel, cancelLabel = "Cancel" }) {
-  const [f, setF] = useState({ date: startDate || "", startTime: "09:00", endTime: "10:00", note: "" });
+  const [f, setF] = useState(() => ({ ...visitSeed(startDate), note: "" }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   // MOVING THE START MOVES THE END WITH IT. Reported as *"if the start time is
@@ -15673,7 +15694,7 @@ function VisitForm({ jobId, startDate = "", forWhom, replacing = false, placehol
   return (
     <div className="visit-form">
       <div className="fld-row">
-        <label className="fld">{tt("Date")}<input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
+        <label className="fld">{tt("Date")}<input type="date" value={f.date} min={new Date().toLocaleDateString("en-CA")} onChange={(e) => setF({ ...f, date: e.target.value })} /></label>
         <label className="fld">{tt("From")}<input type="time" value={f.startTime} onChange={(e) => setStart(e.target.value)} /></label>
         <label className="fld">{tt("To")}<input type="time" value={f.endTime} onChange={(e) => setF({ ...f, endTime: e.target.value })} /></label>
       </div>
@@ -18878,9 +18899,9 @@ const SIZES = ["S", "M", "L", "XL", "2XL", "3XL"];
 // is what it was doing.
 function StateSelect({ value, onChange, label = "State" }) {
   return (
-    <label className="fld">{label}
+    <label className="fld">{tt(label)}
       <select className="fld-state" value={value || ""} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Choose…</option>
+        <option value="">{tt("Choose…")}</option>
         {US_STATES.map(([code, name]) => (
           <option key={code} value={code}>{code} — {name}</option>
         ))}
@@ -19684,16 +19705,16 @@ function TradesPanel({ trades, onSave }) {
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>Trades you work with</h4>
+      <h4>{tt("Trades you work with")}</h4>
       <p className="panel-note">
         {trades == null
-          ? "Not set yet. Pick everything you hire out — it decides what SubSub asks your subcontractors to prove."
-          : "Everything you hire out. It decides what SubSub asks your subcontractors to prove."}
+          ? tt("Not set yet. Pick everything you hire out — it decides what SubSub asks your subcontractors to prove.")
+          : tt("Everything you hire out. It decides what SubSub asks your subcontractors to prove.")}
       </p>
 
       {TRADE_GROUPS.map(([heading, ids]) => (
         <div key={heading} className="trade-group">
-          <h5>{heading}</h5>
+          <h5>{tt(heading)}</h5>
           <div className="picks">
             {ids.map((id) => (
               <button key={id} type="button"
@@ -19707,10 +19728,9 @@ function TradesPanel({ trades, onSave }) {
       <div className="panel-actions">
         <button className="btn-solid" disabled={!dirty}
           onClick={() => { onSave(sel); setJustSaved(true); }}>
-          <Check size={15} /> Save trades
-        </button>
-        {justSaved && !dirty && <span className="cov-hint">Saved.</span>}
-        {dirty && <span className="cov-hint">{sel.length} selected</span>}
+          <Check size={15} />{" "}{tt("Save trades")}</button>
+        {justSaved && !dirty && <span className="cov-hint">{tt("Saved.")}</span>}
+        {dirty && <span className="cov-hint">{sel.length}{" "}{tt("selected")}</span>}
       </div>
     </div>
   );
@@ -19776,9 +19796,9 @@ function AddressStatus({ subdomain, status, onRefresh }) {
   if (!state) {
     return (
       <div className="addr-state t-wait">
-        <div className="addr-head"><Globe size={15} /><b>Your address is being prepared</b>
+        <div className="addr-head"><Globe size={15} /><b>{tt("Your address is being prepared")}</b>
           <span className="addr-spin" aria-hidden="true" /></div>
-        <p>{host} will be yours shortly. Until it is, everyone signs in at app.subsub.work.</p>
+        <p>{host}{" "}{tt("will be yours shortly. Until it is, everyone signs in at app.subsub.work.")}</p>
       </div>
     );
   }
@@ -19836,44 +19856,33 @@ function EmergencyContractorPanel({ subs, current, onSave }) {
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>Emergency contractor</h4>
-      <p className="panel-note">
-        Who gets sent, automatically, when somebody reports flooding, a burst pipe, no
-        heat or anything else we treat as urgent. They are emailed and texted straight
-        away and have two hours to respond.
-      </p>
+      <h4>{tt("Emergency contractor")}</h4>
+      <p className="panel-note">{tt("Who gets sent, automatically, when somebody reports flooding, a burst pipe, no heat or anything else we treat as urgent. They are emailed and texted straight away and have two hours to respond.")}</p>
 
       {eligible.length === 0 ? (
         <div className="doc-block">
           <AlertTriangle size={15} />
-          <div><strong>Nobody is eligible yet.</strong> A contractor can take emergency
-            call-outs once their insurance, bond and agreement are all approved. Until
-            then urgent reports still reach you at the top of your dashboard — nothing
-            is sent on its own.</div>
+          <div><strong>{tt("Nobody is eligible yet.")}</strong>{" "}{tt("A contractor can take emergency call-outs once their insurance, bond and agreement are all approved. Until then urgent reports still reach you at the top of your dashboard — nothing is sent on its own.")}</div>
         </div>
       ) : (
-        <label className="fld">Send urgent reports to
-          <select value={current || ""} disabled={saving}
+        <label className="fld">{tt("Send urgent reports to")}<select value={current || ""} disabled={saving}
             onChange={(e) => set(e.target.value)}>
-            <option value="">Nobody — I'll decide each time</option>
+            <option value="">{tt("Nobody — I'll decide each time")}</option>
             {eligible.map((s) => <option key={s.id} value={s.id}>{s.company}</option>)}
           </select>
           <span className="fld-note">
             {chosen
               ? `${chosen.company} is sent automatically. Fires and gas leaks are never dispatched — those tell the person to call 911.`
-              : "Nothing is sent automatically. Urgent reports wait for you at the top of your dashboard."}
+              : tt("Nothing is sent automatically. Urgent reports wait for you at the top of your dashboard.")}
           </span>
         </label>
       )}
 
       {notReady.length > 0 && (
-        <p className="cov-hint">
-          Not available: {notReady.map((s) => s.company).join(", ")} — paperwork still
-          to approve.
-        </p>
+        <p className="cov-hint">{tt("Not available:")}{" "}{notReady.map((s) => s.company).join(", ")}{" "}{tt("— paperwork still to approve.")}</p>
       )}
       {err && <p className="billing-err" role="alert">{err}</p>}
-      {saved && !err && <p className="cov-hint"><Check size={12} /> Saved.</p>}
+      {saved && !err && <p className="cov-hint"><Check size={12} />{" "}{tt("Saved.")}</p>}
     </div>
   );
 }
@@ -20788,10 +20797,10 @@ function AvatarPicker({ user, onSave }) {
           <input ref={file} type="file" accept="image/*" hidden
             onChange={(e) => pick(e.target.files?.[0])} />
           <button type="button" className="pick" disabled={busy || !!crop} onClick={() => file.current?.click()}>
-            <ImagePlus size={13} /> {user?.hasAvatar ? "Change picture" : "Add a picture"}
+            <ImagePlus size={13} /> {user?.hasAvatar ? tt("Change picture") : tt("Add a picture")}
           </button>
           {user?.hasAvatar && !crop && (
-            <button type="button" className="pick" disabled={busy} onClick={clear}>Remove</button>
+            <button type="button" className="pick" disabled={busy} onClick={clear}>{tt("Remove")}</button>
           )}
           {err && <span className="fld-note err" role="alert">{err}</span>}
         </div>
@@ -22097,11 +22106,11 @@ function SeatState({ u, onResend }) {
     <span className="seat-state">
       <AlertTriangle size={11} />
       {u.inviteSentAt
-        ? <>Hasn't set a password yet · invite sent {relTime(u.inviteSentAt)}</>
-        : <>Hasn't been sent an invite</>}
+        ? <>{tt("Hasn't set a password yet · invite sent")}{" "}{relTime(u.inviteSentAt)}</>
+        : <>{tt("Hasn't been sent an invite")}</>}
       {said ? <b> · {said}</b> : (
         <button className="seat-resend" disabled={busy} onClick={resend}>
-          {busy ? "Sending…" : u.inviteSentAt ? "Send again" : "Send invite"}
+          {busy ? tt("Sending…") : u.inviteSentAt ? tt("Send again") : tt("Send invite")}
         </button>
       )}
     </span>
@@ -22275,7 +22284,7 @@ function BillingManage({ accentHex, onFellBack }) {
 
   return (
     <>
-      <div className="form-sec">Card on file</div>
+      <div className="form-sec">{tt("Card on file")}</div>
       {done && <p className="rollup-note" role="status">{done}</p>}
       {err && <p className="billing-err" role="alert">{err}</p>}
 
@@ -22283,9 +22292,9 @@ function BillingManage({ accentHex, onFellBack }) {
         <div className="bm-card">
           <span>{card
             ? `${card.brand ? card.brand[0].toUpperCase() + card.brand.slice(1) : "Card"} ending ${card.last4} · expires ${String(card.expMonth).padStart(2, "0")}/${String(card.expYear).slice(-2)}`
-            : "No card on file."}</span>
+            : tt("No card on file.")}</span>
           <button className="btn-ghost" disabled={busy} onClick={startCard}>
-            {busy ? "One moment…" : card ? "Change it" : "Add one"}
+            {busy ? tt("One moment…") : card ? tt("Change it") : tt("Add one")}
           </button>
         </div>
       )}
@@ -22295,16 +22304,16 @@ function BillingManage({ accentHex, onFellBack }) {
       {secret && (
         <div className="form-actions">
           <button className="btn-ghost" disabled={busy}
-            onClick={() => { setSecret(""); elements.current = null; }}>Cancel</button>
+            onClick={() => { setSecret(""); elements.current = null; }}>{tt("Cancel")}</button>
           <button className="btn-solid" disabled={busy} onClick={saveCard}>
-            {busy ? "Saving…" : "Save card"}
+            {busy ? tt("Saving…") : tt("Save card")}
           </button>
         </div>
       )}
 
-      <div className="form-sec">Invoices</div>
-      {invoices === null && <p className="fine">Loading…</p>}
-      {invoices !== null && invoices.length === 0 && <p className="fine">Nothing billed yet.</p>}
+      <div className="form-sec">{tt("Invoices")}</div>
+      {invoices === null && <p className="fine">{tt("Loading…")}</p>}
+      {invoices !== null && invoices.length === 0 && <p className="fine">{tt("Nothing billed yet.")}</p>}
       {invoices !== null && invoices.length > 0 && (
         <ul className="bm-invoices">
           {invoices.map((i) => (
@@ -22313,7 +22322,7 @@ function BillingManage({ accentHex, onFellBack }) {
               <span className="bmi-amt">{money(i.total, i.currency)}</span>
               <span className={`bmi-st bmi-${i.status || "unknown"}`}>{i.status || "—"}</span>
               {i.pdf
-                ? <a className="bmi-pdf" href={i.pdf} target="_blank" rel="noopener noreferrer">PDF</a>
+                ? <a className="bmi-pdf" href={i.pdf} target="_blank" rel="noopener noreferrer">{tt("PDF")}</a>
                 : <span className="bmi-pdf" />}
             </li>
           ))}
@@ -22351,46 +22360,38 @@ function UnitPrice({ onLoad }) {
   const terms = unitTermsText();
   return (
     <div className={`unit-price${u.applies ? " applies" : ""}`}>
-      <h4>Your price on Scale</h4>
+      <h4>{tt("Your price on Scale")}</h4>
       {!u.applies ? (
         <>
           <p className="up-lead">
-            {u.fromEstimate ? "You told us at signup that your buildings hold" : "Your buildings hold"}
-            {" "}<b>{n(u.total)}</b> unit{u.total === 1 ? "" : "s"}, so Scale is the flat
-            {" "}<b>{unitUsd(u.minMonthlyCents)} a month</b>.
+            {u.fromEstimate ? tt("You told us at signup that your buildings hold") : tt("Your buildings hold")}
+            {" "}<b>{n(u.total)}</b>{" "}{tt("unit")}{u.total === 1 ? "" : "s"}{tt(", so Scale is the flat")}{" "}<b>{unitUsd(u.minMonthlyCents)}{" "}{tt("a month")}</b>.
           </p>
           <p className="up-rule">{terms.perUnit} {terms.setup}</p>
         </>
       ) : (
         <>
           <div className="up-rows">
-            <div className="wd-row"><span>{u.fromEstimate ? "Units you gave at signup" : "Units across your buildings"}</span><strong>{n(u.total)}</strong></div>
-            <div className="wd-row"><span>Occupied</span><strong>{n(u.occupied)}</strong></div>
-            <div className="wd-row up-month"><span>Each month</span>
+            <div className="wd-row"><span>{u.fromEstimate ? tt("Units you gave at signup") : tt("Units across your buildings")}</span><strong>{n(u.total)}</strong></div>
+            <div className="wd-row"><span>{tt("Occupied")}</span><strong>{n(u.occupied)}</strong></div>
+            <div className="wd-row up-month"><span>{tt("Each month")}</span>
               <strong>{unitUsd(u.monthlyCents)}
                 <em>{u.perUnitCents >= u.minMonthlyCents
                   ? ` · ${unitUsd(u.unitPriceCents)} × ${n(u.occupied)}`
                   : ` · the ${unitUsd(u.minMonthlyCents)} minimum`}</em></strong></div>
-            <div className="wd-row"><span>One-time setup fee</span>
+            <div className="wd-row"><span>{tt("One-time setup fee")}</span>
               <strong>{u.setupCharged
-                ? <>{unitUsd(u.setupCharged.amountCents)} <em>· charged{u.setupCharged.at ? ` ${niceDay(u.setupCharged.at)}` : ""}</em></>
+                ? <>{unitUsd(u.setupCharged.amountCents)} <em>{tt("· charged")}{u.setupCharged.at ? ` ${niceDay(u.setupCharged.at)}` : ""}</em></>
                 : <>{unitUsd(u.setupCents)} <em>· {u.setupLabel}</em></>}</strong></div>
           </div>
           {u.fromEstimate && (
-            <p className="up-estimate">
-              Priced on the units you gave when you signed up, because no building here has a unit count
-              yet. Once you add your buildings in Properties, the price follows them instead.
-            </p>
+            <p className="up-estimate">{tt("Priced on the units you gave when you signed up, because no building here has a unit count yet. Once you add your buildings in Properties, the price follows them instead.")}</p>
           )}
           {u.unknown > 0 && !u.fromEstimate && (
             <p className="up-unknown">
-              {u.unknown === 1 ? "One building has" : `${n(u.unknown)} buildings have`} no occupied count, so every
-              unit there is counted as occupied. Add it on the building in Properties to bill only what is lived in.
-            </p>
+              {u.unknown === 1 ? tt("One building has") : `${n(u.unknown)} buildings have`}{" "}{tt("no occupied count, so every unit there is counted as occupied. Add it on the building in Properties to bill only what is lived in.")}</p>
           )}
-          <p className="up-rule">
-            Billed monthly. A change in occupancy shows on the next bill. The setup fee is charged once
-            {u.setupCharged ? " and has been." : ", on the first bill at this price."}
+          <p className="up-rule">{tt("Billed monthly. A change in occupancy shows on the next bill. The setup fee is charged once")}{u.setupCharged ? tt(" and has been.") : tt(", on the first bill at this price.")}
           </p>
         </>
       )}
@@ -22431,19 +22432,17 @@ function SmsUsage() {
 
   return (
     <>
-      <div className="form-sec">Text messages</div>
+      <div className="form-sec">{tt("Text messages")}</div>
       <div className="sms-use">
-        <div className="picks sms-switch" role="group" aria-label="Text messages">
+        <div className="picks sms-switch" role="group" aria-label={tt("Text messages")}>
           <button type="button" className={`pick ${s.off ? "" : "on"}`} aria-pressed={!s.off}
-            disabled={busy} onClick={() => setOff(false)}>On</button>
+            disabled={busy} onClick={() => setOff(false)}>{tt("On")}</button>
           <button type="button" className={`pick ${s.off ? "on" : ""}`} aria-pressed={!!s.off}
-            disabled={busy} onClick={() => setOff(true)}>Off</button>
+            disabled={busy} onClick={() => setOff(true)}>{tt("Off")}</button>
         </div>
         {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
         {s.off && (
-          <p className="sms-off-note" role="status">
-            Text messages are off. Emails still go out, and emergency call-outs are still texted.
-          </p>
+          <p className="sms-off-note" role="status">{tt("Text messages are off. Emails still go out, and emergency call-outs are still texted.")}</p>
         )}
         <div className="sms-use-line">{smsUsageText(s)}</div>
         <div className={`sms-bar ${over ? "over" : pct >= 80 ? "near" : ""}`}>
@@ -22453,17 +22452,14 @@ function SmsUsage() {
           <p className="sms-over" role="status">{smsOverageText(s)}</p>
         )}
         <p className="fine">
-          {s.included.toLocaleString("en-US")} a month come with Scale and the count starts again on the 1st.
-          {" "}{s.billable
+          {s.included.toLocaleString("en-US")}{" "}{tt("a month come with Scale and the count starts again on the 1st.")}{" "}{s.billable
             ? `Past that, texts keep going: ${SMS_OVERAGE_TERMS} — charged automatically on the 1st. Turn them off above if you would rather not.`
-            : "Past that, texts pause until the 1st and emails still go out."}
-          {" "}Emergency call-outs are always texted.
-        </p>
+            : tt("Past that, texts pause until the 1st and emails still go out.")}
+          {" "}{tt("Emergency call-outs are always texted.")}</p>
         {s.lastMonth && s.lastMonth.blocks > 0 && (
           <p className="fine sms-last">
-            {monthName(s.lastMonth.month)}: {s.lastMonth.used.toLocaleString("en-US")} sent,
-            {" "}{formatCents(s.lastMonth.amountCents)}
-            {s.lastMonth.status === "billed" ? " — charged on the 1st." : " — being charged."}
+            {monthName(s.lastMonth.month)}: {s.lastMonth.used.toLocaleString("en-US")}{" "}{tt("sent,")}{" "}{formatCents(s.lastMonth.amountCents)}
+            {s.lastMonth.status === "billed" ? tt(" — charged on the 1st.") : tt(" — being charged.")}
           </p>
         )}
       </div>
@@ -22578,40 +22574,37 @@ function PayoutSetup({ landed = false, onHandled, accentHex }) {
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>Getting paid</h4>
-      {checking && <p className="fine">One moment…</p>}
+      <h4>{tt("Getting paid")}</h4>
+      {checking && <p className="fine">{tt("One moment…")}</p>}
 
       {!checking && !configured && (
-        <p className="fine">Payments aren't switched on for SubSub yet. Nothing to do here.</p>
+        <p className="fine">{tt("Payments aren't switched on for SubSub yet. Nothing to do here.")}</p>
       )}
 
       {!checking && configured && <>
         <p className="pay-state">
           <span className={`pay-dot pay-${ready ? "ok" : status === "rejected" ? "no" : status === "none" ? "off" : "wait"}`} />
-          {ready ? "Ready to be paid"
-            : status === "rejected" ? "We can't verify this business"
+          {ready ? tt("Ready to be paid")
+            : status === "rejected" ? tt("We can't verify this business")
             // NOT "a few details before we can pay you", which is a sentence
             // about THEIR paperwork and was drawn over a message saying the
             // hold-up is ours. The heading is the louder of the two and is
             // what somebody reads first.
-            : oursToFix ? "Nothing needed from you yet"
-            : "A few details before we can pay you"}
+            : oursToFix ? tt("Nothing needed from you yet")
+            : tt("A few details before we can pay you")}
         </p>
 
         {err && <p className="billing-err" role="alert">{err}</p>}
 
         {status === "rejected"
-          ? <p className="fine">We couldn't verify this business, so there's nothing to finish
-              here. Get in touch and we'll look into it.</p>
+          ? <p className="fine">{tt("We couldn't verify this business, so there's nothing to finish here. Get in touch and we'll look into it.")}</p>
           : <>
               {!ready && !err && (
-                <p className="fine">We need to know who you are and where your money should
-                  go. It takes a few minutes, and your bank details are held by our payments
-                  provider — SubSub never sees them.</p>
+                <p className="fine">{tt("We need to know who you are and where your money should go. It takes a few minutes, and your bank details are held by our payments provider — SubSub never sees them.")}</p>
               )}
 
               {due.length > 0 && <>
-                <div className="form-sec">Still needed</div>
+                <div className="form-sec">{tt("Still needed")}</div>
                 <ul className="pay-due">
                   {due.map((d) => <li key={d.key}>{d.label}</li>)}
                 </ul>
@@ -22622,10 +22615,9 @@ function PayoutSetup({ landed = false, onHandled, accentHex }) {
 
               {fellBack && (
                 <>
-                  <p className="fine">This form can't load here — your browser may be blocking
-                    it. You can finish it in a new window instead.</p>
+                  <p className="fine">{tt("This form can't load here — your browser may be blocking it. You can finish it in a new window instead.")}</p>
                   <button className="btn-solid" disabled={busy} onClick={goHosted}>
-                    {busy ? "Opening…" : "Finish in a new window"}
+                    {busy ? tt("Opening…") : tt("Finish in a new window")}
                   </button>
                 </>
               )}
@@ -22793,21 +22785,17 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>{isDocs ? "Your compliance pack" : "Working as a subcontractor"}</h4>
+      <h4>{isDocs ? tt("Your compliance pack") : tt("Working as a subcontractor")}</h4>
       <p className="panel-note">
         {isDocs ? (
-          <>The four documents a general contractor asks for before they will put you on a
-            job. Whoever hires you reviews them, and they stay current for everybody you
-            work with rather than being re-sent one contractor at a time.</>
+          <>{tt("The four documents a general contractor asks for before they will put you on a job. Whoever hires you reviews them, and they stay current for everybody you work with rather than being re-sent one contractor at a time.")}</>
         ) : (
-          <>You hire subcontractors here, but you can also be hired as one: another general
-            contractor can find {" "}<b>{accountName || "your company"}</b> on SubSub and ask to
-            work with you, and this is what they see. Keep it up to date.</>
+          <>{tt("You hire subcontractors here, but you can also be hired as one: another general contractor can find")}{" "}{" "}<b>{accountName || tt("your company")}</b>{" "}{tt("on SubSub and ask to work with you, and this is what they see. Keep it up to date.")}</>
         )}
       </p>
 
       {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
-      {!f && !err && <p className="cov-hint">Loading…</p>}
+      {!f && !err && <p className="cov-hint">{tt("Loading…")}</p>}
 
       {f && (
         <>
@@ -22839,11 +22827,11 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               <span className="oh-knob" />
             </button>
             <div>
-              <strong>Available to be hired as a subcontractor</strong>
+              <strong>{tt("Available to be hired as a subcontractor")}</strong>
               <span>
                 {openHire
-                  ? "Another general contractor who already has your email, mobile or license number can find you and ask to work with you. You still decide."
-                  : "Off. Nobody can look you up and ask \u2014 your QR code still works, because handing somebody that is you asking them."}
+                  ? tt("Another general contractor who already has your email, mobile or license number can find you and ask to work with you. You still decide.")
+                  : tt("Off. Nobody can look you up and ask — your QR code still works, because handing somebody that is you asking them.")}
               </span>
             </div>
           </div>
@@ -22853,40 +22841,34 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               anybody, and nothing else on the page would ever tell them. */}
           {openHire && <div className={`hire-state ${loaded?.findable ? "on" : "off"}`}>
             {loaded?.findable
-              ? <><CheckCircle2 size={15} /> <span>Another contractor can find you by the details below.</span></>
-              : <><AlertTriangle size={15} /> <span>Nobody can find you yet. Add an email, a mobile or a license
-                  number — those are the three things a search matches on.</span></>}
+              ? <><CheckCircle2 size={15} /> <span>{tt("Another contractor can find you by the details below.")}</span></>
+              : <><AlertTriangle size={15} /> <span>{tt("Nobody can find you yet. Add an email, a mobile or a license number — those are the three things a search matches on.")}</span></>}
           </div>}
 
-          <label className="fld">Company name <span className="fld-note">how you are listed</span>
+          <label className="fld">{tt("Company name")}{" "}<span className="fld-note">{tt("how you are listed")}</span>
             <input value={f.company} onChange={(e) => set("company", e.target.value)} placeholder={accountName || "Your company"} /></label>
-          <label className="fld">Contact name <span className="fld-note">who they ask for</span>
+          <label className="fld">{tt("Contact name")}{" "}<span className="fld-note">{tt("who they ask for")}</span>
             <input value={f.contact} onChange={(e) => set("contact", e.target.value)} placeholder="Sam Ortiz" /></label>
           <div className="fld-row">
-            <label className="fld">Email
-              <input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
-                autoCapitalize="none" autoCorrect="off" placeholder="work@yourcompany.com" /></label>
-            <label className="fld">Mobile
-              <input inputMode="tel" value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))}
+            <label className="fld">{tt("Email")}<input type="email" value={f.email} onChange={(e) => set("email", e.target.value)}
+                autoCapitalize="none" autoCorrect="off" placeholder={tt("work@yourcompany.com")} /></label>
+            <label className="fld">{tt("Mobile")}<input inputMode="tel" value={f.phone} onChange={(e) => set("phone", formatPhone(e.target.value))}
                 placeholder="(206) 555-0100" /></label>
           </div>
           <div className="fld-row fld-nums">
-            <label className={`fld ${isLit("license") ? "lit" : ""}`}>License number
-              <input value={f.license} onChange={(e) => set("license", e.target.value)} placeholder="RAINIRR891QZ" /></label>
-            <label className={`fld ${isLit("ubi") ? "lit" : ""}`}>UBI <span className="fld-note">optional</span>
+            <label className={`fld ${isLit("license") ? "lit" : ""}`}>{tt("License number")}<input value={f.license} onChange={(e) => set("license", e.target.value)} placeholder={tt("RAINIRR891QZ")} /></label>
+            <label className={`fld ${isLit("ubi") ? "lit" : ""}`}>{tt("UBI")}{" "}<span className="fld-note">{tt("optional")}</span>
               <input value={f.ubi} onChange={(e) => set("ubi", e.target.value)} placeholder="601 234 567" /></label>
           </div>
           <div className="fld-row">
-            <label className="fld">City
-              <input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
+            <label className="fld">{tt("City")}<input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
             <StateSelect value={f.state} onChange={(v) => set("state", v)} />
-            <label className="fld">ZIP
-              <input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} placeholder="98101" /></label>
+            <label className="fld">{tt("ZIP")}<input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value)} placeholder="98101" /></label>
           </div>
           <div className="form-actions">
-            {saved && !dirty && <span className="saved-note"><Check size={13} /> Saved</span>}
+            {saved && !dirty && <span className="saved-note"><Check size={13} />{" "}{tt("Saved")}</span>}
             <button className="btn-solid" disabled={busy || !dirty} onClick={save}>
-              {busy ? "Saving…" : "Save profile"}</button>
+              {busy ? tt("Saving…") : tt("Save profile")}</button>
           </div>
 
           </>}
@@ -22917,20 +22899,20 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
                     {tone === "green" && <Check size={10} strokeWidth={3.5} />}
                   </span>
                   <div className="mydoc-main">
-                    <b>{DOC_LABELS[k]}
+                    <b>{tt(DOC_LABELS[k])}
                       {/* Still here, still uploadable -- plenty of hiring
                           accounts do send one. It is just not something the
                           subcontractor is short of until somebody asks. */}
-                      {isOptionalDoc(k) && <span className="mydoc-opt">optional</span>}
+                      {isOptionalDoc(k) && <span className="mydoc-opt">{tt("optional")}</span>}
                     </b>
                     <span className="cx-sub">
                       {st.state === "missing" ? (isOptionalDoc(k)
-                          ? "Not uploaded — only needed if a contractor sends you one"
-                          : "Not uploaded")
-                        : st.state === "expired" ? "Expired — send a replacement"
+                          ? tt("Not uploaded — only needed if a contractor sends you one")
+                          : tt("Not uploaded"))
+                        : st.state === "expired" ? tt("Expired — send a replacement")
                         : st.state === "expiring"
                           ? `Renew it — ${st.days === 0 ? "expires today" : `${st.days} day${st.days === 1 ? "" : "s"} left`}`
-                        : d.fileName || "On file"}
+                        : d.fileName || tt("On file")}
                     </span>
                   </div>
                   {/* The date in its own column. It was inside the status
@@ -22940,13 +22922,13 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
                       an empty cell reads as missing data rather than as a
                       document that does not expire. */}
                   <span className="mydoc-exp">
-                    <b>Expires</b>
+                    <b>{tt("Expires")}</b>
                     {st.state === "missing" ? "—"
                       : d.expiresOn ? formatExpiry(d.expiresOn)
-                      : "Does not expire"}
+                      : tt("Does not expire")}
                   </span>
                   <label className="meas-upload compact">
-                    <Upload size={13} /> {d ? "Replace" : "Upload"}
+                    <Upload size={13} /> {d ? tt("Replace") : tt("Upload")}
                     <input type="file" hidden onChange={async (e) => {
                       const file = e.target.files?.[0];
                       if (!file) return;
@@ -22997,9 +22979,9 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               }} />
           )}
 
-          <div className="form-sec">Asking to work with you{pending.length > 0 ? ` (${pending.length})` : ""}</div>
+          <div className="form-sec">{tt("Asking to work with you")}{pending.length > 0 ? ` (${pending.length})` : ""}</div>
           <ConnectRequests requests={requests} onRespond={onRespond} onReload={onReload}
-            emptyNote="Nobody has asked yet. When somebody does, it lands here and nothing happens until you answer." />
+            emptyNote={tt("Nobody has asked yet. When somebody does, it lands here and nothing happens until you answer.")} />
           </>}
         </>
       )}
@@ -23038,38 +23020,20 @@ function AutoTurnaroundPanel({ on, onSave }) {
   };
   return (
     <div className="portal-panel settings-panel" id="auto-turnaround">
-      <h4>Auto-schedule turnarounds</h4>
-      <p className="panel-note">
-        When you raise a job from a move-in or move-out inspection, SubSub puts
-        somebody on it and gets a time agreed without you. <b>Move-in and
-        move-out only</b> — a repair is somebody's home with somebody in it, and
-        the date follows how bad it is rather than a tenancy.
-      </p>
+      <h4>{tt("Auto-schedule turnarounds")}</h4>
+      <p className="panel-note">{tt("When you raise a job from a move-in or move-out inspection, SubSub puts somebody on it and gets a time agreed without you.")}{" "}<b>{tt("Move-in and move-out only")}</b>{" "}{tt("— a repair is somebody's home with somebody in it, and the date follows how bad it is rather than a tenancy.")}</p>
       <div className="picks">
         <button type="button" className={`pick ${on ? "" : "on"}`} disabled={busy}
-          onClick={() => set(false)}>Off</button>
+          onClick={() => set(false)}>{tt("Off")}</button>
         <button type="button" className={`pick ${on ? "on" : ""}`} disabled={busy}
-          onClick={() => set(true)}>On</button>
+          onClick={() => set(true)}>{tt("On")}</button>
       </div>
       {on && (
         <>
-          <p className="cov-hint">
-            It picks from your own roster: engaged for the trade, documents in
-            order, soonest free day, then the better rating, then whoever has
-            least on. It never picks somebody paused or removed.
-          </p>
+          <p className="cov-hint">{tt("It picks from your own roster: engaged for the trade, documents in order, soonest free day, then the better rating, then whoever has least on. It never picks somebody paused or removed.")}</p>
           {/* THE ONE THING IT WILL NOT DO, said here rather than discovered. */}
-          <p className="cov-hint">
-            It asks — it does not book their calendar. A time goes out when they
-            take the job, and they confirm it or put another forward. Booking
-            straight onto a crew's calendar is theirs to switch on, from their
-            own account.
-          </p>
-          <p className="cov-hint">
-            If nobody can make it after {AUTO_TRIES} tries it stops and tells you,
-            rather than putting a fourth date to two people who have said no
-            three times.
-          </p>
+          <p className="cov-hint">{tt("It asks — it does not book their calendar. A time goes out when they take the job, and they confirm it or put another forward. Booking straight onto a crew's calendar is theirs to switch on, from their own account.")}</p>
+          <p className="cov-hint">{tt("If nobody can make it after")}{" "}{AUTO_TRIES}{" "}{tt("tries it stops and tells you, rather than putting a fourth date to two people who have said no three times.")}</p>
         </>
       )}
       {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
@@ -23254,13 +23218,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
   return (
     <main className="ss-main">
-      <PageHead title="My account"
+      <PageHead title={tt("My account")}
         sub={[me.name, canManage ? brand.name : null, roleLabel]
           .filter(Boolean).join(" \u00b7 ")} />
       {panes.length > 1 && (
         <div className="seg-tabs">
           {panes.map(([id, l]) => (
-            <button key={id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>{l}</button>
+            <button key={id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>{tt(l)}</button>
           ))}
         </div>
       )}
@@ -23269,18 +23233,15 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "emergency" && role === "tenant" && <TenantDetails brandName={brand.name} only="emergency" />}
       {pane === "reach" && role === "tenant" && (
         <div className="portal-panel settings-panel">
-          <h4>Notifications</h4>
-          <p className="panel-note">
-            When something you've reported moves — approved, a contractor assigned, done — we can
-            tell you, so you're not checking back here to find out.
-          </p>
+          <h4>{tt("Notifications")}</h4>
+          <p className="panel-note">{tt("When something you've reported moves — approved, a contractor assigned, done — we can tell you, so you're not checking back here to find out.")}</p>
           <label className={`notify-opt ${tn.statusChanges ? "on" : ""}`} style={{ marginBottom: 10 }}>
             <input type="checkbox" checked={tn.statusChanges}
               onChange={(e) => { setTn({ ...tn, statusChanges: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
             <Bell size={17} />
             <span className="no-txt">
-              <span className="no-name">Tell me when a report's status changes</span>
-              <span className="no-sub">Off means you check here yourself.</span>
+              <span className="no-name">{tt("Tell me when a report's status changes")}</span>
+              <span className="no-sub">{tt("Off means you check here yourself.")}</span>
             </span>
           </label>
           <div className="notify-grid" style={{ opacity: tn.statusChanges ? 1 : .5 }}>
@@ -23289,8 +23250,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 onChange={(e) => { setTn({ ...tn, email: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
               <Mail size={17} />
               <span className="no-txt">
-                <span className="no-name">Email</span>
-                <span className="no-sub">{me.email && !String(me.email).endsWith("@no-email.invalid") ? me.email : "no email on file"}</span>
+                <span className="no-name">{tt("Email")}</span>
+                <span className="no-sub">{me.email && !String(me.email).endsWith("@no-email.invalid") ? me.email : tt("no email on file")}</span>
               </span>
             </label>
             <label className={`notify-opt ${tn.sms && me.phone ? "on" : ""}`}>
@@ -23298,23 +23259,23 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 onChange={(e) => { setTn({ ...tn, sms: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
               <Phone size={17} />
               <span className="no-txt">
-                <span className="no-name">Text message (SMS)</span>
-                <span className="no-sub">{me.phone || "no phone on file — ask your building manager to add one"}</span>
+                <span className="no-name">{tt("Text message (SMS)")}</span>
+                <span className="no-sub">{me.phone || tt("no phone on file — ask your building manager to add one")}</span>
               </span>
             </label>
           </div>
           {tn.statusChanges && !tn.email && !tn.sms && (
             <div className="doc-block" style={{ marginTop: 12, marginBottom: 0 }}>
               <AlertTriangle size={15} />
-              <div><strong>Pick at least one</strong>, or nothing can reach you.</div>
+              <div><strong>{tt("Pick at least one")}</strong>{tt(", or nothing can reach you.")}</div>
             </div>
           )}
           {tnErr && <p className="billing-err" role="alert">{tnErr}</p>}
           <div className="panel-actions">
             <span className="panel-count">
-              {!tn.statusChanges ? "Off" : tn.email && tn.sms ? "Email + SMS" : tn.sms ? "SMS only" : tn.email ? "Email only" : "Nothing selected"}
+              {!tn.statusChanges ? tt("Off") : tn.email && tn.sms ? tt("Email + SMS") : tn.sms ? tt("SMS only") : tn.email ? tt("Email only") : tt("Nothing selected")}
             </span>
-            {tnSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+            {tnSaved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
               : <button className="btn-solid" disabled={tnBusy || (tn.statusChanges && !tn.email && !tn.sms)}
                   onClick={async () => {
                     setTnBusy(true); setTnErr("");
@@ -23322,7 +23283,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     setTnBusy(false);
                     if (err) setTnErr(err); else setTnSaved(true);
                   }}>
-                  <Check size={15} /> {tnBusy ? "Saving…" : "Save notifications"}</button>}
+                  <Check size={15} /> {tnBusy ? tt("Saving…") : tt("Save notifications")}</button>}
           </div>
         </div>
       )}
@@ -23365,16 +23326,16 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           )}
           {mySub && (
             <div className="portal-panel settings-panel">
-              <h4>Notifications</h4>
-              <p className="panel-note">How you hear about job requests, work orders, and document reminders. Pick at least one.</p>
+              <h4>{tt("Notifications")}</h4>
+              <p className="panel-note">{tt("How you hear about job requests, work orders, and document reminders. Pick at least one.")}</p>
               <div className="notify-opts">
                 <label className={`notify-opt ${nf.email ? "on" : ""}`}>
                   <input type="checkbox" checked={nf.email}
                     onChange={(e) => { setNf({ ...nf, email: e.target.checked }); setNSaved(false); }} />
                   <Mail size={17} />
                   <span className="no-txt">
-                    <span className="no-name">Email</span>
-                    <span className="no-sub">{mySub.email || "no email on file"}</span>
+                    <span className="no-name">{tt("Email")}</span>
+                    <span className="no-sub">{mySub.email || tt("no email on file")}</span>
                   </span>
                 </label>
                 <label className={`notify-opt ${nf.sms ? "on" : ""}`}>
@@ -23382,33 +23343,33 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     onChange={(e) => { setNf({ ...nf, sms: e.target.checked }); setNSaved(false); }} />
                   <Phone size={17} />
                   <span className="no-txt">
-                    <span className="no-name">Text message (SMS)</span>
-                    <span className="no-sub">{mySub.phone || "no phone on file"}</span>
+                    <span className="no-name">{tt("Text message (SMS)")}</span>
+                    <span className="no-sub">{mySub.phone || tt("no phone on file")}</span>
                   </span>
                 </label>
               </div>
               {!nf.email && !nf.sms && (
                 <div className="doc-block" style={{ marginTop: 12, marginBottom: 0 }}>
                   <AlertTriangle size={15} />
-                  <div><strong>Pick at least one.</strong> You'd miss job requests and document reminders with both switched off.</div>
+                  <div><strong>{tt("Pick at least one.")}</strong>{" "}{tt("You'd miss job requests and document reminders with both switched off.")}</div>
                 </div>
               )}
-              <p className="cov-hint">Email &amp; SMS is for automated notifications only — nobody can message you from the platform, and these are no-reply.</p>
+              <p className="cov-hint">{tt("Email & SMS is for automated notifications only — nobody can message you from the platform, and these are no-reply.")}</p>
               <div className="panel-actions">
                 <span className="panel-count">
-                  {nf.email && nf.sms ? "Email + SMS" : nf.sms ? "SMS only" : nf.email ? "Email only" : "None selected"}
+                  {nf.email && nf.sms ? tt("Email + SMS") : nf.sms ? tt("SMS only") : nf.email ? tt("Email only") : tt("None selected")}
                 </span>
-                {nSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+                {nSaved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
                   : <button className="btn-solid" disabled={!nf.email && !nf.sms}
                       onClick={() => { onPatchSub(mySub.id, { notify: nf }); setNSaved(true); }}>
-                      <Check size={15} /> Save notifications</button>}
+                      <Check size={15} />{" "}{tt("Save notifications")}</button>}
               </div>
             </div>
           )}
 
           {role === "tenant" && (
-            <p className="panel-note">Your notifications are on <button type="button" className="qr-qsend-go"
-              onClick={() => setPane("reach")}>How we reach you</button>.</p>
+            <p className="panel-note">{tt("Your notifications are on")}{" "}<button type="button" className="qr-qsend-go"
+              onClick={() => setPane("reach")}>{tt("How we reach you")}</button>.</p>
           )}
         </>
       )}
@@ -23416,23 +23377,22 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "profile" && (
         <>
           <div className="portal-panel settings-panel">
-            <h4>Your details</h4>
+            <h4>{tt("Your details")}</h4>
             {/* Your own picture, on your own profile. Every seat gets this,
                 not just an admin: asking somebody else to change your
                 profile picture is an errand, not a permission. */}
             <AvatarPicker user={me} onSave={onSetMyAvatar} />
             {mySub && (
               <>
-                <label className="fld">Company name <span className="fld-note">shown on your dashboard</span>
-                  <input value={co} onChange={(e) => { setCo(e.target.value); setPSaved(false); }} placeholder="Your company" />
+                <label className="fld">{tt("Company name")}{" "}<span className="fld-note">{tt("shown on your dashboard")}</span>
+                  <input value={co} onChange={(e) => { setCo(e.target.value); setPSaved(false); }} placeholder={tt("Your company")} />
                 </label>
                 <div className="fld-row">
-                  <label className="fld">WA L&amp;I license #{" "}
-                    <span className="fld-note">checked against the state registry</span>
-                    <input value={lic} onChange={(e) => { setLic(e.target.value.toUpperCase().trim()); setPSaved(false); }} placeholder="ABCDEF123GH" />
+                  <label className="fld">{tt("WA L&I license #")}{" "}
+                    <span className="fld-note">{tt("checked against the state registry")}</span>
+                    <input value={lic} onChange={(e) => { setLic(e.target.value.toUpperCase().trim()); setPSaved(false); }} placeholder={tt("ABCDEF123GH")} />
                   </label>
-                  <label className="fld">UBI
-                    <input inputMode="numeric" value={ubi} onChange={(e) => { setUbi(e.target.value.trim()); setPSaved(false); }} placeholder="603221887" />
+                  <label className="fld">{tt("UBI")}<input inputMode="numeric" value={ubi} onChange={(e) => { setUbi(e.target.value.trim()); setPSaved(false); }} placeholder="603221887" />
                   </label>
                 </div>
                 {mySub.licenseCheck && (
@@ -23442,55 +23402,55 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                         the registry has never heard of sends somebody to the
                         wrong place entirely. */}
                     {licenseOk(mySub)
-                      ? <>Verified with L&amp;I · {licenseBadge(mySub.licenseCheck)} · expires {mySub.licenseCheck.expirationDate}</>
+                      ? <>{tt("Verified with L&I ·")}{" "}{licenseBadge(mySub.licenseCheck)}{" "}{tt("· expires")}{" "}{mySub.licenseCheck.expirationDate}</>
                       : mySub.licenseCheck.found
-                        ? <><AlertTriangle size={12} /> L&amp;I shows this registration as {licenseStatusText(mySub.licenseCheck)} — renew it to keep receiving work.</>
+                        ? <><AlertTriangle size={12} />{" "}{tt("L&I shows this registration as")}{" "}{licenseStatusText(mySub.licenseCheck)}{" "}{tt("— renew it to keep receiving work.")}</>
                         : mySub.licenseCheck.status === "CHECK_FAILED" || mySub.licenseCheck.status === "UNSUPPORTED_STATE"
-                          ? <><AlertTriangle size={12} /> This registration {licenseStatusText(mySub.licenseCheck)}. Nothing for you to do — it will be tried again.</>
-                          : <><AlertTriangle size={12} /> L&amp;I has no record of this number. Check it against your license and save again.</>}
+                          ? <><AlertTriangle size={12} />{" "}{tt("This registration")}{" "}{licenseStatusText(mySub.licenseCheck)}{tt(". Nothing for you to do — it will be tried again.")}</>
+                          : <><AlertTriangle size={12} />{" "}{tt("L&I has no record of this number. Check it against your license and save again.")}</>}
                   </p>
                 )}
               </>
             )}
             <div className="fld-row">
-              <label className="fld">Full name<input value={p.name} onChange={(e) => { setP({ ...p, name: e.target.value }); setPSaved(false); }} /></label>
-              <label className="fld">Email<input type="email" value={p.email} onChange={(e) => { setP({ ...p, email: e.target.value }); setPSaved(false); }} /></label>
+              <label className="fld">{tt("Full name")}<input value={p.name} onChange={(e) => { setP({ ...p, name: e.target.value }); setPSaved(false); }} /></label>
+              <label className="fld">{tt("Email")}<input type="email" value={p.email} onChange={(e) => { setP({ ...p, email: e.target.value }); setPSaved(false); }} /></label>
             </div>
-            <label className="fld">Phone<input type="tel" inputMode="numeric" maxLength={13} value={p.phone} onChange={(e) => { setP({ ...p, phone: formatPhone(e.target.value) }); setPSaved(false); }} placeholder="(206)555-0100" /></label>
+            <label className="fld">{tt("Phone")}<input type="tel" inputMode="numeric" maxLength={13} value={p.phone} onChange={(e) => { setP({ ...p, phone: formatPhone(e.target.value) }); setPSaved(false); }} placeholder="(206)555-0100" /></label>
             <div className="role-locked">
               <span className={`role-badge r-${role}`}>{roleLabelIn(accountKind, role)}</span>
-              <span className="rl-note">Only an admin can change roles.</span>
+              <span className="rl-note">{tt("Only an admin can change roles.")}</span>
             </div>
             <div className="panel-actions">
               <span className="panel-count">{me.email}</span>
-              {pSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+              {pSaved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
                 : <button className="btn-solid" disabled={!p.name || !p.email || (mySub && !co.trim())}
                     onClick={() => {
                       onSaveUser({ ...me, ...p });
                       if (mySub) onPatchSub(mySub.id, { company: co.trim(), license: lic, ubi });
                       setPSaved(true);
                     }}>
-                    <Check size={15} /> Save details</button>}
+                    <Check size={15} />{" "}{tt("Save details")}</button>}
             </div>
           </div>
 
           {mySub && addr && (
             <div className="portal-panel settings-panel">
-              <h4>Mailing address</h4>
-              <p className="panel-note">Where uniforms and paperwork get shipped.</p>
-              <label className="fld">Street<input value={addr.mailStreet} onChange={(e) => { setAddr({ ...addr, mailStreet: e.target.value }); setASaved(false); }} placeholder="1234 Industrial Way, Suite B" /></label>
+              <h4>{tt("Mailing address")}</h4>
+              <p className="panel-note">{tt("Where uniforms and paperwork get shipped.")}</p>
+              <label className="fld">{tt("Street")}<input value={addr.mailStreet} onChange={(e) => { setAddr({ ...addr, mailStreet: e.target.value }); setASaved(false); }} placeholder="1234 Industrial Way, Suite B" /></label>
               <div className="fld-row">
-                <label className="fld">City<input value={addr.mailCity} onChange={(e) => { setAddr({ ...addr, mailCity: e.target.value }); setASaved(false); }} placeholder="Seattle" /></label>
+                <label className="fld">{tt("City")}<input value={addr.mailCity} onChange={(e) => { setAddr({ ...addr, mailCity: e.target.value }); setASaved(false); }} placeholder="Seattle" /></label>
                 <StateSelect value={addr.mailState}
                   onChange={(v) => { setAddr({ ...addr, mailState: v }); setASaved(false); }} />
-                <label className="fld">ZIP<input inputMode="numeric" value={addr.mailZip} onChange={(e) => { setAddr({ ...addr, mailZip: e.target.value }); setASaved(false); }} placeholder="98108" /></label>
+                <label className="fld">{tt("ZIP")}<input inputMode="numeric" value={addr.mailZip} onChange={(e) => { setAddr({ ...addr, mailZip: e.target.value }); setASaved(false); }} placeholder="98108" /></label>
               </div>
               <div className="panel-actions">
-                <span className="panel-count">{[addr.mailCity, addr.mailState, addr.mailZip].filter(Boolean).join(", ") || "Not set"}</span>
-                {aSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+                <span className="panel-count">{[addr.mailCity, addr.mailState, addr.mailZip].filter(Boolean).join(", ") || tt("Not set")}</span>
+                {aSaved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
                   : <button className="btn-solid" disabled={!addr.mailStreet || !addr.mailZip}
                       onClick={() => { onPatchSub(mySub.id, addr); setASaved(true); }}>
-                      <Check size={15} /> Save address</button>}
+                      <Check size={15} />{" "}{tt("Save address")}</button>}
               </div>
             </div>
           )}
@@ -23512,12 +23472,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               {/* Named the way the header menu names it. The menu entry has
                   said "My Passport QR" now, and a panel calling the
                   same thing something else is two names for one object. */}
-              <h4>My Passport QR</h4>
-              <p className="panel-note">
-                Show this to a general contractor and have them scan it. It opens your SubSub Passport,
-                where they read your license and insurance and connect with you. Once you accept, they
-                get your compliance pack and can assign you jobs.
-              </p>
+              <h4>{tt("My Passport QR")}</h4>
+              <p className="panel-note">{tt("Show this to a general contractor and have them scan it. It opens your SubSub Passport, where they read your license and insurance and connect with you. Once you accept, they get your compliance pack and can assign you jobs.")}</p>
               <ConnectCode />
             </div>
           )}
@@ -23554,23 +23510,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
       {pane === "company" && canManage && (
         <div className="portal-panel settings-panel">
-          <h4>Account type</h4>
-          <p className="panel-note">
-            What this account is. It decides whether you keep a building list:
-            a general contractor subs out trades job by job, the others manage a
-            standing portfolio and scope vendors to specific buildings.
-          </p>
+          <h4>{tt("Account type")}</h4>
+          <p className="panel-note">{tt("What this account is. It decides whether you keep a building list: a general contractor subs out trades job by job, the others manage a standing portfolio and scope vendors to specific buildings.")}</p>
           <div className="picks">
             {Object.entries(ACCOUNT_KINDS).map(([id, k]) => (
               <button key={id} type="button"
                 className={`pick ${accountKind === id ? "on" : ""}`}
-                onClick={() => onSetAccountKind(id)}>{k.label}</button>
+                onClick={() => onSetAccountKind(id)}>{tt(k.label)}</button>
             ))}
           </div>
           <p className="cov-hint">
             {ACCOUNT_KINDS[accountKind].properties
-              ? "Properties is on. Add your buildings there, then scope vendors to them."
-              : "No Properties tab. Vendors are matched by trade and coverage area, per job."}
+              ? tt("Properties is on. Add your buildings there, then scope vendors to them.")
+              : tt("No Properties tab. Vendors are matched by trade and coverage area, per job.")}
           </p>
         </div>
       )}
@@ -23610,83 +23562,74 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
       {pane === "branding" && canManage && !canBrand && (
         <div className="portal-panel settings-panel">
-          <h4>Company branding</h4>
+          <h4>{tt("Company branding")}</h4>
           <div className="doc-block with-cta">
             <AlertTriangle size={15} />
-            <div><strong>Branding comes with Scale.</strong> On Basic your contractors sign in
-              through SubSub. Upgrade to use your own logo and your own sign-in address —
-              nothing needs re-entering.</div>
+            <div><strong>{tt("Branding comes with Scale.")}</strong>{" "}{tt("On Basic your contractors sign in through SubSub. Upgrade to use your own logo and your own sign-in address — nothing needs re-entering.")}</div>
             <button className="btn-notify" disabled={billingBusy} onClick={() => onUpgrade()}>
-              <Zap size={14} /> Upgrade to Scale</button>
+              <Zap size={14} />{" "}{tt("Upgrade to Scale")}</button>
           </div>
-          <p className="cov-hint">Everything else about your company is set when you add contractors and create jobs.</p>
+          <p className="cov-hint">{tt("Everything else about your company is set when you add contractors and create jobs.")}</p>
         </div>
       )}
 
       {pane === "branding" && canManage && canBrand && (
         <div className="portal-panel settings-panel">
-          <h4>Company branding</h4>
-          <p className="panel-note">What your subcontractors see when they sign in. SubSub stays in the background.</p>
+          <h4>{tt("Company branding")}</h4>
+          <p className="panel-note">{tt("What your subcontractors see when they sign in. SubSub stays in the background.")}</p>
 
           <div className="brand-preview">
             <div className="bp-chrome">
               <span className="bp-dot" /><span className="bp-dot" /><span className="bp-dot" />
-              <span className="bp-url">{slug || "yourcompany"}.subsub.work</span>
+              <span className="bp-url">{slug || tt("yourcompany")}{".subsub.work"}</span>
             </div>
             <div className="bp-body">
               <div className="brand-logo lg"><BrandMark brand={b} height={34} /></div>
               <div>
-                <div className="bp-name">{b.name || "Your company"}</div>
+                <div className="bp-name">{b.name || tt("Your company")}</div>
                 <div className="bp-sub">{signInTagline({ kind: accountKind })}</div>
               </div>
             </div>
             <div className="bp-foot"><PoweredBy height={12} /></div>
           </div>
 
-          <label className="fld">Company name<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder="Your company name" /></label>
-          <label className="fld">Subdomain <span className="fld-note">where your team and contractors sign in</span>
+          <label className="fld">{tt("Company name")}<input value={b.name} onChange={(e) => setBrandField("name", e.target.value)} placeholder={tt("Your company name")} /></label>
+          <label className="fld">{tt("Subdomain")}{" "}<span className="fld-note">{tt("where your team and contractors sign in")}</span>
             <div className="subdomain-row">
               <input value={b.subdomain} onChange={(e) => setBrandField("subdomain", e.target.value)}
-                autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="yourcompany" />
-              <span className="sd-suffix">.subsub.work</span>
+                autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={tt("yourcompany")} />
+              <span className="sd-suffix">{".subsub.work"}</span>
             </div>
           </label>
           {subProblem
             ? <p className="fld-err"><AlertTriangle size={12} /> {subProblem}</p>
             : slug !== brand.subdomain && (
-              <p className="cov-hint">
-                Not saved yet. Saving moves everyone to <b>{slug}.subsub.work</b> — the old
-                address stops working, so tell your team and your contractors before you do.
-              </p>
+              <p className="cov-hint">{tt("Not saved yet. Saving moves everyone to")}{" "}<b>{slug}{".subsub.work"}</b>{" "}{tt("— the old address stops working, so tell your team and your contractors before you do.")}</p>
             )}
 
           <AddressStatus subdomain={brand.subdomain} status={hostnameStatus} onRefresh={onRefreshHostname} />
 
-          <div className="fld">Logo mark
-            <div className="mark-row">
+          <div className="fld">{tt("Logo mark")}<div className="mark-row">
               <div className="mark-preview"><BrandMark brand={b} height={30} /></div>
               <div className="mark-meta">
-                <span className="mark-name">{b.name || "Your company"}</span>
-                <span className="mark-hint">{b.logoData ? "Custom mark" : b.useDefaultMark ? "Default roof mark" : "Initials"}</span>
+                <span className="mark-name">{b.name || tt("Your company")}</span>
+                <span className="mark-hint">{b.logoData ? tt("Custom mark") : b.useDefaultMark ? tt("Default roof mark") : tt("Initials")}</span>
               </div>
               <div className="mark-actions">
-                <label className="dm-replace"><Upload size={12} /> Upload
-                  <input type="file" hidden accept="image/*,.svg" onChange={(e) => { if (e.target.files.length) readMark(e.target.files[0]); }} /></label>
+                <label className="dm-replace"><Upload size={12} />{" "}{tt("Upload")}<input type="file" hidden accept="image/*,.svg" onChange={(e) => { if (e.target.files.length) readMark(e.target.files[0]); }} /></label>
                 {b.logoData
                   ? <button type="button" className="dm-delete" onClick={() => {
                       setBrandField("logoData", null); setBrandField("useDefaultMark", true);
                       persist("patchAccount.logo", api.patchAccount({ logoKey: null }));
-                    }}><Trash2 size={12} /> Remove</button>
-                  : !b.useDefaultMark && <button type="button" className="dm-replace" onClick={() => setBrandField("useDefaultMark", true)}>Default</button>}
+                    }}><Trash2 size={12} />{" "}{tt("Remove")}</button>
+                  : !b.useDefaultMark && <button type="button" className="dm-replace" onClick={() => setBrandField("useDefaultMark", true)}>{tt("Default")}</button>}
               </div>
             </div>
-            <p className="cov-hint">Mark only — your company name is rendered as text beside it.</p>
+            <p className="cov-hint">{tt("Mark only — your company name is rendered as text beside it.")}</p>
           </div>
 
-          <div className="form-sec">Colors for your subcontractor-facing pages</div>
-          <p className="panel-note">These apply to the two pages your subcontractors see before
-            they're inside the app: your sign-in page and the public application form you link
-            from your website. The app itself keeps its own styling.</p>
+          <div className="form-sec">{tt("Colors for your subcontractor-facing pages")}</div>
+          <p className="panel-note">{tt("These apply to the two pages your subcontractors see before they're inside the app: your sign-in page and the public application form you link from your website. The app itself keeps its own styling.")}</p>
 
           <div className="theme-grid">
             {THEME_FIELDS.map((tf) => (
@@ -23708,19 +23651,14 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             ))}
           </div>
 
-          <div className="form-sec">Page titles</div>
-          <p className="panel-note">
-            What the browser tab says on those same two pages. They are filled in from your
-            company name already, so there is nothing to do here unless you want different
-            words — a contractor opening your application form from your own website sees
-            this before they see anything else on the page.
-          </p>
+          <div className="form-sec">{tt("Page titles")}</div>
+          <p className="panel-note">{tt("What the browser tab says on those same two pages. They are filled in from your company name already, so there is nothing to do here unless you want different words — a contractor opening your application form from your own website sees this before they see anything else on the page.")}</p>
           {[
             ["signInTitle", "Sign-in page", defaultTitles(b.name).signIn],
             ["applyTitle", "Application form", defaultTitles(b.name).apply],
           ].map(([key, label, fallback]) => (
             <label key={key} className="fld">{label}
-              <span className="fld-note">{stripSuffix(th[key]) ? "yours" : "from your company name"}</span>
+              <span className="fld-note">{stripSuffix(th[key]) ? tt("yours") : tt("from your company name")}</span>
               <div className="subdomain-row">
                 <input value={stripSuffix(th[key] || "")} maxLength={TITLE_MAX}
                   placeholder={fallback}
@@ -23730,10 +23668,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     a tab that drops the name would be passing the product
                     off as the customer's own. Typing it yourself does not
                     double it -- it is stripped before this is added. */}
-                <span className="sd-suffix" title="SubSub stays on every page title">· SubSub</span>
+                <span className="sd-suffix" title={tt("SubSub stays on every page title")}>{tt("· SubSub")}</span>
               </div>
-              <span className="cov-hint">
-                The tab will read <b>{pageTitle(th[key], fallback)}</b>
+              <span className="cov-hint">{tt("The tab will read")}{" "}<b>{pageTitle(th[key], fallback)}</b>
               </span>
             </label>
           ))}
@@ -23746,10 +23683,9 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <p className="fld-err"><AlertTriangle size={12} />
                 {cr < 4.5 && ` Text on cards is low contrast (${cr}:1).`}
                 {br < 4.5 && ` Button text is low contrast (${br}:1).`}
-                {" "}Aim for 4.5:1 or higher so it stays readable.
-              </p>
+                {" "}{tt("Aim for 4.5:1 or higher so it stays readable.")}</p>
             ) : (
-              <p className="cov-hint">Contrast looks good — text {cr}:1, buttons {br}:1.</p>
+              <p className="cov-hint">{tt("Contrast looks good — text")}{" "}{cr}{tt(":1, buttons")}{" "}{br}:1.</p>
             );
           })()}
 
@@ -23759,52 +23695,44 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               preview whose address is not the address of the thing it previews
               is worse than one with no address at all. */}
           <div className="sf-head">
-            <h5>Hosted sign up form</h5>
+            <h5>{tt("Hosted sign up form")}</h5>
             <button type="button" className="embed-code-btn" onClick={() => setApplyCode(true)}
-              title="See the code and what it looks like"
-              aria-label="See the code and what it looks like">
+              title={tt("See the code and what it looks like")}
+              aria-label={tt("See the code and what it looks like")}>
               <Code2 size={15} />
             </button>
           </div>
-          <p className="panel-note sf-note">
-            Below is the hosted sign up form that drops subcontractor entries directly into SubSub,
-            where you can vet them, read their compliance packs, see their availability and schedule
-            them for jobs. Nothing here needs hosting or a plugin.
-          </p>
+          <p className="panel-note sf-note">{tt("Below is the hosted sign up form that drops subcontractor entries directly into SubSub, where you can vet them, read their compliance packs, see their availability and schedule them for jobs. Nothing here needs hosting or a plugin.")}</p>
           <div className="theme-preview" style={themeVars(th)}>
             <div className="tp-bar">
-              <span>{slug || "yourcompany"}.subsub.work/?apply=1</span>
+              <span>{slug || tt("yourcompany")}{".subsub.work/?apply=1"}</span>
             </div>
             <div className="tp-body">
               <div className="tp-card">
                 <div className="tp-brand"><BrandMark brand={b} height={22} />
-                  <span>{b.name || "Your company"}</span></div>
-                <div className="tp-h">Work with {b.name || "your company"}</div>
-                <div className="tp-p">Tell us about your company and we'll add you to our
-                  subcontractor list.</div>
+                  <span>{b.name || tt("Your company")}</span></div>
+                <div className="tp-h">{tt("Work with")}{" "}{b.name || tt("your company")}</div>
+                <div className="tp-p">{tt("Tell us about your company and we'll add you to our subcontractor list.")}</div>
                 <div className="tp-field" />
                 <div className="tp-field" />
-                <div className="tp-btn">Continue</div>
+                <div className="tp-btn">{tt("Continue")}</div>
               </div>
             </div>
           </div>
 
           <div className="theme-actions">
             <button type="button" className="btn-ghost"
-              onClick={() => { setTh({ ...DEFAULT_THEME }); setBSaved(false); setBErr(""); }}>Reset to default</button>
+              onClick={() => { setTh({ ...DEFAULT_THEME }); setBSaved(false); setBErr(""); }}>{tt("Reset to default")}</button>
             {/* The real form on the real address, in a new tab. It used to
                 open a copy inside this tab, which meant signing out of the
                 app to look at it and coming back to generic SubSub branding
                 -- the one thing this page exists to replace. */}
             {hostnameStatus === "active" && brand.subdomain ? (
               <a className="theme-link" href={`https://${brand.subdomain}.subsub.work/?apply=1`}
-                target="_blank" rel="noreferrer">
-                Open the live application form <ExternalLink size={12} />
+                target="_blank" rel="noreferrer">{tt("Open the live application form")}{" "}<ExternalLink size={12} />
               </a>
             ) : (
-              <span className="theme-note">
-                The live form opens once {brand.subdomain || "your"}.subsub.work is ready.
-              </span>
+              <span className="theme-note">{tt("The live form opens once")}{" "}{brand.subdomain || tt("your")}{tt(".subsub.work is ready.")}</span>
             )}
           </div>
 
@@ -23824,8 +23752,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           {bErr && <p className="fld-err"><AlertTriangle size={12} /> {bErr}</p>}
 
           <div className="panel-actions">
-            <span className="panel-count">{slug || "yourcompany"}.subsub.work</span>
-            {bSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+            <span className="panel-count">{slug || tt("yourcompany")}{".subsub.work"}</span>
+            {bSaved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
               : <button className="btn-solid" disabled={bBusy || !b.name || !slug || !!subProblem}
                   onClick={async () => {
                     setBBusy(true); setBErr("");
@@ -23833,7 +23761,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     setBBusy(false);
                     if (err) setBErr(err); else { setBSaved(true); setB((x) => ({ ...x, subdomain: slug })); }
                   }}>
-                  <Check size={15} /> {bBusy ? "Saving…" : "Save branding"}</button>}
+                  <Check size={15} /> {bBusy ? tt("Saving…") : tt("Save branding")}</button>}
           </div>
         </div>
       )}
@@ -23934,23 +23862,20 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {pane === "users" && canManage && (
         <>
           <div className="jobs-head">
-            <h3>{seatCount} of {PLANS[plan].userLimit === Infinity ? "unlimited" : PLANS[plan].userLimit} user seat{PLANS[plan].userLimit === 1 ? "" : "s"} used</h3>
+            <h3>{seatCount}{" "}{tt("of")}{" "}{PLANS[plan].userLimit === Infinity ? tt("unlimited") : PLANS[plan].userLimit}{" "}{tt("user seat")}{PLANS[plan].userLimit === 1 ? "" : "s"}{" "}{tt("used")}</h3>
             <button className="add-btn small" onClick={() => atSeatLimit ? onSeatLimit() : setAdding(true)}>
-              <Plus size={14} /> New user
-            </button>
+              <Plus size={14} />{" "}{tt("New user")}</button>
           </div>
           {added && (
             <p className={`seat-added ${added.invited ? "" : "warn"}`} role="status">
               {added.invited
-                ? <><Check size={13} /> {added.name} was added and invited
-                    {added.to ? <> — we {added.emailed && added.texted ? "emailed and texted"
-                      : added.texted ? "texted" : "emailed"} {added.to}</> : null}. Nothing else to send.</>
-                : <><AlertTriangle size={13} /> {added.name} was added, but the invite did not go out
-                    {added.reason === "no_email" ? " — they have no email address on file."
-                      : added.reason === "already_has_login" ? " — they already have a login, so they don't need one."
-                      : added.reason === "add_failed" ? " — nothing was saved. Try again."
-                      : ". Use Send invite on their row to try again."}</>}
-              <button className="seat-added-x" onClick={onDismissAdded} aria-label="Dismiss"><X size={13} /></button>
+                ? <><Check size={13} /> {added.name}{" "}{tt("was added and invited")}{added.to ? <>{" "}{tt("— we")}{" "}{added.emailed && added.texted ? tt("emailed and texted")
+                      : added.texted ? tt("texted") : tt("emailed")} {added.to}</> : null}{tt(". Nothing else to send.")}</>
+                : <><AlertTriangle size={13} /> {added.name}{" "}{tt("was added, but the invite did not go out")}{added.reason === "no_email" ? tt(" — they have no email address on file.")
+                      : added.reason === "already_has_login" ? tt(" — they already have a login, so they don't need one.")
+                      : added.reason === "add_failed" ? tt(" — nothing was saved. Try again.")
+                      : tt(". Use Send invite on their row to try again.")}</>}
+              <button className="seat-added-x" onClick={onDismissAdded} aria-label={tt("Dismiss")}><X size={13} /></button>
             </p>
           )}
           {adding && (
@@ -23977,7 +23902,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     <div className="user-row-head">
                       <h4>{u.name}</h4>
                       <span className={`role-badge r-${u.role}`}>{roleLabelIn(accountKind, u.role)}</span>
-                      {u.id === currentUserId && <span className="you-badge">you</span>}
+                      {u.id === currentUserId && <span className="you-badge">{tt("you")}</span>}
                     </div>
                     <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}
                       {(ALWAYS_SCOPED_ROLES.includes(u.role) || isScoped(u)) && (() => {
@@ -23989,7 +23914,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                   </div>
                   <div className="user-row-actions">
                     {linked && !docsComplete(linked) && (
-                      <button className="btn-notify sm" onClick={() => onRequestDocs(linked)}><Mail size={12} /> Request docs</button>
+                      <button className="btn-notify sm" onClick={() => onRequestDocs(linked)}><Mail size={12} />{" "}{tt("Request docs")}</button>
                     )}
                     {/* "View as", not "Log in as". This changes what the
                         browser draws from data already loaded -- the API still
@@ -24001,12 +23926,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                         impersonation exists, in the staff console, and is
                         audited. */}
                     {u.id !== currentUserId && (
-                      <button className="login-as-btn" title="Preview this account as they see it. You stay signed in as yourself."
-                        onClick={() => onLoginAs(u.id)}><Eye size={13} /> View as</button>
+                      <button className="login-as-btn" title={tt("Preview this account as they see it. You stay signed in as yourself.")}
+                        onClick={() => onLoginAs(u.id)}><Eye size={13} />{" "}{tt("View as")}</button>
                     )}
-                    <button className="edit-btn" onClick={() => onEditUser(u)}><Pencil size={13} /> Edit</button>
+                    <button className="edit-btn" onClick={() => onEditUser(u)}><Pencil size={13} />{" "}{tt("Edit")}</button>
                     {u.id !== currentUserId && (
-                      <button className="icon-x" onClick={() => setRemoving(u)} title="Remove user"><Trash2 size={13} /></button>
+                      <button className="icon-x" onClick={() => setRemoving(u)} title={tt("Remove user")}><Trash2 size={13} /></button>
                     )}
                   </div>
                 </div>
@@ -24035,12 +23960,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               {billingFellBack && (
                 <div className="billing-manage">
                   <div>
-                    <b>Payment and invoices</b>
-                    <p>This can't load here — your browser may be blocking it.
-                      You can manage it in a new window instead.</p>
+                    <b>{tt("Payment and invoices")}</b>
+                    <p>{tt("This can't load here — your browser may be blocking it. You can manage it in a new window instead.")}</p>
                   </div>
                   <button className="btn-ghost" disabled={billingBusy} onClick={onManageBilling}>
-                    {billingBusy ? "Opening…" : "Open in a new window"}
+                    {billingBusy ? tt("Opening…") : tt("Open in a new window")}
                   </button>
                 </div>
               )}
@@ -24048,22 +23972,22 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           )}
           <div className="plan-current">
             <div>
-              <span className="pc-label">Current plan</span>
+              <span className="pc-label">{tt("Current plan")}</span>
               <span className="pc-name">{active.name}</span>
               {active.annual ? (
                 <span className="pc-cycle">
                   {unitKind && plan === "scale" && !liveYearly ? `${unitUsd(scaleMonthCents)}/mo`
                     : billing === "annual" ? `${formatDollars(active.annual)}/yr` : `${active.price}/mo`}
-                  {!currentPeriodEnd && (billing === "annual" ? " · billed yearly" : " · billed monthly")}
+                  {!currentPeriodEnd && (billing === "annual" ? tt(" · billed yearly") : tt(" · billed monthly"))}
                 </span>
               ) : (
-                <span className="pc-cycle">No subscription</span>
+                <span className="pc-cycle">{tt("No subscription")}</span>
               )}
               {/* The date sits on its own line beside the plan name, and shows
                   for a free account too: a cancelled subscription still runs
                   to a date, and "when does this stop" is the question being
                   asked. "Renews" becomes "ends" when it will not. */}
-              {comped && <span className="pc-renew comp">Complimentary — nothing to pay</span>}
+              {comped && <span className="pc-renew comp">{tt("Complimentary — nothing to pay")}</span>}
               {!comped && currentPeriodEnd && (
                 <span className={`pc-renew ${subscriptionStatus === "past_due" || cancelAtPeriodEnd ? "warn" : ""}`}>
                   {/* Three different things, and saying the wrong one is a
@@ -24073,28 +23997,24 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                       `active` to the last day, so the flag decides, not the
                       status. */}
                   {subscriptionStatus === "canceled" || plan === "basic"
-                    ? <>Moved to Basic {niceDay(currentPeriodEnd)}</>
+                    ? <>{tt("Moved to Basic")}{" "}{niceDay(currentPeriodEnd)}</>
                     : cancelAtPeriodEnd
-                      ? <>Scale until {niceDay(currentPeriodEnd)}, then Basic — free</>
-                      : <>Renews automatically {niceDay(currentPeriodEnd)} · {billing === "annual" ? "yearly" : "monthly"}</>}
-                  {subscriptionStatus === "past_due" && " · payment failed, we're retrying"}
+                      ? <>{tt("Scale until")}{" "}{niceDay(currentPeriodEnd)}{tt(", then Basic — free")}</>
+                      : <>{tt("Renews automatically")}{" "}{niceDay(currentPeriodEnd)} · {billing === "annual" ? tt("yearly") : tt("monthly")}</>}
+                  {subscriptionStatus === "past_due" && tt(" · payment failed, we're retrying")}
                 </span>
               )}
             </div>
             <div className="pc-usage">
-              <span><strong>{subs.length}</strong> of {active.limit === Infinity ? "unlimited" : active.limit} contractors</span>
-              <span><strong>{seatCount}</strong> of {active.userLimit === Infinity ? "unlimited" : active.userLimit} user{active.userLimit === 1 ? "" : "s"}</span>
-              <span><strong>{jobsThisMonth}</strong> of {active.jobsPerMonth === Infinity ? "unlimited" : active.jobsPerMonth} job{active.jobsPerMonth === 1 ? "" : "s"} this month</span>
+              <span><strong>{subs.length}</strong>{" "}{tt("of")}{" "}{active.limit === Infinity ? tt("unlimited") : active.limit}{" "}{tt("contractors")}</span>
+              <span><strong>{seatCount}</strong>{" "}{tt("of")}{" "}{active.userLimit === Infinity ? tt("unlimited") : active.userLimit}{" "}{tt("user")}{active.userLimit === 1 ? "" : "s"}</span>
+              <span><strong>{jobsThisMonth}</strong>{" "}{tt("of")}{" "}{active.jobsPerMonth === Infinity ? tt("unlimited") : active.jobsPerMonth}{" "}{tt("job")}{active.jobsPerMonth === 1 ? "" : "s"}{" "}{tt("this month")}</span>
             </div>
           </div>
           {cancelAtPeriodEnd && plan === "scale" && (
             <div className="cancel-note">
               <AlertTriangle size={14} />
-              <span>
-                Moving to the free <b>Basic</b> plan on <b>{niceDay(currentPeriodEnd)}</b>. Everything on
-                Scale keeps working until then, and your account, contractors and job history stay
-                exactly as they are. Changed your mind? <b>Stay on Scale</b> below.
-              </span>
+              <span>{tt("Moving to the free")}{" "}<b>{"Basic"}</b>{" "}{tt("plan on")}{" "}<b>{niceDay(currentPeriodEnd)}</b>{tt(". Everything on Scale keeps working until then, and your account, contractors and job history stay exactly as they are. Changed your mind?")}{" "}<b>{tt("Stay on Scale")}</b>{" "}{tt("below.")}</span>
             </div>
           )}
 
@@ -24106,24 +24026,23 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <div className="cycle-row">
               <span className="cycle-note unit-monthly-only">
                 {liveYearly
-                  ? <>Your Scale year is paid through {niceDay(currentPeriodEnd)}.</>
-                  : <>Billed monthly: {unitUsd(MIN_MONTHLY_CENTS_UI)} a month, or {unitUsd(UNIT_PRICE_CENTS_UI)} per
-                    occupied unit once your buildings hold more than {UNIT_THRESHOLD} units.</>}
+                  ? <>{tt("Your Scale year is paid through")}{" "}{niceDay(currentPeriodEnd)}.</>
+                  : <>{tt("Billed monthly:")}{" "}{unitUsd(MIN_MONTHLY_CENTS_UI)}{" "}{tt("a month, or")}{" "}{unitUsd(UNIT_PRICE_CENTS_UI)}{" "}{tt("per occupied unit once your buildings hold more than")}{" "}{UNIT_THRESHOLD}{" "}{tt("units.")}</>}
               </span>
             </div>
           ) : (
           <div className="cycle-row">
-            <div className="cycle" role="tablist" aria-label="Billing cycle">
+            <div className="cycle" role="tablist" aria-label={tt("Billing cycle")}>
               {[["monthly", "Monthly"], ["annual", "Annual"]].map(([c, l]) => (
                 <button key={c} role="tab" aria-selected={billing === c}
                   onClick={() => onSetBilling(c)}>
-                  {l}{c === "annual" && <span className="cy-save">2 months free</span>}
+                  {tt(l)}{c === "annual" && <span className="cy-save">{tt("2 months free")}</span>}
                 </button>
               ))}
             </div>
             {billing === "annual" && (
               <span className="cycle-note">
-{formatDollars(PLANS.scale.annual)} a year on Scale, plus sales tax — saves {formatDollars(PLANS.scale.annualSaving)}
+{formatDollars(PLANS.scale.annual)}{" "}{tt("a year on Scale, plus sales tax — saves")}{" "}{formatDollars(PLANS.scale.annualSaving)}
               </span>
             )}
           </div>
@@ -24131,15 +24050,15 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           <div className="plan-grid">
             {Object.values(PLANS).map((pl) => (
               <div key={pl.id} className={`plan-card ${plan === pl.id ? "on" : ""}`}>
-                {plan === pl.id && <span className="plan-badge">Current</span>}
+                {plan === pl.id && <span className="plan-badge">{tt("Current")}</span>}
                 <span className="plan-name">{pl.name}</span>
-                {pl.tagline && <span className="plan-tag">{pl.tagline(planWords)}</span>}
+                {pl.tagline && <span className="plan-tag">{tt(pl.tagline(planWords))}</span>}
                 <div className="plan-price">
                   {pl.id === "scale" && unitKind && !liveYearly
-                    ? <>{unitUsd(scaleMonthCents)}<span>/mo</span></>
+                    ? <>{unitUsd(scaleMonthCents)}<span>{tt("/mo")}</span></>
                     : pl.annual && billing === "annual"
                     ? <>{pl.annualMonthly}<span>{pl.per}</span></>
-                    : <>{pl.price}<span>{pl.per}</span></>}
+                    : <>{tt(pl.price)}<span>{pl.per ? tt(pl.per) : ""}</span></>}
                 </div>
                 {pl.id === "scale" && perUnit && !liveYearly && (
                   <span className="plan-bill plan-unit-bill">
@@ -24157,20 +24076,20 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                         surprise. */}
                     {billing === "annual" && !(pl.id === "scale" && unitKind && !liveYearly)
                       ? `${formatDollars(pl.annual)} billed once a year, plus sales tax`
-                      : "Billed monthly, plus sales tax · cancel any time"}
+                      : tt("Billed monthly, plus sales tax · cancel any time")}
                   </span>
                 )}
-                {pl.bill && <span className="plan-bill">{pl.bill}</span>}
+                {pl.bill && <span className="plan-bill">{tt(pl.bill)}</span>}
                 <ul className="plan-feats">
                   {pl.features(planWords).map(([ft, note]) => (
-                    <li key={ft}><Check size={13} /><span><b>{ft}</b>{note && <> — {note}</>}</span></li>
+                    <li key={ft}><Check size={13} /><span><b>{tt(ft)}</b>{note && <> — {tt(note)}</>}</span></li>
                   ))}
                   {pl.id === "scale" && unitPriced(accountKind) && (
                     <li className="plan-unit-feat"><Check size={13} />
-                      <span><b>Over {UNIT_THRESHOLD} units</b> — {unitTermsText().perUnit.replace(/^Over \d+ units: /, "")}</span></li>
+                      <span><b>{tt("Over")}{" "}{UNIT_THRESHOLD}{" "}{tt("units")}</b> — {unitTermsText().perUnit.replace(/^Over \d+ units: /, "")}</span></li>
                   )}
                   {(pl.excluded || []).map(([ft, note]) => (
-                    <li key={ft} className="feat-off"><X size={13} /><span>{ft}{note && <> — {note}</>}</span></li>
+                    <li key={ft} className="feat-off"><X size={13} /><span>{tt(ft)}{note && <> — {tt(note)}</>}</span></li>
                   ))}
                 </ul>
                 {/* Each card's button is about that card's plan. The way
@@ -24178,51 +24097,42 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     here"), not on Basic -- putting it there read as though
                     Basic were the thing being kept. */}
                 {plan === pl.id && !(pl.id === "scale" && cancelAtPeriodEnd)
-                  ? <button className="btn-ghost plan-btn" disabled>Current plan</button>
+                  ? <button className="btn-ghost plan-btn" disabled>{tt("Current plan")}</button>
                   : pl.id === "scale"
                     ? cancelAtPeriodEnd
                       ? <button className="btn-solid plan-btn" disabled={cancelBusy}
                           onClick={onResumeSubscription}>
-                          {cancelBusy ? "Working…" : "Stay on Scale"}</button>
+                          {cancelBusy ? tt("Working…") : tt("Stay on Scale")}</button>
                       : <button className="btn-solid plan-btn" disabled={billingBusy}
                           onClick={() => onUpgrade()}>
-                          <Zap size={15} /> {billingBusy ? "Opening checkout…" : "Upgrade"}
+                          <Zap size={15} /> {billingBusy ? tt("Opening checkout…") : tt("Upgrade")}
                         </button>
                     // Moving to Basic happens here rather than in Stripe's
                     // portal, which is a hosted page with no embedded form.
                     : cancelAtPeriodEnd
-                      ? <button className="btn-ghost plan-btn" disabled>
-                          Starts {niceDay(currentPeriodEnd)}</button>
+                      ? <button className="btn-ghost plan-btn" disabled>{tt("Starts")}{" "}{niceDay(currentPeriodEnd)}</button>
                       : <button className="btn-ghost plan-btn" disabled={cancelBusy}
-                          onClick={() => setConfirmCancel(true)}>Switch to Basic</button>}
+                          onClick={() => setConfirmCancel(true)}>{tt("Switch to Basic")}</button>}
               </div>
             ))}
           </div>
           {confirmCancel && (
             <Modal onClose={() => setConfirmCancel(false)}>
               <div className="cancel-modal">
-                <h3>Switch to the free Basic plan?</h3>
+                <h3>{tt("Switch to the free Basic plan?")}</h3>
                 <p>
                   {currentPeriodEnd
-                    ? <>You keep everything on Scale until <b>{niceDay(currentPeriodEnd)}</b> — you have paid
-                        for that time and we are not taking it back. Nothing more is charged after that.</>
-                    : <>You keep everything on Scale until the end of the period you have paid for.
-                        Nothing more is charged after that.</>}
+                    ? <>{tt("You keep everything on Scale until")}{" "}<b>{niceDay(currentPeriodEnd)}</b>{" "}{tt("— you have paid for that time and we are not taking it back. Nothing more is charged after that.")}</>
+                    : <>{tt("You keep everything on Scale until the end of the period you have paid for. Nothing more is charged after that.")}</>}
                 </p>
                 <p className="cancel-after">
-                  <b>Your account stays open.</b> Your contractors, documents and job history are all
-                  kept — nothing is deleted. From that date Basic's limits apply: three subcontractors,
-                  one user, five jobs a month, and sign-in moves back to app.subsub.work. You can go
-                  back to Scale whenever you like.
-                </p>
+                  <b>{tt("Your account stays open.")}</b>{" "}{tt("Your contractors, documents and job history are all kept — nothing is deleted. From that date Basic's limits apply: three subcontractors, one user, five jobs a month, and sign-in moves back to app.subsub.work. You can go back to Scale whenever you like.")}</p>
                 {billingErr && <p className="pf-host-err">{billingErr}</p>}
                 <div className="form-actions">
-                  <button className="btn-ghost" onClick={() => setConfirmCancel(false)}>
-                    Stay on Scale
-                  </button>
+                  <button className="btn-ghost" onClick={() => setConfirmCancel(false)}>{tt("Stay on Scale")}</button>
                   <button className="btn-solid" disabled={cancelBusy}
                     onClick={async () => { await onCancelSubscription(); setConfirmCancel(false); }}>
-                    {cancelBusy ? "Switching…" : "Switch to Basic"}
+                    {cancelBusy ? tt("Switching…") : tt("Switch to Basic")}
                   </button>
                 </div>
               </div>
@@ -24231,24 +24141,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
           {plan === "scale" && (
             <div className="usage-panel">
-              <h4>Usage this month</h4>
+              <h4>{tt("Usage this month")}</h4>
               <div className="usage-rows">
-                <div className="wd-row"><span>Email notifications</span><strong>Included</strong></div>
+                <div className="wd-row"><span>{tt("Email notifications")}</span><strong>{tt("Included")}</strong></div>
                 {/* Texts are part of the plan now, not a per-message line.
                     It said "$0.02 each" over a footnote calling them billed
                     separately, which was the old price and the opposite of
                     the one on the pricing page. The count itself is on the
                     Text messages panel, read off the server. */}
-                <div className="wd-row"><span>Text messages</span><strong>{SMS_INCLUDED_SCALE.toLocaleString("en-US")} a month included</strong></div>
-                <div className="wd-row"><span>{planWords.Many} on account</span><strong>{subs.length}</strong></div>
-                <div className="wd-row"><span>User seats</span><strong>{seatCount} · unlimited</strong></div>
+                <div className="wd-row"><span>{tt("Text messages")}</span><strong>{SMS_INCLUDED_SCALE.toLocaleString("en-US")}{" "}{tt("a month included")}</strong></div>
+                <div className="wd-row"><span>{planWords.Many}{" "}{tt("on account")}</span><strong>{subs.length}</strong></div>
+                <div className="wd-row"><span>{tt("User seats")}</span><strong>{seatCount}{" "}{tt("· unlimited")}</strong></div>
               </div>
-              <p className="cov-hint">
-                Emails are included. Past {SMS_INCLUDED_SCALE.toLocaleString("en-US")} texts in a month they
-                keep going, at {formatDollars(SMS_BLOCK_PRICE_CENTS / 100)} for every
-                {" "}{SMS_BLOCK_MESSAGES.toLocaleString("en-US")} sent that month, charged on the 1st. You can
-                turn text messages off at any time, and emails still go out.
-              </p>
+              <p className="cov-hint">{tt("Emails are included. Past")}{" "}{SMS_INCLUDED_SCALE.toLocaleString("en-US")}{" "}{tt("texts in a month they keep going, at")}{" "}{formatDollars(SMS_BLOCK_PRICE_CENTS / 100)}{" "}{tt("for every")}{" "}{SMS_BLOCK_MESSAGES.toLocaleString("en-US")}{" "}{tt("sent that month, charged on the 1st. You can turn text messages off at any time, and emails still go out.")}</p>
             </div>
           )}
         </>
@@ -29424,7 +29329,7 @@ function QrFull({ code, onClose }) {
   };
 
   return createPortal(
-    <div className="qrf" role="dialog" aria-modal="true" aria-label="Your connect code">
+    <div className="qrf" role="dialog" aria-modal="true" aria-label={tt("Your connect code")}>
       <div className="qrf-box">
         <div className="qrf-code">
           <QrCode value={code.url} size={520} label={`Connect code ${code.code}`} />
@@ -29432,12 +29337,12 @@ function QrFull({ code, onClose }) {
         <span className="qrf-txt">{code.code}</span>
         <div className="qrf-acts">
           {canShare && (
-            <button className="qrf-btn solid" onClick={share}><Share2 size={15} /> Share</button>
+            <button className="qrf-btn solid" onClick={share}><Share2 size={15} />{" "}{tt("Share")}</button>
           )}
           <button className="qrf-btn" onClick={copy}>
-            <Copy size={15} /> {copied ? "Copied" : "Copy link"}
+            <Copy size={15} /> {copied ? tt("Copied") : tt("Copy link")}
           </button>
-          <button className="qrf-btn" ref={closeRef} onClick={onClose}><X size={15} /> Done</button>
+          <button className="qrf-btn" ref={closeRef} onClick={onClose}><X size={15} />{" "}{tt("Done")}</button>
         </div>
       </div>
     </div>,
@@ -29545,13 +29450,12 @@ function ConnectCode() {
   };
 
   if (err && !code) return <p className="cov-hint" role="alert">{err}</p>;
-  if (!code) return <p className="cov-hint">Loading…</p>;
+  if (!code) return <p className="cov-hint">{tt("Loading…")}</p>;
   if (pp && !pp.published) return (
     <div className="cx-code-pub">
-      <p className="cov-hint">Your code opens your SubSub Passport: your license, insurance, trades and work in one
-        page, where a GC can connect with you. Publish it and the code is ready to scan.</p>
+      <p className="cov-hint">{tt("Your code opens your SubSub Passport: your license, insurance, trades and work in one page, where a GC can connect with you. Publish it and the code is ready to scan.")}</p>
       <button className="btn-solid" disabled={!!busy} onClick={publish}>
-        <Globe size={14} /> {busy === "publish" ? "Publishing…" : "Publish my Passport"}</button>
+        <Globe size={14} /> {busy === "publish" ? tt("Publishing…") : tt("Publish my Passport")}</button>
       {err && <p className="cov-hint" role="alert">{err}</p>}
     </div>
   );
@@ -29561,9 +29465,9 @@ function ConnectCode() {
         {/* Same code, same place, same everything around it -- it is only
             that touching it now makes it big enough to actually scan. */}
         <button className="qrp-tap" onClick={() => setFull(true)}
-          title="Make it big enough to scan" aria-label="Show the code full screen">
+          title={tt("Make it big enough to scan")} aria-label={tt("Show the code full screen")}>
           <QrCode value={shown.url} label={pp?.published ? "QR code for your Passport" : `Connect code ${code.code}`} />
-          <span className="qrp-tap-hint"><Maximize2 size={12} /> Tap to scan</span>
+          <span className="qrp-tap-hint"><Maximize2 size={12} />{" "}{tt("Tap to scan")}</span>
         </button>
         {full && <QrFull code={shown} onClose={() => setFull(false)} />}
         <div className="cx-code-side">
@@ -29578,28 +29482,25 @@ function ConnectCode() {
               exception, so there is a way through without one: send
               them the link and it opens the same thing. */}
           <span className="cov-hint">{pp?.published
-            ? "It opens your Passport. A GC can read your documents and connect with you from there. Camera not cooperating? Send them the link."
-            : "Camera not cooperating? Send them this link instead — it opens the same request on their side."}</span>
+            ? tt("It opens your Passport. A GC can read your documents and connect with you from there. Camera not cooperating? Send them the link.")
+            : tt("Camera not cooperating? Send them this link instead — it opens the same request on their side.")}</span>
           <div className="cx-code-acts">
             <button className="pick" onClick={copy}>
-              <Copy size={13} /> {copied ? "Copied" : "Copy link"}
+              <Copy size={13} /> {copied ? tt("Copied") : tt("Copy link")}
             </button>
             {confirmRotate ? (
               <>
                 <button className="pick danger" disabled={!!busy} onClick={rotate}>
-                  {busy === "rotate" ? "Changing…" : "Yes, change it"}
+                  {busy === "rotate" ? tt("Changing…") : tt("Yes, change it")}
                 </button>
-                <button className="pick" onClick={() => setConfirmRotate(false)}>Keep it</button>
+                <button className="pick" onClick={() => setConfirmRotate(false)}>{tt("Keep it")}</button>
               </>
             ) : (
               <button className="pick" onClick={() => setConfirmRotate(true)}>
-                <RefreshCw size={13} /> Change code
-              </button>
+                <RefreshCw size={13} />{" "}{tt("Change code")}</button>
             )}
           </div>
-          {confirmRotate && <p className="cov-hint" role="status">
-            Anything already printed or sent with the old code stops working.
-            Nobody you are already connected to is affected.</p>}
+          {confirmRotate && <p className="cov-hint" role="status">{tt("Anything already printed or sent with the old code stops working. Nobody you are already connected to is affected.")}</p>}
         </div>
       </div>
       {err && <p className="cov-hint" role="alert">{err}</p>}
@@ -30578,7 +30479,7 @@ function PassportPanel() {
   }).catch((e) => setErr(e?.body?.migration || e?.body?.error === "migration_needed"
     ? `The Passport is not switched on yet. Migration ${e?.body?.migration || "077_passport"} needs pasting.`
     : e?.body?.error === "not_hireable" ? "Only a company that can be hired has a Passport."
-    : "Couldn't load your Passport. Try again in a moment.")), []);
+    : tt("Couldn't load your Passport. Try again in a moment."))), []);
   useEffect(() => { load(); }, [load]);
 
   if (err) return <div className="portal-panel"><p className="form-err">{err}</p></div>;
@@ -32977,23 +32878,16 @@ function StandardTermsPanel({ myName }) {
 
   return (
     <div className="portal-panel agr-terms">
-      <h4>Your subcontractor agreement</h4>
-      <p className="cx-sub">
-        The terms SubSub's agreement carries when you send one. You can change
-        them for a particular contractor before sending.
-      </p>
+      <h4>{tt("Your subcontractor agreement")}</h4>
+      <p className="cx-sub">{tt("The terms SubSub's agreement carries when you send one. You can change them for a particular contractor before sending.")}</p>
 
       <div className="agr-party">
-        <label>Your legal name
-          <input value={d.hiringParty?.name || ""} onChange={(e) => setParty("name", e.target.value)}
-            placeholder="As it should appear in a contract" /></label>
-        <label>Street
-          <input value={d.hiringParty?.street || ""} onChange={(e) => setParty("street", e.target.value)} /></label>
-        <label>City
-          <input value={d.hiringParty?.city || ""} onChange={(e) => setParty("city", e.target.value)} /></label>
-        <label>State
-          <select value={d.hiringParty?.state || ""} onChange={(e) => setParty("state", e.target.value)}>
-            <option value="">Select…</option>
+        <label>{tt("Your legal name")}<input value={d.hiringParty?.name || ""} onChange={(e) => setParty("name", e.target.value)}
+            placeholder={tt("As it should appear in a contract")} /></label>
+        <label>{tt("Street")}<input value={d.hiringParty?.street || ""} onChange={(e) => setParty("street", e.target.value)} /></label>
+        <label>{tt("City")}<input value={d.hiringParty?.city || ""} onChange={(e) => setParty("city", e.target.value)} /></label>
+        <label>{tt("State")}<select value={d.hiringParty?.state || ""} onChange={(e) => setParty("state", e.target.value)}>
+            <option value="">{tt("Select…")}</option>
             {US_STATES.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
           </select></label>
       </div>
@@ -33002,9 +32896,9 @@ function StandardTermsPanel({ myName }) {
 
       {err && <div className="form-err">{err}</div>}
       <div className="form-actions">
-        {saved && <span className="cx-sub">Saved.</span>}
+        {saved && <span className="cx-sub">{tt("Saved.")}</span>}
         <button className="btn-solid sm" type="button" disabled={busy} onClick={save}>
-          {busy ? "Saving…" : "Save terms"}
+          {busy ? tt("Saving…") : tt("Save terms")}
         </button>
       </div>
     </div>
@@ -34515,8 +34409,8 @@ function MyCoverage({ sub, onSave }) {
       <div className="panel-actions">
         <span className="panel-count">
           {mode === "cities"
-            ? `${cities.length} ${cities.length === 1 ? "city" : "cities"}`
-            : `${cleanRadii.length} radius ${cleanRadii.length === 1 ? "area" : "areas"}`}
+            ? tt(cities.length === 1 ? "{n} city" : "{n} cities", { n: cities.length })
+            : tt(cleanRadii.length === 1 ? "{n} radius area" : "{n} radius areas", { n: cleanRadii.length })}
         </span>
         {saved
           ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
@@ -34729,10 +34623,10 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
   const roleLocked = existing && !canChangeRole;
   return (
     <div className="form">
-      <h2>{isSelf ? "My account" : existing ? "Edit user" : "New user"}</h2>
+      <h2>{isSelf ? tt("My account") : existing ? tt("Edit user") : tt("New user")}</h2>
       <p className="form-sub">
-        {isSelf ? "Update your own name and email."
-          : existing ? "Change this user's details, role, or access."
+        {isSelf ? tt("Update your own name and email.")
+          : existing ? tt("Change this user's details, role, or access.")
           : `Admins manage users; ${roleLabelIn(accountKind, "pm").toLowerCase()}s do everything else.`}
       </p>
       {/* Only on an existing person: the picture is stored against a row,
@@ -34741,13 +34635,12 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
       {existing && onSetAvatar && (
         <AvatarPicker user={existing} onSave={(key) => onSetAvatar(existing.id, key)} />
       )}
-      <label className="fld">Full name<input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Jane Doe" /></label>
-      <label className="fld">Email<input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder="jane@company.com" /></label>
-      <div className="fld">Role
-        {roleLocked ? (
+      <label className="fld">{tt("Full name")}<input value={f.name} onChange={(e) => set("name", e.target.value)} placeholder={tt("Jane Doe")} /></label>
+      <label className="fld">{tt("Email")}<input value={f.email} onChange={(e) => set("email", e.target.value)} placeholder={tt("jane@company.com")} /></label>
+      <div className="fld">{tt("Role")}{roleLocked ? (
           <div className="role-locked">
             <span className={`role-badge r-${f.role}`}>{roleLabelIn(accountKind, f.role)}</span>
-            <span className="rl-note">{isSelf ? "You can't change your own role." : "Only an admin can change roles."}</span>
+            <span className="rl-note">{isSelf ? tt("You can't change your own role.") : tt("Only an admin can change roles.")}</span>
           </div>
         ) : (
           <div className="role-pick">
@@ -34755,12 +34648,12 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
               <button key={k} type="button" className={f.role === k ? "on" : ""} onClick={() => set("role", k)}>
                 <span className="rp-label">{roleLabelIn(accountKind, k)}</span>
                 <span className="rp-desc">
-                  {k === "admin" && "Full access, can manage users"}
+                  {k === "admin" && tt("Full access, can manage users")}
                   {k === "pm" && (properties.length > 0
-                    ? "Runs jobs and contractors — every building, or only the ones you pick"
-                    : "Create jobs & work orders, assign contractors")}
-                  {k === "owner" && "Only the buildings you choose — can request work, sees no costs"}
-                  {k === "contractor" && "Own availability, trades, docs, job responses"}
+                    ? tt("Runs jobs and contractors — every building, or only the ones you pick")
+                    : tt("Create jobs & work orders, assign contractors"))}
+                  {k === "owner" && tt("Only the buildings you choose — can request work, sees no costs")}
+                  {k === "contractor" && tt("Own availability, trades, docs, job responses")}
                 </span>
               </button>
             ))}
@@ -34768,7 +34661,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
         )}
       </div>
       {showBuildings && !roleLocked && (
-        <div className="fld">{f.role === "owner" ? "Buildings they can see" : "Buildings"}
+        <div className="fld">{f.role === "owner" ? tt("Buildings they can see") : tt("Buildings")}
           <div className="pick-grid">
             {properties.map((p) => (
               <button key={p.id} type="button"
@@ -34784,8 +34677,8 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           <p className="fld-note">
             {!f.propertyIds.length
               ? (mustScope
-                  ? "Pick at least one. A seat with none would sign in to an empty account."
-                  : "Leave them all unticked and they run every building on the account — which is what most managers should do. Tick some to assign them to just those.")
+                  ? tt("Pick at least one. A seat with none would sign in to an empty account.")
+                  : tt("Leave them all unticked and they run every building on the account — which is what most managers should do. Tick some to assign them to just those."))
               : f.role === "owner"
               ? `They will see ${f.propertyIds.length} of your ${properties.length} propert${properties.length === 1 ? "y" : "ies"}, the jobs at ${f.propertyIds.length === 1 ? "it" : "them"}, and who is coming. Not the others, not your other contractors, and no costs.`
               : `Assigned to ${f.propertyIds.length} of your ${properties.length} propert${properties.length === 1 ? "y" : "ies"} — they run the jobs at ${f.propertyIds.length === 1 ? "it" : "them"} and see nothing at the others. They cannot add or remove buildings, or change your billing and users.`}
@@ -34793,8 +34686,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
         </div>
       )}
       {scopeByJob && !roleLocked && (
-        <div className="fld">Jobs
-          <div className="pick-grid">
+        <div className="fld">{tt("Jobs")}<div className="pick-grid">
             {jobs.map((j) => (
               <button key={j.id} type="button"
                 className={`pick ${f.jobIds.includes(j.id) ? "on" : ""}`}
@@ -34805,27 +34697,26 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
           </div>
           <p className="fld-note">
             {!f.jobIds.length
-              ? "Leave them all unticked and they run every job on the account \u2014 which is what most project managers should do. Tick some to assign them to just those."
+              ? tt("Leave them all unticked and they run every job on the account — which is what most project managers should do. Tick some to assign them to just those.")
               : `Assigned to ${f.jobIds.length} of your ${jobs.length} job${jobs.length === 1 ? "" : "s"} \u2014 they run ${f.jobIds.length === 1 ? "it" : "them"} and see nothing on the others. A job they create is added to their list, so they do not lose what they just made.`}
           </p>
         </div>
       )}
       {f.role === "contractor" && !roleLocked && (
-        <label className="fld">Link to contractor record
-          <select value={f.subId} onChange={(e) => set("subId", Number(e.target.value))}>
-            <option value="">Select contractor…</option>
+        <label className="fld">{tt("Link to contractor record")}<select value={f.subId} onChange={(e) => set("subId", Number(e.target.value))}>
+            <option value="">{tt("Select contractor…")}</option>
             {subs.map((x) => <option key={x.id} value={x.id}>{x.company}</option>)}
           </select>
         </label>
       )}
       <div className="form-actions">
-        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-ghost" onClick={onCancel}>{tt("Cancel")}</button>
         <button className="btn-solid" onClick={() => onSubmit({
           ...f, subId: f.subId || undefined,
           propertyIds: showBuildings ? f.propertyIds : [],
           jobIds: scopeByJob ? f.jobIds : [],
         })} disabled={!valid}>
-          {existing ? <><Check size={15} /> Save changes</> : <><Plus size={15} /> Create user</>}
+          {existing ? <><Check size={15} />{" "}{tt("Save changes")}</> : <><Plus size={15} />{" "}{tt("Create user")}</>}
         </button>
       </div>
     </div>
@@ -36744,12 +36635,7 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
 
   const body = (
     <>
-      <p className="panel-note">
-        Hold this up and have them scan it. It opens your own sign up form, so
-        what they fill in lands straight on your {words?.many || "subcontractors"} list
-        — no email address spelled out on site, and nothing for you to type in
-        afterwards.
-      </p>
+      <p className="panel-note">{tt("Hold this up and have them scan it. It opens your own sign up form, so what they fill in lands straight on your")}{" "}{words?.many || tt("subcontractors")}{" "}{tt("list — no email address spelled out on site, and nothing for you to type in afterwards.")}</p>
       <div className="rq-wrap">
         <QrCode value={url} size={210} label={`Sign up form for ${accountName || "this account"}`} />
         <div className="rq-side">
@@ -36765,10 +36651,9 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
                   setCopied(true); setTimeout(() => setCopied(false), 2000);
                 } catch { /* a clipboard that refuses is not worth an error */ }
               }}>
-              {copied ? "Copied" : "Copy the link"}
+              {copied ? tt("Copied") : tt("Copy the link")}
             </button>
-            <a className="btn-ghost sm" href={url} target="_blank" rel="noreferrer">
-              Open it <ExternalLink size={12} />
+            <a className="btn-ghost sm" href={url} target="_blank" rel="noreferrer">{tt("Open it")}{" "}<ExternalLink size={12} />
             </a>
           </div>
           {/* Said rather than hidden. On Basic the code works and points at
@@ -36776,12 +36661,7 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
               deciding whether to put this on a van needs to know which. */}
           {!liveHost && (
             <span className="cx-sub rq-note">
-              <b>{subdomain}.subsub.work isn't live yet.</b> Until it is, this
-              code goes to your sign up form at a SubSub address — the form is
-              still yours, with your name, colors and mark on it, but the
-              address bar says SubSub. It switches to your own address on its
-              own once the hostname is ready.
-            </span>
+              <b>{subdomain}{tt(".subsub.work isn't live yet.")}</b>{" "}{tt("Until it is, this code goes to your sign up form at a SubSub address — the form is still yours, with your name, colors and mark on it, but the address bar says SubSub. It switches to your own address on its own once the hostname is ready.")}</span>
           )}
         </div>
       </div>
@@ -36791,7 +36671,7 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
   if (!asModal) {
     return (
       <div className="portal-panel rq-panel">
-        <h4><QrCodeIcon size={14} /> Recruiting code</h4>
+        <h4><QrCodeIcon size={14} />{" "}{tt("Recruiting code")}</h4>
         {body}
       </div>
     );
@@ -36799,7 +36679,7 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
   return (
     <Modal onClose={onClose} wide>
       <div className="form rq-modal">
-        <h2>Recruiting code</h2>
+        <h2>{tt("Recruiting code")}</h2>
         {body}
       </div>
     </Modal>
@@ -36847,20 +36727,19 @@ function EmbedCodeModal({ html, copied, onCopy, onClose }) {
   return (
     <Modal wide onClose={onClose}>
       <div className="form ecm">
-        <h2>The application form</h2>
-        <p className="up-sub">This is what the twelve lines draw on your website, and the
-          markup that draws it. Nothing here needs hosting or a plugin.</p>
+        <h2>{tt("The application form")}</h2>
+        <p className="up-sub">{tt("This is what the twelve lines draw on your website, and the markup that draws it. Nothing here needs hosting or a plugin.")}</p>
         <div className="ecm-tabs" role="tablist">
           <button role="tab" aria-selected={view === "form"} className={view === "form" ? "on" : ""}
-            onClick={() => setView("form")}><Eye size={13} /> The form</button>
+            onClick={() => setView("form")}><Eye size={13} />{" "}{tt("The form")}</button>
           <button role="tab" aria-selected={view === "code"} className={view === "code" ? "on" : ""}
-            onClick={() => setView("code")}><Code2 size={13} /> The code</button>
+            onClick={() => setView("code")}><Code2 size={13} />{" "}{tt("The code")}</button>
           <button className="btn-solid sm ecm-copy" onClick={onCopy}>
-            {copied ? "Copied" : "Copy the code"}
+            {copied ? tt("Copied") : tt("Copy the code")}
           </button>
         </div>
         {view === "form" ? (
-          <iframe className="ecm-prev" title="What the application form looks like"
+          <iframe className="ecm-prev" title={tt("What the application form looks like")}
             sandbox="allow-scripts" srcDoc={`<!doctype html><meta charset="utf-8">
               <body style="margin:16px;font:15px/1.5 system-ui,sans-serif;color:#16241d">
               ${html}`} />
@@ -36900,8 +36779,8 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
       <button className="embed-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <Globe size={14} />
         <span className="embed-h">
-          <b>Let contractors apply from your own website</b>
-          <em>A form you paste into your site. They land straight on your roster.</em>
+          <b>{tt("Let contractors apply from your own website")}</b>
+          <em>{tt("A form you paste into your site. They land straight on your roster.")}</em>
         </span>
         <ChevronDown size={14} className={`um-caret ${open ? "up" : ""}`} />
       </button>
@@ -36913,33 +36792,29 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
               <div className="embed-opt-h">
                 <span className="embed-n">1</span>
                 <div>
-                  <b>Just a link</b>
-                  <em>For an email, a bid invitation, or a button on your site.</em>
+                  <b>{tt("Just a link")}</b>
+                  <em>{tt("For an email, a bid invitation, or a button on your site.")}</em>
                 </div>
                 <button className="btn-ghost sm" onClick={() => copy("link", link)}>
-                  {copied === "link" ? "Copied" : "Copy link"}
+                  {copied === "link" ? tt("Copied") : tt("Copy link")}
                 </button>
               </div>
               <code className="embed-link">{link}</code>
             </div>
           ) : (
-            <p className="embed-note">
-              The pasted form below works now. The shareable link at{" "}
-              <b>{subdomain}.subsub.work</b> needs your own sign-in address, which
-              comes with Scale.
-            </p>
+            <p className="embed-note">{tt("The pasted form below works now. The shareable link at")}{" "}
+              <b>{subdomain}{".subsub.work"}</b>{" "}{tt("needs your own sign-in address, which comes with Scale.")}</p>
           )}
 
           <div className="embed-opt">
             <div className="embed-opt-h">
               <span className="embed-n">2</span>
               <div>
-                <b>The form itself</b>
-                <em>Paste it where you want it. No plugins, nothing to host,
-                  and it styles itself to your page.</em>
+                <b>{tt("The form itself")}</b>
+                <em>{tt("Paste it where you want it. No plugins, nothing to host, and it styles itself to your page.")}</em>
               </div>
               <button className="btn-solid sm" onClick={() => copy("html", html)}>
-                {copied === "html" ? "Copied" : "Copy the code"}
+                {copied === "html" ? tt("Copied") : tt("Copy the code")}
               </button>
               {/* No code icon here. The same markup is one tap from the Sign
                   up form preview above, where somebody is standing when they
@@ -36953,8 +36828,7 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
                 code is one tap away, beside the form it is a copy OF rather
                 than at the bottom of the page. */}
             {copied === "no" && (
-              <p className="embed-note">Your browser wouldn&rsquo;t let us copy that.
-                Open the code and copy it by hand.</p>
+              <p className="embed-note">{tt("Your browser wouldn’t let us copy that. Open the code and copy it by hand.")}</p>
             )}
           </div>
           {preview && <EmbedCodeModal html={html} copied={copied === "html"}
@@ -36967,18 +36841,10 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
               would be lying by omission. */}
           <p className="embed-note">
             {themed
-              ? <>The button and the focus ring use <b>your branding colors</b>. This is a
-                  copy, so if you change them, paste the form again &mdash; what is already on
-                  your site keeps the colors it was copied with.</>
-              : <>The button uses SubSub&rsquo;s green. Your own colors come with Scale, and
-                  the form works exactly the same either way.</>}
+              ? <>{tt("The button and the focus ring use")}{" "}<b>{tt("your branding colors")}</b>{tt(". This is a copy, so if you change them, paste the form again — what is already on your site keeps the colors it was copied with.")}</>
+              : <>{tt("The button uses SubSub’s green. Your own colors come with Scale, and the form works exactly the same either way.")}</>}
           </p>
-          <p className="embed-note">
-            Applications arrive under <b>Asked to connect</b> on the {words.Many}{" "}
-            screen. Nobody is
-            added to your roster until you say so, and the form never asks for a
-            password &mdash; whoever applies sets that themselves from the email.
-          </p>
+          <p className="embed-note">{tt("Applications arrive under")}{" "}<b>{tt("Asked to connect")}</b>{" "}{tt("on the")}{" "}{words.Many}{" "}{tt("screen. Nobody is added to your roster until you say so, and the form never asks for a password — whoever applies sets that themselves from the email.")}</p>
         </div>
       )}
     </section>

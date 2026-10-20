@@ -130,6 +130,33 @@ try {
   t.ck("the nav is in Spanish", nav.includes("Mis trabajos") && nav.includes("Inicio"), JSON.stringify(nav));
   t.ck("the page says lang=es", await page.evaluate(() => document.documentElement.lang) === "es");
   t.ck("the setting's own heading is Spanish", /Idioma/i.test(await page.evaluate(() => document.querySelector(".ss-main")?.innerText || "")));
+  // MY ACCOUNT IS SPANISH TOO, not only the Settings tab. Reported as "Spanish
+  // converts only limited, many still English in my account": the heading, the
+  // tab names and every panel behind them were English.
+  const acct = await page.evaluate(() => ({
+    h1: document.querySelector(".ss-main h1, .ss-main .page-head h1, .ss-main h2")?.innerText.trim(),
+    tabs: [...document.querySelectorAll(".ss-main .seg-tabs button")].map((b) => b.innerText.trim()),
+  }));
+  t.ck("My account is headed in Spanish", /Mi cuenta/.test(acct.h1 || ""), JSON.stringify(acct));
+  t.ck("its tabs are Spanish", ["Perfil", "Configuración", "Empresa", "Pasaporte", "Usuarios", "Suscripción"]
+    .every((x) => acct.tabs.includes(x)) && acct.tabs.includes("Paquete de cumplimiento"), JSON.stringify(acct.tabs));
+  t.ck("and no English tab is left", !acct.tabs.some((x) => /^(Profile|Settings|Company|Branding|Compliance pack|Passport|Users|Subscription)$/.test(x)),
+    JSON.stringify(acct.tabs));
+  const tabText = async (label) => {
+    await page.evaluate((l) => [...document.querySelectorAll(".ss-main .seg-tabs button")]
+      .find((b) => b.innerText.trim() === l)?.click(), label);
+    await wait(500);
+    return page.evaluate(() => document.querySelector("main")?.innerText || document.body.innerText);
+  };
+  const prof = await tabText("Perfil");
+  t.ck("the Profile tab is Spanish", /Sus datos/i.test(prof) && /Guardar datos/.test(prof) && !/Your details|Save details|Add a picture|Copy link|Subcontractor \(admin\)/.test(prof),
+    prof.slice(0, 1500).replace(/\n/g, " | "));
+  if (process.env.DUMP) for (const l of ["Empresa", "Marca", "Paquete de cumplimiento", "Pasaporte", "Usuarios", "Suscripción"]) {
+    console.log("=== " + l + "\n" + (await tabText(l)).replace(/\n+/g, " | "));
+  }
+  const sub = await tabText("Suscripción");
+  t.ck("the Subscription tab is Spanish", sub.length > 40 && /Plan actual|Uso este mes/.test(sub) && !/Current plan|Usage this month/.test(sub),
+    sub.slice(0, 400));
   t.ck("My Jobs is reachable by its Spanish name", await goJobs(page, "^Mis trabajos"));
   await wait(900);
   const body = await page.evaluate(() => document.body.innerText);
