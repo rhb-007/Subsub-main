@@ -175,6 +175,13 @@ try {
     await wait(350);
     box = await overrideBox(page);
     t.ck("it opens", box?.open === true);
+    // THE FIELDS ARE FULL SIZE. TermFields is the same grid Account -> Company
+    // draws, and its inputs were bare browser boxes there: short, small type.
+    // Measured, because only the computed box knows whether the rule fired.
+    const sizes = await page.evaluate(() => [...document.querySelectorAll(".agr-over .agr-in input")]
+      .map((i) => ({ h: Math.round(i.getBoundingClientRect().height), f: parseFloat(getComputedStyle(i).fontSize) })));
+    t.ck("the term inputs are at least 44px tall at 15px type",
+      sizes.length > 0 && sizes.every((s) => s.h >= 44 && s.f >= 15), JSON.stringify(sizes.slice(0, 4)));
     t.ck("the warranty is one of the fields, at three years",
       box?.fields.some((f) => /Warranty on the work/i.test(f.label) && f.value === "36"),
       JSON.stringify(box?.fields.filter((f) => /warranty/i.test(f.label))));
