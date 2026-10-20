@@ -586,5 +586,12 @@ export default {
   "Job request awaiting you": "Solicitud de trabajo lo espera",
   "Job requests awaiting you": "Solicitudes de trabajo lo esperan",
   "{n} day off": "{n} día libre",
-  "{n} days off": "{n} días libres"
+  "{n} days off": "{n} días libres",
+  "Add a document to your compliance pack and you can send it from here.": "Agregue un documento a su paquete de cumplimiento y podrá enviarlo desde aquí.",
+  "Add a document": "Agregar un documento",
+  "Recruiting QR": "QR de reclutamiento",
+  "for subcontractors": "para subcontratistas",
+  "Remembered on this device. System follows your device's own setting.": "Se recuerda en este dispositivo. Sistema sigue la configuración de su dispositivo.",
+  "Remembered on this device.": "Se recuerda en este dispositivo.",
+  "Have a subcontractor scan this. It opens your sign up form, and what they fill in lands on your list.": "Pida a un subcontratista que escanee esto. Abre su formulario de registro y lo que llenen llega a su lista."
 };

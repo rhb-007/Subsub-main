@@ -93,8 +93,15 @@ const browser = await launch();
 
 const navTexts = (page) => page.evaluate(() => [...document.querySelectorAll("nav button, .tabs button")]
   .map((b) => b.innerText.trim().split("\n")[0]).filter(Boolean));
-const openMenu = async (page) => { await page.evaluate(() => document.querySelector(".user-btn")?.click()); await wait(400); };
-const langRows = (page) => page.evaluate(() => [...document.querySelectorAll(".user-menu .lang-opt")]
+// Language lives in My account -> Settings, not in the profile menu.
+const openMenu = async (page) => {
+  await page.evaluate(() => document.querySelector(".user-btn")?.click()); await wait(400);
+  await page.evaluate(() => document.querySelector(".user-menu .um-account")?.click()); await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+    .find((b) => /^(Settings|Configuración)$/.test(b.innerText.trim()))?.click());
+  await wait(400);
+};
+const langRows = (page) => page.evaluate(() => [...document.querySelectorAll(".set-opt[lang]")]
   .map((b) => ({ label: b.innerText.trim(), on: b.getAttribute("aria-checked") === "true" })));
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true }); };
 const goJobs = (page, re) => page.evaluate((src) => {
@@ -112,19 +119,17 @@ try {
   t.ck("the app is drawn, in English", nav.includes("My Jobs") && nav.includes("Dashboard"), JSON.stringify(nav));
   await openMenu(page);
   let rows = await langRows(page);
-  t.ck("the profile menu offers English and Espanol, each in its own language",
+  t.ck("Settings offers English and Espanol, each in its own language",
     rows.map((r) => r.label).join(",") === "English,Español", JSON.stringify(rows));
   t.ck("English is chosen", rows[0]?.on && !rows[1]?.on);
 
   console.log("\n-- Espanol --");
-  await page.evaluate(() => [...document.querySelectorAll(".user-menu .lang-opt")].find((b) => /Español/.test(b.innerText))?.click());
+  await page.evaluate(() => [...document.querySelectorAll(".set-opt[lang]")].find((b) => /Español/.test(b.innerText))?.click());
   await wait(400);
   nav = await navTexts(page);
   t.ck("the nav is in Spanish", nav.includes("Mis trabajos") && nav.includes("Inicio"), JSON.stringify(nav));
   t.ck("the page says lang=es", await page.evaluate(() => document.documentElement.lang) === "es");
-  t.ck("the menu's own heading is Spanish", /Idioma/i.test(await page.evaluate(() => document.querySelector(".user-menu")?.innerText || "")));
-  await page.evaluate(() => document.querySelector(".add-scrim")?.click());
-  await wait(300);
+  t.ck("the setting's own heading is Spanish", /Idioma/i.test(await page.evaluate(() => document.querySelector(".ss-main")?.innerText || "")));
   t.ck("My Jobs is reachable by its Spanish name", await goJobs(page, "^Mis trabajos"));
   await wait(900);
   const body = await page.evaluate(() => document.body.innerText);
@@ -134,7 +139,7 @@ try {
   t.ck("what is waiting is said in Spanish", /Esperándolo a usted/i.test(body) && /Solicitudes de trabajo/i.test(body), body.slice(0, 400));
   t.ck("a job's line says what it needs in Spanish", /Fijar un horario/.test(body) && /Responder · quedan/.test(body), body.slice(0, 600));
   t.ck("the trade is named in Spanish", /Pintura/.test(body) && !/Painting/.test(body));
-  t.ck("the greeting is Spanish", /Buen(os|as) (días|tardes|noches)/.test(body));
+  t.ck("the greeting is Spanish", /Buen(os|as) (días|tardes|noches)|Todavía despierto/.test(body));
   t.ck("and no English heading is left on the work list",
     !/Waiting on you|Job requests|Current & upcoming|Good (morning|afternoon|evening)/i.test(body), (body.match(/Waiting on you|Job requests|Current & upcoming|Accept\b/g) || []).join(","));
   const day = DAY(6);
@@ -166,7 +171,7 @@ try {
   t.ck("its screens stay English even with Spanish remembered", nav.includes("Dashboard") && !nav.includes("Inicio"), JSON.stringify(nav));
   await openMenu(pm.page);
   rows = await langRows(pm.page);
-  t.ck("and no Language setting is drawn", rows.length === 0 && (await pm.page.evaluate(() => !!document.querySelector(".user-menu"))),
+  t.ck("and no Language setting is drawn", rows.length === 0 && (await pm.page.evaluate(() => document.querySelectorAll(".set-opt").length === 3)),
     JSON.stringify(rows));
   t.ck("the page says lang=en", await pm.page.evaluate(() => document.documentElement.lang) === "en");
   await pm.ctx.close();

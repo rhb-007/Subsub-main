@@ -96,12 +96,15 @@ try {
     const items = await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
       .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
     t.ck("the QR code is in the menu", items.some((i) => /My Passport QR/.test(i)), JSON.stringify(items));
-    t.ck("and sending documents is right beside it",
-      items.some((i) => /Quick send/.test(i)), JSON.stringify(items));
-
+    // Quick send rides INSIDE the Passport QR: opening the code reveals it,
+    // rather than it being a second row to find.
+    t.ck("Quick send is not a second row of its own",
+      !items.some((i) => /Quick send/.test(i)), JSON.stringify(items));
     await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
-      .find((b) => /Quick send/.test(b.innerText))?.click());
+      .find((b) => /My Passport QR/.test(b.innerText))?.click());
     await wait(500);
+    t.ck("opening the Passport QR reveals Quick send under it",
+      await page.evaluate(() => /Quick send/.test(document.querySelector(".user-menu .qr-qsend")?.innerText || "")));
 
     const peek = await page.evaluate(() => {
       const el = document.querySelector(".qsend-peek");
@@ -158,10 +161,16 @@ try {
     const { ctx, page, crashes } = await openMenu();
     const items = await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
       .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
-    t.ck("sending is not offered", !items.some((i) => /Quick send/.test(i)),
+    t.ck("the QR code is still offered", items.some((i) => /My Passport QR/.test(i)),
       JSON.stringify(items));
-    t.ck("but the QR code still is", items.some((i) => /My Passport QR/.test(i)),
-      JSON.stringify(items));
+    await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
+      .find((b) => /My Passport QR/.test(b.innerText))?.click());
+    await wait(500);
+    const qs = await page.evaluate(() => {
+      const el = document.querySelector(".user-menu .qr-qsend");
+      return el ? { inputs: el.querySelectorAll("input").length, go: !!el.querySelector(".qr-qsend-go") } : null; });
+    t.ck("sending is not offered, and it says where to add a document",
+      qs && qs.inputs === 0 && qs.go, JSON.stringify(qs));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
     SUB = { ...SUB, insurance: true, bond: true, contract: true, w9: true };
@@ -174,10 +183,11 @@ try {
     SUB = { ...SUB, insurance: true, bond: false, contract: false, w9: false,
       docReview: { insurance: { status: "rejected" } } };
     const { ctx, page, crashes } = await openMenu();
-    const items = await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
-      .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
+    await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
+      .find((b) => /My Passport QR/.test(b.innerText))?.click());
+    await wait(500);
     t.ck("one document on file is enough to offer it",
-      items.some((i) => /Quick send/.test(i)), JSON.stringify(items));
+      await page.evaluate(() => !!document.querySelector(".user-menu .qr-qsend .qsend-row input")));
     t.ck("even unverified", true);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
@@ -189,7 +199,7 @@ try {
     FAIL_WITH = { status: 429, body: { error: "rate_limited" } };
     const { ctx, page, crashes } = await openMenu();
     await page.evaluate(() => [...document.querySelectorAll(".user-menu .um-qr")]
-      .find((b) => /Quick send/.test(b.innerText))?.click());
+      .find((b) => /My Passport QR/.test(b.innerText))?.click());
     await wait(500);
     await page.evaluate(() => {
       const el = document.querySelector(".qsend-row input");

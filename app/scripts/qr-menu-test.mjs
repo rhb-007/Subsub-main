@@ -301,8 +301,11 @@ try {
       !items.some((x) => /My Passport QR/i.test(x)), items.join(" | "));
     t.ck("and nothing went looking for one",
       !api.calls.includes("/api/connect/code"), api.calls.join(" "));
+    // A hiring account on Scale has a drawer copy of the RECRUITING code;
+    // what must not be there is the Passport QR.
     t.ck("nor is the phone's copy in the markup",
-      (await page.$(".drawer-qr")) === null);
+      await page.evaluate(() => ![...document.querySelectorAll(".drawer-qr")]
+        .some((d) => /Passport QR/.test(d.textContent))));
     t.ck("My account is still there", items.some((x) => /My account/i.test(x)), items.join(" | "));
     await ctx.close();
     kind = "general_contractor";

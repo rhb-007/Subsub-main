@@ -4037,6 +4037,46 @@ export default function SubSub() {
   const packSource = role === "contractor" ? mySub : myCompany?.docs;
   const packOnFile = !!packSource && PACK_KINDS.some((k) => packSource[k]);
   const canQuickSend = canShowQr && packOnFile;
+  // What the Passport QR reveals under the code: Quick send, or -- with
+  // nothing on file yet -- the one place to put something on file. A
+  // disclosure that opened onto nothing about sending would leave somebody
+  // hunting for the send they came to the menu for.
+  const goPackDocs = () => {
+    setUserMenu(false); setMobileNav(false);
+    if (role === "contractor") { setPane("docs"); setTab("portal"); }
+    else { setTab("account"); setOpenPane({ pane: "docs", focus: "docs", n: Date.now() }); }
+  };
+  const passQuickSend = canShowQr ? (
+    <div className="qr-qsend">
+      <div className="qr-qsend-head"><Send size={13} /> {tt("Quick send")}</div>
+      {canQuickSend ? <QuickSend inline /> : (
+        <p className="qrp-note">
+          {tt("Add a document to your compliance pack and you can send it from here.")}{" "}
+          <button type="button" className="qr-qsend-go" onClick={goPackDocs}>{tt("Add a document")}</button>
+        </p>
+      )}
+    </div>
+  ) : null;
+  // THE RECRUITING CODE, for the hiring side, directly under the Passport QR.
+  // The Passport QR says "here is who I am"; this one says "come and work for
+  // us". Scale-only, the gate the Add flow's own copy of it already has.
+  const [recruitOpen, setRecruitOpen] = useState(false);
+  const canRecruit = (role === "admin" || role === "pm") && isHiring(account)
+    && !!PLANS[account.plan]?.branding && !!account.subdomain && account.subdomain !== "app";
+  const recruitBlock = canRecruit ? (
+    <>
+      <button className="um-qr" onClick={(e) => { e.stopPropagation(); setRecruitOpen((v) => !v); }}
+        aria-expanded={recruitOpen}>
+        <QrCodeIcon size={14} /> {tt("Recruiting QR")}
+        <span className="um-qr-sub">{tt("for subcontractors")}</span>
+        <ChevronDown size={13} className={`um-caret ${recruitOpen ? "up" : ""}`} />
+      </button>
+      {recruitOpen && (
+        <RecruitQr peek subdomain={account.subdomain} accountName={account.name}
+          words={rosterWords(account)} liveHost={account.hostnameStatus === "active"} />
+      )}
+    </>
+  ) : null;
 
   // Your own picture. The roster is re-read rather than patched locally,
   // because hasAvatar is what every circle on the page reads to decide
@@ -6090,24 +6130,14 @@ export default function SubSub() {
                           <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
                         </button>
                         {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
+                        {qrOpen && passQuickSend}
                       </>
                     )}
-                    {canQuickSend && <QuickSend />}
+                    {recruitBlock}
                     {can("tenant") && <div className="um-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> {tt("My account")}
                     </button>
-                    <ThemePicker ctl={themeCtl} />
-                    {langEligible && <LangPicker ctl={langCtl} />}
-                    {brand.subdomain && brand.subdomain !== "app" && (
-                      <>
-                        <div className="um-sec">Your sign-in address</div>
-                        <a className="um-link" href={`https://${portalUrl(brand)}/`} target="_blank" rel="noreferrer"
-                          onClick={() => setUserMenu(false)}>
-                          <Globe size={13} /> <span>{portalUrl(brand)}</span>
-                        </a>
-                      </>
-                    )}
                     {myMemberships.length > 1 && (
                       <>
                         <div className="um-sec">Switch account</div>
@@ -6175,11 +6205,6 @@ export default function SubSub() {
                 here it only cost the role the room to be read. */}
             <span className="drawer-user-txt"><b>{me.name}</b><span>{roleLabel}</span></span>
           </div>
-          {brand.subdomain && brand.subdomain !== "app" && (
-            <a className="drawer-addr" href={`https://${portalUrl(brand)}/`} target="_blank" rel="noreferrer">
-              <Globe size={13} /> <span>{portalUrl(brand)}</span>
-            </a>
-          )}
           {/* The phone is where this matters most, and the phone is the one
               that gets this drawer rather than the menu above.
 
@@ -6194,15 +6219,15 @@ export default function SubSub() {
                 <ChevronDown size={13} className={`um-caret ${qrOpen ? "up" : ""}`} />
               </button>
               {qrOpen && <QrPeek code={qrCode} err={qrErr} onRetry={loadQr} />}
+              {/* Quick send rides inside the Passport QR, because both are the
+                  same gesture: give somebody your details without a
+                  conversation. stopPropagation on the wrapper keeps the drawer
+                  open while somebody types an address into it. */}
+              {qrOpen && passQuickSend}
             </div>
           )}
-          {/* Same reason the QR block stops propagation: every button in the
-              drawer closes it, which is right for a nav item and wrong for a
-              form somebody is typing into. */}
-          {canQuickSend && (
-            <div className="drawer-qr" onClick={(e) => e.stopPropagation()}>
-              <QuickSend />
-            </div>
+          {recruitBlock && (
+            <div className="drawer-qr" onClick={(e) => e.stopPropagation()}>{recruitBlock}</div>
           )}
           {/* A tenant's two jobs, as two links: see what you've reported,
               and report something. Without them the nav was empty and the
@@ -6384,8 +6409,6 @@ export default function SubSub() {
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
-            <ThemePicker ctl={themeCtl} drawer />
-            {langEligible && <LangPicker ctl={langCtl} drawer />}
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
                 it. "Switch to Cascade Management" on its own reads as taking
                 the place over -- which is the opposite of the truth when the
@@ -7767,7 +7790,8 @@ export default function SubSub() {
           is what made the embed panel invisible to every Basic account while
           the nudge email told them it existed. */}
       {tab === "account" && (
-        <AccountView me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
+        <AccountView themeCtl={themeCtl} langCtl={langCtl} langEligible={langEligible}
+          me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
           properties={accountProperties}
           seatCount={seatCount} atSeatLimit={atSeatLimit}
           jobsThisMonth={jobsThisMonth} canBrand={canBrand}
@@ -22976,7 +23000,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   autoTurnaround = false, onSetAutoTurnaround,
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
   added = null, onDismissAdded, openPane = null,
-  payoutsLanded = false, onPayoutsHandled }) {
+  payoutsLanded = false, onPayoutsHandled,
+  themeCtl = null, langCtl = null, langEligible = false }) {
   // Only set when the in-app card form could not be drawn at all.
   const [billingFellBack, setBillingFellBack] = useState(false);
   // accountKind is already a prop; the user form needs it to know which
@@ -23002,8 +23027,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // who to call if they cannot be. The last two used to sit at the foot of
   // Tenant HQ and were moved here on request.
   const panes = role === "tenant"
-    ? [["profile", "Profile"], ["reach", "How we reach you"], ["emergency", "Emergency contact"]]
-    : [["profile", "Profile"]]
+    ? [["profile", "Profile"], ["reach", "How we reach you"], ["emergency", "Emergency contact"], ["settings", "Settings"]]
+    : [["profile", "Profile"], ["settings", "Settings"]]
     .concat(canManage ? [["company", "Company"]] : [])
     .concat(canManage ? [["branding", "Branding"]] : [])
     // Only an account that can be hired has paperwork of its own to keep.
@@ -23212,6 +23237,92 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         </div>
       )}
 
+      {/* SETTINGS: how the app behaves for this person, on this device or
+          for their own notices. It was three menus in the profile drop-down
+          (theme, language) and a panel on Profile (notifications), which made
+          the menu the longest thing on a phone. One tab, one place to look. */}
+      {pane === "settings" && (
+        <>
+          {themeCtl && (
+            <div className="portal-panel settings-panel">
+              <h4>{tt("Theme")}</h4>
+              <p className="panel-note">{tt("Remembered on this device. System follows your device's own setting.")}</p>
+              <div className="set-opts" role="radiogroup" aria-label={tt("Theme")}>
+                {THEME_ROWS.map(({ id, label, icon: Icon }) => (
+                  <button key={id} type="button" role="radio" aria-checked={themeCtl.pref === id}
+                    className={`set-opt${themeCtl.pref === id ? " on" : ""}`} onClick={() => themeCtl.setPref(id)}>
+                    <Icon size={16} /> <span>{tt(label)}</span>
+                    {themeCtl.pref === id && <Check size={15} className="set-tick" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {langCtl && langEligible && (
+            <div className="portal-panel settings-panel">
+              <h4>{tt("Language")}</h4>
+              <p className="panel-note">{tt("Remembered on this device.")}</p>
+              <div className="set-opts" role="radiogroup" aria-label={tt("Language")}>
+                {LANG_ROWS.map(({ id, label }) => (
+                  <button key={id} type="button" role="radio" aria-checked={langCtl.lang === id} lang={id}
+                    className={`set-opt${langCtl.lang === id ? " on" : ""}`} onClick={() => langCtl.setLang(id)}>
+                    <Languages size={16} /> <span>{label}</span>
+                    {langCtl.lang === id && <Check size={15} className="set-tick" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {mySub && (
+            <div className="portal-panel settings-panel">
+              <h4>Notifications</h4>
+              <p className="panel-note">How you hear about job requests, work orders, and document reminders. Pick at least one.</p>
+              <div className="notify-opts">
+                <label className={`notify-opt ${nf.email ? "on" : ""}`}>
+                  <input type="checkbox" checked={nf.email}
+                    onChange={(e) => { setNf({ ...nf, email: e.target.checked }); setNSaved(false); }} />
+                  <Mail size={17} />
+                  <span className="no-txt">
+                    <span className="no-name">Email</span>
+                    <span className="no-sub">{mySub.email || "no email on file"}</span>
+                  </span>
+                </label>
+                <label className={`notify-opt ${nf.sms ? "on" : ""}`}>
+                  <input type="checkbox" checked={nf.sms}
+                    onChange={(e) => { setNf({ ...nf, sms: e.target.checked }); setNSaved(false); }} />
+                  <Phone size={17} />
+                  <span className="no-txt">
+                    <span className="no-name">Text message (SMS)</span>
+                    <span className="no-sub">{mySub.phone || "no phone on file"}</span>
+                  </span>
+                </label>
+              </div>
+              {!nf.email && !nf.sms && (
+                <div className="doc-block" style={{ marginTop: 12, marginBottom: 0 }}>
+                  <AlertTriangle size={15} />
+                  <div><strong>Pick at least one.</strong> You'd miss job requests and document reminders with both switched off.</div>
+                </div>
+              )}
+              <p className="cov-hint">Email &amp; SMS is for automated notifications only — nobody can message you from the platform, and these are no-reply.</p>
+              <div className="panel-actions">
+                <span className="panel-count">
+                  {nf.email && nf.sms ? "Email + SMS" : nf.sms ? "SMS only" : nf.email ? "Email only" : "None selected"}
+                </span>
+                {nSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
+                  : <button className="btn-solid" disabled={!nf.email && !nf.sms}
+                      onClick={() => { onPatchSub(mySub.id, { notify: nf }); setNSaved(true); }}>
+                      <Check size={15} /> Save notifications</button>}
+              </div>
+            </div>
+          )}
+
+          {role === "tenant" && (
+            <p className="panel-note">Your notifications are on <button type="button" className="qr-qsend-go"
+              onClick={() => setPane("reach")}>How we reach you</button>.</p>
+          )}
+        </>
+      )}
+
       {pane === "profile" && (
         <>
           <div className="portal-panel settings-panel">
@@ -23272,49 +23383,6 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     <Check size={15} /> Save details</button>}
             </div>
           </div>
-
-          {mySub && (
-            <div className="portal-panel settings-panel">
-              <h4>Notifications</h4>
-              <p className="panel-note">How you hear about job requests, work orders, and document reminders. Pick at least one.</p>
-              <div className="notify-opts">
-                <label className={`notify-opt ${nf.email ? "on" : ""}`}>
-                  <input type="checkbox" checked={nf.email}
-                    onChange={(e) => { setNf({ ...nf, email: e.target.checked }); setNSaved(false); }} />
-                  <Mail size={17} />
-                  <span className="no-txt">
-                    <span className="no-name">Email</span>
-                    <span className="no-sub">{mySub.email || "no email on file"}</span>
-                  </span>
-                </label>
-                <label className={`notify-opt ${nf.sms ? "on" : ""}`}>
-                  <input type="checkbox" checked={nf.sms}
-                    onChange={(e) => { setNf({ ...nf, sms: e.target.checked }); setNSaved(false); }} />
-                  <Phone size={17} />
-                  <span className="no-txt">
-                    <span className="no-name">Text message (SMS)</span>
-                    <span className="no-sub">{mySub.phone || "no phone on file"}</span>
-                  </span>
-                </label>
-              </div>
-              {!nf.email && !nf.sms && (
-                <div className="doc-block" style={{ marginTop: 12, marginBottom: 0 }}>
-                  <AlertTriangle size={15} />
-                  <div><strong>Pick at least one.</strong> You'd miss job requests and document reminders with both switched off.</div>
-                </div>
-              )}
-              <p className="cov-hint">Email &amp; SMS is for automated notifications only — nobody can message you from the platform, and these are no-reply.</p>
-              <div className="panel-actions">
-                <span className="panel-count">
-                  {nf.email && nf.sms ? "Email + SMS" : nf.sms ? "SMS only" : nf.email ? "Email only" : "None selected"}
-                </span>
-                {nSaved ? <span className="saved-note"><CheckCircle2 size={14} /> Saved</span>
-                  : <button className="btn-solid" disabled={!nf.email && !nf.sms}
-                      onClick={() => { onPatchSub(mySub.id, { notify: nf }); setNSaved(true); }}>
-                      <Check size={15} /> Save notifications</button>}
-              </div>
-            </div>
-          )}
 
           {mySub && addr && (
             <div className="portal-panel settings-panel">
@@ -36541,7 +36609,7 @@ function QuickSend({ inline = false }) {
 // hostname is Scale, so on Basic that address does not resolve, and a code
 // that fails while somebody is standing there holding a phone is worse than no
 // code at all. Recruiting is not plan-gated, so the code cannot be either.
-function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = false, onClose }) {
+function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = false, onClose, peek = false }) {
   // THE BRANDED ADDRESS, which is the point of the code rather than a detail
   // on it. Somebody scanning it should land on `<sub>.subsub.work` with this
   // account's name in the bar, its colours and its mark -- the same page the
@@ -36559,6 +36627,30 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
   // Nothing to encode is nothing to draw. A panel with an empty square in it
   // reads as broken rather than as not yet available.
   if (!url) return null;
+
+  // In the profile menu, under My Passport QR: the code, where it goes, and a
+  // copy button, cut down the way QrPeek is for the code beside it. The long
+  // explanation stays on Branding, where somebody is reading rather than
+  // holding a phone up.
+  if (peek) {
+    return (
+      <div className="qrp rq-peek" onClick={(e) => e.stopPropagation()}>
+        <QrCode value={url} size={170} label={`Sign up form for ${accountName || "this account"}`} />
+        <span className="qrp-code rq-url">{url.replace(/^https:\/\//, "")}</span>
+        <button className="pick" onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(url);
+            setCopied(true); setTimeout(() => setCopied(false), 2000);
+          } catch { /* a clipboard that refuses is not worth an error */ }
+        }}>
+          <Copy size={13} /> {copied ? tt("Copied") : tt("Copy link")}
+        </button>
+        <p className="qrp-note">
+          {tt("Have a subcontractor scan this. It opens your sign up form, and what they fill in lands on your list.")}
+        </p>
+      </div>
+    );
+  }
 
   const body = (
     <>
@@ -41398,43 +41490,11 @@ const THEME_ROWS = [
   { id: "dark", label: "Dark", icon: Moon },
   { id: "light", label: "Light", icon: Sun },
 ];
-function ThemePicker({ ctl, drawer = false }) {
-  return (
-    <div className={`theme-pick${drawer ? " in-drawer" : ""}`} role="radiogroup" aria-label={tt("Theme")}>
-      <div className="theme-head">{tt("Theme")}</div>
-      {THEME_ROWS.map(({ id, label, icon: Icon }) => (
-        <button key={id} type="button" role="radio" aria-checked={ctl.pref === id}
-          className={`theme-opt${ctl.pref === id ? " on" : ""}`}
-          onClick={(e) => { e.stopPropagation(); ctl.setPref(id); }}>
-          <Icon size={drawer ? 15 : 14} /> <span>{tt(label)}</span>
-          {ctl.pref === id && <Check size={14} className="theme-tick" />}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // English or Español, each named in its own language, because somebody who
 // cannot read the menu cannot find their way out of it in the other one.
 // Offered to the people whose screens are translated: contractor and handyman
 // seats, and a subcontractor account's own team.
 const LANG_ROWS = [{ id: "en", label: "English" }, { id: "es", label: "Español" }];
-function LangPicker({ ctl, drawer = false }) {
-  return (
-    <div className={`theme-pick${drawer ? " in-drawer" : ""}`} role="radiogroup" aria-label={tt("Language")}>
-      <div className="theme-head">{tt("Language")}</div>
-      {LANG_ROWS.map(({ id, label }) => (
-        <button key={id} type="button" role="radio" aria-checked={ctl.lang === id} lang={id}
-          className={`theme-opt lang-opt${ctl.lang === id ? " on" : ""}`}
-          onClick={(e) => { e.stopPropagation(); ctl.setLang(id); }}>
-          <Languages size={drawer ? 15 : 14} /> <span>{label}</span>
-          {ctl.lang === id && <Check size={14} className="theme-tick" />}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // ---- Styles --------------------------------------------------------------
 const BASE_CSS = `
 :root{--ink:#1a2b23;--ink-soft:#4a5c53;--paper:#f6f4ee;--card:#fffdf8;--line:#e2ddd0;
@@ -42800,6 +42860,21 @@ p.fld-note{margin:6px 0 0}
 /* The drawer closes on a button, so the code sits in a block of its own
    that does not pass the click on. */
 .drawer-qr{display:flex;flex-direction:column;margin:2px 0 6px}
+.set-opts{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.set-opt{display:flex;align-items:center;gap:8px;min-height:44px;padding:10px 16px;border:1px solid var(--line);
+  border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.set-opt svg{color:var(--ink-soft)}
+.set-opt.on{border-color:var(--brand);background:var(--paper);box-shadow:inset 0 0 0 1px var(--brand)}
+.set-opt.on svg{color:var(--brand)}
+.set-tick{margin-left:4px}
+/* Quick send, revealed under the Passport QR when it slides down. */
+.qr-qsend{margin:2px 10px 8px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.qr-qsend-head{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:800;color:var(--ink);margin-bottom:6px}
+.qr-qsend-head svg{color:var(--brand)}
+.qr-qsend .qrp-note{margin:0}
+.qr-qsend-go{border:0;background:none;padding:0;font:inherit;font-weight:700;color:var(--brand);cursor:pointer;text-decoration:underline}
+.um-qr-sub{font-size:11px;font-weight:500;color:var(--ink-soft)}
+.rq-peek .rq-url{word-break:break-all;text-align:center}
 
 /* Quick send, beside the QR code. Same tinted block so the two read as one
    family -- give somebody your details without a conversation -- and the same
@@ -46679,6 +46754,18 @@ iframe.dv-frame{display:block}
 .agr-unit{flex:none;font-size:11.5px;color:var(--ink-soft);white-space:nowrap}
 .agr-field.agr-bool{flex-direction:row;align-items:center;gap:8px}
 .agr-field.agr-bool span{order:2}
+/* The agreement's own boxes were bare browser inputs -- short, small type, no
+   padding -- so the terms form read as a different, smaller product beside
+   every other form. They take the .fld treatment now. */
+.agr-party label,.agr-field{font-size:13px}
+.agr-party input,.agr-party select,.agr-in input,.agr-decline input,.agr-decline textarea{
+  width:100%;min-height:44px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;
+  font-size:15px;color:var(--ink);background:var(--card);font-family:inherit;box-sizing:border-box}
+.agr-unit{font-size:13px}
+.agr-field.agr-bool input{width:20px;height:20px;min-height:0;flex:none}
+@media (max-width:760px){
+  .agr-party input,.agr-party select,.agr-in input,.agr-decline input,.agr-decline textarea{font-size:16px}
+}
 @media (max-width:620px){
   .agr-row{flex-direction:column;align-items:stretch}
   .agr-doc{max-height:60vh;padding:13px 14px}

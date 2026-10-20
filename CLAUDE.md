@@ -14217,6 +14217,36 @@ refactor.
   screens (Jobs, Availability, the roster), and the general contractor's whole
   app. **Not verified:** the Spanish has not been read by a native speaker.
 
+- **THE PROFILE MENU IS FOR WHAT YOU HAND SOMEBODY; SETTINGS ARE A TAB IN MY
+  ACCOUNT.** Reported from a general contractor's drawer on a phone: the
+  theme rows, the sign-in address and the switcher made the menu the longest
+  thing on the screen. Five changes in one message.
+
+  - **Theme, language and notifications are My account -> Settings**, one tab
+    for every role. The two picker components are gone rather than kept for a
+    second door. Language is drawn only where it already was offered
+    (`langEligible`). A contractor's notifications moved off Profile to it; a
+    tenant's stay on *How we reach you*, beside the contact details they
+    belong to, and Settings links there.
+  - **The branded address came off the menu and the drawer.** It is on
+    Account -> Branding already.
+  - **Quick send is revealed under the Passport QR when it slides down**, not a
+    second row. With nothing on file it says so and offers *Add a document*,
+    which opens the compliance pack, because a disclosure about sending that
+    opens onto nothing about sending is a dead end.
+  - **The recruiting code sits under the Passport QR** for a hiring account on
+    Scale with a subdomain (the gate the Add flow's copy already has), as a
+    disclosure drawing `RecruitQr peek`: the code, its address, Copy link and
+    one line. The explanation stays on Branding.
+  - **The agreement terms form takes the `.fld` treatment.** Its inputs were
+    bare browser boxes (short, small type, no padding), so the form read as a
+    smaller product. 44px boxes at 15px (16px on a phone, so iPhone does not
+    zoom), 20px checkboxes.
+
+  `test:themeui`, `test:spanishui`, `test:quicksend` and `test:qrmenu` were
+  moved to the new places rather than loosened: each now also asserts the
+  old place is empty.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

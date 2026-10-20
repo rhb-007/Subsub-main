@@ -67,12 +67,18 @@ const read = (page) => page.evaluate(() => {
     scheme: getComputedStyle(document.documentElement).colorScheme,
   };
 });
+// The theme lives in My account -> Settings now, not in the profile menu.
 const openMenu = async (page) => {
   await page.evaluate(() => document.querySelector(".user-btn")?.click());
   await wait(400);
+  await page.evaluate(() => document.querySelector(".user-menu .um-account")?.click());
+  await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+    .find((b) => /^Settings$/.test(b.innerText.trim()))?.click());
+  await wait(400);
 };
 const pick = (page, label) => page.evaluate((l) => {
-  const b = [...document.querySelectorAll(".user-menu .theme-opt")].find((x) => x.innerText.trim() === l);
+  const b = [...document.querySelectorAll(".set-opt")].find((x) => x.innerText.trim() === l);
   b?.click(); return !!b;
 }, label);
 const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png` }); };
@@ -87,12 +93,18 @@ try {
   t.ck("the app is really drawn", !!r.page, JSON.stringify(r));
   t.ck("System on a light device is light", r.theme === "" && lum(r.page) > 0.8, JSON.stringify(r));
   await shot(page, "light-dash");
+  // Where the seat lands, so the test can come back to it after Settings.
+  const home = await page.evaluate(() => document.querySelector("nav.tabs button.on")?.innerText.trim().split("\n")[0] || "");
 
   console.log("\n-- the picker --");
+  await page.evaluate(() => document.querySelector(".user-btn")?.click()); await wait(400);
+  t.ck("the profile menu no longer carries the theme",
+    await page.evaluate(() => !!document.querySelector(".user-menu") && !document.querySelector(".user-menu .theme-opt")));
+  await page.evaluate(() => document.querySelector(".add-scrim")?.click()); await wait(200);
   await openMenu(page);
-  const opts = await page.evaluate(() => [...document.querySelectorAll(".user-menu .theme-opt")]
+  const opts = await page.evaluate(() => [...document.querySelectorAll(".set-opt")]
     .map((b) => ({ label: b.innerText.trim(), on: b.getAttribute("aria-checked") === "true" })));
-  t.ck("the profile menu offers System, Dark and Light in that order",
+  t.ck("My account -> Settings offers System, Dark and Light in that order",
     opts.map((o) => o.label).join(",") === "System,Dark,Light", JSON.stringify(opts));
   t.ck("System is the default", opts[0]?.on && !opts[1]?.on && !opts[2]?.on, JSON.stringify(opts));
   await shot(page, "light-menu");
@@ -105,17 +117,19 @@ try {
   t.ck("the header goes dark", lum(r.header) < 0.05, r.header);
   t.ck("the text goes light, readable at AA", contrast(r.text, r.page) >= 7, `${r.text} on ${r.page}`);
   t.ck("native controls are told it is dark", /dark/.test(r.scheme), r.scheme);
-  const menu = await page.evaluate(() => {
-    const m = document.querySelector(".user-menu");
-    const on = [...m.querySelectorAll(".theme-opt")].find((b) => b.getAttribute("aria-checked") === "true");
-    return { bg: getComputedStyle(m).backgroundColor, on: on?.innerText.trim(), open: !!m };
-  });
-  t.ck("the menu stays open after picking", menu.open);
-  t.ck("Dark is ticked", menu.on === "Dark", JSON.stringify(menu));
-  t.ck("the menu itself is dark", lum(menu.bg) < 0.05, menu.bg);
+  const on = await page.evaluate(() => [...document.querySelectorAll(".set-opt")]
+    .find((b) => b.getAttribute("aria-checked") === "true")?.innerText.trim());
+  t.ck("Dark is ticked", on === "Dark", on);
+  await page.evaluate(() => document.querySelector(".user-btn")?.click()); await wait(400);
+  const menuBg = await page.evaluate(() => { const m = document.querySelector(".user-menu");
+    return m ? getComputedStyle(m).backgroundColor : null; });
+  t.ck("the profile menu is dark", menuBg && lum(menuBg) < 0.05, menuBg);
   await shot(page, "dark-menu");
   await page.evaluate(() => document.querySelector(".add-scrim")?.click());
   await wait(300);
+  await page.evaluate((h) => [...document.querySelectorAll("nav.tabs button")]
+    .find((b) => b.innerText.trim().split("\n")[0] === h)?.click(), home);
+  await wait(600);
   await shot(page, "dark-dash");
   // A card on the dashboard sits a step above the page.
   const card = await page.evaluate(() => {
@@ -158,12 +172,21 @@ try {
   await page.reload({ waitUntil: "domcontentloaded" }); await wait(2200);
   await page.evaluate(() => document.querySelector(".hamburger, .menu-btn, [aria-label='Menu'], [aria-label='Open menu']")?.click());
   await wait(500);
-  const dr = await page.evaluate(() => [...document.querySelectorAll(".drawer-actions .theme-opt")]
+  const inDrawer = await page.evaluate(() => ({
+    acct: !!document.querySelector(".drawer-actions button"),
+    theme: document.querySelectorAll(".drawer-actions .theme-opt, .drawer-actions .set-opt").length }));
+  t.ck("the drawer is open, and carries no theme rows", inDrawer.acct && inDrawer.theme === 0, JSON.stringify(inDrawer));
+  await page.evaluate(() => [...document.querySelectorAll(".drawer-actions button")].find((b) => /My account/.test(b.innerText))?.click());
+  await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll(".seg-tabs button")]
+    .find((b) => /^Settings$/.test(b.innerText.trim()))?.click());
+  await wait(400);
+  const dr = await page.evaluate(() => [...document.querySelectorAll(".set-opt")]
     .map((b) => ({ label: b.innerText.trim(), h: b.getBoundingClientRect().height,
       on: b.getAttribute("aria-checked") === "true" })));
-  t.ck("the drawer offers the same three", dr.map((o) => o.label).join(",") === "System,Dark,Light", JSON.stringify(dr));
+  t.ck("Settings on a phone offers the same three", dr.map((o) => o.label).join(",") === "System,Dark,Light", JSON.stringify(dr));
   t.ck("Dark is ticked there too", dr.find((o) => o.on)?.label === "Dark", JSON.stringify(dr));
-  t.ck("each is a thumb-sized row", dr.length === 3 && dr.every((o) => o.h >= 44), JSON.stringify(dr));
+  t.ck("each is thumb-sized", dr.length === 3 && dr.every((o) => o.h >= 44), JSON.stringify(dr));
   await shot(page, "dark-drawer");
   t.ck("no page error", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
