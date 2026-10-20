@@ -205,6 +205,30 @@ try {
   await wait(500);
   const opened = await page.evaluate(() => !!document.querySelector(".span-modal"));
   t.ck("Change opens the estimate window", opened);
+  // iPad Safari gives a date box its own intrinsic width and height, which
+  // Chrome does not, so the test stands that in with a UA-weight rule (:where
+  // adds no specificity) and checks the window's own CSS wins over it.
+  for (const w of [820, 1024]) {
+    await page.setViewport({ width: w, height: 1000 });
+    await page.evaluate(() => {
+      if (document.getElementById("safari-date")) return;
+      const st = document.createElement("style"); st.id = "safari-date";
+      st.textContent = ":where(input[type=date]){min-width:300px;height:54px}";
+      document.head.appendChild(st);
+    });
+    await wait(150);
+    const g = await page.evaluate(() => {
+      const r = (sel) => document.querySelector(sel)?.getBoundingClientRect();
+      const ds = r(".span-modal .spf-start input"), dd = r(".span-modal .spf-days input");
+      const ls = r(".span-modal .spf-start"), ld = r(".span-modal .spf-days");
+      return ds && dd ? { dsR: ds.right, ddL: dd.left, lsT: ls.top, ldT: ld.top, dsH: ds.height, ddH: dd.height } : null;
+    });
+    t.ck(`at ${w}px the date box ends before the days box starts`, !!g && g.dsR <= g.ddL + 0.5, JSON.stringify(g));
+    t.ck(`at ${w}px both labels start on one line`, !!g && Math.abs(g.lsT - g.ldT) < 1, JSON.stringify(g));
+    t.ck(`at ${w}px both boxes are one height`, !!g && Math.abs(g.dsH - g.ddH) < 1, JSON.stringify(g));
+  }
+  await page.evaluate(() => document.getElementById("safari-date")?.remove());
+  await page.setViewport({ width: 1100, height: 1000 });
   await setNum(page, ".span-modal .spf-days input", "4");
   await wait(250);
   const out = await page.evaluate(() => document.querySelector(".span-modal .spf-out")?.innerText.trim() || "");

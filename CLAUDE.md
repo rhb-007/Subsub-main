@@ -14686,6 +14686,19 @@ refactor.
 - **MIGRATION 093 IS PASTED ON THE LIVE DATABASE**, confirmed by the owner, so
   holding a job for a contractor who is not on SubSub works there.
 
+- **TWO SPACING FIXES, EACH MEASURED.** The state list on `/check` and
+  `/handyman-limits` ran into the *Questions* heading on an iPhone: the
+  heading sat flush on the last row, and Safari lets a multi-column list
+  spill a little past its box. Each state is now an inline block in the
+  columns, and the FAQ starts 32px below. `test:sitetools` measures the gap
+  at 390px and 1200px on both hubs; the old CSS reads 0px and fails four.
+  And the estimate window's date box ran under *Working days* on an iPad,
+  with that label sitting lower, because iPad Safari sizes a date box by
+  itself. Both boxes are now full width of their column, one height, and
+  top-aligned. Chrome does not size date boxes that way, so
+  `test:jobspanui` adds a UA-weight rule standing in for Safari's and
+  checks the window's CSS wins at 820px and 1024px; the old CSS fails six.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

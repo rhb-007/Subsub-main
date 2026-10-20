@@ -241,6 +241,23 @@ const result = (page, sel = "#tlResult") => page.evaluate((s) => (document.query
 const submit = (page, sel) => page.evaluate((s) => { const f = document.querySelector(s); f?.requestSubmit ? f.requestSubmit() : f?.submit(); }, sel);
 
 try {
+  console.log("\n-- the state list clears the Questions heading --");
+  // Reported on an iPhone: the last state in the two-column list sat over
+  // "Questions". Every item must sit inside the list's own box, and the
+  // heading must start clear of the list's last row.
+  for (const path of ["/handyman-limits/", "/check/"]) for (const w of [390, 1200]) {
+    const { ctx, page } = await open(path, w);
+    const g = await page.evaluate(() => {
+      const ul = document.querySelector(".tl-states"), h = document.querySelector("#faq-h");
+      if (!ul || !h) return null;
+      const items = [...ul.querySelectorAll("li")].map((li) => li.getBoundingClientRect().bottom);
+      return { listBottom: ul.getBoundingClientRect().bottom, lastItem: Math.max(...items), hTop: h.getBoundingClientRect().top, n: items.length };
+    });
+    t.ck(`${path} at ${w}px every state sits inside the list`, !!g && g.n === 51 && g.lastItem <= g.listBottom + 0.5, JSON.stringify(g));
+    t.ck(`${path} at ${w}px "Questions" starts at least 24px below the last state`, !!g && g.hTop - g.lastItem >= 24, JSON.stringify(g));
+    await ctx.close();
+  }
+
   console.log("\n-- the checker, Washington --");
   {
     const { ctx, page, crashes } = await open("/check/wa/?ref=k7q2-mxrb");

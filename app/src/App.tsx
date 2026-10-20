@@ -45064,8 +45064,15 @@ strong.insp-name{background:none;border:0;padding:0}
 .tsp-prop-acts button{min-height:36px;padding:6px 12px;font-size:12.5px}
 
 /* The figures: a start, working days, weekends, and the finish under them. */
-.spf{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto;gap:6px 12px;align-items:end}
+.spf{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto;gap:6px 12px;align-items:start}
 .spf .fld{margin:0}
+.spf .fld{min-width:0}
+/* iPad Safari draws a date box at its own intrinsic width and height, which ran
+   it under the days box and pushed that label lower. Same width, same height. */
+.spf .fld input{display:block;width:100%;min-width:0;max-width:100%;box-sizing:border-box;height:42px;
+  -webkit-appearance:none;appearance:none}
+.spf .fld input::-webkit-date-and-time-value{text-align:left}
+.spf-wk{margin-top:24px}
 .spf-wk{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;color:var(--ink-soft);
   min-height:40px;white-space:nowrap}
 .spf-out{grid-column:1 / -1;margin:0;font-size:12.5px;color:var(--ink-soft)}
@@ -45077,7 +45084,7 @@ strong.insp-name{background:none;border:0;padding:0}
 .js-trade{display:block;font-size:13px;font-weight:800;margin-bottom:6px}
 @media (max-width:560px){
   .spf{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-  .spf-wk{grid-column:1 / -1;min-height:0}
+  .spf-wk{grid-column:1 / -1;min-height:0;margin-top:0}
 }
 
 /* On the crew's card: how long, and the way to say otherwise. */
