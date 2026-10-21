@@ -117,6 +117,12 @@ console.log("\n-- the referral snippet is one thing --");
   const cta = (pr.match(/<div class="subfree" id="subFreeCta">([\s\S]*?)<\/a>\s*<\/div>/) || [])[1] || "";
   t.ck("pricing tells a subcontractor or handyman it is free, and signs them up as one",
     /Always free, forever/.test(cta) && /\$0/.test(cta) && /href="get-started\.html\?as=subcontractor"/.test(cta), cta.slice(0, 200));
+  // Before the cards: who the two plans are for, and where a sub's door is.
+  const who = (pr.match(/<p class="forwho" id="forWho">([\s\S]*?)<\/p>/) || [])[1] || "";
+  t.ck("pricing says the plans are for GCs, property managers, portfolio managers and owners",
+    /general contractors/i.test(who) && /property managers/i.test(who) && /portfolio managers/i.test(who) && /building owners/i.test(who), who);
+  t.ck("and points a subcontractor or handyman at the free signup below", /Subcontractor or handyman/i.test(who) && /href="#subFreeCta"/.test(who), who);
+  t.ck("and it sits above the plan cards", who !== "" && pr.indexOf('id="forWho"') < pr.indexOf('<div class="plans">') && pr.indexOf('id="forWho"') > pr.indexOf('class="cycle"'));
   const auds = (read("index.html").match(/<div class="auds">([\s\S]*?)<\/div>\s*<\/div>\s*<\/section>/) || [])[1] || "";
   const handyCard = (auds.match(/<a class="aud" href="([^"]+)">\s*<h3>Handymen and maintenance<\/h3>/) || [])[1];
   t.ck("the index has a card for handymen, so the grid has no empty cell", !!handyCard && (auds.match(/class="aud"/g) || []).length % 2 === 0, String(handyCard));

@@ -57,6 +57,8 @@ export function unclaimedPage(host) {
   .sub a{color:#fff}
   footer{padding:18px 24px;text-align:center;font-size:13px;color:#8FA399}
   footer a{color:#C9D4CE}
+  footer .pb{display:inline-flex;align-items:center;gap:8px;text-decoration:none}
+  footer .pb img{display:block;height:16px;width:auto}
 </style>
 </head>
 <body>
@@ -71,7 +73,7 @@ export function unclaimedPage(host) {
     <p class="sub">Already have an account? <a href="https://app.subsub.work/">Sign in</a></p>
   </section>
 </main>
-<footer>Powered by <a href="https://subsub.work/">SubSub</a></footer>
+<footer><a class="pb" href="https://subsub.work/"><span>Powered by</span><img src="https://subsub.work/email-logo.png" alt="SubSub" width="96" height="16"></a></footer>
 </body>
 </html>`;
 }

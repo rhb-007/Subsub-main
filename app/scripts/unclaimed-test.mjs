@@ -66,6 +66,10 @@ console.log("\n-- the question it asks --");
 }
 
 console.log("\n-- the page --");
+{
+  const foot = (unclaimedPage("x.subsub.work").match(/<footer>([\s\S]*?)<\/footer>/) || [])[1] || "";
+  ck("the footer is Powered by and the SubSub logo, not the word", /Powered by/.test(foot) && /<img src="https:\/\/subsub\.work\/email-logo\.png" alt="SubSub"/.test(foot) && !/>SubSub</.test(foot), foot);
+}
 ck("a typed address cannot write markup into it", !/<script>/.test(unclaimedPage("<script>.subsub.work")));
 {
   const browser = await launch();

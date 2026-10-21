@@ -213,6 +213,10 @@ nav.top a.btn-gold:hover{color:#20160A}
 
 /* ---------- pricing ---------- */
 .plans{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:44px}
+.forwho{max-width:none;margin:0;padding:14px 18px;border-left:3px solid var(--gold);
+  background:#FBF6EC;border-radius:0 var(--r) var(--r) 0;font-size:16px;line-height:1.5;color:var(--ink)}
+.forwho a{color:var(--forest-lift);font-weight:600;white-space:nowrap}
+.forwho + .plans{margin-top:22px}
 .subfree{display:flex;align-items:center;gap:22px;margin-top:22px;padding:22px 26px;
   border:1.5px solid var(--forest);border-radius:var(--r);background:#F1F6F3}
 .subfree .sf-price{font:800 44px 'Bricolage Grotesque';letter-spacing:-.03em;color:var(--forest);line-height:1}
@@ -520,6 +524,12 @@ body.nav-open{overflow:hidden}
 
   <section class="sec" style="padding-top:34px">
     <div class="wrap">
+      <!-- Who these two plans are for, said before the cards, because a
+           subcontractor reading "Up to 3 subcontractors" concludes they need
+           a plan. Their own door is the $0 strip below the cards. -->
+      <p class="forwho" id="forWho"><b>These plans are for general contractors, property managers,
+        portfolio managers and building owners.</b> Subcontractor or handyman?
+        <a href="#subFreeCta">Your signup is free, below &darr;</a></p>
       <div class="plans">
         <div class="plan">
           <div class="plan-n">Basic</div>

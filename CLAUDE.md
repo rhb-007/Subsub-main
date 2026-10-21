@@ -7962,6 +7962,16 @@ refactor.
   accept jobs and see them on their own calendar (the invite panel sits just
   above it on the card).
 
+- **THE PRICING PAGE SAYS WHO ITS PLANS ARE FOR, AND THE 404'S FOOTER IS
+  THE REAL LOGO.** Asked for as making it clear the plans are for general
+  contractors, property managers, portfolio managers and building owners, with
+  the subcontractor and handyman signup below. A sub reading *Up to 3
+  subcontractors* concluded they needed a plan. `#forWho` sits between the
+  Monthly/Annual toggle and the cards, gold-edged, and links `#subFreeCta`.
+  The unclaimed 404's footer read *Powered by* and the word in plain text; it
+  is now *Powered by* and `email-logo.png`, the same mark as its header.
+  `test:sitetools` and `test:unclaimed` pin both; removing either fails it.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
