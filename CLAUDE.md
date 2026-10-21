@@ -14783,6 +14783,24 @@ refactor.
   subsub.work, and "No data received" in Google Analytics says nothing about
   why.
 
+- **THE PRIVACY POLICY SAYS WHAT SUBSUB DOES WITH GOOGLE DATA, BECAUSE GOOGLE
+  WILL NOT VERIFY THE APP WITHOUT IT.** Asked for as getting Google's sign-in
+  screen to say SubSub with the logo. That needs Google's brand verification,
+  and both Calendar scopes are sensitive, so the review reads the privacy
+  policy for a Google-specific section. Ours named Google Analytics and nothing
+  else. Section 4, *Google sign-in and Google Calendar* (`#google`), says what
+  sign-in receives (name and email), the two scopes in words, what is stored
+  (the connected address, the sealed refresh token, the calendar's id and the
+  event ids, never busy times), that disconnecting deletes the calendar and the
+  token, and Google's own Limited Use sentence, which the review looks for
+  verbatim. **Every claim in it was checked against `gcal.js` and migration 094
+  before it was written**; a policy promising less than the code does is the
+  one thing this review exists to catch. `google-logo-120.png` at the site root
+  is the mark on a solid forest square at 120px, the size Google asks for, so
+  it can be downloaded on an iPad and uploaded on the Branding page.
+  **Still open:** the custom Supabase domain, so the sign-in screen names
+  subsub.work instead of the supabase.co address.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
