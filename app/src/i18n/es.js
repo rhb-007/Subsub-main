@@ -1048,4 +1048,13 @@ export default {
   "Google didn't answer the last time SubSub tried. It will try again on its own.": "Google no respondió la última vez que SubSub lo intentó. Lo intentará de nuevo por su cuenta.",
   "Google wouldn't let SubSub make the SubSub Jobs calendar. Disconnect, then connect again.": "Google no permitió que SubSub creara el calendario SubSub Jobs. Desconecte y conéctese de nuevo.",
   "Google refused some of the jobs. SubSub will try them again on its own.": "Google rechazó algunos trabajos. SubSub los intentará de nuevo por su cuenta.",
+  "Companies you work for": "Empresas para las que trabaja",
+  "Their jobs for you": "Sus trabajos para usted",
+  "Back to your company": "Volver a su empresa",
+  "You don't have a login on {name}'s account yet. It is made when they accept your request to connect.": "Todavía no tiene acceso a la cuenta de {name}. Se crea cuando aceptan su solicitud de conexión.",
+  "Couldn't open {name} just now. Try again in a moment.": "No se pudo abrir {name} en este momento. Inténtelo de nuevo en un momento.",
+  "{n} more booked.": "{n} más reservados.",
+  "Open {name}'s dashboard": "Abrir el panel de {name}",
+  "Days off": "Días libres",
+  "Name each crew and list who's on it. Days off and pausing a crew are on the calendar below.": "Ponga nombre a cada cuadrilla y diga quién está en ella. Los días libres y las pausas están en el calendario de abajo.",
 };

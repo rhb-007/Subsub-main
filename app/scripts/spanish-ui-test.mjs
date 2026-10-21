@@ -116,7 +116,9 @@ try {
     seat: { userId: "u_ric", accountId: "acc_cas" }, viewport: { width: 1100, height: 1000 } });
   await wait(2200);
   let nav = await navTexts(page);
-  t.ck("the app is drawn, in English", nav.includes("My Jobs") && nav.includes("Dashboard"), JSON.stringify(nav));
+  // My Jobs is not on a subcontractor account's own nav any more; the work
+  // clients gave it is on the dashboard, which is what is read below.
+  t.ck("the app is drawn, in English", nav.includes("Dashboard") && !nav.includes("My Jobs"), JSON.stringify(nav));
   await openMenu(page);
   let rows = await langRows(page);
   t.ck("Settings offers English and Espanol, each in its own language",
@@ -127,7 +129,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll(".set-opt[lang]")].find((b) => /Español/.test(b.innerText))?.click());
   await wait(400);
   nav = await navTexts(page);
-  t.ck("the nav is in Spanish", nav.includes("Mis trabajos") && nav.includes("Inicio"), JSON.stringify(nav));
+  t.ck("the nav is in Spanish", nav.includes("Inicio") && nav.includes("Mi cuenta"), JSON.stringify(nav));
   t.ck("the page says lang=es", await page.evaluate(() => document.documentElement.lang) === "es");
   t.ck("the setting's own heading is Spanish", /Idioma/i.test(await page.evaluate(() => document.querySelector(".ss-main")?.innerText || "")));
   // MY ACCOUNT IS SPANISH TOO, not only the Settings tab. Reported as "Spanish
@@ -157,21 +159,32 @@ try {
   const sub = await tabText("Suscripción");
   t.ck("the Subscription tab is Spanish", sub.length > 40 && /Plan actual|Uso este mes/.test(sub) && !/Current plan|Usage this month/.test(sub),
     sub.slice(0, 400));
-  t.ck("My Jobs is reachable by its Spanish name", await goJobs(page, "^Mis trabajos"));
+  t.ck("the dashboard is reachable by its Spanish name", await goJobs(page, "^Inicio"));
   await wait(900);
   const body = await page.evaluate(() => document.body.innerText);
   await shot(page, "es-myjobs");
     // Chrome's innerText applies text-transform, and these headings are upper
   // case on screen, so the checks ignore case.
-  t.ck("what is waiting is said in Spanish", /Esperándolo a usted/i.test(body) && /Solicitudes de trabajo/i.test(body), body.slice(0, 400));
+  t.ck("what is waiting is said in Spanish", /Trabajo de sus clientes/i.test(body) && /esperándolo/i.test(body), body.slice(0, 400));
   t.ck("a job's line says what it needs in Spanish", /Fijar un horario/.test(body) && /Responder · quedan/.test(body), body.slice(0, 600));
   t.ck("the trade is named in Spanish", /Pintura/.test(body) && !/Painting/.test(body));
   t.ck("the greeting is Spanish", /Buen(os|as) (días|tardes|noches)|Todavía despierto/.test(body));
-  t.ck("and no English heading is left on the work list",
-    !/Waiting on you|Job requests|Current & upcoming|Good (morning|afternoon|evening)/i.test(body), (body.match(/Waiting on you|Job requests|Current & upcoming|Accept\b/g) || []).join(","));
+  const cw = await page.evaluate(() => document.querySelector(".sec-cw")?.innerText || "");
+  t.ck("and no English heading is left on the client work",
+    cw.length > 0 && !/Work from your clients|waiting on you|Good (morning|afternoon|evening)/i.test(cw), (body.match(/Waiting on you|Job requests|Current & upcoming|Accept\b/g) || []).join(","));
   const day = DAY(6);
   const esMonth = new Date(`${day}T12:00:00`).toLocaleDateString("es-US", { month: "short" }).replace(".", "");
-  t.ck("dates follow the language", body.toLowerCase().includes(esMonth.toLowerCase()), esMonth);
+  // The crews' month, which sits on the roster page's My crews tab now.
+  await goJobs(page, "^Subcontratistas");
+  await wait(700);
+  await page.evaluate(() => document.querySelectorAll(".net-view button")[1]?.click());
+  await wait(700);
+  const calTxt = await page.evaluate(() => document.querySelector(".crew-cal")?.innerText || "");
+  const esLong = new Date().toLocaleDateString("es-US", { month: "long" });
+  t.ck("dates follow the language", calTxt.toLowerCase().includes(esLong.toLowerCase()) && esMonth.length > 0,
+    `${esLong} in ${calTxt.slice(0, 120)}`);
+  await goJobs(page, "^Inicio");
+  await wait(700);
 
   // Open the waiting job and the offer, so their insides are drawn too.
   // One line opens a window; the offer is the one that asks a question.
@@ -185,7 +198,7 @@ try {
   console.log("\n-- remembered --");
   await page.reload({ waitUntil: "domcontentloaded" }); await wait(2200);
   nav = await navTexts(page);
-  t.ck("Spanish survives a reload", nav.includes("Mis trabajos"), JSON.stringify(nav));
+  t.ck("Spanish survives a reload", nav.includes("Inicio"), JSON.stringify(nav));
   t.ck("no page error", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
 

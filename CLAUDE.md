@@ -14811,6 +14811,60 @@ refactor.
   **Still open:** the custom Supabase domain, so the sign-in screen names
   subsub.work instead of the supabase.co address.
 
+- **A SUBCONTRACTOR ACCOUNT HAS ONE DASHBOARD; A CLIENT'S SIDE OF THE WORK
+  IS A LINK ABOVE MY ACCOUNT, UNDER THE CLIENT'S NAME.** Reported from
+  Cascade Apartment Services with **My Jobs** and **Get your GCs on SubSub**
+  boxed in its own nav: *"There should not be 2 separate dashboard within 1
+  ... a link down by my account to the company they are working for
+  dashboard ... the top of the page should say Sound Property Management."*
+  My Jobs drew the contractor portal inside the account's own nav beside
+  Jobs, so the account's work and the work a client gave it read as one
+  product with two of everything.
+
+  **Both entries came off the account's own nav.** The client's side already
+  existed: the contractor seat that accepting a connect request creates, on
+  the client's account, under the client's name. That seat keeps My Jobs and
+  **Get your GCs**, which is the "subcontractor version" the request names.
+  This reverses 075's *"a subcontractor account's own team refers GCs too"*,
+  at the owner's word.
+
+  **`clientLinks` is one entry per client, drawn above My account** in the
+  drawer and the profile menu, with the count of what is waiting there
+  (`crewAction`, the same rule My Jobs counted). Its sources are the work
+  (`elsewhere`) and the contractor seats. Outside a staff session it lists
+  only clients with a seat to land in, because a link onto a refusal is a
+  dead end. The same seat is no longer listed again as a switcher row.
+  The dashboard's client panel ends in *Open Sound Property Management's
+  dashboard* instead of *Open My Jobs*.
+
+  **`openClient` works two ways, because a staff session is pinned to one
+  account.** A person goes through `goToSeat`. Staff are signed in again as
+  the same person on the client's account. The console's sign-in code is now
+  one function, `impersonateInto`, so the two cannot drift. It sends the call
+  **without** the old token, because the server reads a token before
+  anything else, so the platform route would have seen the customer's seat.
+  The token is put back if the call is refused, and the old session is ended
+  once the new one starts. `returnTo` draws *Back to your company*, since a
+  staff session never loads the person's other seats. A refusal is named:
+  no login there yet means the client has not accepted a connect request.
+  A contractor seat now lands on its portal, not the admin's first tab.
+
+  **The crews' days off moved to the roster page's My crews tab**, under the
+  crew editor. They are the account's own, and they had lived only under My
+  Jobs. The month draws the accepted client work too, and a press on a job
+  opens that client. `toggleCrewDay` and `toggleCrewAvailable` are one pair
+  for both calendars.
+
+  `test:ownportal` (41), `test:owncrewsui` (31), `test:clientworkui` (25),
+  `test:referralui` (24) and `test:spanishui` (24) were moved to the new rule
+  rather than loosened. Three mutations fire: the drawer link removed (seven
+  assertions), the switcher not filtered (one), and the calendar removed from
+  My crews (four). **Not verified in a browser:** the staff path.
+  `resumeSession` refuses an impersonated session, so the harness cannot
+  stand in one. **Still open:** a subcontractor with no seat on any client
+  answers its client work from the dashboard panel, and has no link to
+  follow.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

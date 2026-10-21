@@ -80,20 +80,56 @@ const MY_WORK = () => ({ work: [{
     contractorNote: null, tenantNote: null, note: "" },
 } ] });
 
+// THE CLIENT'S SIDE. Juan holds a contractor seat on Sound's account, made
+// when Pacific accepted Sound's request to connect, so the link above My
+// account has somewhere to land. Answered per account, off X-Account-Id,
+// because a stub that answers Pacific whatever is asked cannot see the
+// switch land.
+let SEAT = true;
+const PM = {
+  id: "acc_pm", name: "Sound Property Management", subdomain: "soundpm",
+  kind: "property_manager", plan: "basic", billing: "monthly", useDefaultMark: true, theme: null,
+  trades: [], logoKey: null, subscriptionStatus: "active",
+  user: { id: "u_juan", name: "Juan Soto", email: "juan@pacific.test", role: "contractor" },
+};
+const PM_SUB = {
+  id: "cmp_pac", companyId: "cmp_pac", engagementId: "en_pac", accountId: "acc_pm",
+  company: "Pacific apartment maintenance", contact: "Juan Soto", email: "juan@pacific.test",
+  phone: null, categories: ["plumbing"], caps: [], crews: [], propertyIds: [], zips: [],
+  notify: {}, rating: null, bond: true, insurance: true, contract: true, w9: true,
+  hasPortal: true, answersForItself: true, license: "PACIFAM881QT", licenseCheck: null,
+  available: true, unavailableDays: [], docReview: {}, coverage: {}, autoSchedule: false,
+};
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method, body, headers) => {
+  const away = String(headers["x-account-id"] || "") === "acc_pm";
+  if (path === "/api/auth/me") return [200, { user: { id: "u_juan", name: "Juan Soto", email: "juan@pacific.test" },
+    memberships: [
+      { accountId: "acc_pac", accountName: "Pacific apartment maintenance", subdomain: "pacific",
+        kind: KIND, role: "admin", companyId: null, plan: "basic", billing: "monthly", theme: null,
+        trades: ["plumbing"], logoKey: null, useDefaultMark: true },
+      ...(SEAT ? [{ accountId: "acc_pm", accountName: "Sound Property Management", subdomain: "soundpm",
+        kind: "property_manager", role: "contractor", companyId: "cmp_pac", plan: "basic",
+        billing: "monthly", theme: null, trades: [], logoKey: null, useDefaultMark: true }] : []),
+    ] }];
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
-  if (path === "/api/account") return [200, acct()];
+  if (path === "/api/account") return [200, away ? PM : acct()];
+  if (path === "/api/subs") return [200, away ? [PM_SUB] : []];
   if (path === "/api/my-company") {
+    if (away) return [409, { error: "not_hireable" }];
     return KIND === "subcontractor" || KIND === "general_contractor"
       ? [200, MY_COMPANY] : [409, { error: "not_hireable" }];
   }
-  if (path === "/api/my-work") return [200, NO_WORK ? { work: [] } : MY_WORK()];
+  if (path === "/api/my-work") {
+    if (NO_WORK) return [200, { work: [] }];
+    // Over there, the same work is THIS account's.
+    return [200, away ? { work: MY_WORK().work.map((w) => ({ ...w, here: true })) } : MY_WORK()];
+  }
   if (path === "/api/account-users") return [200, [
     { id: "u_juan", name: "Juan Soto", email: "juan@pacific.test", phone: null,
-      role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true,
-      inviteSentAt: null, hasAvatar: false }]];
-  if (path === "/api/jobs" || path === "/api/subs" || path === "/api/properties"
+      role: away ? "contractor" : "admin", subId: away ? "cmp_pac" : null, propertyIds: [], unit: null,
+      hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
+  if (path === "/api/jobs" || path === "/api/properties"
     || path === "/api/invites" || path === "/api/clients" || path === "/api/visits"
     || path === "/api/my-connect-requests" || path === "/api/connect-requests"
     || path === "/api/property-transfers" || path === "/api/my-quotes"
@@ -126,56 +162,59 @@ try {
 
   const items = await nav(page);
   t.ck("the app rendered at all", items.length > 0, JSON.stringify(items));
-  t.ck("My Jobs is in the nav", items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
-  // The calendar is a view inside My Jobs now, not an entry of its own.
+  // TWO DASHBOARDS IN ONE, reported from Cascade: My Jobs and Get your GCs in
+  // this account's own nav, beside Jobs, drew a client's side of the work
+  // inside it. Neither is here now.
+  t.ck("no My Jobs in the account's own nav", !items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
+  t.ck("no Get your GCs in it either", !items.some((x) => /Get your GCs/.test(x)), JSON.stringify(items));
   t.ck("and no separate My calendar", !items.some((x) => /^My calendar/.test(x)), JSON.stringify(items));
 
-  console.log("\n-- and pressing it lands on the work, not back on the dashboard --");
-  await open(page, "My Jobs");
-  const jobsPane = await page.evaluate(() => ({
-    onNav: (document.querySelector("nav button.on")?.innerText || "").trim(),
-    text: (document.querySelector(".ss-main")?.innerText || "").replace(/\s+/g, " ").slice(0, 600),
-  }));
-  // THE DEAD END BEING REPLACED: the entry existed nowhere, and anything that
-  // pointed at the pane fell through to the dashboard.
-  t.ck("My Jobs is the selected tab", /^My Jobs/.test(jobsPane.onNav), jobsPane.onNav);
-  t.ck("and it did not fall back to the account dashboard",
-    !/Properties under management|Unassigned trade slots/.test(jobsPane.text),
-    jobsPane.text.slice(0, 160));
-  // The work itself -- given to them by somebody else, which is the only kind
-  // a subcontractor account has.
-  t.ck("the job they were given is on it",
-    /leaking sink/i.test(jobsPane.text), jobsPane.text.slice(0, 300));
-  t.ck("and it names who it is for",
-    /Sound Property Management/i.test(jobsPane.text), jobsPane.text.slice(0, 300));
-  // AND NOT FOR THEMSELVES. The one-client line read `brand.name`, which on
-  // their OWN account is their own name -- "Working for Pacific apartment
-  // maintenance", said to Pacific.
-  t.ck("and does not say they work for themselves",
-    !/(Working|Subcontracting|Contracting) for Pacific/i.test(jobsPane.text),
-    (jobsPane.text.match(/\w+ for [A-Z][^·|]{0,40}/) || [""])[0]);
+  console.log("\n-- the client's dashboard is a link above My account --");
+  const drawer = await page.evaluate(() => [...document.querySelectorAll(".drawer-actions > button, .drawer-actions > p")]
+    .map((b) => ({ t: b.innerText.replace(/\s+/g, " ").trim(), client: b.classList.contains("client-dash") })));
+  const ci = drawer.findIndex((r) => r.client && /Sound Property Management/.test(r.t));
+  const ai = drawer.findIndex((r) => /^My account/.test(r.t));
+  t.ck("the drawer links to Sound's side", ci >= 0, JSON.stringify(drawer));
+  t.ck("above My account", ci >= 0 && ai > ci, JSON.stringify(drawer));
+  // Not twice: the switcher row for the same seat is the same door.
+  t.ck("and Sound is not listed a second time as a switcher row",
+    drawer.filter((r) => /Sound Property Management/.test(r.t)).length === 1, JSON.stringify(drawer));
+  await page.click(".user-btn");
+  await wait(400);
+  const menu = await page.evaluate(() => [...document.querySelectorAll(".user-menu > button")]
+    .map((b) => ({ t: b.innerText.replace(/\s+/g, " ").trim(), client: b.classList.contains("um-client") })));
+  const mi = menu.findIndex((r) => r.client && /Sound Property Management/.test(r.t));
+  t.ck("and the profile menu does too, above My account",
+    mi >= 0 && menu.findIndex((r) => /^My account/.test(r.t)) > mi, JSON.stringify(menu));
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => document.querySelector(".add-scrim")?.click());
+  await wait(300);
+  const dashLink = await page.evaluate(() => [...document.querySelectorAll(".sec-cw .dash-more")]
+    .map((b) => b.innerText.trim()));
+  t.ck("the dashboard's client panel opens Sound's side, not My Jobs",
+    dashLink.some((x) => /Open Sound Property Management's dashboard/.test(x))
+      && !dashLink.some((x) => /My Jobs/.test(x)), JSON.stringify(dashLink));
 
-  console.log("\n-- the calendar opens too --");
-  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
-  await new Promise((r) => setTimeout(r, 900));
-  const cal = await page.evaluate(() => ({
+  console.log("\n-- pressing it lands on Sound's side, under Sound's name --");
+  await page.evaluate(() => document.querySelector(".drawer-actions .client-dash")?.click());
+  await wait(2500);
+  const there = await page.evaluate(() => ({
+    brand: (document.querySelector(".header-top .brand-name")?.innerText || "").trim(),
+    nav: [...document.querySelectorAll("nav button")].map((b) => b.innerText.replace(/\s+/g, " ").trim()),
     onNav: (document.querySelector("nav button.on")?.innerText || "").trim(),
-    grid: !!document.querySelector(".jcal, .mycal"),
+    text: (document.querySelector(".ss-main")?.innerText || "").replace(/\s+/g, " ").slice(0, 4000),
+    who: (document.querySelector(".who-bar")?.innerText || "").replace(/\s+/g, " ").trim(),
   }));
-  t.ck("My Jobs stays the selected entry", /^My Jobs/.test(cal.onNav), cal.onNav);
-  t.ck("and a month grid is drawn", cal.grid === true, JSON.stringify(cal));
-
-  console.log("\n-- nobody verifies their own paperwork --");
-  await open(page, "My Jobs");
-  const badge = await page.evaluate(() =>
-    (document.querySelector(".ss-main")?.innerText || "")
-      .match(/can'?t be assigned[^.]*\./i)?.[0] || "");
-  // Four documents are on file and nobody has reviewed them, because there is
-  // nobody on the other side to. A count derived from a hiring account's
-  // verdict would sit red for ever -- the permanently-amber failure docs.js
-  // exists to prevent.
-  t.ck("no \"upload your documents\" banner over four already on file",
-    badge === "", badge);
+  t.ck("the top of the page says Sound Property Management", there.brand === "Sound Property Management",
+    JSON.stringify(there.brand));
+  t.ck("My Jobs is there, on their side", there.nav.some((x) => /^My Jobs/.test(x)), JSON.stringify(there.nav));
+  t.ck("and Get your GCs is there too", there.nav.some((x) => /Get your GCs/.test(x)), JSON.stringify(there.nav));
+  t.ck("it opens on My Jobs, working for Sound", /^My Jobs/.test(there.onNav) && /Sound Property Management/.test(there.who),
+    JSON.stringify({ on: there.onNav, who: there.who }));
+  const back = await page.evaluate(() => [...document.querySelectorAll(".drawer-actions button")]
+    .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
+  t.ck("and the way back to Pacific is in the drawer", back.some((x) => /Pacific apartment maintenance/.test(x)),
+    JSON.stringify(back));
 
   t.ck("the page's own console is clean", logs.length === 0, logs.join(" | "));
   t.ck("and the harness saw no crash", crashes.length === 0, crashes.join(" | "));
@@ -213,10 +252,7 @@ try {
     t.ck(`${kind}: the roster screen opened`, /contractors/i.test(roster.onNav), JSON.stringify(roster));
     t.ck(`${kind}: one screen under the roster, not a dashboard below it`,
       roster.mains === 1 && roster.whoBar === 0 && roster.greetings === 0, JSON.stringify(roster));
-    await open(px, "My Jobs");
-    const mine = await screens(px);
-    t.ck(`${kind}: My Jobs still draws the portal`, /^My Jobs/.test(mine.onNav) && mine.mains === 1,
-      JSON.stringify(mine));
+    t.ck(`${kind}: no My Jobs in the account's own nav`, !(await nav(px)).some((x) => /^My Jobs/.test(x)));
     await cx.close().catch(() => {});
   }
   KIND = "subcontractor";
@@ -227,7 +263,7 @@ try {
   // "Outerhome -- Working for Outerhome". Both kinds in the same place, because
   // the subcontractor's entries must survive the fix: being hired is the whole
   // reason that kind exists.
-  NO_WORK = true;
+  NO_WORK = true; SEAT = false;
   for (const kind of ["general_contractor", "subcontractor"]) {
     KIND = kind;
     const { ctx: cx, page: px } = await visitApp(browser, { host: "pacific", webPort: WEB,
@@ -235,20 +271,15 @@ try {
     await wait(2800);
     const its = await nav(px);
     t.ck(`${kind}: the app rendered`, its.some((x) => /^Dashboard/.test(x)), JSON.stringify(its));
-    if (kind === "general_contractor") {
-      t.ck("a GC nobody has hired has no My Jobs", !its.some((x) => /^My Jobs/.test(x)), JSON.stringify(its));
-      t.ck("and no My calendar", !its.some((x) => /^My calendar/.test(x)), JSON.stringify(its));
-    } else {
-      t.ck("a subcontractor keeps My Jobs with nothing on it", its.some((x) => /^My Jobs/.test(x)), JSON.stringify(its));
-      await open(px, "My Jobs");
-      const who = await px.evaluate(() => (document.querySelector(".who-bar")?.innerText || "").replace(/\s+/g, " ").trim());
-      t.ck("the bar is drawn", who.length > 0, who);
-      t.ck("and does not say they work for themselves", !/for Pacific/i.test(who), who);
-      t.ck("it says there are no clients yet", /No clients yet/.test(who), who);
-    }
+    t.ck(`${kind}: no My Jobs`, !its.some((x) => /^My Jobs/.test(x)), JSON.stringify(its));
+    t.ck(`${kind}: and no My calendar`, !its.some((x) => /^My calendar/.test(x)), JSON.stringify(its));
+    // No seat anywhere and no work: there is no client to link to, so none is
+    // drawn rather than a link onto a refusal.
+    const dl = await px.evaluate(() => document.querySelectorAll(".drawer-actions .client-dash").length);
+    t.ck(`${kind}: and no client link with nobody to link to`, dl === 0, String(dl));
     await cx.close().catch(() => {});
   }
-  NO_WORK = false;
+  NO_WORK = false; SEAT = true;
   KIND = "subcontractor";
 
   console.log("\n-- and an account nobody can hire gets neither --");

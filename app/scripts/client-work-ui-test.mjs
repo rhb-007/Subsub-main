@@ -81,6 +81,17 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     if (path.endsWith("/visits")) return [201, { id: "v_new", status: "proposed", date: DAY(3) }];
     return [200, { ok: true }];
   }
+  // Ricard holds a contractor seat on Sound's account, so the menu has a
+  // client link to land in -- and that link is what carries the count now.
+  if (path === "/api/auth/me") return [200, { user: { id: "u_ric", name: "Ricard Brando", email: "rbraun@cascade.test" },
+    memberships: [
+      { accountId: "acc_cas", accountName: "Cascade Apartment Services", subdomain: "cascade", kind: KIND,
+        role: "admin", companyId: null, plan: "basic", billing: "monthly", theme: null, trades: ["painting"],
+        logoKey: null, useDefaultMark: true },
+      { accountId: "acc_pm", accountName: "Sound Property Management", subdomain: "soundpm",
+        kind: "property_manager", role: "contractor", companyId: "cmp_cas", plan: "basic", billing: "monthly",
+        theme: null, trades: [], logoKey: null, useDefaultMark: true },
+    ] }];
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
   if (path === "/api/account") return [200, acct()];
   if (path === "/api/my-company") {
@@ -122,7 +133,7 @@ const panel = (page) => page.evaluate(() => {
   const dot = p.querySelector("h3 .act-dot");
   return { head: p.querySelector("h3")?.innerText || "", lines,
     headDot: !!dot, anim: dot ? getComputedStyle(dot, "::after").animationName : "",
-    more: p.querySelector(".dash-more")?.innerText || "" };
+    more: p.innerText || "", open: [...p.querySelectorAll(".dash-more")].map((b) => b.innerText.trim()) };
 });
 
 try {
@@ -146,7 +157,10 @@ try {
   t.ck("the offer comes before the unscheduled job", d && d.lines.indexOf(gate) < d.lines.indexOf(paint));
   t.ck("work already booked is not listed as waiting",
     !d?.lines.some((l) => /hallway drywall/.test(l.title)), JSON.stringify(d?.lines));
-  t.ck("and the panel says how to see it", /1 more booked/.test(d?.more || ""), d?.more);
+  t.ck("and the panel says how many more are booked", /1 more booked/.test(d?.more || ""), d?.more);
+  // Not "Open My Jobs": the rest lives on Sound's side, under Sound's name.
+  t.ck("and opens Sound's side, not My Jobs", (d?.open || []).some((x) => /Open Sound Property Management's dashboard/.test(x))
+    && !(d?.open || []).some((x) => /My Jobs/.test(x)), JSON.stringify(d?.open));
   // The colour: violet, not the amber that means "waiting" or the green that means booked.
   t.ck("assigned-no-time is violet, not the waiting amber",
     paint?.bg === "rgb(239, 233, 251)" && gate?.bg !== paint?.bg, `${paint?.bg} vs ${gate?.bg}`);
@@ -214,19 +228,16 @@ try {
   const j = await panel(page);
   t.ck("the same panel is on the Jobs screen", !!j && /waiting on you/i.test(j.head), JSON.stringify(j));
 
-  console.log("\n-- My Jobs --");
-  await openNav(page, "My Jobs");
-  const mj = await page.evaluate(() => {
-    const s = [...document.querySelectorAll(".dash-sec.sec-yt")].find((x) => /Waiting on you/i.test(x.innerText));
-    return { head: s?.querySelector("h3")?.innerText || "",
-      titles: s ? [...s.querySelectorAll(".jl-title")].map((x) => x.innerText) : [] };
+  console.log("\n-- no My Jobs here; the client link carries the count --");
+  const items = await page.evaluate(() => [...document.querySelectorAll("nav button")].map((b) => b.innerText.trim()));
+  t.ck("there is no My Jobs in this account's nav", items.length > 0 && !items.some((x) => /^My Jobs/.test(x)),
+    JSON.stringify(items));
+  const link = await page.evaluate(() => {
+    const b = document.querySelector(".drawer-actions .client-dash");
+    return { name: b?.querySelector(".sw-name")?.textContent || "", n: b?.querySelector(".count")?.textContent || "" };
   });
-  t.ck("My Jobs lists the unscheduled job under Waiting on you",
-    mj.titles.some((x) => /Paint is peeling/.test(x)), JSON.stringify(mj));
-  t.ck("headed as setting a time", /set a time/i.test(mj.head), mj.head);
-  const navCount = await page.evaluate(() => [...document.querySelectorAll("nav button")]
-    .find((b) => /^My Jobs/.test(b.innerText.trim()))?.innerText.replace(/\s+/g, " ") || "");
-  t.ck("the My Jobs nav entry counts both things waiting", /My Jobs\s*2/.test(navCount), navCount);
+  t.ck("Sound's link above My account counts both things waiting", link.name === "Sound Property Management" && link.n === "2",
+    JSON.stringify(link));
 
   t.ck("nothing threw", logs.length === 0 && crashes.length === 0, [...logs, ...crashes].join(" | "));
   await ctx.close().catch(() => {});

@@ -2294,6 +2294,8 @@ export default function SubSub() {
     }
   };
   const [impersonating, setImpersonating] = useState(null);  // { by, account }
+  // A refusal from opening a client's side, said where the link was.
+  const [clientErr, setClientErr] = useState("");
   // A STAFF SESSION LASTS THIRTY MINUTES AND THE SCREEN NEVER SAID SO. After
   // that every write is refused with impersonation_expired, and the app went
   // on looking exactly as it had -- so a contractor's "Propose a time" came
@@ -4076,6 +4078,41 @@ export default function SubSub() {
   // before -- the work is the reason for the screen.
   const ownWork = ownSub && (kindOf(account) === "subcontractor"
     || myWork.length > 0 || myQuotes.length > 0) ? ownSub : null;
+  // THE CLIENTS THIS COMPANY WORKS FOR, EACH ONE A WAY INTO THEIR SIDE.
+  // Reported from Cascade as "two dashboards in one": My Jobs and Get your
+  // GCs sat in the same nav as Jobs, so the account's own work and the work
+  // a client gave it read as one product with two of everything. The client's
+  // view already exists -- the contractor seat accepting a connect request
+  // created, which wears the client's name at the top -- so the account's own
+  // menu links to it, above My account, and stops drawing a copy of it.
+  //
+  // Read off the work (a client is somebody who gave us some) and off the
+  // seats (somebody we connected with before any work came). A link needs a
+  // seat to land in, so outside a staff session only seats are listed; in a
+  // staff session the memberships are not loaded, and the server is asked
+  // and says no by name if there is no seat there.
+  const clientLinks = useMemo(() => {
+    if (!ownSub || role === "contractor") return [];
+    const seats = new Set(myMemberships.filter((m) => m.role === "contractor"
+      && m.accountId !== account.id).map((m) => m.accountId));
+    const byId = new Map();
+    for (const w of elsewhere) {
+      const e = w.elsewhere;
+      if (!e?.accountId || e.accountId === account.id) continue;
+      const row = byId.get(e.accountId) || { accountId: e.accountId, name: e.name || "", waiting: 0 };
+      if (crewAction(w, now)) row.waiting += 1;
+      byId.set(e.accountId, row);
+    }
+    for (const id of seats) {
+      if (byId.has(id)) continue;
+      const a = accounts.find((x) => x.id === id);
+      if (a) byId.set(id, { accountId: id, name: a.name, waiting: 0 });
+    }
+    return [...byId.values()]
+      .filter((c) => c.name && (impersonating || seats.has(c.accountId)))
+      .sort((a, b) => (b.waiting - a.waiting) || a.name.localeCompare(b.name));
+  }, [ownSub, role, myMemberships, account, elsewhere, now, accounts, impersonating]);
+  const clientIds = new Set(clientLinks.map((c) => c.accountId));
   const packSource = role === "contractor" ? mySub : myCompany?.docs;
   const packOnFile = !!packSource && PACK_KINDS.some((k) => packSource[k]);
   const canQuickSend = canShowQr && packOnFile;
@@ -5070,6 +5107,101 @@ export default function SubSub() {
     await hydrateAccount(accountId, currentUserId);
   };
 
+  // STAFF SIGNING IN AS A SEAT. One function for the console's "Open as
+  // them" and for the client link in a subcontractor account's own menu,
+  // which re-signs staff into the client's account as the same person: a
+  // staff session is pinned to one account, so goToSeat cannot move it, and
+  // two copies of this would be two places to forget a step.
+  const impersonateInto = async (acct, asUserId, by) => {
+    const prior = getAuth();
+    // Mid-session, the stored token would make the server read
+    // this call as the CUSTOMER'S seat rather than as staff, and
+    // the platform route would refuse it. So the call goes out
+    // without it, and it is put back if the switch is refused.
+    if (prior?.impersonation) setAuth({ ...prior, impersonation: undefined });
+    let r;
+    try { r = await api.platform.impersonate(acct.id, null, asUserId); }
+    catch (e) { if (prior) setAuth(prior); throw e; }
+    // The session being left is handed back rather than left to
+    // run out, so the log shows one seat at a time.
+    if (prior?.impersonation) api.platform.endImpersonation(prior.impersonation);
+    // The token is what the API accepts. Setting the ids alone
+    // used to leave every call refused, and the app fell back to
+    // "contractor with no contractor record" -- an empty screen
+    // where the account should have been.
+    setAuth({ userId: r.actAsUserId, accountId: r.accountId, impersonation: r.token });
+    setImpersonating({ by, account: acct, token: r.token,
+      // When it runs out, and whose seat to ask for again when it
+      // does -- so "Sign in again" lands in the same seat rather
+      // than whichever one the server would pick by default.
+      expiresAt: r.expiresAt || null, asUserId: r.actAsUserId,
+      // WHICH SEAT, when it is not an admin one. Landing in a pm
+      // seat and finding Account, billing and branding missing
+      // reads as the tool being broken; naming it reads as the
+      // account having no admin, which is the real problem and
+      // the customer's to fix.
+      // WHICH SEAT, whenever it is not an admin one -- and not
+      // only when the server picked it. A staff member who names
+      // a contractor seat deliberately gets the contractor portal
+      // and used to get no explanation for it at all, because
+      // this read `fellBack`, which is about how the seat was
+      // chosen rather than about what it is.
+      seatRole: r.actAsRole === "admin" ? null : r.actAsRole,
+      noAdmin: r.accountHasAdmin === false,
+      // WHAT THE SESSION REACHES, which is not what the seat
+      // says. An account with no admin has nobody inside it who
+      // can grant the role, so a team seat stands in -- the
+      // Worker decided that and this carries the answer. Deriving
+      // it here from seatRole and noAdmin would be the same fact
+      // held twice, in two languages, which is the shape that put
+      // "nobody to sign in as" over "1 team users".
+      standingIn: !!r.standingIn });
+    setCurrentAccountId(r.accountId); setCurrentUserId(r.actAsUserId);
+    setSuperadminView(false);
+
+    // And then actually load it. The console has the platform's
+    // data, not this account's, so without this the app renders
+    // whatever happened to be in state.
+    const acctData = await api.getAccount();
+    setAccounts((prev) => [...prev.filter((a) => a.id !== acctData.id), {
+      id: acctData.id, name: acctData.name, subdomain: acctData.subdomain,
+      kind: acctData.kind, plan: acctData.plan, billing: acctData.billing,
+      logoData: acctData.logoKey ? logoUrl(acctData.id) : null,
+      useDefaultMark: acctData.useDefaultMark, theme: acctData.theme,
+      trades: acctData.trades, subscriptionStatus: acctData.subscriptionStatus,
+      currentPeriodEnd: acctData.currentPeriodEnd,
+      hostnameStatus: acctData.hostnameStatus,
+    }]);
+    await hydrateAccount(r.accountId, r.actAsUserId);
+    // A contractor seat lands on its own portal, which is the client's view
+    // of the work; every other seat lands where an admin's would.
+    setPane("jobs");
+    setTab(r.actAsRole === "contractor" && !r.standingIn ? ROLES.contractor.can[0] : ROLES.admin.can[0]);
+    setLoggedIn(true);
+  };
+
+  // Into a client's side of the work, from the account's own menu. Staff are
+  // signed in again as the same person on the client's account, because a
+  // staff session is pinned to one account; everybody else goes through
+  // goToSeat like every other door. `returnTo` is what draws the way back,
+  // since a staff session never loads the person's other seats.
+  const openClient = async (c, { back = false } = {}) => {
+    setUserMenu(false); setMobileNav(false); setClientErr("");
+    if (impersonating && !impersonating.expired) {
+      const from = { id: account.id, name: account.name };
+      try {
+        await impersonateInto({ id: c.accountId, name: c.name }, currentUserId, impersonating.by);
+        setImpersonating((prev) => (prev ? { ...prev, returnTo: back ? null : from } : prev));
+      } catch (e) {
+        setClientErr(e?.body?.error === "not_on_this_account"
+          ? tt("You don't have a login on {name}'s account yet. It is made when they accept your request to connect.", { name: c.name })
+          : tt("Couldn't open {name} just now. Try again in a moment.", { name: c.name }));
+      }
+      return;
+    }
+    await goToSeat(c.accountId);
+  };
+
   // `email` is only used in dev-stub mode (see LoginPage) — in real-auth
   // mode, identity already comes from the Supabase session that
   // signInWithPassword() just established, so this just asks who that is.
@@ -5883,57 +6015,7 @@ export default function SubSub() {
             // no admin openable at all.
             if (staff) {
               try {
-                const r = await api.platform.impersonate(acct.id, null, asUserId);
-                // The token is what the API accepts. Setting the ids alone
-                // used to leave every call refused, and the app fell back to
-                // "contractor with no contractor record" -- an empty screen
-                // where the account should have been.
-                setAuth({ userId: r.actAsUserId, accountId: r.accountId, impersonation: r.token });
-                setImpersonating({ by: me.name, account: acct, token: r.token,
-                  // When it runs out, and whose seat to ask for again when it
-                  // does -- so "Sign in again" lands in the same seat rather
-                  // than whichever one the server would pick by default.
-                  expiresAt: r.expiresAt || null, asUserId: r.actAsUserId,
-                  // WHICH SEAT, when it is not an admin one. Landing in a pm
-                  // seat and finding Account, billing and branding missing
-                  // reads as the tool being broken; naming it reads as the
-                  // account having no admin, which is the real problem and
-                  // the customer's to fix.
-                  // WHICH SEAT, whenever it is not an admin one -- and not
-                  // only when the server picked it. A staff member who names
-                  // a contractor seat deliberately gets the contractor portal
-                  // and used to get no explanation for it at all, because
-                  // this read `fellBack`, which is about how the seat was
-                  // chosen rather than about what it is.
-                  seatRole: r.actAsRole === "admin" ? null : r.actAsRole,
-                  noAdmin: r.accountHasAdmin === false,
-                  // WHAT THE SESSION REACHES, which is not what the seat
-                  // says. An account with no admin has nobody inside it who
-                  // can grant the role, so a team seat stands in -- the
-                  // Worker decided that and this carries the answer. Deriving
-                  // it here from seatRole and noAdmin would be the same fact
-                  // held twice, in two languages, which is the shape that put
-                  // "nobody to sign in as" over "1 team users".
-                  standingIn: !!r.standingIn });
-                setCurrentAccountId(r.accountId); setCurrentUserId(r.actAsUserId);
-                setSuperadminView(false);
-
-                // And then actually load it. The console has the platform's
-                // data, not this account's, so without this the app renders
-                // whatever happened to be in state.
-                const acctData = await api.getAccount();
-                setAccounts((prev) => [...prev.filter((a) => a.id !== acctData.id), {
-                  id: acctData.id, name: acctData.name, subdomain: acctData.subdomain,
-                  kind: acctData.kind, plan: acctData.plan, billing: acctData.billing,
-                  logoData: acctData.logoKey ? logoUrl(acctData.id) : null,
-                  useDefaultMark: acctData.useDefaultMark, theme: acctData.theme,
-                  trades: acctData.trades, subscriptionStatus: acctData.subscriptionStatus,
-                  currentPeriodEnd: acctData.currentPeriodEnd,
-                  hostnameStatus: acctData.hostnameStatus,
-                }]);
-                await hydrateAccount(r.accountId, r.actAsUserId);
-                setTab(ROLES.admin.can[0]);
-                setLoggedIn(true);
+                await impersonateInto(acct, asUserId, me.name);
               } catch (e) {
                 // Leave no half-started session behind: a token in storage
                 // with the console still on screen is the worst of both.
@@ -5980,6 +6062,23 @@ export default function SubSub() {
     if (staff?.userId) setCurrentUserId(staff.userId);
   };
 
+  // A crew's day off, or whether it is taking work. One pair of handlers for
+  // the portal's calendar and the roster page's My crews tab, so the two
+  // cannot write the crews two ways.
+  const toggleCrewDay = (crewId, day) => {
+    const crews = (portalSub.crews || []).map((c) => c.id !== crewId ? c : {
+      ...c,
+      unavailableDays: crewOffDays(c).includes(day)
+        ? crewOffDays(c).filter((d) => d !== day)
+        : [...crewOffDays(c), day],
+    });
+    return mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews).catch(() => {});
+  };
+  const toggleCrewAvailable = (crewId, v) => {
+    const crews = (portalSub.crews || []).map((c) => c.id !== crewId ? c : { ...c, available: v });
+    return mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews).catch(() => {});
+  };
+
   // WORK OTHER ACCOUNTS HAVE GIVEN THIS ONE, on the screens this account
   // actually opens. Reported from Cascade: Sound gave them a tenant's job and
   // it was on neither their Dashboard nor their Jobs screen -- only behind My
@@ -5988,7 +6087,7 @@ export default function SubSub() {
   // reads, because a const read before its declaration is a blank screen.
   const clientWorkPanel = ownWork && elsewhere.length > 0 ? (
     <ClientWorkPanel rows={elsewhere} now={now}
-      onOpenAll={() => setTab("portal")}
+      links={clientLinks} onOpenClient={openClient}
       cardProps={{
         onRespond: (jobId, trade, status, ctx) => (ctx?.elsewhere
           ? respondAway(ctx.a.id, status) : respondTrade(jobId, trade, status)),
@@ -6212,13 +6311,39 @@ export default function SubSub() {
                     )}
                     {recruitBlock}
                     {can("tenant") && <div className="um-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
+                    {/* Above My account: the companies this one works for,
+                        each opening their side of the work under their name. */}
+                    {clientLinks.length > 0 && (
+                      <>
+                        <div className="um-sec">{tt("Companies you work for")}</div>
+                        {clientLinks.map((c) => (
+                          <button key={c.accountId} className="um-acct um-client" onClick={() => openClient(c)}>
+                            <span className="ua-text">
+                              <span className="ua-name">{c.name}</span>
+                              <span className="ua-role">{tt("Their jobs for you")}</span>
+                            </span>
+                            {c.waiting > 0 && <span className="count amber">{c.waiting}</span>}
+                          </button>
+                        ))}
+                      </>
+                    )}
+                    {impersonating?.returnTo && impersonating.returnTo.id !== account.id && (
+                      <button className="um-acct um-client" onClick={() => openClient(
+                        { accountId: impersonating.returnTo.id, name: impersonating.returnTo.name }, { back: true })}>
+                        <span className="ua-text">
+                          <span className="ua-name">{impersonating.returnTo.name}</span>
+                          <span className="ua-role">{tt("Back to your company")}</span>
+                        </span>
+                      </button>
+                    )}
+                    {clientErr && <p className="um-err">{clientErr}</p>}
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> {tt("My account")}
                     </button>
-                    {myMemberships.length > 1 && (
+                    {myMemberships.filter((m) => !clientIds.has(m.accountId)).length > 1 && (
                       <>
                         <div className="um-sec">Switch account</div>
-                        {myMemberships.map((m) => {
+                        {myMemberships.filter((m) => !clientIds.has(m.accountId)).map((m) => {
                           const a = accounts.find((x) => x.id === m.accountId);
                           if (!a) return null;
                           return (
@@ -6417,36 +6542,11 @@ export default function SubSub() {
                 <span className="count amber">{uniformOrders.filter((o) => o.status === "pending").length}</span>}
             </button>
           )}
-          {/* AND A HIREABLE ACCOUNT'S OWN TEAM GETS THE TWO THAT ARE ABOUT
-              WORK GIVEN TO THEM. Not the whole portal: Compliance pack is
-              already a tab in Account for them and two names for one object
-              is how somebody concludes there are two of them; Job Settings
-              is engagement-shaped and there is no engagement with yourself;
-              Connect is on the dashboard, which is where it
-              was moved for exactly this reason. */}
-          {/* AND THEIR AVAILABILITY. Reported as "where do I adjust my
-              availability, I can't find it": the contractor seat sets it under
-              Job Settings, which is engagement-shaped, so the business owner
-              had nowhere to block a single day. Crews and their days off live
-              on the company row, which IS theirs, so these two are not. */}
-          {/* ONE ENTRY. My Jobs, My calendar, My availability and My Crews
-              were four nav items for one question -- who is going where, and
-              when -- reported as "too many navigation items to spread out".
-              The calendar and the days off are one view inside My Jobs
-              (JOB_PANES), and the crews are a tab of the roster page beside
-              the companies this account hires, because both are the labour. */}
-          {!can("portal") && ownWork && [["jobs", "My Jobs"]]
-            /* 075. A subcontractor account's own team refers GCs too. A
-               hiring account refers from Account -> Refer a GC instead,
-               because for them it is an account matter, not their work. */
-            .concat(kindOf(account) === "subcontractor" ? [["refer", "Get your GCs on SubSub"]] : [])
-            .map(([id, label]) => (
-              <button key={id} className={tab === "portal" && (id === "jobs" ? JOB_PANES.includes(pane) : pane === id) ? "on" : ""}
-                onClick={() => { setPane(id); setTab("portal"); }}>
-                {tt(label)}
-                {id === "jobs" && crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
-              </button>
-            ))}
+          {/* NO "MY JOBS" HERE ANY MORE, and no "Get your GCs". Both drew
+              the client's side of the work inside this account's own nav,
+              beside Jobs, which read as two dashboards in one. The client's
+              side is a link above My account (clientLinks), and Get your GCs
+              lives there, on the subcontractor's side. */}
           {can("portal") && [
             /* My calendar was an entry of its own here, on the reasoning that
                a month buried behind a toggle stays unfound. It is a tab at the
@@ -6487,6 +6587,32 @@ export default function SubSub() {
           ))}
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
+            {/* THE CLIENT'S DASHBOARD, ABOVE MY ACCOUNT. Asked for in those
+                words: "a link down by my account to the company they are
+                working for". It opens their side under their name, which is
+                where the work they gave you, Job Settings and Get your GCs
+                live -- not a copy of it inside your own nav. */}
+            {clientLinks.map((c) => (
+              <button key={c.accountId} className="switch-acct client-dash" onClick={() => openClient(c)}>
+                <Building2 size={15} />
+                <span className="sw-main">
+                  <span className="sw-name">{c.name}</span>
+                  <span className="sw-what">{tt("Their jobs for you")}</span>
+                </span>
+                {c.waiting > 0 && <span className="count amber">{c.waiting}</span>}
+              </button>
+            ))}
+            {impersonating?.returnTo && impersonating.returnTo.id !== account.id && (
+              <button className="switch-acct client-dash" onClick={() => openClient(
+                { accountId: impersonating.returnTo.id, name: impersonating.returnTo.name }, { back: true })}>
+                <ArrowUpDown size={15} />
+                <span className="sw-main">
+                  <span className="sw-name">{impersonating.returnTo.name}</span>
+                  <span className="sw-what">{tt("Back to your company")}</span>
+                </span>
+              </button>
+            )}
+            {clientErr && <p className="drawer-err">{clientErr}</p>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
                 it. "Switch to Cascade Management" on its own reads as taking
@@ -6496,7 +6622,7 @@ export default function SubSub() {
                 from the role, so the role is the half that was missing. */}
             {/* Under the threshold this is the flat list it always was. Over
                 it, one entry opening a panel -- see SWITCHER_THRESHOLD. */}
-            {otherSeats.length > 0 && !usePanel(otherSeats.length) && otherSeats.map((seat) => (
+            {otherSeats.length > 0 && !usePanel(otherSeats.length) && otherSeats.filter((seat) => !clientIds.has(seat.accountId)).map((seat) => (
               <button key={seat.accountId} className="switch-acct"
                 onClick={() => goToSeat(seat.accountId)}>
                 <ArrowUpDown size={15} />
@@ -6621,8 +6747,27 @@ export default function SubSub() {
             </div>
           )}
           {netView === "crews" && ownSub ? (
-            <MyCrews key={ownSub.id} embedded crews={ownSub.crews || []}
-              onSave={saveOwnCrews} saveErr={ownCrewErr} />
+            <>
+              <MyCrews key={ownSub.id} embedded crews={ownSub.crews || []}
+                onSave={saveOwnCrews} saveErr={ownCrewErr} />
+              {/* THE DAYS OFF, BESIDE THE CREWS THEY BELONG TO. This month
+                  was a tab of My Jobs, which came off this account's nav
+                  because it drew a client's side of the work inside our own.
+                  The crews and their days off are ours, so they stay here,
+                  with the work clients have given us drawn on the same
+                  month. */}
+              <section className="crew-cal">
+                <h3 className="form-sec">{tt("Days off")}</h3>
+                <MyCalendar rows={elsewhere.filter((m) => m.a.status === "accepted" || m.a.auto)}
+                  crews={ownSub.crews || []}
+                  onToggleCrewDay={toggleCrewDay} onToggleCrewAvailable={toggleCrewAvailable}
+                  saveErr={ownCrewErr}
+                  onOpen={(m) => {
+                    const c = clientLinks.find((x) => x.accountId === m.elsewhere?.accountId);
+                    if (c) openClient(c);
+                  }} />
+              </section>
+            </>
           ) : (<>
           {/* Arriving from a building's card. A filtered list that does not
               say it is filtered is how somebody concludes they have three
@@ -8137,19 +8282,8 @@ export default function SubSub() {
             /* Through the one door that fits the seat: a contractor seat
                writes the roster row it was invited onto, the account's own
                team writes its own company. Same crew shape either way. */
-            onToggleCrewDay={(crewId, day) => {
-              const crews = (portalSub.crews || []).map((c) => c.id !== crewId ? c : {
-                ...c,
-                unavailableDays: crewOffDays(c).includes(day)
-                  ? crewOffDays(c).filter((d) => d !== day)
-                  : [...crewOffDays(c), day],
-              });
-              return mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews).catch(() => {});
-            }}
-            onToggleCrewAvailable={(crewId, v) => {
-              const crews = (portalSub.crews || []).map((c) => c.id !== crewId ? c : { ...c, available: v });
-              return mySub ? patchSub(mySub.id, { crews }) : saveOwnCrews(crews).catch(() => {});
-            }}
+            onToggleCrewDay={toggleCrewDay}
+            onToggleCrewAvailable={toggleCrewAvailable}
             onSetWarranty={(w) => patchSub(mySub.id, { warranty: w })}
             onSetCategories={(cats) => patchSub(mySub.id, {
               categories: cats,
@@ -34254,7 +34388,7 @@ function ActDot({ tone = "warn", label = "Needs you" }) {
 // THE CLIENT-WORK PANEL. What other accounts have given this one, led by what
 // is waiting on it, on the Dashboard and the Jobs screen. Every row is the same
 // JobRequestCard My Jobs draws, answered in place.
-function ClientWorkPanel({ rows, now, onOpenAll, cardProps }) {
+function ClientWorkPanel({ rows, now, links = [], onOpenClient, cardProps }) {
   const live = rows.filter((m) => m.a.status !== "declined"
     && m.job.status !== "completed" && m.job.status !== "cancelled");
   if (!live.length) return null;
@@ -34280,11 +34414,17 @@ function ClientWorkPanel({ rows, now, onOpenAll, cardProps }) {
       </p>
       {need.map(card)}
       {rest.slice(0, need.length ? 0 : SHOW).map(card)}
-      <button className="dash-more" onClick={onOpenAll}>
-        {rest.length > (need.length ? 0 : SHOW)
-          ? `${rest.length - (need.length ? 0 : SHOW)} more booked — open My Jobs`
-          : tt("Open My Jobs")} <ChevronRight size={13} />
-      </button>
+      {/* The rest of it lives on each client's side, under their name --
+          a link per client rather than "Open My Jobs", which was a second
+          dashboard inside this one. */}
+      {rest.length > (need.length ? 0 : SHOW) && (
+        <p className="portal-sec-note">{tt("{n} more booked.", { n: rest.length - (need.length ? 0 : SHOW) })}</p>
+      )}
+      {links.map((c) => (
+        <button key={c.accountId} className="dash-more" onClick={() => onOpenClient(c)}>
+          {tt("Open {name}'s dashboard", { name: c.name })} <ChevronRight size={13} />
+        </button>
+      ))}
     </section>
   );
 }
@@ -34644,7 +34784,11 @@ function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
         : `${crews.length} crew${crews.length === 1 ? "" : "s"} \u00b7 ${
             crews.reduce((n, c) => n + (c.members || []).length, 0)} people`} />}
     <div className="portal-panel">
-      <p className="panel-note">{tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs.")}</p>
+      {/* Embedded on the roster page, the calendar is directly below; on a
+          contractor seat's own My Crews it is under My Jobs. */}
+      <p className="panel-note">{embedded
+        ? tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar below.")
+        : tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs.")}</p>
       <div className="crew-edit">
         {list.map((cr, ci) => (
           <div key={cr.id} className="crew-edit-card">
@@ -43324,6 +43468,9 @@ p.fld-note{margin:6px 0 0}
   font-weight:700;padding:5px 10px;border-radius:7px;cursor:pointer;font-family:inherit;
   flex:none;margin-left:24px}
 .qsend-again:hover{border-color:var(--brand)}
+.um-err,.drawer-err{margin:4px 14px 8px;font-size:12.5px;line-height:1.4;color:var(--red)}
+.drawer-err{margin:4px 20px 8px}
+.um-client .count{margin-left:auto}
 .um-sec{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;
   color:var(--ink-soft);padding:10px 14px 5px;border-top:1px solid var(--line);margin-top:4px}
 .um-acct{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;

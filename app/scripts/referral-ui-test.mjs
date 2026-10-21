@@ -27,6 +27,11 @@ const WEB = 5453, API = 9153;
 const t = tally();
 
 let KIND = "subcontractor";
+// THE SUBCONTRACTOR'S SIDE IS THE CONTRACTOR SEAT. Get your GCs came off a
+// subcontractor account's own nav ("two dashboards in one") and lives where
+// the client's work does: the seat a connect request created on the client's
+// account. SEAT says which one this visit stands in.
+let SEAT = "contractor";
 const posts = [];
 const mine = () => (KIND === "subcontractor" ? {
   available: true, kind: "sub", code: "K7Q2MXRB", link: "https://subsub.work/gc?ref=K7Q2MXRB",
@@ -39,12 +44,21 @@ const mine = () => (KIND === "subcontractor" ? {
   from: "Sound Property Management", preferredSub: false, opens: 0, invitesToday: 0, inviteLimit: 25,
   referred: [], rewards: [],
 });
+const onSeat = () => KIND === "subcontractor" && SEAT === "contractor";
 const acct = () => ({
-  id: "acc_x", name: KIND === "subcontractor" ? "Cascade Apartment Services" : "Sound Property Management",
-  subdomain: "cascade", kind: KIND, plan: "basic", billing: "monthly", useDefaultMark: true, theme: null,
-  trades: ["plumbing"], logoKey: null, subscriptionStatus: "active",
-  user: { id: "u_rb", name: "R Braun", email: "rb@cascade.test", role: "admin" },
+  id: "acc_x", name: KIND === "subcontractor" && !onSeat() ? "Cascade Apartment Services" : "Sound Property Management",
+  subdomain: "cascade", kind: onSeat() ? "property_manager" : KIND, plan: "basic", billing: "monthly",
+  useDefaultMark: true, theme: null, trades: ["plumbing"], logoKey: null, subscriptionStatus: "active",
+  user: { id: "u_rb", name: "R Braun", email: "rb@cascade.test", role: onSeat() ? "contractor" : "admin" },
 });
+const SUB_ROW = {
+  id: "cmp_cas", companyId: "cmp_cas", engagementId: "en_cas", accountId: "acc_x",
+  company: "Cascade Apartment Services", contact: "R Braun", email: "rb@cascade.test", phone: null,
+  categories: ["plumbing"], caps: [], crews: [], propertyIds: [], zips: [], notify: {}, rating: null,
+  bond: true, insurance: true, contract: true, w9: true, hasPortal: true, answersForItself: true,
+  license: "", licenseCheck: null, available: true, unavailableDays: [], docReview: {}, coverage: {},
+  autoSchedule: false,
+};
 const company = () => ({
   companyId: "cmp_cas", company: "Cascade Apartment Services", contact: "R Braun", email: "rb@cascade.test",
   phone: "2065550199", license: "", ubi: "", city: "Tacoma", state: "WA", zip: "98407",
@@ -61,11 +75,13 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     posts.push(body);
     return [200, { ok: true, sent: (body.emails || []).length, texted: body.sms || 0, skipped: [], left: 20 }];
   }
-  if (path === "/api/my-company") return KIND === "subcontractor" ? [200, company()] : [409, { error: "not_hireable" }];
+  if (path === "/api/my-company") return KIND === "subcontractor" && !onSeat() ? [200, company()] : [409, { error: "not_hireable" }];
+  if (path === "/api/subs") return [200, onSeat() ? [SUB_ROW] : []];
   if (path === "/api/my-work") return [200, { work: [] }];
   if (path === "/api/account-users") return [200, [{ id: "u_rb", name: "R Braun", email: "rb@cascade.test",
-    phone: null, role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
-  if (["/api/jobs", "/api/subs", "/api/properties", "/api/invites", "/api/clients", "/api/visits",
+    phone: null, role: onSeat() ? "contractor" : "admin", subId: onSeat() ? "cmp_cas" : null, propertyIds: [], unit: null,
+    hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
+  if (["/api/jobs", "/api/properties", "/api/invites", "/api/clients", "/api/visits",
     "/api/my-connect-requests", "/api/connect-requests", "/api/property-transfers", "/api/my-quotes",
     "/api/doc-shares", "/api/inspections", "/api/change-orders", "/api/tenants", "/api/agreements"].includes(path)) return [200, []];
   return undefined;
@@ -101,7 +117,20 @@ const typeInto = (page, sel, v) => page.evaluate(({ sel, v }) => {
 }, { sel, v });
 
 try {
-  console.log("\n-- a subcontractor account --");
+  console.log("\n-- a subcontractor's own account: not here --");
+  {
+    SEAT = "admin";
+    const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_x" }, viewport: { width: 1200, height: 1700 } });
+    await wait(2600);
+    const items = await nav(page);
+    t.ck("the subcontractor account's own app rendered", items.some((x) => /^Dashboard/.test(x)), JSON.stringify(items));
+    t.ck("and Get your GCs is not in its own nav", !items.some((x) => /^Get your GCs/.test(x)), JSON.stringify(items));
+    await ctx.close();
+    SEAT = "contractor";
+  }
+
+  console.log("\n-- the subcontractor's side: their seat on a client's account --");
   {
     const { ctx, page, crashes } = await visitApp(browser, { host: "cascade", webPort: WEB,
       seat: { userId: "u_rb", accountId: "acc_x" }, viewport: { width: 1200, height: 1700 } });

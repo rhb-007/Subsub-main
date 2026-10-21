@@ -260,8 +260,12 @@ try {
   console.log("\n-- the screen --");
   {
     const src = readFileSync(join(app, "src", "App.tsx"), "utf8");
-    ck("the account's own team has one nav entry for its work",
-      /!can\("portal"\) && ownWork && \[\["jobs", "My Jobs"\]\]/.test(src));
+    // My Jobs came off the account's own nav: a client's side of the work is
+    // a link above My account, and the crews' days off sit with the crews.
+    ck("the account's own team has no My Jobs entry of its own",
+      !/!can\("portal"\) && ownWork && \[\["jobs", "My Jobs"\]\]/.test(src));
+    ck("and the crews tab draws the days-off month",
+      /<MyCrews key=\{ownSub\.id\} embedded[\s\S]{0,900}<MyCalendar[\s\S]{0,200}onToggleCrewDay=\{toggleCrewDay\}/.test(src));
     ck("its crews save through its own company, never patchSub",
       /onSetCrews=\{\(crews\) => \(mySub \? patchSub\(mySub\.id, \{ crews \}\) : saveOwnCrews\(crews\)\)\}/.test(src));
     ck("and saveOwnCrews goes to my-company", /const saveOwnCrews[\s\S]{0,400}api\.saveMyCompany\(\{ crews \}\)/.test(src));

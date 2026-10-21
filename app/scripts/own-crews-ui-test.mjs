@@ -89,6 +89,11 @@ const open = async (page, label) => {
     .find((b) => b.innerText.trim().toUpperCase().startsWith(l.toUpperCase()))?.click(), label);
   await wait(1000);
 };
+const openCrews = async (page) => {
+  await open(page, "Subcontractors");
+  await page.evaluate(() => [...document.querySelectorAll(".net-view button")].find((b) => /My crews/.test(b.innerText))?.click());
+  await wait(800);
+};
 const main = (page) => page.evaluate(() => (document.querySelector(".ss-main")?.innerText || "").replace(/\s+/g, " "));
 const setVal = (page, sel, i, v) => page.evaluate(({ sel, i, v }) => {
   const el = document.querySelectorAll(sel)[i];
@@ -110,37 +115,24 @@ try {
   t.ck("the app rendered", items.length > 0, JSON.stringify(items));
   // ONE ENTRY FOR THE WORK. My calendar, My availability and My Crews were
   // three more nav items for one question, reported as too many.
-  t.ck("My Jobs is in the nav", items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
+  // MY JOBS CAME OFF THIS NAV: it drew a client's side of the work inside
+  // the account's own, reported as "two dashboards in one". The crews and
+  // their days off are this account's, so they are on the roster page's My
+  // crews tab, one month with the work clients gave drawn on it.
+  t.ck("My Jobs is not in the nav", !items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
   t.ck("and My calendar, My availability and My Crews are not",
     !items.some((x) => /^My calendar|^My availability|^My Crews/.test(x)), JSON.stringify(items));
 
-  await open(page, "My Jobs");
-  const tabs = await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].map((b) => b.innerText.trim()));
-  t.ck("My Jobs carries a Jobs and a Calendar view", tabs.length === 2 && /^Jobs/.test(tabs[0]) && /^Calendar/.test(tabs[1]),
-    JSON.stringify(tabs));
-  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
-  await wait(800);
+  await openCrews(page);
   let txt = await main(page);
-  t.ck("the calendar opens under My Jobs", /Your jobs and your crews' days off/.test(txt) && !!(await page.$(".jcal-grid")),
-    txt.slice(0, 200));
-  t.ck("and My Jobs stays the selected nav entry", /^My Jobs/.test(await page.evaluate(() =>
-    (document.querySelector("nav button.on")?.innerText || "").trim())));
-  // NO CREWS IS A WAY IN, not a sentence pointing somewhere else.
-  const goBtn = await page.evaluate(() => {
-    const b = [...document.querySelectorAll(".mcal-crews button")].find((x) => /Add a crew/.test(x.innerText));
-    b?.click();
-    return !!b;
-  });
-  t.ck("with no crews it offers to add one", goBtn);
-  await wait(900);
-  txt = await main(page);
-  // CREWS SIT WITH THE SUBCONTRACTORS, because both are the labour.
   const netTabs = await page.evaluate(() => [...document.querySelectorAll(".net-view button")]
     .map((b) => ({ t: b.innerText.trim(), on: b.classList.contains("on") })));
-  t.ck("that lands on the roster page's My crews tab",
+  t.ck("the roster page has a My crews tab",
     netTabs.length === 2 && /^Subcontractors/.test(netTabs[0].t) && /^My crews/.test(netTabs[1].t) && netTabs[1].on,
     JSON.stringify(netTabs));
   t.ck("with the crew editor on it", /Save crews/.test(txt), txt.slice(0, 200));
+  t.ck("and the days-off month under it", /Days off/.test(txt) && !!(await page.$(".crew-cal .jcal-grid")),
+    txt.slice(0, 200));
 
   console.log("\n-- naming a crew and saving it --");
   await setVal(page, ".crew-name-input", 0, "Day crew");
@@ -163,9 +155,7 @@ try {
   t.ck("the Subcontractors entry opens on the roster half", back[0] === true && back[1] === false, JSON.stringify(back));
 
   console.log("\n-- marking a day off on the calendar --");
-  await open(page, "My Jobs");
-  await page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
-  await wait(800);
+  await openCrews(page);
   const chip = await page.evaluate(() => document.querySelector(".mcal-crew")?.innerText.replace(/\s+/g, " ").trim() || "");
   t.ck("the crew is named above the month, taking work", /Day crew/.test(chip) && /Taking work/.test(chip), chip);
   const today = await page.evaluate(() => {
@@ -238,9 +228,7 @@ try {
     const v3 = await visitApp(browser, { host: "cascade", webPort: WEB,
       seat: { userId: "u_rb", accountId: "acc_cas" }, viewport: { width: 1340, height: 1800 } });
     await wait(2600);
-    await open(v3.page, "My Jobs");
-    await v3.page.evaluate(() => [...document.querySelectorAll(".jobs-view button")].find((b) => /Calendar/.test(b.innerText))?.click());
-    await wait(700);
+    await openCrews(v3.page);
     // Page to the month the day is in, if it is next month.
     if (!(await v3.page.$(`.jcal-cell[data-day="${D}"]`))) {
       await v3.page.evaluate(() => document.querySelector('.jcal-nav[aria-label="Next month"]')?.click());
