@@ -5448,7 +5448,14 @@ export default function SubSub() {
   // 094. Back from Google's consent screen (?gcal=connected, or the reason it
   // was not). Opens My account -> Settings, where the panel says which.
   const [gcalLanded] = useState(() => {
-    try { return new URLSearchParams(window.location.search).get("gcal") || null; }
+    // "failed" carries Google's own reason beside it (gcal_why), so the panel
+    // can say which refusal it was rather than "try again in a minute".
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const g = q.get("gcal");
+      const why = q.get("gcal_why");
+      return g ? (g === "failed" && why ? `failed:${why}` : g) : null;
+    }
     catch { return null; }
   });
   const gcalAimed = useRef(false);
@@ -15722,6 +15729,25 @@ const GCAL_LANDED_TEXT = {
   failed: "Google Calendar could not be connected just now. Try again in a minute.",
   not_configured: "Google Calendar isn't set up on SubSub yet.",
 };
+// A failed exchange names Google's reason. invalid_client and its two
+// siblings are SubSub's own setting (the OAuth client id or secret), which
+// pressing again can never fix, so they say so -- with the code, because the
+// code is what whoever fixes it needs, and it reveals nothing.
+const GCAL_FAILED_WHY = {
+  invalid_client: "SubSub's Google settings are wrong, so Google turned the connection down. Pressing again won't help until that's fixed on SubSub's side.",
+  unauthorized_client: "SubSub's Google settings are wrong, so Google turned the connection down. Pressing again won't help until that's fixed on SubSub's side.",
+  deleted_client: "SubSub's Google settings point at a Google app that was deleted. Pressing again won't help until that's fixed on SubSub's side.",
+  invalid_grant: "Google said that sign-in had already been used or had expired. Press Connect again.",
+  redirect_uri_mismatch: "SubSub's Google return address doesn't match the one Google has on file. Pressing again won't help until that's fixed on SubSub's side.",
+  unreachable: "Google didn't answer just now. Try again in a minute.",
+};
+function gcalLandedText(landed) {
+  const [state, why] = String(landed).split(":");
+  if (state !== "failed") return GCAL_LANDED_TEXT[state] || GCAL_LANDED_TEXT.failed;
+  if (!why) return GCAL_LANDED_TEXT.failed;
+  const text = GCAL_FAILED_WHY[why] || "Google Calendar could not be connected.";
+  return why === "unreachable" ? text : `${text} (Google said: ${why})`;
+}
 const GCAL_ERROR_TEXT = {
   revoked: "Google stopped letting SubSub in (access was removed, or it expired). Disconnect, then connect again.",
   sealed: "SubSub can't read this connection any more. Disconnect, then connect again.",
@@ -15744,7 +15770,7 @@ function GoogleCalendarPanel({ landed = null, crewSide = true }) {
   const [s, setS] = useState(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
-  const [note, setNote] = useState(landed ? GCAL_LANDED_TEXT[landed] || GCAL_LANDED_TEXT.failed : "");
+  const [note, setNote] = useState(landed ? gcalLandedText(landed) : "");
   const [asking, setAsking] = useState(false);
   const load = () => api.googleCalendar().then(setS).catch((e) => setS({ failed: true, status: e?.status }));
   // The note stays for as long as the screen does: the address bar has

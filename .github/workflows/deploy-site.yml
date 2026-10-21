@@ -151,3 +151,22 @@ jobs:
             exit 1
           fi
           echo "subsub.work serves the site and keeps the repository private."
+
+      # The Google tag is in every page in the repository (test:discover), but
+      # only the live page says whether it reached subsub.work: a deploy that
+      # served an older copy, or something in front of the site rewriting it,
+      # would leave Google Analytics reading "no data" with nothing here saying
+      # why. So the live home and pricing pages are read for the tag itself.
+      - name: The live site carries the Google tag
+        run: |
+          for path in / /pricing.html; do
+            page=$(curl -s --max-time 15 "https://subsub.work$path")
+            loader=$(printf '%s' "$page" | grep -c "googletagmanager.com/gtag/js?id=G-3ZHHKNP0F2")
+            config=$(printf '%s' "$page" | grep -c "gtag('config', 'G-3ZHHKNP0F2')")
+            echo "$path: loader $loader, config $config"
+            if [ "$loader" != "1" ] || [ "$config" != "1" ]; then
+              echo "::error::https://subsub.work$path does not carry the Google tag exactly once."
+              exit 1
+            fi
+          done
+          echo "The live site carries the Google tag (G-3ZHHKNP0F2)."

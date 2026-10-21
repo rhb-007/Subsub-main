@@ -306,7 +306,8 @@
     "test:registries": "node --no-warnings scripts/state-registries-test.mjs",
     "test:i18n": "node --no-warnings scripts/i18n-test.mjs",
     "test:spanishui": "node --no-warnings scripts/spanish-ui-test.mjs",
-    "test:consent": "node --no-warnings scripts/consent-test.mjs"
+    "test:consent": "node --no-warnings scripts/consent-test.mjs",
+    "test:unclaimed": "node scripts/unclaimed-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

@@ -31,10 +31,10 @@ export function authUrl(env, { redirectUri, state, scopes, loginHint }) {
   return u.toString();
 }
 
-async function tokenCall(env, form) {
+async function tokenCall(env, form, fetchImpl = fetch) {
   let res;
   try {
-    res = await fetch(`${oauthBase(env)}/token`, {
+    res = await fetchImpl(`${oauthBase(env)}/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body: new URLSearchParams({
@@ -51,6 +51,19 @@ async function tokenCall(env, form) {
 
 export const exchangeCode = (env, { code, redirectUri }) =>
   tokenCall(env, { code, redirect_uri: redirectUri, grant_type: "authorization_code" });
+
+// The console's health probe: a refresh token nobody issued, so nothing is
+// granted either way, and Google's answer says only whether it knows the client.
+export const tokenProbe = (env, fetchImpl) =>
+  tokenCall(env, { refresh_token: "subsub-health-check", grant_type: "refresh_token" }, fetchImpl);
+
+// Why a code exchange failed, as a short word safe to put in an address:
+// Google's own error code, or "unreachable" when nothing answered.
+export function exchangeReason(r) {
+  if (!r || r.status === 0) return "unreachable";
+  const e = String(r.data?.error || "").toLowerCase();
+  return /^[a-z_]{1,40}$/.test(e) ? e : `http_${Number(r.status) || 0}`;
+}
 
 export const refreshAccess = (env, refreshToken) =>
   tokenCall(env, { refresh_token: refreshToken, grant_type: "refresh_token" });

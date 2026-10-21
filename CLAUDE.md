@@ -14736,6 +14736,53 @@ refactor.
   it at 1180x820 and 1366x1024. Restoring the blanket rule fails eight
   assertions, and dropping the width fails two.
 
+- **A REFUSED GOOGLE CALENDAR CONNECTION SAYS GOOGLE'S REASON, AND HEALTH
+  CHECKS THE CLIENT.** Reported as *"Google Calendar could not be connected
+  just now. Try again in a minute."* That sentence is `failed`, which the
+  callback answers only when Google refuses the code exchange after the
+  person has already approved. The likeliest cause is `invalid_client` (a
+  `GOOGLE_CLIENT_SECRET` that does not belong to `GOOGLE_CLIENT_ID`), and
+  pressing again never fixes that. The callback now sends Google's own code
+  back as `gcal_why` (`exchangeReason`: Google's word, or `unreachable`) and
+  logs it. The panel names it: a client or redirect problem says pressing
+  again won't help and shows the code; only `unreachable` says to try again.
+  The console's Health page has a **Google Calendar** probe
+  (`tokenProbe`): a refresh with a token nobody issued, which grants nothing.
+  Google answers `invalid_grant` when it knows the client (green) and
+  `invalid_client` when it does not (red, named). `test:gcal` (85) and
+  `test:gcalui` (32); three mutations fire.
+
+- **A BRANDED ADDRESS THAT IS NOT LIVE SHOWS "404 // SITE UNDER
+  CONSTRUCTION" INSTEAD OF A BROWSER ERROR.** Reported from Safari at
+  `cascadeexteriors.subsub.work`: *"Safari can't open the page because the
+  server can't be found."* Only a Scale account gets a DNS record
+  (`hostnames.js`), so every other name failed before any code ran, which
+  reads as SubSub being down. `worker-unclaimed.js` (Worker
+  `subsub-unclaimed`, deployed by `deploy-unclaimed.yml`) sits on the
+  `*.subsub.work/*` route behind a proxied wildcard DNS record, both added by
+  hand. It serves `unclaimedPage` (`shared/unclaimed.js`): forest and gold,
+  the SubSub logo, *404 // Site under construction*, *Not available yet!*,
+  the address typed, *Claim your branded SubSub URL*, and **See plans and
+  sign up** to subsub.work/pricing.
+
+  **It never stands in front of something real.** Reserved names (`app`,
+  `api`, `admin`, `www` and the rest of `NEVER_PROVISION`, now exported) and
+  anything not one label under the domain pass through without asking. A
+  branded address asks `GET /api/account-by-subdomain/:s/live`, a bare yes or
+  no from `accountOnScale`, and passes through when yes. **Anything it cannot
+  answer passes through too** (API down, a 500, an unknown shape): failing
+  open costs an unclaimed address the old error, while failing closed would
+  cover a paying customer's sign-in. **An unknown name and a Basic account
+  get the identical page and the identical `live:false`**, naming the address
+  and no company, so it is not a way to ask which names are taken. The
+  route is not in `wrangler.unclaimed.toml` on purpose, so turning it off is
+  deleting one route. `test:unclaimed` (37); two mutations fire.
+
+  **And the site deploy now reads the live home and pricing pages for the
+  Google tag**, because only the live page says whether the tag reached
+  subsub.work, and "No data received" in Google Analytics says nothing about
+  why.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

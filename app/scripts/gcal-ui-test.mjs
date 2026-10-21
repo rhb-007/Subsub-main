@@ -156,6 +156,21 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- a refused connection names why --");
+  {
+    state = { configured: true, connected: false };
+    const { ctx, page } = await visitApp(browser, { host: "sound", webPort: WEB,
+      path: "/?gcal=failed&gcal_why=invalid_client", seat: { userId: "usr_c", accountId: "acc_s" } });
+    await wait(2500);
+    const p = await panel(page);
+    t.ck("Settings opened", !!p, await page.evaluate(() => document.body.innerText.slice(0, 200)));
+    t.ck("a wrong client is not 'try again in a minute'", !/Try again in a minute/.test(p?.landed || ""), p?.landed);
+    t.ck("it says pressing again won't help, and names Google's code",
+      /won't help/.test(p?.landed || "") && /invalid_client/.test(p?.landed || ""), p?.landed);
+    t.ck("the address bar is tidied of both", !/gcal/.test(page.url()), page.url());
+    await ctx.close();
+  }
+
   console.log("\n-- a tenant --");
   {
     state = { configured: true, connected: true, email: "john@gmail.test", syncOn: true, blockOn: true, events: 1 };

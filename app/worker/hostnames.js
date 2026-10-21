@@ -26,7 +26,7 @@ const CF_API = "https://api.cloudflare.com/client/v4";
 // actually point a hostname somewhere, so it does not trust that whatever
 // wrote the row validated it: a stored subdomain of "api" would take
 // api.subsub.work away from the API itself.
-const NEVER_PROVISION = new Set([
+export const NEVER_PROVISION = new Set([
   "app", "www", "admin", "api", "platform", "dashboard", "portal", "status",
   "mail", "smtp", "ftp", "cdn", "assets", "static", "help", "support",
   "docs", "blog", "billing", "account", "accounts", "login", "signup",

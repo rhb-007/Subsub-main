@@ -77,7 +77,8 @@ globalThis.fetch = async (input, init = {}) => {
         scope, token_type: "Bearer", id_token: `h.${payload}.s` });
     }
     const rt = f.get("refresh_token");
-    if (G.dead.has(rt)) return json(400, { error: "invalid_grant" });
+    // Google answers invalid_grant to a refresh token it never issued.
+    if (G.dead.has(rt) || !String(rt).startsWith("rt-")) return json(400, { error: "invalid_grant" });
     return json(200, { access_token: rt.replace(/^rt-/, "at-"), expires_in: 3599 });
   }
   if (url.startsWith("https://oauth.test/revoke")) return json(200, {});
@@ -255,6 +256,33 @@ try {
     ck("and nothing is stored", !DB.prepare(`SELECT 1 FROM gcal_connections WHERE user_id = 'u_mgr'`).get());
     const nr = await connect("mgr", "mgr-norefresh");
     ck("no lasting access is said rather than stored", (nr.to || "").endsWith("gcal=no_refresh"));
+
+    // A wrong GOOGLE_CLIENT_SECRET: Google sends them back, then refuses the
+    // code exchange. The reason rides back so the screen can say it, instead
+    // of "try again in a minute", which pressing again never fixes.
+    const [, sb] = await call("mgr", "/api/google-calendar/start", { method: "POST",
+      body: { timeZone: TZ, returnTo: "https://soundpm.subsub.work/" } });
+    const bst = new URL(sb.url).searchParams.get("state");
+    const badEnv = { ...ENV, GOOGLE_CLIENT_SECRET: "wrong" };
+    const bad = await worker.fetch(new Request(`https://api.subsub.work/api/google-calendar/callback?state=${bst}&code=code-mgr`,
+      { redirect: "manual" }), badEnv);
+    const badTo = new URL(bad.headers.get("location") || "https://x/");
+    ck("a refused exchange names Google's reason on the way back",
+      badTo.searchParams.get("gcal") === "failed" && badTo.searchParams.get("gcal_why") === "invalid_client", badTo.toString());
+    ck("and stores nothing", !DB.prepare(`SELECT 1 FROM gcal_connections WHERE user_id = 'u_mgr'`).get());
+  }
+
+  console.log("\n-- the console's health probe --");
+  {
+    const { PROBES } = await import("../worker/integrationhealth.js");
+    const t = () => Date.now();
+    const okP = await PROBES.gcal(ENV, globalThis.fetch, t);
+    ck("a client Google knows reads as working", !okP.refused && !okP.error && /accepted/.test(okP.say || ""), JSON.stringify(okP));
+    const badP = await PROBES.gcal({ ...ENV, GOOGLE_CLIENT_SECRET: "wrong" }, globalThis.fetch, t);
+    ck("a wrong secret reads as refused, naming invalid_client", badP.refused === true && /invalid_client/.test(badP.say || ""), JSON.stringify(badP));
+    const probeCall = G.calls.filter((x) => x.url.startsWith("https://oauth.test/token")).pop();
+    ck("the probe grants nothing: a refresh with a token nobody issued",
+      new URLSearchParams(probeCall?.body || "").get("refresh_token") === "subsub-health-check");
   }
 
   console.log("\n-- what goes on their calendar --");

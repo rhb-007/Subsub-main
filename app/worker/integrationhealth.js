@@ -13,6 +13,7 @@ import { smsConfig } from "./sms.js";
 import { diagnose } from "./hostnames.js";
 import { calConfigured, fetchSlots } from "./demo.js";
 import { ANTHROPIC_API, ANTHROPIC_VERSION } from "./ai.js";
+import { tokenProbe } from "./gcal.js";
 
 const clean = (v) => String(v ?? "").trim();
 
@@ -134,6 +135,22 @@ export const PROBES = {
       headers: { "x-api-key": clean(env.ANTHROPIC_API_KEY), "anthropic-version": ANTHROPIC_VERSION },
     });
     return asProbe(r, "Anthropic accepted the key.", "Anthropic refused ANTHROPIC_API_KEY.");
+  },
+  // Google Calendar's OAuth client. A refresh with a token nobody issued
+  // creates nothing: Google answers invalid_grant when it accepts the client
+  // id and secret and invalid_client when it does not -- which is the one
+  // failure the connect press otherwise only reports as "could not be
+  // connected". Nothing else about the client can be read without a person.
+  gcal: async (env, f, now) => {
+    const t0 = now();
+    const r = await tokenProbe(env, f);
+    const ms = now() - t0;
+    if (r.status === 0) return { error: "Google's token address did not answer." };
+    const why = r.data?.error;
+    if (why === "invalid_grant") return { ms, say: "Google accepted GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET." };
+    if (why === "invalid_client" || why === "unauthorized_client" || why === "deleted_client")
+      return { refused: true, ms, say: `Google refused the client (${why}). GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must both come from the same OAuth client in Google Cloud.` };
+    return { error: why ? `Google answered ${why}` : `HTTP ${r.status}` };
   },
   // The very call the demo form makes: a week of real availability. It
   // creates nothing.

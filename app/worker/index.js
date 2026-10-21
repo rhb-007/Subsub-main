@@ -169,7 +169,7 @@ import { INTEGRATIONS, integrationById, hookIntegration, integrationApplies,
   integrationEnabled, zapierInviteUrl } from "../shared/integrations.js";
 import { sealSecret, openSecret, sealingConfigured } from "./secretbox.js";
 import { googleConfigured, authUrl, exchangeCode, refreshAccess, refreshDead, revoke, idTokenEmail,
-  createCalendar, deleteCalendar, insertEvent, patchEvent, deleteEvent, freeBusy } from "./gcal.js";
+  createCalendar, deleteCalendar, insertEvent, patchEvent, deleteEvent, freeBusy, exchangeReason } from "./gcal.js";
 import { GCAL_SCOPES, GCAL_CALENDAR_NAME, GCAL_PAST_DAYS, GCAL_AHEAD_DAYS, GCAL_BUSY_DAYS,
   validTimeZone, wallToUtc, eventFor, eventFingerprint, companyBusyAt, companyBusyDays,
   companyBusyOnSpan, WORK_DAY_START, WORK_DAY_END, scopesGranted, gcalReturnTo } from "../shared/gcal.js";
@@ -6614,6 +6614,17 @@ app.get("/api/account-by-subdomain/:subdomain", async (c) => {
     id: a.id, name: a.name, subdomain: a.subdomain, kind: a.kind, plan: a.plan, billing: effectiveBilling(a),
     logoKey: a.logo_key, useDefaultMark: !!a.use_default_mark, theme: parseJson(a.theme),
   });
+});
+
+// Is this branded address live? Read by worker-unclaimed.js, which serves the
+// "not available yet" page for every *.subsub.work name that is not. A bare
+// yes or no, and the same "no" for an unknown name and an account not on
+// Scale, so it says nothing a live address does not already say by loading.
+app.get("/api/account-by-subdomain/:subdomain/live", async (c) => {
+  const a = await c.env.DB.prepare(`SELECT plan, comped FROM accounts WHERE subdomain = ?`)
+    .bind(c.req.param("subdomain").toLowerCase()).first();
+  c.header("Cache-Control", "no-store");
+  return c.json({ live: accountOnScale(a) });
 });
 
 // Every value in a theme must be a plain 6-digit hex color. These get
@@ -27321,9 +27332,10 @@ app.post("/api/google-calendar/start", async (c) => {
 // is the whole of what says whose calendar this is.
 app.get("/api/google-calendar/callback", async (c) => {
   const q = c.req.query();
-  const back = (to, why) => {
+  const back = (to, why, reason) => {
     const u = new URL(to || `${APP_ORIGIN}/`);
     u.searchParams.set("gcal", why);
+    if (reason) u.searchParams.set("gcal_why", reason);
     return c.redirect(u.toString(), 302);
   };
   const st = q.state ? await c.env.DB.prepare(
@@ -27337,7 +27349,14 @@ app.get("/api/google-calendar/callback", async (c) => {
   if (q.error) return back(st.return_to, "denied");
   if (!gcalReady(c.env)) return back(st.return_to, "not_configured");
   const r = await exchangeCode(c.env, { code: String(q.code || ""), redirectUri: gcalRedirect(c) });
-  if (!r.ok || !r.data?.access_token) return back(st.return_to, "failed");
+  // Google's own reason rides back with "failed", because "try again in a
+  // minute" is false for every reason but one: invalid_client is a wrong
+  // GOOGLE_CLIENT_SECRET, and pressing again cannot fix that.
+  if (!r.ok || !r.data?.access_token) {
+    const reason = exchangeReason(r);
+    console.error("[gcal] code exchange refused:", reason, r.data?.error_description || "");
+    return back(st.return_to, "failed", reason);
+  }
   if (!scopesGranted(r.data.scope)) {
     await revoke(c.env, r.data.access_token);
     return back(st.return_to, "missing_scope");

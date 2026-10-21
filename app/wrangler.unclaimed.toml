@@ -1,0 +1,16 @@
+# The "not available yet" page for branded addresses that are not live
+# (worker-unclaimed.js). Deployed by .github/workflows/deploy-unclaimed.yml.
+#
+# The route is added by hand in Cloudflare, not here, on purpose: it sits in
+# front of every *.subsub.work name, so turning it on is a decision for the
+# moment the wildcard DNS record goes in, and turning it off is deleting one
+# route. A route in this file would be re-created by every deploy.
+name = "subsub-unclaimed"
+main = "worker-unclaimed.js"
+compatibility_date = "2026-01-01"
+
+# The only question it asks -- is this address live? -- goes to the API
+# without leaving Cloudflare.
+[[services]]
+binding = "API"
+service = "subsub-api"
