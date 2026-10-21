@@ -65,6 +65,9 @@ jobs:
 
       - name: Its own checks
         working-directory: app
+        # The suite draws the page at two widths; the runner's own Chrome.
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
         run: npm run test:unclaimed
 
       - name: Deploy

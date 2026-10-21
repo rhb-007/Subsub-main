@@ -159,11 +159,13 @@ jobs:
       # why. So the live home and pricing pages are read for the tag itself.
       - name: The live site carries the Google tag
         run: |
-          for path in / /pricing.html; do
-            page=$(curl -s --max-time 15 "https://subsub.work$path")
+          # -L, because Cloudflare answers /pricing.html with a redirect to
+          # /pricing, and a redirect has no tag in it.
+          for path in / /pricing; do
+            page=$(curl -sL --max-time 15 "https://subsub.work$path")
             loader=$(printf '%s' "$page" | grep -c "googletagmanager.com/gtag/js?id=G-3ZHHKNP0F2")
             config=$(printf '%s' "$page" | grep -c "gtag('config', 'G-3ZHHKNP0F2')")
-            echo "$path: loader $loader, config $config"
+            echo "$path: loader $loader, config $config, $(printf '%s' "$page" | wc -c) bytes"
             if [ "$loader" != "1" ] || [ "$config" != "1" ]; then
               echo "::error::https://subsub.work$path does not carry the Google tag exactly once."
               exit 1
