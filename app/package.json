@@ -150,6 +150,7 @@
     "test:dashlayout": "node scripts/dash-layout-test.mjs",
     "test:dashwidth": "node scripts/dash-width-test.mjs",
     "test:bootflash": "node scripts/boot-flash-test.mjs",
+    "test:usermenu": "node scripts/user-menu-test.mjs",
     "test:qrmenu": "node scripts/qr-menu-test.mjs",
     "test:userseat": "node scripts/user-seat-test.mjs",
     "test:invitename": "node scripts/invite-name-test.mjs",

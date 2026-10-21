@@ -14725,6 +14725,17 @@ refactor.
   `test:devtabs` (27); two mutations fire (panels never hidden: 13 failures;
   the anchor's panel ignored: 9).
 
+- **THE PROFILE MENU KEEPS EACH ICON BESIDE ITS LABEL.** Reported from an iPad
+  in landscape: the icons sat above *My account* and *Sign out*, *Recruiting QR*
+  wrapped, and the current account's tick dropped under its role. One rule did
+  all of it: `.user-menu button{flex-direction:column}` was written for the
+  demo's *Switch user* rows (a name over a role) and applied to every button in
+  the menu. It is now `.user-menu button.um-user`, and the menu is 264px wide,
+  so no label wraps. The account rows wrap the name and role in `.ua-text`, so
+  the tick sits at the right edge of the name's row. `test:usermenu` measures
+  it at 1180x820 and 1366x1024. Restoring the blanket rule fails eight
+  assertions, and dropping the width fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

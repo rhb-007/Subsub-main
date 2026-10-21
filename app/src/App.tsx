@@ -4109,8 +4109,11 @@ export default function SubSub() {
     <>
       <button className="um-qr" onClick={(e) => { e.stopPropagation(); setRecruitOpen((v) => !v); }}
         aria-expanded={recruitOpen}>
-        <QrCodeIcon size={14} /> {tt("Recruiting QR")}
-        <span className="um-qr-sub">{tt("for subcontractors")}</span>
+        <QrCodeIcon size={14} />
+        <span className="um-qr-text">
+          <span className="um-qr-label">{tt("Recruiting QR")}</span>
+          <span className="um-qr-sub">{tt("for subcontractors")}</span>
+        </span>
         <ChevronDown size={13} className={`um-caret ${recruitOpen ? "up" : ""}`} />
       </button>
       {recruitOpen && (
@@ -6221,8 +6224,10 @@ export default function SubSub() {
                                at the account we had just left. One door. */
                             <button key={m.accountId} className="um-acct"
                               onClick={() => { setUserMenu(false); goToSeat(m.accountId); }}>
-                              <span className="ua-name">{a.name}</span>
-                              <span className="ua-role">{roleLabelIn(kindOf(a), m.role)}</span>
+                              <span className="ua-text">
+                                <span className="ua-name">{a.name}</span>
+                                <span className="ua-role">{roleLabelIn(kindOf(a), m.role)}</span>
+                              </span>
                               {m.accountId === account.id && <Check size={13} className="ua-tick" />}
                             </button>
                           );
@@ -6242,7 +6247,7 @@ export default function SubSub() {
                           const um = memberships.find((m) => m.userId === u.id && m.accountId === account.id);
                           if (!um) return null;
                           return (
-                            <button key={u.id} className={u.id === currentUserId ? "on" : ""}
+                            <button key={u.id} className={`um-user ${u.id === currentUserId ? "on" : ""}`}
                               onClick={() => {
                                 setCurrentUserId(u.id);
                                 setUserMenu(false);
@@ -43131,9 +43136,15 @@ p.fld-note{margin:6px 0 0}
 .user-meta{display:flex;flex-direction:column;align-items:flex-start;line-height:1.2}
 .user-name{font-size:12.5px;font-weight:700;color:var(--ink)}
 .user-role{font-size:10.5px;color:var(--ink-soft);font-weight:600}
-.user-menu{min-width:210px}
+/* 264px, so "Recruiting QR" and an account name each fit on their line on an
+   iPad held sideways, where 210 wrapped them. */
+.user-menu{min-width:264px;max-width:min(320px,calc(100vw - 24px))}
 .user-menu-label{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-soft);padding:7px 12px 5px}
-.user-menu button{flex-direction:column;align-items:flex-start !important;gap:1px !important}
+/* Only the demo's Switch user rows are a name over a role. This was every
+   button in the menu once, which stacked each icon above its label and put
+   the account check on a line of its own. */
+.user-menu button.um-user{flex-direction:column;align-items:flex-start !important;gap:1px !important}
+.user-menu button{white-space:nowrap}
 .user-menu button.on{background:#eef5f1}
 .um-name{font-size:13px;font-weight:600}
 .um-role{font-size:11px;color:var(--ink-soft);font-weight:500}
@@ -43257,6 +43268,7 @@ p.fld-note{margin:6px 0 0}
 .qr-qsend-head svg{color:var(--brand)}
 .qr-qsend .qrp-note{margin:0}
 .qr-qsend-go{border:0;background:none;padding:0;font:inherit;font-weight:700;color:var(--brand);cursor:pointer;text-decoration:underline}
+.um-qr-text{display:flex;flex-direction:column;align-items:flex-start;min-width:0;line-height:1.25}
 .um-qr-sub{font-size:11px;font-weight:500;color:var(--ink-soft)}
 .rq-peek .rq-url{word-break:break-all;text-align:center}
 
@@ -43291,7 +43303,8 @@ p.fld-note{margin:6px 0 0}
 .um-acct{display:flex;align-items:center;gap:8px;width:100%;border:0;background:none;
   padding:9px 14px;cursor:pointer;text-align:left;font:inherit}
 .um-acct:hover{background:var(--paper)}
-.ua-name{font-size:13.5px;font-weight:600;color:var(--ink)}
+.ua-text{display:flex;flex-direction:column;align-items:flex-start;min-width:0;flex:1;line-height:1.3}
+.ua-name{font-size:13.5px;font-weight:600;color:var(--ink);max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .ua-role{font-size:11px;color:var(--ink-soft)}
 .ua-tick{margin-left:auto;color:var(--brand);flex:none}
 .um-account{border-bottom:1px solid var(--line);border-radius:8px 8px 0 0 !important;margin-bottom:3px;color:var(--brand) !important;font-weight:700 !important}
