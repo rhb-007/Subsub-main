@@ -14836,7 +14836,8 @@ refactor.
   and `test:ownportal` assert that, and that a general contractor does not
   get the entry. Removing the entry fails five assertions.
 
-  **`clientLinks` is one entry per client, drawn above My account** in the
+  **`clientLinks` is one entry per client, drawn BELOW My account** (it was
+  above; moved at the owner's word, with an arrow) in the
   drawer and the profile menu, with the count of what is waiting there
   (`crewAction`, the same rule My Jobs counted). Its sources are the work
   (`elsewhere`) and the contractor seats. Outside a staff session it lists
@@ -14865,7 +14866,13 @@ refactor.
 
   `test:ownportal` (41), `test:owncrewsui` (31), `test:clientworkui` (25),
   `test:referralui` (24) and `test:spanishui` (24) were moved to the new rule
-  rather than loosened. Three mutations fire: the drawer link removed (seven
+  rather than loosened. **And a staff session's "Back to your company" row
+  is not drawn beside a switcher row for the same account**: it was, and
+  read as two links to one place. Seat rows go through `openSeat`, which
+  re-signs staff through `openClient` (a pinned staff session cannot be
+  moved by `goToSeat`), so the switcher row is the one way back.
+  `test:ownportal` reads both from the source, because the harness cannot
+  stand in a staff session. Three mutations fire: the drawer link removed (seven
   assertions), the switcher not filtered (one), and the calendar removed from
   My crews (four). **Not verified in a browser:** the staff path.
   `resumeSession` refuses an impersonated session, so the harness cannot

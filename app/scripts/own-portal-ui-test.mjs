@@ -34,6 +34,7 @@
 //   node --no-warnings scripts/own-portal-ui-test.mjs
 
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
 
@@ -41,6 +42,20 @@ const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-ownportal-test");
 const WEB = 5337, API = 9035;
 const t = tally();
+
+// THE STAFF SESSION'S WAY BACK IS NOT DRAWN TWICE. A staff session cannot be
+// driven here (resumeSession refuses one), so this reads the source: the
+// "Back to your company" row is skipped wherever the switcher already lists
+// that account, and a seat row goes through openSeat, which re-signs staff.
+{
+  const src = readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "../src/App.tsx"), "utf8");
+  const backs = src.match(/impersonating\?\.returnTo && impersonating\.returnTo\.id !== account\.id[^(]*\(/g) || [];
+  t.ck("both Back rows exist", backs.length === 2, String(backs.length));
+  t.ck("and each is skipped when the switcher lists that account",
+    backs.length === 2 && backs.every((b) => /menuSeatIds\.has|otherSeats\.some/.test(b)), JSON.stringify(backs));
+  t.ck("seat rows go through openSeat, not goToSeat",
+    (src.match(/goToSeat\((m|seat)\.accountId\)/g) || []).length === 0);
+}
 
 let KIND = "subcontractor";
 // Whether anybody has given this account work. Off, the account has a company
@@ -170,13 +185,13 @@ try {
   t.ck("Get your GCs is on it", items.some((x) => /^Get your GCs on SubSub/.test(x)), JSON.stringify(items));
   t.ck("and no separate My calendar", !items.some((x) => /^My calendar/.test(x)), JSON.stringify(items));
 
-  console.log("\n-- the client's dashboard is a link above My account --");
+  console.log("\n-- the client's dashboard is a link below My account --");
   const drawer = await page.evaluate(() => [...document.querySelectorAll(".drawer-actions > button, .drawer-actions > p")]
     .map((b) => ({ t: b.innerText.replace(/\s+/g, " ").trim(), client: b.classList.contains("client-dash") })));
   const ci = drawer.findIndex((r) => r.client && /Sound Property Management/.test(r.t));
   const ai = drawer.findIndex((r) => /^My account/.test(r.t));
   t.ck("the drawer links to Sound's side", ci >= 0, JSON.stringify(drawer));
-  t.ck("above My account", ci >= 0 && ai > ci, JSON.stringify(drawer));
+  t.ck("below My account", ci >= 0 && ai >= 0 && ai < ci, JSON.stringify(drawer));
   // Not twice: the switcher row for the same seat is the same door.
   t.ck("and Sound is not listed a second time as a switcher row",
     drawer.filter((r) => /Sound Property Management/.test(r.t)).length === 1, JSON.stringify(drawer));
@@ -185,8 +200,9 @@ try {
   const menu = await page.evaluate(() => [...document.querySelectorAll(".user-menu > button")]
     .map((b) => ({ t: b.innerText.replace(/\s+/g, " ").trim(), client: b.classList.contains("um-client") })));
   const mi = menu.findIndex((r) => r.client && /Sound Property Management/.test(r.t));
-  t.ck("and the profile menu does too, above My account",
-    mi >= 0 && menu.findIndex((r) => /^My account/.test(r.t)) > mi, JSON.stringify(menu));
+  const mai = menu.findIndex((r) => /^My account/.test(r.t));
+  t.ck("and the profile menu does too, below My account",
+    mi >= 0 && mai >= 0 && mai < mi, JSON.stringify(menu));
   await page.keyboard.press("Escape");
   await page.evaluate(() => document.querySelector(".add-scrim")?.click());
   await wait(300);

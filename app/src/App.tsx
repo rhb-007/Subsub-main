@@ -4113,6 +4113,10 @@ export default function SubSub() {
       .sort((a, b) => (b.waiting - a.waiting) || a.name.localeCompare(b.name));
   }, [ownSub, role, myMemberships, account, elsewhere, now, accounts, impersonating]);
   const clientIds = new Set(clientLinks.map((c) => c.accountId));
+  // What the profile menu's switch list draws (only past one seat), so the
+  // staff "Back to your company" row is not drawn a second time beside it.
+  const menuSeats = myMemberships.filter((m) => !clientIds.has(m.accountId));
+  const menuSeatIds = new Set(menuSeats.length > 1 ? menuSeats.map((m) => m.accountId) : []);
   const packSource = role === "contractor" ? mySub : myCompany?.docs;
   const packOnFile = !!packSource && PACK_KINDS.some((k) => packSource[k]);
   const canQuickSend = canShowQr && packOnFile;
@@ -5201,6 +5205,12 @@ export default function SubSub() {
     }
     await goToSeat(c.accountId);
   };
+  // A seat row in the switcher. Staff cannot move a pinned session with
+  // goToSeat, so they go through openClient, which signs them in again;
+  // going to the account they came from clears the way back.
+  const openSeat = (accountId, name) => (impersonating && !impersonating.expired
+    ? openClient({ accountId, name }, { back: impersonating.returnTo?.id === accountId })
+    : goToSeat(accountId));
 
   // `email` is only used in dev-stub mode (see LoginPage) — in real-auth
   // mode, identity already comes from the Supabase session that
@@ -6311,8 +6321,12 @@ export default function SubSub() {
                     )}
                     {recruitBlock}
                     {can("tenant") && <div className="um-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
-                    {/* Above My account: the companies this one works for,
-                        each opening their side of the work under their name. */}
+                    <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
+                      <UserCog size={14} /> {tt("My account")}
+                    </button>
+                    {/* BELOW My account, asked for with an arrow: the companies this
+                        one works for, each opening their side of the work under
+                        their name. */}
                     {clientLinks.length > 0 && (
                       <>
                         <div className="um-sec">{tt("Companies you work for")}</div>
@@ -6327,7 +6341,7 @@ export default function SubSub() {
                         ))}
                       </>
                     )}
-                    {impersonating?.returnTo && impersonating.returnTo.id !== account.id && (
+                    {impersonating?.returnTo && impersonating.returnTo.id !== account.id && !menuSeatIds.has(impersonating.returnTo.id) && (
                       <button className="um-acct um-client" onClick={() => openClient(
                         { accountId: impersonating.returnTo.id, name: impersonating.returnTo.name }, { back: true })}>
                         <span className="ua-text">
@@ -6337,9 +6351,6 @@ export default function SubSub() {
                       </button>
                     )}
                     {clientErr && <p className="um-err">{clientErr}</p>}
-                    <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
-                      <UserCog size={14} /> {tt("My account")}
-                    </button>
                     {myMemberships.filter((m) => !clientIds.has(m.accountId)).length > 1 && (
                       <>
                         <div className="um-sec">Switch account</div>
@@ -6355,7 +6366,7 @@ export default function SubSub() {
                                `onGoClient` came to leave every fetch pointed
                                at the account we had just left. One door. */
                             <button key={m.accountId} className="um-acct"
-                              onClick={() => { setUserMenu(false); goToSeat(m.accountId); }}>
+                              onClick={() => { setUserMenu(false); openSeat(m.accountId, a.name); }}>
                               <span className="ua-text">
                                 <span className="ua-name">{a.name}</span>
                                 <span className="ua-role">{roleLabelIn(kindOf(a), m.role)}</span>
@@ -6594,7 +6605,8 @@ export default function SubSub() {
           ))}
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
-            {/* THE CLIENT'S DASHBOARD, ABOVE MY ACCOUNT. Asked for in those
+            <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
+            {/* THE CLIENT'S DASHBOARD, BELOW MY ACCOUNT (it was above, and an arrow moved it). Asked for in those
                 words: "a link down by my account to the company they are
                 working for". It opens their side under their name, which is
                 where the work they gave you, Job Settings and Get your GCs
@@ -6609,7 +6621,8 @@ export default function SubSub() {
                 {c.waiting > 0 && <span className="count amber">{c.waiting}</span>}
               </button>
             ))}
-            {impersonating?.returnTo && impersonating.returnTo.id !== account.id && (
+            {impersonating?.returnTo && impersonating.returnTo.id !== account.id
+              && !otherSeats.some((x) => x.accountId === impersonating.returnTo.id) && (
               <button className="switch-acct client-dash" onClick={() => openClient(
                 { accountId: impersonating.returnTo.id, name: impersonating.returnTo.name }, { back: true })}>
                 <ArrowUpDown size={15} />
@@ -6620,7 +6633,6 @@ export default function SubSub() {
               </button>
             )}
             {clientErr && <p className="drawer-err">{clientErr}</p>}
-            <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
             {/* Every account this person holds a seat in, and WHAT THEY ARE in
                 it. "Switch to Cascade Management" on its own reads as taking
                 the place over -- which is the opposite of the truth when the
@@ -6631,7 +6643,7 @@ export default function SubSub() {
                 it, one entry opening a panel -- see SWITCHER_THRESHOLD. */}
             {otherSeats.length > 0 && !usePanel(otherSeats.length) && otherSeats.filter((seat) => !clientIds.has(seat.accountId)).map((seat) => (
               <button key={seat.accountId} className="switch-acct"
-                onClick={() => goToSeat(seat.accountId)}>
+                onClick={() => openSeat(seat.accountId, seat.name)}>
                 <ArrowUpDown size={15} />
                 <span className="sw-main">
                   <span className="sw-name">{seat.name}</span>
@@ -8544,7 +8556,7 @@ export default function SubSub() {
                 </div>
                 {g.seats.map((seat) => (
                   <button key={seat.accountId} className="seat-row"
-                    onClick={() => { setSeatQuery(""); goToSeat(seat.accountId); }}>
+                    onClick={() => { setSeatQuery(""); openSeat(seat.accountId, seat.name); }}>
                     <span className="seat-main">
                       <span className="seat-name">{seat.name}</span>
                       <span className="seat-sd">{seat.subdomain}</span>

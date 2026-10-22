@@ -236,7 +236,7 @@ try {
     const b = document.querySelector(".drawer-actions .client-dash");
     return { name: b?.querySelector(".sw-name")?.textContent || "", n: b?.querySelector(".count")?.textContent || "" };
   });
-  t.ck("Sound's link above My account counts both things waiting", link.name === "Sound Property Management" && link.n === "2",
+  t.ck("Sound's link below My account counts both things waiting", link.name === "Sound Property Management" && link.n === "2",
     JSON.stringify(link));
 
   t.ck("nothing threw", logs.length === 0 && crashes.length === 0, [...logs, ...crashes].join(" | "));
