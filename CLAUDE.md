@@ -14821,12 +14821,20 @@ refactor.
   Jobs, so the account's work and the work a client gave it read as one
   product with two of everything.
 
-  **Both entries came off the account's own nav.** The client's side already
+  **My Jobs came off the account's own nav.** The client's side already
   existed: the contractor seat that accepting a connect request creates, on
   the client's account, under the client's name. That seat keeps My Jobs and
-  **Get your GCs**, which is the "subcontractor version" the request names.
-  This reverses 075's *"a subcontractor account's own team refers GCs too"*,
-  at the owner's word.
+  **Get your GCs**.
+
+  **Get your GCs came off with it for one release and went back, at the
+  owner's word:** *"sub contractors should be able to refer or invite GC's
+  from their own accounts."* So 075's rule stands: a subcontractor
+  account's own team refers GCs too. The entry is on a subcontractor
+  account's own nav and nowhere else among the hiring kinds, which refer
+  from Account -> Refer a GC. It opens the referral screen alone, because
+  the portal draws its dashboard only for the jobs panes. `test:referralui`
+  and `test:ownportal` assert that, and that a general contractor does not
+  get the entry. Removing the entry fails five assertions.
 
   **`clientLinks` is one entry per client, drawn above My account** in the
   drawer and the profile menu, with the count of what is waiting there

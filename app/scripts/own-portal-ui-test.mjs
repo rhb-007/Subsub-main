@@ -162,11 +162,12 @@ try {
 
   const items = await nav(page);
   t.ck("the app rendered at all", items.length > 0, JSON.stringify(items));
-  // TWO DASHBOARDS IN ONE, reported from Cascade: My Jobs and Get your GCs in
-  // this account's own nav, beside Jobs, drew a client's side of the work
-  // inside it. Neither is here now.
+  // TWO DASHBOARDS IN ONE, reported from Cascade: My Jobs in this account's
+  // own nav, beside Jobs, drew a client's side of the work inside it. It is
+  // gone. Get your GCs came off with it and went back at the owner's word: a
+  // subcontractor refers GCs from its own account.
   t.ck("no My Jobs in the account's own nav", !items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
-  t.ck("no Get your GCs in it either", !items.some((x) => /Get your GCs/.test(x)), JSON.stringify(items));
+  t.ck("Get your GCs is on it", items.some((x) => /^Get your GCs on SubSub/.test(x)), JSON.stringify(items));
   t.ck("and no separate My calendar", !items.some((x) => /^My calendar/.test(x)), JSON.stringify(items));
 
   console.log("\n-- the client's dashboard is a link above My account --");
@@ -273,6 +274,10 @@ try {
     t.ck(`${kind}: the app rendered`, its.some((x) => /^Dashboard/.test(x)), JSON.stringify(its));
     t.ck(`${kind}: no My Jobs`, !its.some((x) => /^My Jobs/.test(x)), JSON.stringify(its));
     t.ck(`${kind}: and no My calendar`, !its.some((x) => /^My calendar/.test(x)), JSON.stringify(its));
+    // Get your GCs is the subcontractor's, with or without work; a GC refers
+    // from Account -> Refer a GC instead.
+    t.ck(`${kind}: Get your GCs ${kind === "subcontractor" ? "is" : "is not"} in the nav`,
+      its.some((x) => /^Get your GCs/.test(x)) === (kind === "subcontractor"), JSON.stringify(its));
     // No seat anywhere and no work: there is no client to link to, so none is
     // drawn rather than a link onto a refusal.
     const dl = await px.evaluate(() => document.querySelectorAll(".drawer-actions .client-dash").length);

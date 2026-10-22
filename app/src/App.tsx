@@ -6542,11 +6542,18 @@ export default function SubSub() {
                 <span className="count amber">{uniformOrders.filter((o) => o.status === "pending").length}</span>}
             </button>
           )}
-          {/* NO "MY JOBS" HERE ANY MORE, and no "Get your GCs". Both drew
-              the client's side of the work inside this account's own nav,
-              beside Jobs, which read as two dashboards in one. The client's
-              side is a link above My account (clientLinks), and Get your GCs
-              lives there, on the subcontractor's side. */}
+          {/* NO "MY JOBS" HERE ANY MORE. It drew the client's side of the
+              work inside this account's own nav, beside Jobs, which read as
+              two dashboards in one; the client's side is a link above My
+              account (clientLinks). GET YOUR GCS STAYS, on a subcontractor
+              account's own nav, at the owner's word: a sub brings GCs in from
+              its own account, not only from a seat on a client's. */}
+          {!can("portal") && ownWork && kindOf(account) === "subcontractor" && (
+            <button className={tab === "portal" && pane === "refer" ? "on" : ""}
+              onClick={() => { setPane("refer"); setTab("portal"); }}>
+              {tt("Get your GCs on SubSub")}
+            </button>
+          )}
           {can("portal") && [
             /* My calendar was an entry of its own here, on the reasoning that
                a month buried behind a toggle stays unfound. It is a tab at the

@@ -27,10 +27,10 @@ const WEB = 5453, API = 9153;
 const t = tally();
 
 let KIND = "subcontractor";
-// THE SUBCONTRACTOR'S SIDE IS THE CONTRACTOR SEAT. Get your GCs came off a
-// subcontractor account's own nav ("two dashboards in one") and lives where
-// the client's work does: the seat a connect request created on the client's
-// account. SEAT says which one this visit stands in.
+// BOTH SIDES. Get your GCs is on a subcontractor account's own nav (it came
+// off for a release and went back at the owner's word) and on the contractor
+// seat a connect request created on the client's account. SEAT says which one
+// this visit stands in.
 let SEAT = "contractor";
 const posts = [];
 const mine = () => (KIND === "subcontractor" ? {
@@ -117,7 +117,7 @@ const typeInto = (page, sel, v) => page.evaluate(({ sel, v }) => {
 }, { sel, v });
 
 try {
-  console.log("\n-- a subcontractor's own account: not here --");
+  console.log("\n-- a subcontractor's own account: here too --");
   {
     SEAT = "admin";
     const { ctx, page } = await visitApp(browser, { host: "cascade", webPort: WEB,
@@ -125,7 +125,14 @@ try {
     await wait(2600);
     const items = await nav(page);
     t.ck("the subcontractor account's own app rendered", items.some((x) => /^Dashboard/.test(x)), JSON.stringify(items));
-    t.ck("and Get your GCs is not in its own nav", !items.some((x) => /^Get your GCs/.test(x)), JSON.stringify(items));
+    t.ck("and Get your GCs is in its own nav", items.some((x) => /^Get your GCs on SubSub/.test(x)), JSON.stringify(items));
+    t.ck("but My Jobs is not", !items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^Get your GCs/.test(b.innerText.trim()))?.click());
+    await wait(1200);
+    const r = await read(page);
+    t.ck("it opens the screen from the account itself", r.there && r.head === "Get your GCs on SubSub" && r.code === "K7Q2MXRB", JSON.stringify(r).slice(0, 300));
+    const extra = await page.evaluate(() => ({ hello: document.querySelectorAll(".dash-hello").length, who: document.querySelectorAll(".who-bar").length }));
+    t.ck("and only the screen, with no second dashboard under it", extra.hello === 0 && extra.who === 0, JSON.stringify(extra));
     await ctx.close();
     SEAT = "contractor";
   }
