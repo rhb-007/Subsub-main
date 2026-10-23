@@ -26,7 +26,7 @@ import {
   Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList, ClipboardCheck,
-  Users, StickyNote, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck, Ban, PlayCircle,
+  Users, StickyNote, ListChecks, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck, Ban, PlayCircle,
   Blocks, Sun, Frame, Square, Layers3, Shovel, Droplet, Thermometer,
   Snowflake, SquareStack, PaintRoller, LayoutGrid, Grid3x3, Boxes, Slice, Trees,
   DoorOpen, Droplets, SprayCan, FilePlus2, TrendingUp, Activity, Link2, Copy, Key,
@@ -90,6 +90,8 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   whyNotFinish, canSendInspection, mayWriteInspection,
   suggestTrades, inspectionStep, quoteInspectionShape, unflaggedWork } from "../shared/inspection.js";
 import { UNIT_LAYOUTS, layoutLabel, layoutChangeText } from "../shared/unitlayout.js";
+import { ITEM_CONDITIONS, ITEM_CONDITION_ORDER, DEFAULT_CONDITION_TEXT, itemChanged, checklistTally,
+  parseCost } from "../shared/roomchecklist.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
@@ -38441,8 +38443,148 @@ function PhotoCaption({ photo, locked, onSave }) {
   );
 }
 
+// THE CHECKLIST INSIDE A ROOM, from the industry move-in / move-out form
+// (shared/roomchecklist.js). Folded until opened, with the count on the
+// toggle, because a kitchen is twenty-seven rows and twelve rooms of that
+// open at once is a screen nobody can find the next room on.
+//
+// On a MOVE-OUT each row says what the move-in recorded for the same item,
+// takes a cost, and is marked Changed when it is worse than the move-in said
+// -- a stain recorded on the way in is not a charge on the way out.
+function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood }) {
+  const rows = room.checklist || [];
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  if (!rows.length) return null;
+  const t = checklistTally([room]);
+  const missing = room.checklistMigration;
+  const ro = locked || !!missing;
+  const save = async (key, body) => {
+    setBusy(key); setErr("");
+    try { await onItem(room.id, key, body); }
+    catch (e) {
+      const code = e?.body?.error;
+      setErr(code === "migration_needed" ? `The checklist needs a database update (${e.body.migration}).`
+        : code === "bad_cost" ? "That cost is not a dollar amount SubSub can keep."
+        : code === "already_finished" ? "This inspection is finished, so it cannot be changed."
+        : "That didn't save. Try again.");
+    } finally { setBusy(""); }
+  };
+  const shown = locked ? rows.filter((r) => r.condition || r.note || r.costCents != null || r.moveIn) : rows;
+  let lastGroup = null;
+  return (
+    <div className={`insp-cl ${open ? "is-open" : ""}`}>
+      <button type="button" className="insp-cl-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <ListChecks size={14} />
+        <span className="insp-cl-lab">Checklist</span>
+        <span className="insp-cl-count">{t.answered} of {t.total} marked</span>
+        {moveOut && t.changed > 0 && <span className="insp-cl-chg">{t.changed} changed</span>}
+        {moveOut && t.costCents > 0 && <span className="insp-cl-cost">{formatCents(t.costCents)}</span>}
+        <ChevronDown size={14} className="insp-cl-chev" />
+      </button>
+      {open && (
+        <div className="insp-cl-body">
+          <p className="insp-cl-default">{DEFAULT_CONDITION_TEXT}</p>
+          {missing && <p className="fld-err">The checklist needs a database update ({missing}) before it can be saved.</p>}
+          {!ro && t.answered < t.total && (
+            <button type="button" className="btn-ghost small insp-cl-allgood" disabled={!!busy}
+              onClick={async () => { setBusy("all"); setErr("");
+                try { await onAllGood(room.id); } catch { setErr("That didn't save. Try again."); }
+                finally { setBusy(""); } }}>
+              <CheckCircle2 size={13} /> {busy === "all" ? "Marking…" : "Mark the rest good"}
+            </button>
+          )}
+          {locked && !shown.length && <p className="prop-none">Nothing was noted beyond that.</p>}
+          <ul className="insp-cl-rows">
+            {shown.map((r) => {
+              const head = r.group && r.group !== lastGroup ? r.group : null;
+              lastGroup = r.group || null;
+              const changed = moveOut && itemChanged(r);
+              return (
+                <React.Fragment key={r.key}>
+                  {head && <li className="insp-cl-group">{head}</li>}
+                  <InspectionItemRow row={r} ro={ro} moveOut={moveOut} changed={changed}
+                    busy={busy === r.key} onSave={(body) => save(r.key, body)} />
+                </React.Fragment>
+              );
+            })}
+          </ul>
+          {err && <p className="cov-hint" role="alert">{err}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave }) {
+  const [note, setNote] = useState(row.note || "");
+  const [cost, setCost] = useState(row.costCents != null ? (row.costCents / 100).toFixed(2) : "");
+  const [costErr, setCostErr] = useState(false);
+  useEffect(() => { setNote(row.note || ""); }, [row.note]);
+  useEffect(() => { setCost(row.costCents != null ? (row.costCents / 100).toFixed(2) : ""); }, [row.costCents]);
+  const c = row.condition ? ITEM_CONDITIONS[row.condition] : null;
+  const mi = row.moveIn;
+  return (
+    <li className={`insp-cl-row ${row.condition ? `c-${row.condition}` : ""} ${changed ? "is-changed" : ""}`}>
+      <div className="insp-cl-line">
+        <span className="insp-cl-item">{row.label}</span>
+        {changed && <span className="insp-cl-tag">Changed</span>}
+        {ro ? (
+          <span className="insp-cl-val">{c ? c.label : "Not marked"}</span>
+        ) : (
+          <select className="insp-cl-sel" value={row.condition || ""} disabled={busy}
+            aria-label={`${row.label} condition`}
+            onChange={(e) => onSave({ condition: e.target.value || null })}>
+            <option value="">Not marked</option>
+            {ITEM_CONDITION_ORDER.map((k) => (
+              <option key={k} value={k}>{ITEM_CONDITIONS[k].label}</option>
+            ))}
+          </select>
+        )}
+      </div>
+      {moveOut && (
+        <p className="insp-cl-mi">
+          Move-in: {mi?.condition ? ITEM_CONDITIONS[mi.condition]?.label : "not recorded"}
+          {mi?.note ? ` — ${mi.note}` : ""}
+        </p>
+      )}
+      {ro ? (
+        (row.note || (moveOut && row.costCents != null)) && (
+          <p className="insp-cl-ro">
+            {row.note}{row.note && moveOut && row.costCents != null ? " · " : ""}
+            {moveOut && row.costCents != null ? `Cost ${formatCents(row.costCents)}` : ""}
+          </p>
+        )
+      ) : (
+        (row.condition || row.note || row.costCents != null) && (
+          <div className="insp-cl-more">
+            <input className="insp-cl-note" value={note} maxLength={500} disabled={busy}
+              placeholder={moveOut ? "Final comment" : "Comment"} aria-label={`${row.label} comment`}
+              onChange={(e) => setNote(e.target.value)}
+              onBlur={() => note.trim() !== (row.note || "") && onSave({ note })} />
+            {moveOut && (
+              <label className={`insp-cl-costbox ${costErr ? "bad" : ""}`}>
+                <span>$</span>
+                <input inputMode="decimal" value={cost} disabled={busy} placeholder="Cost"
+                  aria-label={`${row.label} cost`}
+                  onChange={(e) => { setCost(e.target.value); setCostErr(false); }}
+                  onBlur={() => {
+                    const v = parseCost(cost);
+                    if (v === undefined) { setCostErr(true); return; }
+                    if (v !== (row.costCents ?? null)) onSave({ costCents: v });
+                  }} />
+              </label>
+            )}
+          </div>
+        )
+      )}
+    </li>
+  );
+}
+
 function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, onRemove, onAddPhotos, onRemovePhoto,
-  onCaption, onDraft, canAiDraft = false }) {
+  onCaption, onDraft, canAiDraft = false, moveOut = false, onItem, onAllGood }) {
   const [name, setName] = useState(room.name);
   const [note, setNote] = useState(room.note || "");
   const [busy, setBusy] = useState("");
@@ -38535,6 +38677,9 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
             onChange={(e) => setNote(e.target.value)}
             onBlur={() => note !== (room.note || "") && run("note", () => onPatch(room.id, { note }))} />
         )}
+
+      <InspectionChecklist room={room} locked={locked} moveOut={moveOut}
+        onItem={onItem} onAllGood={onAllGood} />
 
       {/* A LIST RATHER THAN `.ph-grid`, which is the tenant report's and stays
           its own: a row of 84px tiles is right for scanning and useless for
@@ -39199,6 +39344,26 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         {STANDARD_ROOMS.map((r) => <option key={r} value={r} />)}
       </datalist>
 
+      {/* WHAT CHANGED SINCE THE MOVE-IN, across the whole unit. The checklist
+          in each room says it item by item; this is the line somebody reads
+          before a deposit conversation. */}
+      {inspection.kind === "move_out" && rooms.length > 0 && (() => {
+        const ct = checklistTally(rooms);
+        return rooms[0].comparedTo === null ? (
+          <p className="insp-cmp none">No move-in inspection of this unit was found, so there is nothing
+            to compare the checklist with. Mark each item as you find it.</p>
+        ) : rooms[0].comparedTo ? (
+          <p className={`insp-cmp ${ct.changed ? "has" : ""}`}>
+            <ListChecks size={14} />
+            <span><strong>Compared with the move-in.</strong>{" "}
+              {ct.changed
+                ? `${ct.changed} item${ct.changed === 1 ? "" : "s"} changed since then`
+                : "Nothing marked worse than the move-in yet"}
+              {ct.costCents > 0 ? ` · ${formatCents(ct.costCents)} to put right` : ""}.</span>
+          </p>
+        ) : null;
+      })()}
+
       <div className="insp-rooms">
         {rooms.map((r) => (
           <InspectionRoom key={r.id} inspectionId={inspection.id} room={r} locked={locked}
@@ -39211,6 +39376,9 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             onCaption={(roomId, photoId, caption) =>
               api.captionInspectionPhoto(inspection.id, roomId, photoId, caption).then(settle)}
             onDraft={draftRoom}
+            moveOut={inspection.kind === "move_out"}
+            onItem={(roomId, key, body) => api.putInspectionItem(inspection.id, roomId, key, body).then(settle)}
+            onAllGood={(roomId) => api.inspectionItemsAllGood(inspection.id, roomId).then(settle)}
             /* Read off the inspection rather than assumed: only the Worker
                knows whether there is a key, and a button that cannot work
                must not be drawn. */
@@ -44568,6 +44736,56 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-note{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
   font:inherit;font-size:13.5px;background:var(--paper);color:var(--ink);resize:vertical}
 .insp-note-ro{margin:0;font-size:13.5px;color:var(--ink)}
+/* THE CHECKLIST INSIDE A ROOM. Folded, with the count on the toggle; open,
+   one thin row per item with its condition on the right. A changed row on a
+   move-out is edged amber, because amber here means "needs somebody" and a
+   changed item is what the deposit conversation is about. No backticks in
+   here, the stylesheet is one template literal. */
+.insp-cl{border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.insp-cl-toggle{display:flex;align-items:center;gap:8px;width:100%;min-height:42px;padding:0 12px;
+  background:none;border:0;cursor:pointer;font:600 13px Inter,sans-serif;color:var(--ink);text-align:left}
+.insp-cl-lab{font-weight:800}
+.insp-cl-count{color:var(--ink-soft);font-weight:600}
+.insp-cl-chg{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--ink);
+  border-radius:999px;padding:2px 8px;font-size:11.5px;font-weight:800}
+.insp-cl-cost{font-weight:800;color:var(--ink)}
+.insp-cl-chev{margin-left:auto;flex:none;color:var(--ink-soft);transition:transform .15s}
+.insp-cl.is-open .insp-cl-chev{transform:rotate(180deg)}
+.insp-cl-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:8px}
+.insp-cl-default{margin:0;font-size:12.5px;color:var(--ink-soft);line-height:1.45}
+.insp-cl-allgood{align-self:flex-start}
+.insp-cl-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.insp-cl-group{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-soft);padding:10px 0 4px}
+.insp-cl-row{border-top:1px solid var(--line);padding:7px 0 7px 8px;border-left:3px solid transparent;
+  display:flex;flex-direction:column;gap:5px}
+.insp-cl-row.is-changed{border-left-color:var(--amber)}
+.insp-cl-line{display:flex;align-items:center;gap:8px;min-height:36px}
+.insp-cl-item{flex:1;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink)}
+.insp-cl-tag{flex:none;font-size:11px;font-weight:800;color:var(--ink);border-radius:999px;padding:2px 7px;
+  background:color-mix(in srgb,var(--amber) 22%,transparent)}
+.insp-cl-sel{flex:none;width:178px;max-width:52%;min-height:36px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--ink);font:600 13px Inter,sans-serif;padding:0 8px}
+.insp-cl-val{flex:none;font-size:13px;font-weight:700;color:var(--ink-soft)}
+.insp-cl-row.c-ok .insp-cl-val{color:var(--brand)}
+.insp-cl-mi{margin:0;font-size:12px;color:var(--ink-soft)}
+.insp-cl-ro{margin:0;font-size:12.5px;color:var(--ink)}
+.insp-cl-more{display:flex;gap:8px;flex-wrap:wrap}
+.insp-cl-note{flex:1 1 200px;min-width:0;min-height:36px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;padding:0 10px}
+.insp-cl-costbox{flex:0 0 120px;display:flex;align-items:center;gap:4px;border:1px solid var(--line);
+  border-radius:8px;background:var(--card);padding:0 8px;min-height:36px;font-weight:700;color:var(--ink-soft)}
+.insp-cl-costbox.bad{border-color:var(--red)}
+.insp-cl-costbox input{flex:1;min-width:0;border:0;background:none;color:var(--ink);font:inherit;font-weight:600;font-size:13.5px}
+.insp-cmp{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:10px 12px;border-radius:10px;
+  border:1px solid var(--line);background:var(--paper);font-size:13.5px;color:var(--ink)}
+.insp-cmp.has{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));
+  background:color-mix(in srgb,var(--amber) 8%,var(--card))}
+.insp-cmp.none{color:var(--ink-soft)}
+@media (max-width:560px){
+  .insp-cl-sel,.insp-cl-note,.insp-cl-costbox input{font-size:16px}
+  .insp-cl-sel{width:150px}
+}
 /* The header's own fields, while it is a draft. Quiet: this is a correction
    somebody makes once, above the rooms which are the work. No backticks
    anywhere in here, the stylesheet is one template literal. */

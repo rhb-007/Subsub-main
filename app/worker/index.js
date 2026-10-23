@@ -74,6 +74,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   inspectionTradeScopes, quoteInspectionShape,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { isUnitLayout, layoutLabel, layoutChange, layoutOrder } from "../shared/unitlayout.js";
+import { checklistFor, checklistRows, isItemCondition, roomKey, MAX_ITEM_COST_CENTS } from "../shared/roomchecklist.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
 import { MAX_REPORT_DRAFT_PHOTOS, REPORT_DRAFT_MODEL, reportDraftChoices, reportDraftContext,
@@ -9706,6 +9707,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\binspection_items\b/i.test(m)) return "096_inspection_items";
   if (/\bunit_layout\b/i.test(m)) return "095_unit_layout";
   if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
   if (/\bheld_assignments\b/i.test(m)) return "093_held_assignments";
@@ -18084,7 +18086,169 @@ async function inspectionRooms(db, inspectionId, opts = {}) {
   }
   const byRoom = {};
   for (const p of shots || []) (byRoom[p.room_id] ||= []).push(p);
-  return list.map((r) => inspectionRoomToJs(r, byRoom[r.id] || [], opts));
+  const out = list.map((r) => inspectionRoomToJs(r, byRoom[r.id] || [], opts));
+  return withChecklists(db, inspectionId, out);
+}
+
+async function carryMoveInRooms(db, row) {
+  if (row?.kind !== "move_out") return [];
+  const mi = await moveInFor(db, row);
+  if (!mi) return [];
+  const { results: theirs } = await db.prepare(
+    `SELECT name FROM inspection_rooms WHERE inspection_id = ? ORDER BY position, created_at`).bind(mi.id).all();
+  const { results: mine } = await db.prepare(
+    `SELECT name, position FROM inspection_rooms WHERE inspection_id = ?`).bind(row.id).all();
+  const have = new Set((mine || []).map((r) => roomKey(r.name)));
+  let pos = Math.max(-1, ...(mine || []).map((r) => Number(r.position) || 0));
+  const added = [];
+  for (const r of theirs || []) {
+    const k = roomKey(r.name);
+    if (!k || have.has(k) || (mine || []).length + added.length >= MAX_ROOMS) continue;
+    have.add(k);
+    await db.prepare(
+      `INSERT INTO inspection_rooms (id, inspection_id, name, status, note, position) VALUES (?, ?, ?, 'unchecked', NULL, ?)`
+    ).bind(uid(), row.id, String(r.name).trim(), ++pos).run();
+    added.push(String(r.name).trim());
+  }
+  return added;
+}
+
+// THE CHECKLIST INSIDE EACH ROOM (096, shared/roomchecklist.js).
+//
+// A room's list is derived from its name, and only items somebody recorded
+// something about have a row. On a MOVE-OUT every row also carries the same
+// item on the move-in of that unit, which is what turns two walks into an
+// answer about what changed and what it costs.
+//
+// The move-in is read LIVE while the move-out is a draft -- it is a living
+// document, kept up through the tenancy -- and STAMPED onto the move-out's
+// rows when the move-out is finished, so a finished comparison cannot change
+// under anybody afterwards. Stamped is recognized by any row carrying
+// `movein_from`; a move-in with nothing recorded stamps nothing, and reading
+// it live then gives the same empty answer.
+async function inspectionHead(db, id) {
+  return db.prepare(
+    `SELECT id, account_id, property_id, unit, kind, status, created_at FROM inspections WHERE id = ?`
+  ).bind(id).first();
+}
+
+// The move-in this move-out is compared with: the latest one of the same
+// unit at the same building on the same account, started no later than the
+// move-out. A blank unit matches a blank unit (a whole-building walk), never
+// a numbered one.
+async function moveInFor(db, row) {
+  if (!row || row.kind !== "move_out") return null;
+  return db.prepare(
+    `SELECT id, unit_layout FROM inspections
+      WHERE account_id = ? AND property_id = ? AND kind = 'move_in' AND id <> ?
+        AND lower(trim(COALESCE(unit, ''))) = lower(trim(COALESCE(?, '')))
+        AND datetime(created_at) <= datetime(?)
+      ORDER BY datetime(created_at) DESC, rowid DESC LIMIT 1`
+  ).bind(row.account_id, row.property_id, row.id, row.unit || "", row.created_at || "9999-12-31").first()
+    .catch(() => null);
+}
+
+// Every stored item of one inspection, with its room's name. Null when the
+// table is not there, which the rooms say rather than failing.
+async function inspectionItemRows(db, inspectionId) {
+  try {
+    const { results } = await db.prepare(
+      `SELECT i.*, r.name AS room_name FROM inspection_items i
+         JOIN inspection_rooms r ON r.id = i.room_id
+        WHERE r.inspection_id = ?`
+    ).bind(inspectionId).all();
+    return results || [];
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+const itemFromRow = (i) => ({
+  key: i.item_key, label: i.label || i.item_key, group: i.grp || "",
+  condition: i.condition || null, note: i.note || "",
+  costCents: Number.isFinite(i.cost_cents) ? i.cost_cents : null,
+});
+
+async function withChecklists(db, inspectionId, rooms) {
+  const head = await inspectionHead(db, inspectionId);
+  const stored = await inspectionItemRows(db, inspectionId);
+  if (stored === null) {
+    return rooms.map((r) => ({ ...r, checklist: checklistRows(r.name, []),
+      checklistMigration: "096_inspection_items" }));
+  }
+  const byRoom = {};
+  for (const i of stored) (byRoom[i.room_id] ||= []).push(i);
+
+  // The comparison, keyed by room name and then item key.
+  let compare = null, comparedTo = null;
+  if (head?.kind === "move_out") {
+    const stamped = head.status === "finished" && stored.some((i) => i.movein_from);
+    if (stamped) {
+      comparedTo = stored.find((i) => i.movein_from).movein_from;
+      compare = {};
+      for (const i of stored) {
+        if (!i.movein_condition && !i.movein_note) continue;
+        (compare[roomKey(i.room_name)] ||= {})[i.item_key] =
+          { condition: i.movein_condition || null, note: i.movein_note || "" };
+      }
+    } else {
+      const mi = await moveInFor(db, head);
+      if (mi) {
+        comparedTo = mi.id;
+        compare = {};
+        for (const i of (await inspectionItemRows(db, mi.id)) || []) {
+          (compare[roomKey(i.room_name)] ||= {})[i.item_key] =
+            { condition: i.condition || null, note: i.note || "" };
+        }
+      }
+    }
+  }
+  return rooms.map((r) => ({
+    ...r,
+    checklist: checklistRows(r.name, (byRoom[r.id] || []).map(itemFromRow),
+      compare ? compare[roomKey(r.name)] || {} : null),
+    ...(head?.kind === "move_out" ? { comparedTo } : {}),
+  }));
+}
+
+// WRITES THE MOVE-IN ONTO A MOVE-OUT AT THE MOMENT IT IS FINISHED. Cleared
+// first, so a move-out reopened and finished again compares with the move-in
+// as it reads now rather than mixing two readings. Never fails the finish: a
+// database without 096 has nothing to stamp.
+async function stampMoveIn(db, row) {
+  if (row?.kind !== "move_out") return { stamped: 0 };
+  try {
+    const head = await inspectionHead(db, row.id);
+    const mi = await moveInFor(db, head);
+    await db.prepare(
+      `UPDATE inspection_items SET movein_condition = NULL, movein_note = NULL, movein_from = NULL
+        WHERE room_id IN (SELECT id FROM inspection_rooms WHERE inspection_id = ?)`
+    ).bind(row.id).run();
+    if (!mi) return { stamped: 0 };
+    const theirs = (await inspectionItemRows(db, mi.id)) || [];
+    const { results: mine } = await db.prepare(
+      `SELECT id, name FROM inspection_rooms WHERE inspection_id = ?`).bind(row.id).all();
+    const roomByName = {};
+    for (const r of mine || []) roomByName[roomKey(r.name)] ||= r.id;
+    let stamped = 0;
+    for (const i of theirs) {
+      const roomId = roomByName[roomKey(i.room_name)];
+      if (!roomId || (!i.condition && !i.note)) continue;
+      await db.prepare(
+        `INSERT INTO inspection_items (id, room_id, item_key, label, grp, movein_condition, movein_note, movein_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(room_id, item_key) DO UPDATE SET
+           movein_condition = excluded.movein_condition, movein_note = excluded.movein_note,
+           movein_from = excluded.movein_from`
+      ).bind(uid(), roomId, i.item_key, i.label, i.grp, i.condition || null, i.note || null, mi.id).run();
+      stamped++;
+    }
+    return { stamped };
+  } catch (err) {
+    if (missingSchema(err)) return { stamped: 0, migration: "096_inspection_items" };
+    throw err;
+  }
 }
 
 app.get("/api/inspections", requireRole(...INSPECTION_READ_ROLES), async (c) => {
@@ -18228,11 +18392,15 @@ app.post("/api/inspections", requireRole(...INSPECTION_WRITE_ROLES), async (c) =
   let row = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(id).first();
   // A layout chosen on the form arrives with its rooms already in place, so
   // the first screen is the walk rather than nine taps on chips.
-  if (!lay.value) return c.json({ ...inspectionRowToJs(row), rooms: [] }, 201);
-  const layout = await applyUnitLayout(c.env.DB, row, lay.value);
+  const layout = lay.value ? await applyUnitLayout(c.env.DB, row, lay.value) : undefined;
+  // A MOVE-OUT STARTS WITH THE MOVE-IN'S ROOMS, so every room the move-in
+  // recorded has a counterpart to be compared with -- including ones added by
+  // hand that no layout would put back. Matched by name, added at the end.
+  const carried = await carryMoveInRooms(c.env.DB, row);
   row = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(id).first();
-  return c.json({ ...inspectionRowToJs(row), unitLayout: lay.value,
-    rooms: await inspectionRooms(c.env.DB, id, { drafts: mayWriteInspection(auth.role) }), layout }, 201);
+  return c.json({ ...inspectionRowToJs(row), ...(lay.value ? { unitLayout: lay.value } : {}),
+    rooms: await inspectionRooms(c.env.DB, id, { drafts: mayWriteInspection(auth.role) }),
+    ...(layout ? { layout } : {}), carried }, 201);
 });
 
 // Who may be sent this report, and who already has it. Both are read from
@@ -18467,6 +18635,7 @@ app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async 
     await c.env.DB.prepare(
       `UPDATE inspections SET status = 'finished', finished_at = CURRENT_TIMESTAMP WHERE id = ?`
     ).bind(row.id).run();
+    await stampMoveIn(c.env.DB, row);
     await logActivity(c.env, auth.accountId, auth.userId, "inspection_finished",
       `Finished a ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${row.unit ? ` of unit ${row.unit}` : ""}`);
     // THE SUMMARY, WRITTEN WHEN THE WALK IS DONE.
@@ -18586,6 +18755,101 @@ app.delete("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE
     `DELETE FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
   ).bind(c.req.param("roomId"), row.id).run();
   if (!res.meta?.changes) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+});
+
+// ONE CHECKLIST ITEM in a room: its condition, a note, and on a move-out a
+// cost. Only the keys sent are written. The key must be on the room's list
+// (shared/roomchecklist.js) or already stored, so a renamed room keeps what
+// was recorded in it and nothing can be invented. A row left with nothing in
+// it is deleted, because no row means "nothing recorded" and an empty one is
+// a second way of saying it.
+async function roomForItems(c, auth) {
+  const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
+  if (error) return { res: c.json({ error, migration }, status) };
+  if (row.status === "finished") return { res: c.json({ error: "already_finished" }, 409) };
+  const room = await c.env.DB.prepare(
+    `SELECT * FROM inspection_rooms WHERE id = ? AND inspection_id = ?`
+  ).bind(c.req.param("roomId"), row.id).first();
+  if (!room) return { res: c.json({ error: "not_found" }, 404) };
+  return { row, room };
+}
+
+app.put("/api/inspections/:id/rooms/:roomId/items/:key", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { res, row, room } = await roomForItems(c, auth);
+  if (res) return res;
+  const key = String(c.req.param("key") || "");
+  const b = await c.req.json().catch(() => ({}));
+  const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+  const item = checklistFor(room.name).find((i) => i.key === key);
+  let existing;
+  try {
+    existing = await c.env.DB.prepare(
+      `SELECT * FROM inspection_items WHERE room_id = ? AND item_key = ?`).bind(room.id, key).first();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "096_inspection_items" }, 503);
+    throw err;
+  }
+  if (!item && !existing) return c.json({ error: "not_on_checklist" }, 400);
+  const sets = {};
+  if (has("condition")) {
+    if (b.condition !== null && !isItemCondition(b.condition)) return c.json({ error: "bad_condition" }, 400);
+    sets.condition = b.condition || null;
+  }
+  if (has("note")) sets.note = String(b.note || "").trim().slice(0, 500) || null;
+  if (has("costCents")) {
+    // A cost is what the move-out says it will take to put right, so it
+    // belongs on the move-out. On a move-in it would be a charge nobody has
+    // incurred yet.
+    if (row.kind !== "move_out" && b.costCents !== null) return c.json({ error: "cost_move_out_only" }, 400);
+    const n = b.costCents === null ? null : Number(b.costCents);
+    if (n !== null && (!Number.isInteger(n) || n < 0 || n > MAX_ITEM_COST_CENTS)) {
+      return c.json({ error: "bad_cost", max: MAX_ITEM_COST_CENTS }, 400);
+    }
+    sets.cost_cents = n;
+  }
+  const cols = Object.keys(sets);
+  if (!cols.length) return c.json({ error: "nothing_to_change" }, 400);
+  await c.env.DB.prepare(
+    `INSERT INTO inspection_items (id, room_id, item_key, label, grp, ${cols.join(", ")}, updated_by, updated_at)
+     VALUES (?, ?, ?, ?, ?, ${cols.map(() => "?").join(", ")}, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(room_id, item_key) DO UPDATE SET
+       ${cols.map((k) => `${k} = excluded.${k}`).join(", ")},
+       updated_by = excluded.updated_by, updated_at = excluded.updated_at`
+  ).bind(uid(), room.id, key, item?.label || existing?.label || key, item?.group || existing?.grp || "",
+    ...cols.map((k) => sets[k]), auth.userId).run();
+  await c.env.DB.prepare(
+    `DELETE FROM inspection_items WHERE room_id = ? AND item_key = ?
+       AND condition IS NULL AND note IS NULL AND cost_cents IS NULL
+       AND movein_from IS NULL AND movein_condition IS NULL AND movein_note IS NULL`
+  ).bind(room.id, key).run();
+  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+});
+
+// EVERYTHING ELSE IN THIS ROOM IS FINE, in one press: the form's own default
+// ("unless otherwise noted ... in good working order") made explicit for the
+// items nobody has answered. An answer already given is never overwritten.
+app.post("/api/inspections/:id/rooms/:roomId/items/all-good", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
+  const auth = c.get("auth");
+  const { res, row, room } = await roomForItems(c, auth);
+  if (res) return res;
+  const list = checklistFor(room.name);
+  if (!list.length) return c.json({ error: "no_checklist" }, 400);
+  try {
+    for (const i of list) {
+      await c.env.DB.prepare(
+        `INSERT INTO inspection_items (id, room_id, item_key, label, grp, condition, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'ok', ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(room_id, item_key) DO UPDATE SET condition = 'ok',
+           updated_by = excluded.updated_by, updated_at = excluded.updated_at
+         WHERE inspection_items.condition IS NULL`
+      ).bind(uid(), room.id, i.key, i.label, i.group, auth.userId).run();
+    }
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "096_inspection_items" }, 503);
+    throw err;
+  }
   return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
@@ -19988,6 +20252,7 @@ app.post("/api/inspections/:id/job", requireRole(...INSPECTION_WRITE_ROLES), asy
     ).bind(row.id).run();
     finished = (r.meta?.changes || 0) > 0;
     if (finished) {
+      await stampMoveIn(c.env.DB, row);
       await logActivity(c.env, auth.accountId, auth.userId, "inspection_finished",
         `Finished the ${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${row.unit ? ` of unit ${row.unit}` : ""} by raising its job`);
     }

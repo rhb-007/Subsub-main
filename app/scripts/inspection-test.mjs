@@ -727,6 +727,11 @@ console.log("\n-- sending the finished report to the building's owner --");
       { method: "POST", body: { name: "Kitchen" } }));
     await call(env, `/api/inspections/${insp.id}/rooms/${r1.rooms[0].id}`,
       { method: "PATCH", body: { status: "fail", note: "Cracked basin" } });
+    // A move-out starts with the move-in's rooms (096), so a second walk of
+    // the same unit carries them; they are walked too, or it cannot finish.
+    for (const x of r1.rooms.slice(1)) {
+      await call(env, `/api/inspections/${insp.id}/rooms/${x.id}`, { method: "PATCH", body: { status: "ok" } });
+    }
     // The flagged room's job is raised first, because that is now what
     // finishing a flagged walk takes -- through the route, as a person would.
     // Raising it finishes it now. A fixture that needs a DRAFT reopens it,

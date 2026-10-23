@@ -14917,6 +14917,76 @@ refactor.
   Schema note: the 095 comment sits after the table in `schema.sql`, because a
   comment before the last column breaks SQLite's DROP COLUMN rewrite.
 
+- **EVERY INSPECTION ROOM CARRIES THE INDUSTRY CHECKLIST, AND A MOVE-OUT IS
+  READ AGAINST THE MOVE-IN, ITEM BY ITEM, WITH A COST.** Asked for as *"a
+  checklist of items -- standardized in the industry, move-in compared with
+  move-out, to understand the issues or costs of things that changed. The move
+  in should be a living document and saved until moving out where final
+  comments are made"*, with Zillow's move-in / move-out checklist as the
+  reference. Migration 096 (`inspection_items`), `app/shared/roomchecklist.js`.
+
+  **The lists are that form's, room by room**, keyed off the room's name:
+  entry and hallway, living, dining, bedroom, bathroom (with the toilet's bowl,
+  seat and flush), kitchen (with the dishwasher, refrigerator and stove/oven),
+  mechanical, outdoor, laundry and closet. A half bath has no tub. An unknown
+  room gets floor, walls, ceiling, doors, windows, lights and outlets. A room
+  that is already one thing ("Walls and floors", "Keys handed over") gets no
+  list, because a one-item checklist is a second record of the room's own
+  verdict. **Item keys never change once shipped**: they are what match an item
+  on the move-out to the same item on the move-in.
+
+  **The form's key, plus Good**: Needs cleaning, spot cleaning, painting, spot
+  painting, repair, replacing. An item nobody marked is NOT good; the room says
+  the form's default sentence ("unless otherwise noted, clean, in good working
+  order and undamaged") instead of inventing a tick. **Mark the rest good** is
+  one press that answers only what nobody answered.
+
+  **Only recorded items have a row.** The list is derived at read time; a row
+  left empty is deleted, and a row for an item the list no longer has (a room
+  renamed after somebody wrote in it) is kept and shown. Only the keys sent are
+  written, and an item not on the room's list is refused (`not_on_checklist`).
+
+  **The move-in is a living document, read LIVE by the move-out while the
+  move-out is a draft, and STAMPED onto it when the move-out is finished**
+  (`movein_condition`, `movein_note`, `movein_from`), so editing the move-in
+  afterwards cannot change a finished comparison. A re-finish after a reopen
+  clears the stamp and takes it again. The move-in is the latest one of the
+  same unit (case and spaces ignored) at the same building on the account,
+  started no later than the move-out; a blank unit matches only a blank unit.
+
+  **A move-out starts with the move-in's rooms**, the hand-added ones
+  included, so every room recorded on the way in has a counterpart on the way
+  out (`carried` on the reply). Those rooms start unchecked, so a move-out
+  cannot be finished until they are walked, which is the point.
+
+  **Changed means worse than the move-in said** (`itemChanged`): a stain
+  recorded on the way in is not a charge on the way out. A move-in that never
+  answered the item is not evidence it was fine, so it still counts, and the
+  row says *Move-in: not recorded*. **A cost belongs to the move-out**
+  (`cost_move_out_only` on a move-in), typed in dollars, stored in cents, under
+  $50,000 an item. The move-out leads with one line: compared with the move-in,
+  N items changed, $X to put right, or that no move-in of this unit was found.
+
+  **On screen** each room's checklist is folded, with *N of M marked*, the
+  changed count and the cost on the toggle, because a kitchen is twenty-seven
+  rows. Open, each item is one thin row with a condition picker; a comment box
+  (and on a move-out a cost box) appears once the item is marked. Finished, it
+  reads, costs included, and the owner's copy carries it. **Contractors do not
+  get it**: `contractorInspectionShape` picks its fields and the checklist is
+  not one.
+
+  `test:roomchecklist` (40) and `test:inspectionui`. Six server mutations
+  fire, each on its own assertion: the stamp ignored, changed meaning merely
+  not good, a cost allowed on a move-in, the unit match dropped, the rooms not
+  carried, and Mark the rest good overwriting answers. In the browser, drawing a move-out as a move-in fails three. `test:inspection`'s walk
+  fixture now marks the carried rooms. **Paste 096** before any of it saves;
+  until then the lists draw, saving names the file, and inspections finish as
+  before.
+
+  **Still open:** a flagged checklist item does not feed the trade
+  suggestions or the job's scope; those still read the room's note and
+  captions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -385,6 +385,11 @@ export const api = {
     request(`/inspections/${id}/rooms/${roomId}`, { method: "PATCH", body: JSON.stringify(body) }),
   removeInspectionRoom: (id, roomId) =>
     request(`/inspections/${id}/rooms/${roomId}`, { method: "DELETE" }),
+  // One checklist item in a room (096): only the keys sent are written.
+  putInspectionItem: (id, roomId, key, body) =>
+    request(`/inspections/${id}/rooms/${roomId}/items/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify(body) }),
+  inspectionItemsAllGood: (id, roomId) =>
+    request(`/inspections/${id}/rooms/${roomId}/items/all-good`, { method: "POST" }),
   // The bytes go up through the same checked upload kind a tenant's report
   // photo uses -- one set of type and size limits, not two.
   addInspectionPhotos: (id, roomId, photos) =>

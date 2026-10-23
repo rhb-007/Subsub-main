@@ -138,6 +138,7 @@
     "test:inviteeditui": "node --no-warnings scripts/invite-edit-ui-test.mjs",
     "test:inspection": "node --no-warnings scripts/inspection-test.mjs",
     "test:unitlayout": "node --no-warnings scripts/unit-layout-test.mjs",
+    "test:roomchecklist": "node --no-warnings scripts/room-checklist-test.mjs",
     "test:inspwalk": "node --no-warnings scripts/insp-walk-ui-test.mjs",
     "test:inspectionui": "node --no-warnings scripts/inspection-ui-test.mjs",
     "test:photoshrink": "node --no-warnings scripts/photo-shrink-ui-test.mjs",

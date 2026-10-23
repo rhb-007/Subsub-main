@@ -326,6 +326,8 @@ WITH spec(j) AS (SELECT
   -- 095. The unit's layout on an inspection. Until it is run, choosing one
   -- still adds its rooms and is not remembered.
   ',["m095_unit_layout","col","inspections",["unit_layout"]]' ||
+  -- 096. The checklist items inside each inspection room.
+  ',["m096_inspection_items","col","inspection_items",["id","room_id","item_key","label","grp","condition","note","cost_cents","movein_condition","movein_note","movein_from","updated_by","updated_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -856,6 +858,11 @@ WITH inv(j) AS (SELECT '['
   -- or the reason the assign route refused it, never neither.
   || (',' || json_array('m093_inv_held_released_nothing', (SELECT COUNT(*) FROM held_assignments
     WHERE released_at IS NOT NULL AND work_order_id IS NULL AND release_error IS NULL)))
+  -- 096. A checklist item with a condition the screen cannot draw, or a
+  -- negative cost.
+  || (',' || json_array('m096_inv_bad_item', (SELECT COUNT(*) FROM inspection_items
+    WHERE (condition IS NOT NULL AND condition NOT IN ('ok','nc','nsc','np','nsp','nr','rp'))
+       OR cost_cents < 0)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

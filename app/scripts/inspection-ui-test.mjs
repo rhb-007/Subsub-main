@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
 import { layoutChange, layoutLabel } from "../shared/unitlayout.js";
+import { checklistRows } from "../shared/roomchecklist.js";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-inspection-test");
@@ -88,6 +89,19 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     SENDS = [...to.map((u) => ({ userId: u.id, at: new Date().toISOString(), emailed: true })), ...SENDS];
     return [200, { ok: true, sent: to.map((u) => ({ userId: u.id, name: u.name, emailed: true })),
       recipients: RECIPIENTS, sends: SENDS }];
+  }
+  // One checklist item, and "mark the rest good" -- carried out on the
+  // fixture's own rows, the way the route does.
+  const itm = /^\/api\/inspections\/insp_1\/rooms\/(r\d)\/items\/(.+)$/.exec(path);
+  if (itm) {
+    sent.push({ path, method, body });
+    const key = decodeURIComponent(itm[2]);
+    DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => r.id !== itm[1] ? r : {
+      ...r, checklist: (r.checklist || []).map((i) => key === "all-good" && method === "POST"
+        ? { ...i, condition: i.condition || "ok" }
+        : i.key === key ? { ...i, ...body } : i),
+    }) };
+    return [200, { ok: true, rooms: DETAIL.rooms }];
   }
   const room = /^\/api\/inspections\/insp_1\/rooms\/(r\d)$/.exec(path);
   if (room && method === "PATCH") {
@@ -417,6 +431,121 @@ try {
     t.ck("the picker keeps the choice", after.value === "2br-1ba", after.value);
     t.ck("and the line under it says what was added", /Added/.test(after.note) && /Remove any/.test(after.note), after.note);
     await ctx.close().catch(() => {});
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+  }
+
+  console.log("\n-- THE CHECKLIST, MOVE-IN AGAINST MOVE-OUT --");
+  {
+    // Asked for as a checklist of items in each room, from the industry
+    // move-in / move-out form, so the move-out says what changed and what it
+    // costs. The fixture is a move-out compared with a move-in that recorded
+    // a stained floor (not a change when it is still stained) and good walls
+    // (a change once they need painting).
+    const moveIn = { floor: { condition: "nsc", note: "Stain by the tub" }, walls: { condition: "ok", note: "" } };
+    const list = checklistRows("Bathroom 1", [
+      { key: "floor", condition: "nsc" },
+      { key: "walls", condition: "np", note: "Two scuffs", costCents: 18000 },
+    ], moveIn);
+    DETAIL = { ...DETAIL, kind: "move_out", status: "draft",
+      rooms: DETAIL.rooms.map((r) => r.id === "r3"
+        ? { ...r, checklist: list, comparedTo: "insp_in" }
+        : { ...r, checklist: checklistRows(r.name, [], {}), comparedTo: "insp_in" }) };
+    const { ctx, page } = await openOne();
+    const head = await page.evaluate(() => document.querySelector(".insp-cmp")?.innerText || "");
+    t.ck("the move-out says it is compared with the move-in, with the change and the cost",
+      /Compared with the move-in/.test(head) && /1 item changed/.test(head) && /\$180\.00/.test(head), head);
+
+    const room3 = () => page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const cl = r?.querySelector(".insp-cl");
+      if (!cl) return null;
+      return {
+        toggle: cl.querySelector(".insp-cl-toggle")?.innerText || "",
+        open: !!cl.querySelector(".insp-cl-body"),
+        rows: [...cl.querySelectorAll(".insp-cl-row")].map((li) => ({
+          item: li.querySelector(".insp-cl-item")?.innerText,
+          changed: !!li.querySelector(".insp-cl-tag"),
+          mi: li.querySelector(".insp-cl-mi")?.innerText || "",
+          sel: li.querySelector(".insp-cl-sel")?.value ?? null,
+          cost: li.querySelector(".insp-cl-costbox input")?.value ?? null,
+        })),
+        groups: [...cl.querySelectorAll(".insp-cl-group")].map((g) => g.textContent),
+        allGood: !!cl.querySelector(".insp-cl-allgood"),
+      };
+    });
+    let c3 = await room3();
+    t.ck("each room carries a folded checklist with its count", !!c3 && !c3.open && /of \d+ marked/.test(c3.toggle), JSON.stringify(c3));
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      r.querySelector(".insp-cl-toggle").click();
+    });
+    await wait(300);
+    c3 = await room3();
+    t.ck("opening it lists the bathroom's items, the toilet's under their own heading",
+      c3?.open && c3.rows.length === list.length && c3.groups.includes("Toilet"), JSON.stringify(c3?.groups));
+    const walls = c3?.rows.find((r) => r.item === "Walls");
+    const floor = c3?.rows.find((r) => r.item === "Floor");
+    t.ck("each row says what the move-in recorded", /Move-in: Good/.test(walls?.mi || "")
+      && /Move-in: Needs spot cleaning — Stain by the tub/.test(floor?.mi || ""), JSON.stringify([walls?.mi, floor?.mi]));
+    t.ck("worse than the move-in is marked Changed", walls?.changed === true);
+    t.ck("the stain the move-in already recorded is not", floor?.changed === false);
+    t.ck("and the cost sits on the row", walls?.cost === "180.00", walls?.cost);
+
+    sent.length = 0;
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Mirror");
+      const sel = li.querySelector(".insp-cl-sel");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set;
+      set.call(sel, "rp"); sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(600);
+    t.ck("marking an item sends its condition", sent.some((x) => /items\/mirror$/.test(x.path) && x.body?.condition === "rp"), JSON.stringify(sent));
+    sent.length = 0;
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Mirror");
+      const inp = li.querySelector(".insp-cl-costbox input");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      inp.focus(); set.call(inp, "45.50"); inp.dispatchEvent(new Event("input", { bubbles: true })); inp.blur();
+    });
+    await wait(600);
+    t.ck("a cost typed in dollars is sent in cents", sent.some((x) => /items\/mirror$/.test(x.path) && x.body?.costCents === 4550), JSON.stringify(sent));
+    sent.length = 0;
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      r.querySelector(".insp-cl-allgood").click();
+    });
+    await wait(600);
+    c3 = await room3();
+    t.ck("Mark the rest good sends one press and leaves the rest marked",
+      sent.some((x) => /items\/all-good$/.test(x.path) && x.method === "POST")
+        && c3?.rows.every((r) => r.sel) && c3?.rows.find((r) => r.item === "Mirror")?.sel === "rp", JSON.stringify(sent));
+    await ctx.close().catch(() => {});
+
+    // FINISHED, it reads rather than edits.
+    DETAIL = { ...DETAIL, status: "finished" };
+    const o2 = await openOne();
+    await o2.page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => /Bathroom 1/.test(x.querySelector(".insp-name")?.textContent || ""));
+      r?.querySelector(".insp-cl-toggle")?.click();
+    });
+    await wait(300);
+    const ro = await o2.page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => /Bathroom 1/.test(x.querySelector(".insp-name")?.textContent || ""));
+      return r ? { rows: r.querySelectorAll(".insp-cl-row").length, selects: r.querySelectorAll(".insp-cl-sel").length,
+        text: r.querySelector(".insp-cl-body")?.innerText || "" } : null;
+    });
+    t.ck("a finished one shows the checklist read-only, costs included",
+      ro?.rows > 0 && ro.selects === 0 && /Cost \$180\.00/.test(ro.text), JSON.stringify(ro));
+    await o2.ctx.close().catch(() => {});
+
+    // NO MOVE-IN, said rather than left blank.
+    DETAIL = { ...DETAIL, status: "draft", rooms: DETAIL.rooms.map((r) => ({ ...r, comparedTo: null })) };
+    const o3 = await openOne();
+    const none = await o3.page.evaluate(() => document.querySelector(".insp-cmp")?.innerText || "");
+    t.ck("a move-out with no move-in to compare says so", /No move-in inspection of this unit/.test(none), none);
+    await o3.ctx.close().catch(() => {});
     DETAIL = JSON.parse(JSON.stringify(FIXTURE));
   }
 

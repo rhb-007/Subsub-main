@@ -2027,6 +2027,26 @@ CREATE TABLE IF NOT EXISTS inspection_photos (
 );
 CREATE INDEX IF NOT EXISTS idx_inspection_photos ON inspection_photos(room_id, created_at);
 
+CREATE TABLE IF NOT EXISTS inspection_items (
+  id               TEXT PRIMARY KEY,
+  room_id          TEXT NOT NULL REFERENCES inspection_rooms(id) ON DELETE CASCADE,
+  item_key         TEXT NOT NULL,
+  label            TEXT,
+  grp              TEXT,
+  condition        TEXT,
+  note             TEXT,
+  cost_cents       INTEGER,
+  movein_condition TEXT,
+  movein_note      TEXT,
+  movein_from      TEXT,
+  updated_by       TEXT,
+  updated_at       TEXT DEFAULT CURRENT_TIMESTAMP
+);
+-- 096. The checklist inside each room, one row per item somebody recorded
+-- something about (shared/roomchecklist.js). movein_* are the matching
+-- move-in item stamped when a move-out is finished.
+CREATE UNIQUE INDEX IF NOT EXISTS ux_inspection_items ON inspection_items(room_id, item_key);
+
 -- Who has been sent an inspection report (056). Here as well as in the
 -- migration, in the same change: schema.sql is what a fresh database and every
 -- freshDb() test is built from.
