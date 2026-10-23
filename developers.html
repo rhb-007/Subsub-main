@@ -564,7 +564,7 @@ body.nav-open{overflow:hidden}
   <a class="dev-what-card" href="#inspections">
     <span class="dev-start-tag">Inspections</span>
     <strong>Send inspections</strong>
-    <span>Move-in and move-out walks from your inspection app land as draft inspections.</span>
+    <span>Move-in, move-out and checkup walks from your inspection app land as draft inspections.</span>
   </a>
   <a class="dev-what-card" href="#reference">
     <span class="dev-start-tag">Reads</span>
@@ -911,9 +911,10 @@ Content-Type: application/json</code></pre>
     </tr>
     <tr>
       <td><code>kind</code></td><td>Yes</td>
-      <td><code>move_in</code> or <code>move_out</code>. Most spellings are read —
-      <code>Move Out</code>, <code>moveout</code>, <code>check-out</code>. A word SubSub cannot
-      place is refused rather than guessed: the two are opposite documents.</td>
+      <td><code>move_in</code>, <code>move_out</code> or <code>checkup</code> (a one-off walk in the
+      middle of a lease). Most spellings are read — <code>Move Out</code>, <code>moveout</code>,
+      <code>check-out</code>, <code>routine</code>. A word SubSub cannot place is refused rather than
+      guessed: a move-in and a move-out are opposite documents.</td>
     </tr>
     <tr>
       <td><code>property</code> <em>or</em> <code>propertyId</code></td><td>Yes</td>

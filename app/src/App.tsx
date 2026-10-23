@@ -36,7 +36,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, Minimize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, Circle,
   // Aliased: Map is the JavaScript built-in, which this file uses constantly.
   Map as MapIcon,
 } from "lucide-react";
@@ -91,7 +91,7 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   suggestTrades, inspectionStep, quoteInspectionShape, unflaggedWork } from "../shared/inspection.js";
 import { UNIT_LAYOUTS, layoutLabel, layoutChangeText } from "../shared/unitlayout.js";
 import { ITEM_CONDITIONS, ITEM_CONDITION_ORDER, DEFAULT_CONDITION_TEXT, itemChanged, checklistTally,
-  parseCost } from "../shared/roomchecklist.js";
+  parseCost, flaggedItems, itemLabel } from "../shared/roomchecklist.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
@@ -38443,17 +38443,25 @@ function PhotoCaption({ photo, locked, onSave }) {
   );
 }
 
-// THE CHECKLIST INSIDE A ROOM, from the industry move-in / move-out form
-// (shared/roomchecklist.js). Folded until opened, with the count on the
-// toggle, because a kitchen is twenty-seven rows and twelve rooms of that
-// open at once is a screen nobody can find the next room on.
+// THE CHECKLIST LEADS EACH ROOM, OPEN, AND THE ROOM'S STATUS IS ITS SUMMARY.
 //
-// On a MOVE-OUT each row says what the move-in recorded for the same item,
-// takes a cost, and is marked Changed when it is worse than the move-in said
-// -- a stain recorded on the way in is not a charge on the way out.
-function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood }) {
+// Asked for as *"the check list should be prominent at the top of each room
+// section and allow you to take photos within each checklist item and
+// automate the description of the photo (as many photos as you want), each
+// will have a check as you go down the list to emulate an actual property
+// manager check list"*. It was folded under the room's verdict and its note,
+// which made the industry form a thing to go looking for rather than the walk
+// itself.
+//
+// So each item is one row in the order the form lists them: a check you tap
+// as you pass it (Good), a picker for what is wrong with it, a camera for its
+// own photos -- every one drafted by itself the moment it lands -- and, once
+// something is said about it, a comment and on a move-out a cost. On a
+// MOVE-OUT each row also says what the move-in recorded for the same item and
+// is marked Changed when it is worse than that.
+function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood, photosFor, renderPhotos,
+  onPickItem, pickingItem }) {
   const rows = room.checklist || [];
-  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   if (!rows.length) return null;
@@ -38471,76 +38479,107 @@ function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood }) {
         : "That didn't save. Try again.");
     } finally { setBusy(""); }
   };
-  const shown = locked ? rows.filter((r) => r.condition || r.note || r.costCents != null || r.moveIn) : rows;
+  const shown = locked
+    ? rows.filter((r) => r.condition || r.note || r.costCents != null || r.moveIn || photosFor(r.key).length)
+    : rows;
   let lastGroup = null;
   return (
-    <div className={`insp-cl ${open ? "is-open" : ""}`}>
-      <button type="button" className="insp-cl-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-        <ListChecks size={14} />
+    <div className="insp-cl">
+      <div className="insp-cl-head">
+        <ListChecks size={15} />
         <span className="insp-cl-lab">Checklist</span>
-        <span className="insp-cl-count">{t.answered} of {t.total} marked</span>
+        <span className="insp-cl-count">{t.answered} of {t.total} checked</span>
         {moveOut && t.changed > 0 && <span className="insp-cl-chg">{t.changed} changed</span>}
         {moveOut && t.costCents > 0 && <span className="insp-cl-cost">{formatCents(t.costCents)}</span>}
-        <ChevronDown size={14} className="insp-cl-chev" />
-      </button>
-      {open && (
-        <div className="insp-cl-body">
-          <p className="insp-cl-default">{DEFAULT_CONDITION_TEXT}</p>
-          {missing && <p className="fld-err">The checklist needs a database update ({missing}) before it can be saved.</p>}
-          {!ro && t.answered < t.total && (
-            <button type="button" className="btn-ghost small insp-cl-allgood" disabled={!!busy}
-              onClick={async () => { setBusy("all"); setErr("");
-                try { await onAllGood(room.id); } catch { setErr("That didn't save. Try again."); }
-                finally { setBusy(""); } }}>
-              <CheckCircle2 size={13} /> {busy === "all" ? "Marking…" : "Mark the rest good"}
-            </button>
-          )}
-          {locked && !shown.length && <p className="prop-none">Nothing was noted beyond that.</p>}
-          <ul className="insp-cl-rows">
-            {shown.map((r) => {
-              const head = r.group && r.group !== lastGroup ? r.group : null;
-              lastGroup = r.group || null;
-              const changed = moveOut && itemChanged(r);
-              return (
-                <React.Fragment key={r.key}>
-                  {head && <li className="insp-cl-group">{head}</li>}
-                  <InspectionItemRow row={r} ro={ro} moveOut={moveOut} changed={changed}
-                    busy={busy === r.key} onSave={(body) => save(r.key, body)} />
-                </React.Fragment>
-              );
-            })}
-          </ul>
-          {err && <p className="cov-hint" role="alert">{err}</p>}
-        </div>
-      )}
+        {!ro && t.answered < t.total && (
+          <button type="button" className="btn-ghost small insp-cl-allgood" disabled={!!busy}
+            onClick={async () => { setBusy("all"); setErr("");
+              try { await onAllGood(room.id); } catch { setErr("That didn't save. Try again."); }
+              finally { setBusy(""); } }}>
+            <CheckCircle2 size={13} /> {busy === "all" ? "Marking…" : "Mark the rest good"}
+          </button>
+        )}
+      </div>
+      <div className="insp-cl-meter" aria-hidden="true">
+        <span style={{ width: `${t.total ? Math.round((t.answered / t.total) * 100) : 0}%` }} />
+      </div>
+      <p className="insp-cl-default">{DEFAULT_CONDITION_TEXT}</p>
+      {missing && <p className="fld-err">The checklist needs a database update ({missing}) before it can be saved.</p>}
+      {locked && !shown.length && <p className="prop-none">Nothing was noted beyond that.</p>}
+      <ul className="insp-cl-rows">
+        {shown.map((r) => {
+          const head = r.group && r.group !== lastGroup ? r.group : null;
+          lastGroup = r.group || null;
+          const changed = moveOut && itemChanged(r);
+          return (
+            <React.Fragment key={r.key}>
+              {head && <li className="insp-cl-group">{head}</li>}
+              <InspectionItemRow row={r} ro={ro} moveOut={moveOut} changed={changed}
+                busy={busy === r.key} onSave={(body) => save(r.key, body)}
+                photos={photosFor(r.key)} renderPhotos={renderPhotos}
+                canPhoto={!locked} picking={pickingItem === r.key}
+                onPick={(files) => onPickItem(r.key, files)} />
+            </React.Fragment>
+          );
+        })}
+      </ul>
+      {err && <p className="cov-hint" role="alert">{err}</p>}
     </div>
   );
 }
 
-function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave }) {
+function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave, photos = [], renderPhotos,
+  canPhoto, picking, onPick }) {
   const [note, setNote] = useState(row.note || "");
   const [cost, setCost] = useState(row.costCents != null ? (row.costCents / 100).toFixed(2) : "");
   const [costErr, setCostErr] = useState(false);
   useEffect(() => { setNote(row.note || ""); }, [row.note]);
   useEffect(() => { setCost(row.costCents != null ? (row.costCents / 100).toFixed(2) : ""); }, [row.costCents]);
   const c = row.condition ? ITEM_CONDITIONS[row.condition] : null;
+  const issue = !!row.condition && row.condition !== "ok";
   const mi = row.moveIn;
+  // THE CHECK IS THE "I HAVE LOOKED AT THIS" MARK. Empty until something is
+  // said about the item, a green tick for Good, and the issue's own mark when
+  // something is wrong -- so a glance down the column says how far the walk
+  // has got. Tapping an empty one marks it Good, which is most items in most
+  // rooms; tapping a tick takes it off. Over an issue it is a mark rather
+  // than a button, because a press there would have to guess what to do with
+  // the issue.
+  const mark = row.condition === "ok" ? <Check size={15} />
+    : issue ? (["nr", "rp"].includes(row.condition) ? <XCircle size={15} /> : <AlertTriangle size={14} />)
+    : null;
   return (
-    <li className={`insp-cl-row ${row.condition ? `c-${row.condition}` : ""} ${changed ? "is-changed" : ""}`}>
+    <li className={`insp-cl-row ${row.condition ? `c-${row.condition}` : ""} ${issue ? "is-issue" : ""} ${changed ? "is-changed" : ""}`}>
       <div className="insp-cl-line">
+        {ro || issue ? (
+          <span className={`insp-cl-check ${row.condition ? "on" : ""}`} aria-hidden="true">{mark}</span>
+        ) : (
+          <button type="button" className={`insp-cl-check ${row.condition ? "on" : ""}`} disabled={busy}
+            aria-pressed={row.condition === "ok"} aria-label={`${row.label}: good`}
+            onClick={() => onSave({ condition: row.condition === "ok" ? null : "ok" })}>{mark}</button>
+        )}
         <span className="insp-cl-item">{row.label}</span>
         {changed && <span className="insp-cl-tag">Changed</span>}
         {ro ? (
-          <span className="insp-cl-val">{c ? c.label : "Not marked"}</span>
+          <span className="insp-cl-val">{c ? c.label : "Not checked"}</span>
         ) : (
-          <select className="insp-cl-sel" value={row.condition || ""} disabled={busy}
+          <select className={`insp-cl-sel ${issue ? "has-issue" : ""}`} value={row.condition || ""} disabled={busy}
             aria-label={`${row.label} condition`}
             onChange={(e) => onSave({ condition: e.target.value || null })}>
-            <option value="">Not marked</option>
+            <option value="">Not checked</option>
             {ITEM_CONDITION_ORDER.map((k) => (
               <option key={k} value={k}>{ITEM_CONDITIONS[k].label}</option>
             ))}
           </select>
+        )}
+        {canPhoto && (
+          <label className={`insp-cl-cam ${photos.length ? "has" : ""}`} title={`Add photos of ${row.label}`}>
+            <Camera size={15} />
+            {picking ? <span>…</span> : photos.length > 0 && <span>{photos.length}</span>}
+            <input type="file" accept="image/*" multiple hidden disabled={picking}
+              aria-label={`Add photos of ${row.label}`}
+              onChange={(e) => { onPick(e.target.files); e.target.value = ""; }} />
+          </label>
         )}
       </div>
       {moveOut && (
@@ -38557,10 +38596,10 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave }) {
           </p>
         )
       ) : (
-        (row.condition || row.note || row.costCents != null) && (
+        (issue || row.note || row.costCents != null) && (
           <div className="insp-cl-more">
             <input className="insp-cl-note" value={note} maxLength={500} disabled={busy}
-              placeholder={moveOut ? "Final comment" : "Comment"} aria-label={`${row.label} comment`}
+              placeholder={moveOut ? "Final comment" : "What is wrong with it"} aria-label={`${row.label} comment`}
               onChange={(e) => setNote(e.target.value)}
               onBlur={() => note.trim() !== (row.note || "") && onSave({ note })} />
             {moveOut && (
@@ -38579,7 +38618,37 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave }) {
           </div>
         )
       )}
+      {photos.length > 0 && <div className="insp-cl-shots">{renderPhotos(photos)}</div>}
     </li>
+  );
+}
+
+// WHAT THE ROOM'S STATUS SAYS AND WHY, at the foot of the room. Read-only
+// wherever a checklist decides it (`derivedRoomStatus`), with the items that
+// decided it named, because "Damage" on its own sends somebody back up a list
+// of twenty-seven rows to find out what.
+function RoomStatusSummary({ room }) {
+  const rows = room.checklist || [];
+  const t = checklistTally([room]);
+  const flagged = flaggedItems(rows);
+  const marked = t.answered > 0;
+  const st = ROOM_STATUSES[room.status] || ROOM_STATUSES.unchecked;
+  const why = flagged.length
+    ? `From the checklist: ${flagged.slice(0, 4).map((i) => `${itemLabel(i)} (${ITEM_CONDITIONS[i.condition]?.label.toLowerCase()})`).join(", ")}${flagged.length > 4 ? `, and ${flagged.length - 4} more` : ""}.`
+    : room.status === "ok" && marked ? "Every item is checked and good."
+    : !marked && room.status !== "unchecked" ? "Set before the checklist was used. Checking an item replaces it."
+    : `${t.total - t.answered} of ${t.total} item${t.total === 1 ? "" : "s"} still to check.`;
+  return (
+    <div className={`insp-status st-${room.status}`} aria-live="polite">
+      <span className="insp-status-lab">Room status</span>
+      <span className="insp-status-val">
+        {room.status === "ok" ? <CheckCircle2 size={14} /> : room.status === "follow_up" ? <AlertTriangle size={14} />
+          : room.status === "fail" ? <XCircle size={14} /> : <Circle size={14} />}
+        {room.status === "unchecked" ? "Not checked yet" : st.label}
+      </span>
+      <p className="insp-status-why">{why}</p>
+      <p className="insp-status-auto">Set by the checklist above.</p>
+    </div>
   );
 }
 
@@ -38588,10 +38657,17 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
   const [name, setName] = useState(room.name);
   const [note, setNote] = useState(room.note || "");
   const [busy, setBusy] = useState("");
+  const [picking, setPicking] = useState(null);
   const [err, setErr] = useState("");
   const [shots, setShots] = useState({});
   const [lightbox, setLightbox] = useState(null);
   const photos = room.photos || [];
+  const hasList = (room.checklist || []).length > 0;
+  // A photo under an item the room's list no longer has (a renamed room) is
+  // drawn with the room's own photos rather than lost.
+  const itemKeys = new Set((room.checklist || []).map((r) => r.key));
+  const photosFor = (key) => photos.filter((p) => p.itemKey === key);
+  const roomPhotos = photos.filter((p) => !p.itemKey || !itemKeys.has(p.itemKey));
   // What is left to draft. A photograph somebody has already captioned is
   // done -- re-reading it would spend money to produce a sentence that
   // cannot be used, since a draft never overwrites a kept caption.
@@ -38606,36 +38682,87 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
   // stale-snapshot bug this file has grown three times.
   useEffect(() => { setName(room.name); setNote(room.note || ""); }, [room.name, room.note]);
 
+  const words = (e) => {
+    const code = e?.body?.error;
+    // `DRAFT_REFUSALS` first, because it is where the drafting reasons and
+    // their words live together -- a reason added there arrives with its
+    // sentence rather than falling through to "that didn't go through",
+    // which is the dead end a refused press must never be.
+    return DRAFT_REFUSALS[code]
+      || (code === "already_finished" ? "This inspection is finished, so it cannot be changed."
+        : code === "too_many" ? `That room already has ${MAX_ROOM_PHOTOS} photos.`
+        : code === "status_from_checklist" ? "This room's status comes from its checklist. Change an item instead."
+        : "That didn't go through. Try again.");
+  };
   const run = async (what, fn) => {
     setBusy(what); setErr("");
     try { await fn(); }
-    catch (e) {
-      console.error("[inspection] room:", e);
-      const code = e?.body?.error;
-      // `DRAFT_REFUSALS` first, because it is where the drafting reasons and
-      // their words live together -- a reason added there arrives with its
-      // sentence rather than falling through to "that didn't go through",
-      // which is the dead end a refused press must never be.
-      setErr(DRAFT_REFUSALS[code]
-        || (code === "already_finished" ? "This inspection is finished, so it cannot be changed."
-          : code === "too_many" ? `That room already has ${MAX_ROOM_PHOTOS} photos.`
-          : "That didn't go through. Try again."));
-    } finally { setBusy(""); }
+    catch (e) { console.error("[inspection] room:", e); setErr(words(e)); }
+    finally { setBusy(""); }
   };
 
-  const pick = async (files) => {
+  // TAKING A PHOTO DESCRIBES IT. Asked for as *"automate the description of
+  // the photo"*: the draft used to wait for a press, so it was a second job
+  // after the first one. Now the upload's own reply names the new photos and
+  // they are drafted straight away, in batches the route will take. A draft
+  // is still a draft -- dashed until somebody keeps or edits it -- and a
+  // failed draft never costs the photo, which is already saved by then.
+  const pick = async (files, itemKey = null) => {
     const list = [...files].slice(0, MAX_ROOM_PHOTOS - photos.length);
     if (!list.length) return;
-    await run("photo", async () => {
+    setPicking(itemKey || "room"); setErr("");
+    try {
       // Three at a time: one after another was most of the wait on a room of
       // twelve, and all at once on one bar of signal finishes none of them.
       const up = await inPool(list, 3, async (f) => {
         const { key, type, size } = await api.uploadReportPhoto(f);
         return { key, type, size, name: f.name };
       });
-      await onAddPhotos(room.id, up);
-    });
+      const res = await onAddPhotos(room.id, up, itemKey);
+      const notes = [];
+      if (res?.itemMigration) notes.push(`Saved on the room: linking a photo to its item needs a database update (${res.itemMigration}).`);
+      const fresh = (res?.added || []).map((id) => ({ id }));
+      if (fresh.length && canAiDraft && !locked) {
+        // The files are still in hand, in the order the reply names them, so
+        // the draft is read from them rather than downloading each one back.
+        const local = {};
+        fresh.forEach((p, i) => { if (list[i]) local[p.id] = URL.createObjectURL(list[i]); });
+        try {
+          for (let i = 0; i < fresh.length; i += MAX_DRAFT_PHOTOS) {
+            await onDraft(room.id, fresh.slice(i, i + MAX_DRAFT_PHOTOS), local);
+          }
+        } catch (e) {
+          console.warn("[inspection] auto-draft:", e?.body?.error || e?.message || e);
+          notes.push(`The photo${fresh.length === 1 ? " is" : "s are"} saved. ${DRAFT_REFUSALS[e?.body?.error] || "The description could not be written just now."}`);
+        } finally {
+          Object.values(local).forEach((u) => URL.revokeObjectURL(u));
+        }
+      }
+      if (notes.length) setErr(notes.join(" "));
+    } catch (e) {
+      console.error("[inspection] photo:", e); setErr(words(e));
+    } finally { setPicking(null); }
   };
+
+  // One renderer for the room's photos and every item's, so a thumbnail, its
+  // caption box and its remove button are the same thing wherever they sit,
+  // and the lightbox walks every photo in the room in one order.
+  const renderPhotos = (list) => list.map((ph) => (
+    <div key={ph.id} className="insp-shot">
+      <div className="ph-holder">
+        <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
+          load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
+          onOpen={() => setLightbox(photos.indexOf(ph))} />
+        {!locked && (
+          <button type="button" className="ph-x" disabled={!!busy}
+            aria-label={`Remove ${ph.name}`}
+            onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
+        )}
+      </div>
+      <PhotoCaption photo={ph} locked={locked}
+        onSave={(caption) => onCaption(room.id, ph.id, caption)} />
+    </div>
+  ));
 
   return (
     <div className={`insp-room st-${room.status} ${ringed ? "insp-ring" : ""}`} ref={nodeRef}>
@@ -38646,101 +38773,89 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
             onBlur={() => name.trim() && name !== room.name
               && run("name", () => onPatch(room.id, { name: name.trim() }))} />
         )}
+        <span className={`insp-room-pill st-${room.status}`}>
+          {room.status === "unchecked" ? "Not checked" : ROOM_STATUSES[room.status]?.label}
+        </span>
         {!locked && (
           <button className="insp-x" title="Remove this room" disabled={!!busy}
             onClick={() => run("del", () => onRemove(room.id))}><Trash2 size={13} /></button>
         )}
       </div>
 
-      {/* THE VERDICT, as three buttons rather than a dropdown. One tap, and
-          all three answers are readable without opening anything -- a select
-          on a phone is a sheet over the room you are standing in. The state
-          it starts in is "not checked", which is neither of the three and is
-          drawn as none of them being on. */}
-      <div className="insp-verdict" role="group" aria-label={`${roomName(room)} status`}>
-        {ROOM_STATUS_ORDER.map((k) => (
-          <button key={k} type="button" disabled={locked || !!busy}
-            className={`insp-v v-${k} ${room.status === k ? "on" : ""}`}
-            aria-pressed={room.status === k}
-            onClick={() => run("status", () => onPatch(room.id, { status: k }))}>
-            {k === "ok" ? <CheckCircle2 size={13} /> : k === "follow_up" ? <AlertTriangle size={13} /> : <XCircle size={13} />}
-            {ROOM_STATUSES[k].label}
-          </button>
-        ))}
-      </div>
-
-      {locked
-        ? (room.note ? <p className="insp-note-ro">{room.note}</p> : null)
-        : (
-          <textarea className="insp-note" rows={2} maxLength={2000} value={note}
-            placeholder="What you saw — the more specific the better"
-            onChange={(e) => setNote(e.target.value)}
-            onBlur={() => note !== (room.note || "") && run("note", () => onPatch(room.id, { note }))} />
-        )}
-
       <InspectionChecklist room={room} locked={locked} moveOut={moveOut}
-        onItem={onItem} onAllGood={onAllGood} />
+        onItem={onItem} onAllGood={onAllGood} photosFor={photosFor} renderPhotos={renderPhotos}
+        pickingItem={picking} onPickItem={(key, files) => pick(files, key)} />
 
-      {/* A LIST RATHER THAN `.ph-grid`, which is the tenant report's and stays
-          its own: a row of 84px tiles is right for scanning and useless for
-          editing the sentence under each one. One per row means the text box
-          gets the width of the card, which on a phone is the only shape that
-          works at all -- and scanning down a column of thumbnails is no
-          worse than across a row of them. */}
-      {photos.length > 0 && (
-        <div className="insp-shots">
-          {photos.map((ph) => (
-            <div key={ph.id} className="insp-shot">
-              <div className="ph-holder">
-                <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
-                  load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
-                  onOpen={() => setLightbox(photos.indexOf(ph))} />
-                {!locked && (
-                  <button type="button" className="ph-x" disabled={!!busy}
-                    aria-label={`Remove ${ph.name}`}
-                    onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
-                )}
-              </div>
-              <PhotoCaption photo={ph} locked={locked}
-                onSave={(caption) => onCaption(room.id, ph.id, caption)} />
-            </div>
-          ))}
+      {(roomPhotos.length > 0 || !locked) && (
+        <div className="insp-room-photos">
+          {hasList && <span className="insp-sub">Other photos of this room</span>}
+          {roomPhotos.length > 0 && <div className="insp-shots">{renderPhotos(roomPhotos)}</div>}
+          {!locked && photos.length < MAX_ROOM_PHOTOS && (
+            <label className="ph-add">
+              <Camera size={14} /> {picking === "room" ? "Uploading and describing…" : hasList ? "Add room photos" : "Add photos"}
+              <input type="file" accept="image/*" multiple hidden disabled={!!picking}
+                onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
+            </label>
+          )}
         </div>
       )}
+      {picking && picking !== "room" && <p className="insp-busy">Uploading and describing the photos…</p>}
 
-      {/* DRAFTING THE NOTES. Offered only when the route would take it --
-          the same `whyNotDraft` the Worker asks -- so there is no press here
-          that answers 503, and none withheld that would have worked.
-          `all_drafted` and `no_photos` draw nothing at all: both are the
-          ordinary state of a room rather than a problem, and a disabled
-          button saying "every photo already has a draft" is an explanation
-          nobody asked for. */}
-      {!locked && !whyNot && (
+      {/* DRAFTING WHAT IS LEFT. New photos describe themselves; this is for
+          the ones taken before that, or whose draft failed. Offered only when
+          the route would take it -- the same `whyNotDraft` the Worker asks. */}
+      {!locked && !whyNot && !picking && (
         <div className="insp-draft">
           <button type="button" className="insp-draft-go" disabled={!!busy}
             onClick={() => run("draft", () => onDraft(room.id, undrafted.slice(0, MAX_DRAFT_PHOTOS), shots))}>
             <Sparkles size={14} />
             {busy === "draft" ? "Reading the photos…"
-              : undrafted.length === 1 ? "Draft a note for this photo"
-              : `Draft notes for ${Math.min(undrafted.length, MAX_DRAFT_PHOTOS)} photos`}
+              : undrafted.length === 1 ? "Describe the 1 photo without a note"
+              : `Describe ${Math.min(undrafted.length, MAX_DRAFT_PHOTOS)} photos without notes`}
           </button>
-          {/* WHAT LEAVES, said at the control rather than in help text
-              nobody opens. A photograph of the inside of somebody's home
-              going to a third party is not guessable from a button, and it
-              is the one thing about this feature a person is entitled to
-              know before pressing it. */}
-          <p className="insp-draft-note">
-            Reads the photo with Claude to draft the note. Nothing else about the
-            property, the tenant or the building is sent, and you edit every line.
-          </p>
         </div>
       )}
-      {!locked && photos.length < MAX_ROOM_PHOTOS && (
-        <label className="ph-add">
-          <Camera size={14} /> {busy === "photo" ? "Uploading…" : "Add photos"}
-          <input type="file" accept="image/*" multiple hidden disabled={!!busy}
-            onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
-        </label>
+      {/* WHAT LEAVES, said at the control rather than in help text nobody
+          opens. A photograph of the inside of somebody's home going to a
+          third party is not guessable from a camera button, and it is the
+          one thing about this feature a person is entitled to know. */}
+      {!locked && canAiDraft && (
+        <p className="insp-draft-note">
+          Photos are described by Claude as they are added. Nothing else about the
+          property, the tenant or the building is sent, and you edit every line.
+        </p>
+      )}
+
+      <label className="insp-sub" htmlFor={`note-${room.id}`}>Comments about this room</label>
+      {locked
+        ? (room.note ? <p className="insp-note-ro">{room.note}</p> : <p className="prop-none">None.</p>)
+        : (
+          <textarea id={`note-${room.id}`} className="insp-note" rows={2} maxLength={2000} value={note}
+            placeholder="Anything the checklist does not cover"
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => note !== (room.note || "") && run("note", () => onPatch(room.id, { note }))} />
+        )}
+
+      {/* THE STATUS, LAST, AS THE ROOM'S SUMMARY. Where a checklist decides
+          it, it is worked out from the items and cannot be picked -- a press
+          that overrode it would leave the summary and the items disagreeing
+          on the record. A room the form has no list for ("Keys handed over")
+          keeps the three buttons, because there is nothing else to decide it. */}
+      {hasList ? <RoomStatusSummary room={room} /> : (
+        <div className="insp-status-pick">
+          <span className="insp-status-lab">Room status</span>
+          <div className="insp-verdict" role="group" aria-label={`${roomName(room)} status`}>
+            {ROOM_STATUS_ORDER.map((k) => (
+              <button key={k} type="button" disabled={locked || !!busy}
+                className={`insp-v v-${k} ${room.status === k ? "on" : ""}`}
+                aria-pressed={room.status === k}
+                onClick={() => run("status", () => onPatch(room.id, { status: k }))}>
+                {k === "ok" ? <CheckCircle2 size={13} /> : k === "follow_up" ? <AlertTriangle size={13} /> : <XCircle size={13} />}
+                {ROOM_STATUSES[k].label}
+              </button>
+            ))}
+          </div>
+        </div>
       )}
       {err && <p className="cov-hint" role="alert">{err}</p>}
       {lightbox !== null && (
@@ -39120,7 +39235,13 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
       const borrowed = shots[ph.id];
       let mine = null;
       try {
-        const src = borrowed || (mine = await api.inspectionPhotoBlob(inspection.id, ph.id));
+        // A borrowed source the browser cannot decode (a HEIC outside Safari)
+        // falls back to the stored copy, which the upload already shrank to
+        // a JPEG.
+        if (borrowed) {
+          try { return { id: ph.id, data: await jpegForDraft(borrowed) }; } catch { /* the stored copy below */ }
+        }
+        const src = (mine = await api.inspectionPhotoBlob(inspection.id, ph.id));
         return { id: ph.id, data: await jpegForDraft(src) };
       } catch (e) {
         // One unreadable photograph must not cost the other eleven their
@@ -39259,6 +39380,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
               </button>
             ))}
           </div>
+          {INSPECTION_KINDS[inspection.kind]?.hint && <p className="fld-note insp-kind-hint">{INSPECTION_KINDS[inspection.kind].hint}</p>}
           <div className="insp-facts">
             <label className="fld">{unitWord}
               <input value={unit} maxLength={40}
@@ -39266,7 +39388,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
                 onBlur={() => unit !== (inspection.unit || "")
                   && run("unit", () => api.patchInspection(inspection.id, { unit }).then(onReload))} />
             </label>
-            <label className="fld">Who is {INSPECTION_KINDS[inspection.kind]?.verb || "moving"}
+            <label className="fld">{INSPECTION_KINDS[inspection.kind]?.who || "Tenant"}
               <input value={who} maxLength={120}
                 onChange={(e) => setWho(e.target.value)}
                 onBlur={() => who !== (inspection.tenantName || "")
@@ -39370,7 +39492,8 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             nodeRef={(el) => { nodes.current[r.id] = el; }} ringed={ringing(r.id)}
             onPatch={patchRoom}
             onRemove={(roomId) => api.removeInspectionRoom(inspection.id, roomId).then(settle)}
-            onAddPhotos={(roomId, photos) => api.addInspectionPhotos(inspection.id, roomId, photos).then(settle)}
+            onAddPhotos={(roomId, photos, itemKey) => api.addInspectionPhotos(inspection.id, roomId, photos, itemKey)
+              .then((r) => { settle(r); return r; })}
             onRemovePhoto={(roomId, photoId) =>
               api.removeInspectionPhoto(inspection.id, roomId, photoId).then(settle)}
             onCaption={(roomId, photoId, caption) =>
@@ -39516,9 +39639,17 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
                       <Pencil size={13} /> Reopen to mark it</button>
                   )
                 ) : (
+                  // A room whose checklist has said anything takes its status
+                  // from the checklist, so the way to flag it is an item --
+                  // pointed at, not pressed for them.
+                  (rooms.find((x) => x.id === r.id)?.checklist || []).some((i) => i.condition) ? (
+                    <button className="btn-solid small" onClick={() => point(r.id)}>
+                      <ListChecks size={13} /> Mark the item in {r.name}</button>
+                  ) : (
                   <button className="btn-solid small" disabled={!!busy}
                     onClick={() => run(`flag-${r.id}`, () => patchRoom(r.id, { status: "follow_up" }))}>
                     <AlertTriangle size={13} /> {busy === `flag-${r.id}` ? "Marking…" : `Mark ${r.name} Needs work`}</button>
+                  )
                 )}
               </div>
             ))}
@@ -40322,6 +40453,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
                 </button>
               ))}
             </div>
+            {INSPECTION_KINDS[form.kind]?.hint && <p className="fld-note insp-kind-hint">{INSPECTION_KINDS[form.kind].hint}</p>}
             <label className="fld">Building
               <select value={form.propertyId || ""}
                 onChange={(e) => setForm({ ...form, propertyId: e.target.value })}>
@@ -40348,7 +40480,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
                 : newLayout.value ? "Its rooms are added when you start. Change or remove any after."
                 : "Pick one and the entry, kitchen, bedrooms and bathrooms are added for you."}</span>
             </label>
-            <label className="fld">Who is {INSPECTION_KINDS[form.kind]?.verb || "moving"}
+            <label className="fld">{INSPECTION_KINDS[form.kind]?.who || "Tenant"}
               <input value={form.tenantName || ""} maxLength={120}
                 onChange={(e) => setForm({ ...form, tenantName: e.target.value })} />
               {/* A NAME, not a tenant record. The person moving out may have
@@ -44736,47 +44868,90 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-note{width:100%;border:1px solid var(--line);border-radius:9px;padding:9px 11px;
   font:inherit;font-size:13.5px;background:var(--paper);color:var(--ink);resize:vertical}
 .insp-note-ro{margin:0;font-size:13.5px;color:var(--ink)}
-/* THE CHECKLIST INSIDE A ROOM. Folded, with the count on the toggle; open,
-   one thin row per item with its condition on the right. A changed row on a
-   move-out is edged amber, because amber here means "needs somebody" and a
-   changed item is what the deposit conversation is about. No backticks in
+/* THE CHECKLIST LEADS THE ROOM, OPEN. A head with the count and a meter, then
+   one row per item: a check you tap as you pass it, the item, what is wrong
+   with it, and a camera for its own photos. An issue row is tinted by how bad
+   it is, the same yellow and red the room status uses, so the column reads at
+   a glance. A changed row on a move-out keeps its amber edge. No backticks in
    here, the stylesheet is one template literal. */
-.insp-cl{border:1px solid var(--line);border-radius:10px;background:var(--paper)}
-.insp-cl-toggle{display:flex;align-items:center;gap:8px;width:100%;min-height:42px;padding:0 12px;
-  background:none;border:0;cursor:pointer;font:600 13px Inter,sans-serif;color:var(--ink);text-align:left}
-.insp-cl-lab{font-weight:800}
+.insp-cl{border:1px solid var(--line);border-radius:11px;background:var(--paper);padding:10px 12px 6px;
+  display:flex;flex-direction:column;gap:7px}
+.insp-cl-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font:600 13px Inter,sans-serif;color:var(--ink)}
+.insp-cl-lab{font-weight:800;font-size:14px}
 .insp-cl-count{color:var(--ink-soft);font-weight:600}
 .insp-cl-chg{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--ink);
   border-radius:999px;padding:2px 8px;font-size:11.5px;font-weight:800}
 .insp-cl-cost{font-weight:800;color:var(--ink)}
-.insp-cl-chev{margin-left:auto;flex:none;color:var(--ink-soft);transition:transform .15s}
-.insp-cl.is-open .insp-cl-chev{transform:rotate(180deg)}
-.insp-cl-body{padding:0 12px 12px;display:flex;flex-direction:column;gap:8px}
-.insp-cl-default{margin:0;font-size:12.5px;color:var(--ink-soft);line-height:1.45}
-.insp-cl-allgood{align-self:flex-start}
+.insp-cl-allgood{margin-left:auto}
+.insp-cl-meter{height:5px;border-radius:999px;background:var(--line);overflow:hidden}
+.insp-cl-meter span{display:block;height:100%;background:var(--brand);transition:width .2s}
+.insp-cl-default{margin:0;font-size:12px;color:var(--ink-soft);line-height:1.45}
 .insp-cl-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
 .insp-cl-group{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
   color:var(--ink-soft);padding:10px 0 4px}
-.insp-cl-row{border-top:1px solid var(--line);padding:7px 0 7px 8px;border-left:3px solid transparent;
-  display:flex;flex-direction:column;gap:5px}
+.insp-cl-row{border-top:1px solid var(--line);padding:7px 6px;border-left:3px solid transparent;
+  display:flex;flex-direction:column;gap:6px;border-radius:0 6px 6px 0}
+.insp-cl-row.is-issue{background:color-mix(in srgb,#f5c518 9%,transparent)}
+.insp-cl-row.c-nr,.insp-cl-row.c-rp{background:color-mix(in srgb,#c62f2a 7%,transparent)}
 .insp-cl-row.is-changed{border-left-color:var(--amber)}
-.insp-cl-line{display:flex;align-items:center;gap:8px;min-height:36px}
-.insp-cl-item{flex:1;min-width:0;font-size:13.5px;font-weight:600;color:var(--ink)}
+.insp-cl-line{display:flex;align-items:center;gap:9px;min-height:40px}
+.insp-cl-check{flex:none;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;
+  border-radius:50%;border:2px solid color-mix(in srgb,var(--ink-soft) 45%,transparent);background:var(--card);
+  color:#fff;cursor:pointer;padding:0}
+span.insp-cl-check{cursor:default}
+.insp-cl-check:disabled{opacity:.6}
+.insp-cl-row.c-ok .insp-cl-check{background:var(--brand);border-color:var(--brand)}
+.insp-cl-row.is-issue .insp-cl-check{background:#f5c518;border-color:#e0ad00;color:#3a2a00}
+.insp-cl-row.c-nr .insp-cl-check,.insp-cl-row.c-rp .insp-cl-check{background:#c62f2a;border-color:#c62f2a;color:#fff}
+.insp-cl-item{flex:1;min-width:0;font-size:14px;font-weight:600;color:var(--ink)}
 .insp-cl-tag{flex:none;font-size:11px;font-weight:800;color:var(--ink);border-radius:999px;padding:2px 7px;
   background:color-mix(in srgb,var(--amber) 22%,transparent)}
-.insp-cl-sel{flex:none;width:178px;max-width:52%;min-height:36px;border:1px solid var(--line);border-radius:8px;
-  background:var(--card);color:var(--ink);font:600 13px Inter,sans-serif;padding:0 8px}
+.insp-cl-sel{flex:none;width:170px;max-width:44%;min-height:38px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--ink-soft);font:600 13px Inter,sans-serif;padding:0 8px}
+.insp-cl-sel.has-issue{color:var(--ink);border-color:color-mix(in srgb,#e0ad00 60%,var(--line))}
+.insp-cl-cam{flex:none;display:inline-flex;align-items:center;justify-content:center;gap:3px;min-width:38px;height:38px;
+  padding:0 8px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink-soft);
+  cursor:pointer;font:700 12px Inter,sans-serif}
+.insp-cl-cam.has{color:var(--brand);border-color:color-mix(in srgb,var(--brand) 45%,var(--line))}
 .insp-cl-val{flex:none;font-size:13px;font-weight:700;color:var(--ink-soft)}
 .insp-cl-row.c-ok .insp-cl-val{color:var(--brand)}
-.insp-cl-mi{margin:0;font-size:12px;color:var(--ink-soft)}
-.insp-cl-ro{margin:0;font-size:12.5px;color:var(--ink)}
-.insp-cl-more{display:flex;gap:8px;flex-wrap:wrap}
-.insp-cl-note{flex:1 1 200px;min-width:0;min-height:36px;border:1px solid var(--line);border-radius:8px;
-  background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;padding:0 10px}
+.insp-cl-mi{margin:0 0 0 39px;font-size:12px;color:var(--ink-soft)}
+.insp-cl-ro{margin:0 0 0 39px;font-size:12.5px;color:var(--ink)}
+.insp-cl-more{display:flex;gap:8px;flex-wrap:wrap;margin-left:39px}
+.insp-cl-shots{margin-left:39px;display:flex;flex-direction:column;gap:8px}
+.insp-cl-note{flex:1 1 200px;min-width:0;min-height:38px;border:1px solid var(--line);border-radius:8px;
+  background:var(--card);color:var(--ink);font:inherit;font-size:16px;padding:0 10px}
 .insp-cl-costbox{flex:0 0 120px;display:flex;align-items:center;gap:4px;border:1px solid var(--line);
-  border-radius:8px;background:var(--card);padding:0 8px;min-height:36px;font-weight:700;color:var(--ink-soft)}
+  border-radius:8px;background:var(--card);padding:0 8px;min-height:38px;font-weight:700;color:var(--ink-soft)}
 .insp-cl-costbox.bad{border-color:var(--red)}
-.insp-cl-costbox input{flex:1;min-width:0;border:0;background:none;color:var(--ink);font:inherit;font-weight:600;font-size:13.5px}
+.insp-cl-costbox input{flex:1;min-width:0;border:0;background:none;color:var(--ink);font:inherit;font-weight:600;font-size:16px}
+/* The status is a pill in the room's head and a summary at its foot: the
+   pill so a scroll down the rooms says where each stands, the summary so the
+   reason is beside the verdict. */
+.insp-room-pill{flex:none;font:800 11.5px Inter,sans-serif;border-radius:999px;padding:3px 9px;
+  background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+.insp-room-pill.st-ok{background:var(--brand);border-color:var(--brand);color:#fff}
+.insp-room-pill.st-follow_up{background:#f5c518;border-color:#e0ad00;color:#3a2a00}
+.insp-room-pill.st-fail{background:#c62f2a;border-color:#c62f2a;color:#fff}
+.insp-sub{font:800 11px Inter,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft)}
+.insp-room-photos{display:flex;flex-direction:column;gap:7px}
+.insp-busy{margin:0;font-size:12.5px;color:var(--ink-soft)}
+.insp-status,.insp-status-pick{border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:5px}
+.insp-status-lab{font:800 11px Inter,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft)}
+.insp-status-val{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;font:800 13.5px Inter,sans-serif;
+  border-radius:9px;padding:6px 11px;background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+.insp-status.st-ok .insp-status-val{background:var(--brand);border-color:var(--brand);color:#fff}
+.insp-status.st-follow_up .insp-status-val{background:#f5c518;border-color:#e0ad00;color:#3a2a00}
+.insp-status.st-fail .insp-status-val{background:#c62f2a;border-color:#c62f2a;color:#fff}
+.insp-status-why{margin:0;font-size:13px;color:var(--ink)}
+.insp-status-auto{margin:0;font-size:11.5px;color:var(--ink-soft)}
+.insp-kind-hint{margin:6px 0 0}
+.insp-kind-hint + .fld{margin-top:14px}
+@media (max-width:560px){
+  .insp-cl-sel{width:auto;max-width:none;flex:1 1 100%;order:5}
+  .insp-cl-line{flex-wrap:wrap}
+  .insp-cl-mi,.insp-cl-ro,.insp-cl-more,.insp-cl-shots{margin-left:0}
+}
 .insp-cmp{display:flex;align-items:flex-start;gap:8px;margin:0 0 10px;padding:10px 12px;border-radius:10px;
   border:1px solid var(--line);background:var(--paper);font-size:13.5px;color:var(--ink)}
 .insp-cmp.has{border-color:color-mix(in srgb,var(--amber) 55%,var(--line));

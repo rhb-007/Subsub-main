@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
 import { layoutChange, layoutLabel } from "../shared/unitlayout.js";
-import { checklistRows } from "../shared/roomchecklist.js";
+import { checklistRows, derivedRoomStatus } from "../shared/roomchecklist.js";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-inspection-test");
@@ -96,13 +96,38 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (itm) {
     sent.push({ path, method, body });
     const key = decodeURIComponent(itm[2]);
-    DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => r.id !== itm[1] ? r : {
-      ...r, checklist: (r.checklist || []).map((i) => key === "all-good" && method === "POST"
+    DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => {
+      if (r.id !== itm[1]) return r;
+      const checklist = (r.checklist || []).map((i) => key === "all-good" && method === "POST"
         ? { ...i, condition: i.condition || "ok" }
-        : i.key === key ? { ...i, ...body } : i),
+        : i.key === key ? { ...i, ...body } : i);
+      // The route's own rule: the status is the checklist's summary.
+      return { ...r, checklist, status: derivedRoomStatus(checklist) || r.status };
     }) };
     return [200, { ok: true, rooms: DETAIL.rooms }];
   }
+  if (path.startsWith("/api/uploads/report-photo/") && method === "PUT") {
+    sent.push({ path, method });
+    return [200, { key: `acc_x/report-photo/${Date.now()}.jpg`, type: "image/jpeg", size: 100 }];
+  }
+  const add = /^\/api\/inspections\/insp_1\/rooms\/(r\d)\/photos$/.exec(path);
+  if (add && method === "POST") {
+    sent.push({ path, method, body });
+    const ids = (body.photos || []).map((_, i) => `ph_${Date.now()}_${i}`);
+    DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => r.id !== add[1] ? r : {
+      ...r, photos: [...(r.photos || []), ...ids.map((id) => ({ id, name: "wall.jpg", type: "image/jpeg",
+        caption: "", draft: "", itemKey: body.itemKey || null }))] }) };
+    return [200, { ok: true, added: ids, rooms: DETAIL.rooms }];
+  }
+  const dr = /^\/api\/inspections\/insp_1\/rooms\/(r\d)\/drafts$/.exec(path);
+  if (dr && method === "POST") {
+    sent.push({ path, method, body });
+    const want = new Set((body.photos || []).map((p) => p.id));
+    DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => r.id !== dr[1] ? r : {
+      ...r, photos: (r.photos || []).map((p) => want.has(p.id) ? { ...p, draft: "Two scuffs low on the wall." } : p) }) };
+    return [200, { ok: true, rooms: DETAIL.rooms }];
+  }
+  if (/^\/api\/inspections\/insp_1\/photos\//.test(path)) return [200, "img"];
   const room = /^\/api\/inspections\/insp_1\/rooms\/(r\d)$/.exec(path);
   if (room && method === "PATCH") {
     sent.push({ path, body });
@@ -448,7 +473,7 @@ try {
     ], moveIn);
     DETAIL = { ...DETAIL, kind: "move_out", status: "draft",
       rooms: DETAIL.rooms.map((r) => r.id === "r3"
-        ? { ...r, checklist: list, comparedTo: "insp_in" }
+        ? { ...r, checklist: list, comparedTo: "insp_in", status: derivedRoomStatus(list) }
         : { ...r, checklist: checklistRows(r.name, [], {}), comparedTo: "insp_in" }) };
     const { ctx, page } = await openOne();
     const head = await page.evaluate(() => document.querySelector(".insp-cmp")?.innerText || "");
@@ -460,8 +485,7 @@ try {
       const cl = r?.querySelector(".insp-cl");
       if (!cl) return null;
       return {
-        toggle: cl.querySelector(".insp-cl-toggle")?.innerText || "",
-        open: !!cl.querySelector(".insp-cl-body"),
+        head: cl.querySelector(".insp-cl-head")?.innerText || "",
         rows: [...cl.querySelectorAll(".insp-cl-row")].map((li) => ({
           item: li.querySelector(".insp-cl-item")?.innerText,
           changed: !!li.querySelector(".insp-cl-tag"),
@@ -474,15 +498,30 @@ try {
       };
     });
     let c3 = await room3();
-    t.ck("each room carries a folded checklist with its count", !!c3 && !c3.open && /of \d+ marked/.test(c3.toggle), JSON.stringify(c3));
-    await page.evaluate(() => {
+    // OPEN AND FIRST: the checklist leads the room, rather than folded under
+    // the verdict and the note.
+    t.ck("each room's checklist is open from the start, with its count",
+      !!c3 && /of \d+ checked/.test(c3.head) && c3.rows.length === list.length && c3.groups.includes("Toilet"),
+      JSON.stringify({ head: c3?.head, n: c3?.rows.length }));
+    const order = await page.evaluate(() => {
       const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
-      r.querySelector(".insp-cl-toggle").click();
+      const top = (sel) => r?.querySelector(sel)?.getBoundingClientRect().top ?? null;
+      return { cl: top(".insp-cl"), note: top(".insp-note"), status: top(".insp-status"),
+        picks: r?.querySelectorAll(".insp-v").length ?? -1, statusText: r?.querySelector(".insp-status")?.innerText || "",
+        pill: r?.querySelector(".insp-room-pill")?.innerText || "" };
     });
-    await wait(300);
-    c3 = await room3();
-    t.ck("opening it lists the bathroom's items, the toilet's under their own heading",
-      c3?.open && c3.rows.length === list.length && c3.groups.includes("Toilet"), JSON.stringify(c3?.groups));
+    t.ck("the checklist comes before the comments, and the status is last",
+      order.cl !== null && order.note !== null && order.status !== null && order.cl < order.note && order.note < order.status,
+      JSON.stringify(order));
+    t.ck("a room with a checklist offers no status to pick", order.picks === 0, String(order.picks));
+    t.ck("its status is the checklist's summary, naming the items that decided it",
+      /Needs work/.test(order.statusText) && /Walls \(needs painting\)/.test(order.statusText)
+        && /Set by the checklist/.test(order.statusText) && /Needs work/.test(order.pill), order.statusText);
+    const plain = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Walls and floors");
+      return r ? r.querySelectorAll(".insp-v").length : -1;
+    });
+    t.ck("a room the form has no list for keeps its three buttons", plain === 3, String(plain));
     const walls = c3?.rows.find((r) => r.item === "Walls");
     const floor = c3?.rows.find((r) => r.item === "Floor");
     t.ck("each row says what the move-in recorded", /Move-in: Good/.test(walls?.mi || "")
@@ -511,6 +550,50 @@ try {
     });
     await wait(600);
     t.ck("a cost typed in dollars is sent in cents", sent.some((x) => /items\/mirror$/.test(x.path) && x.body?.costCents === 4550), JSON.stringify(sent));
+    // THE CHECK: tapping an empty one says the item is good.
+    sent.length = 0;
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Ceiling");
+      li.querySelector("button.insp-cl-check").click();
+    });
+    await wait(600);
+    t.ck("tapping an item's check marks it good", sent.some((x) => /items\/ceiling$/.test(x.path) && x.body?.condition === "ok"),
+      JSON.stringify(sent));
+    const ticked = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Ceiling");
+      const b = li.querySelector(".insp-cl-check");
+      return { pressed: b?.getAttribute("aria-pressed"), bg: b ? getComputedStyle(b).backgroundColor : "" };
+    });
+    t.ck("and the check is drawn filled", ticked.pressed === "true" && ticked.bg !== "rgba(0, 0, 0, 0)" && ticked.bg !== "rgb(255, 255, 255)",
+      JSON.stringify(ticked));
+
+    // A CAMERA ON EVERY ITEM, AND THE PHOTO DESCRIBES ITSELF.
+    sent.length = 0;
+    const cam = await page.evaluateHandle(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Walls");
+      return li.querySelector(".insp-cl-cam input[type=file]");
+    });
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const tmpd = mkdtempSync(join((await import("node:os")).tmpdir(), "insp-"));
+    writeFileSync(join(tmpd, "wall.png"), png);
+    await cam.asElement().uploadFile(join(tmpd, "wall.png"));
+    await wait(2500);
+    const added = sent.find((x) => /rooms\/r3\/photos$/.test(x.path));
+    t.ck("a photo taken from an item is filed under it", added?.body?.itemKey === "walls", JSON.stringify(added?.body));
+    t.ck("and is described without a press", sent.some((x) => /rooms\/r3\/drafts$/.test(x.path)), JSON.stringify(sent.map((x) => x.path)));
+    const shot = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Walls");
+      return { inItem: li?.querySelectorAll(".insp-shot").length || 0, cam: li?.querySelector(".insp-cl-cam")?.innerText.trim() || "",
+        text: [...(li?.querySelectorAll(".insp-cl-shots textarea") || [])].map((x) => x.value).join(" | ") };
+    });
+    t.ck("the photo sits under its item with its draft, and the camera counts it",
+      shot.inItem === 1 && shot.cam === "1" && /Two scuffs low on the wall/.test(shot.text), JSON.stringify(shot));
+
     sent.length = 0;
     await page.evaluate(() => {
       const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
@@ -528,13 +611,12 @@ try {
     const o2 = await openOne();
     await o2.page.evaluate(() => {
       const r = [...document.querySelectorAll(".insp-room")].find((x) => /Bathroom 1/.test(x.querySelector(".insp-name")?.textContent || ""));
-      r?.querySelector(".insp-cl-toggle")?.click();
     });
     await wait(300);
     const ro = await o2.page.evaluate(() => {
       const r = [...document.querySelectorAll(".insp-room")].find((x) => /Bathroom 1/.test(x.querySelector(".insp-name")?.textContent || ""));
       return r ? { rows: r.querySelectorAll(".insp-cl-row").length, selects: r.querySelectorAll(".insp-cl-sel").length,
-        text: r.querySelector(".insp-cl-body")?.innerText || "" } : null;
+        text: r.querySelector(".insp-cl")?.innerText || "" } : null;
     });
     t.ck("a finished one shows the checklist read-only, costs included",
       ro?.rows > 0 && ro.selects === 0 && /Cost \$180\.00/.test(ro.text), JSON.stringify(ro));
@@ -564,7 +646,7 @@ try {
         .map((b) => ({ label: b.innerText.trim(), on: b.classList.contains("on") })),
       fields: [...document.querySelectorAll(".insp-facts input")].map((i) => i.value),
     }));
-    t.ck("both walks are offered", h.kinds.length === 2, JSON.stringify(h.kinds));
+    t.ck("all three walks are offered", h.kinds.length === 3, JSON.stringify(h.kinds));
     t.ck("with the one it is marked", h.kinds.filter((k) => k.on).length === 1
       && h.kinds.find((k) => k.on).label === "Move-out", JSON.stringify(h.kinds));
     t.ck("and the unit, the name and the date are all there",
@@ -1263,7 +1345,7 @@ try {
       const { ctx, page } = await openOne();
       // THE KIND PICKER IS ONE CONTROL WITH TWO HALVES.
       const seg = await look(page, ".insp-kind.seg button");
-      t.ck("move-in and move-out are two halves of one control", seg.length === 2,
+      t.ck("move-in, move-out and checkup are parts of one control", seg.length === 3,
         JSON.stringify(seg.map((x) => x.text)));
       const on = seg.find((x) => x.on), off = seg.find((x) => !x.on);
       t.ck("exactly one is picked", !!on && !!off, JSON.stringify(seg.map((x) => x.on)));

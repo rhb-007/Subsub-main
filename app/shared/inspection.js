@@ -1,3 +1,5 @@
+import { ITEM_CONDITIONS, flaggedItems, itemLabel } from "./roomchecklist.js";
+
 // MOVE-IN AND MOVE-OUT INSPECTIONS: the rules, in one place, because four
 // things have to agree about them -- the routes, the screen, the job raised
 // off the back of one, and the tests.
@@ -6,10 +8,20 @@
 // screen: "the carpet was like that when I moved in" is the single most
 // common dispute a managing agent has, and the answer is two inspections of
 // the same unit with dates on them.
+//
+// AND A CHECKUP, which is neither. Asked for as *"an inspection that is
+// neither a move in or move out, just a 1 off inspection if there was a party
+// or an issue and it needs to be documented as a 1 off in the middle of a
+// lease"*. Somebody lives there, so the tenant field names them rather than
+// asking who is moving, and nothing is compared with anything: a checkup is
+// a record of the day, not half of a pair.
 export const INSPECTION_KINDS = {
-  move_in: { label: "Move-in", verb: "moving in" },
-  move_out: { label: "Move-out", verb: "moving out" },
+  move_in: { label: "Move-in", verb: "moving in", who: "Who is moving in" },
+  move_out: { label: "Move-out", verb: "moving out", who: "Who is moving out" },
+  checkup: { label: "Checkup", verb: "living there", who: "Tenant",
+    hint: "A one-off walk in the middle of a lease: after a party, a complaint or damage." },
 };
+export const INSPECTION_KIND_ORDER = ["move_in", "move_out", "checkup"];
 export const isInspectionKind = (k) => Object.prototype.hasOwnProperty.call(INSPECTION_KINDS, String(k));
 
 // FOUR STATES, NOT THREE, and the fourth is the whole reason this is a list
@@ -59,7 +71,10 @@ export const STANDARD_ROOMS = [
 // Per ROOM, not per inspection: a unit is a dozen rooms and a phone camera
 // fills a page with four. The ceiling, the floor and the meter reading are
 // one piece of evidence about one room.
-export const MAX_ROOM_PHOTOS = 12;
+// Raised from 12 when photos moved onto checklist items: *"as many photos as
+// you want"* on each item, and a kitchen is twenty-seven of them. Still a
+// ceiling, because a loop uploading for ever is the one thing it must stop.
+export const MAX_ROOM_PHOTOS = 80;
 export const MAX_ROOMS = 60;
 
 export const roomName = (r) => String(r?.name || "").trim() || "Unnamed room";
@@ -119,9 +134,11 @@ export const canFinish = (rooms = [], opts = {}) => whyNotFinish(rooms, opts) ==
 // that were fine would hand a contractor a document to read rather than work
 // to price.
 export function inspectionJobTitle(inspection = {}) {
-  const kind = INSPECTION_KINDS[inspection.kind]?.label || "Inspection";
+  const kind = INSPECTION_KINDS[inspection.kind]?.label || "";
   const unit = String(inspection.unit || "").trim();
-  return `${kind} work${unit ? ` — unit ${unit}` : ""}`.slice(0, 140);
+  // It says WHICH inspection, because "Move-out work" beside a checkup's job
+  // would not, and a job list reading three kinds of walk needs the word.
+  return `${kind ? `${kind} inspection` : "Inspection"} work${unit ? ` — unit ${unit}` : ""}`.slice(0, 140);
 }
 
 // The header and one line per room. Factored out because the PER-TRADE scope
@@ -167,7 +184,15 @@ function scopeFrom(inspection, flagged) {
       seen.add(cap.toLowerCase());
       shots.push(`    - photo: ${cap}`);
     }
-    return [`• ${roomName(r)} — ${status}${note ? `: ${note}` : ""}`, ...shots];
+    // THE CHECKLIST ITEMS THAT FLAGGED IT, one line each, because the room's
+    // status is now worked out from them: "Kitchen — Damage" with nothing
+    // under it would say less than the walk did.
+    const items = flaggedItems(r.checklist).map((i) => {
+      const what = ITEM_CONDITIONS[i.condition]?.label || "Flagged";
+      const n = String(i.note || "").trim();
+      return `    - ${itemLabel(i)}: ${what}${n ? ` — ${n}` : ""}`;
+    });
+    return [`• ${roomName(r)} — ${status}${note ? `: ${note}` : ""}`, ...items, ...shots];
   });
   return [head, ...lines].join("\n");
 }
@@ -204,6 +229,8 @@ export function inspectionJobScope(inspection = {}, rooms = []) {
 export function suggestedAccessForInspection(kind) {
   if (kind === "move_in") return "tenant";
   if (kind === "move_out") return "manager";
+  // Mid-lease, somebody lives there and will usually be in.
+  if (kind === "checkup") return "tenant";
   return null;
 }
 
@@ -240,7 +267,13 @@ const shapeRoom = (r) => ({
   id: r.id, name: roomName(r), status: r.status, note: String(r.note || "").trim(),
   photos: (r.photos || []).map((p) => ({
     id: p.id, name: p.name || "photo", type: p.type || "image/jpeg",
-    caption: String(p.caption || "").trim(),
+    caption: String(p.caption || "").trim(), itemKey: p.itemKey || null,
+  })),
+  // What is wrong, item by item. Never a cost: what the move-out says it will
+  // take to put right is the deposit conversation, not the contractor's.
+  items: flaggedItems(r.checklist).map((i) => ({
+    key: i.key, label: itemLabel(i), condition: ITEM_CONDITIONS[i.condition]?.label || "",
+    note: String(i.note || "").trim(),
   })),
 });
 
@@ -640,7 +673,13 @@ function roomTrades(r) {
   // The note and the room name are read together: somebody writing "Kitchen"
   // in the name box and "tap drips" in the note has said both halves, and
   // only one of them is in either field.
-  const hay = flatten(`${name} ${dropWhere(r?.note)}`);
+  // A flagged checklist item says both what and what is wrong with it --
+  // "Sink/plumbing: Needs repair", "Walls: Needs painting" -- so its words go
+  // in with the note. Only flagged ones: an item marked Good is a record that
+  // something is fine, the same reason a photo with no fault earns nothing.
+  const itemWords = flaggedItems(r?.checklist).map((i) =>
+    `${i.label} ${ITEM_CONDITIONS[i.condition]?.label || ""} ${i.note || ""}`).join(". ");
+  const hay = flatten(`${name} ${dropWhere(r?.note)} ${dropWhere(itemWords)}`);
   for (const [trade, words] of Object.entries(TRADE_HINTS)) {
     for (const w of words) {
       if (hitsWord(hay, w)) { add(trade, w); break; }

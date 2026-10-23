@@ -30,7 +30,7 @@
 //   externalId  Their own id for the walk. Not for us -- for RETRIES. A
 //               webhook that does not get a 200 sends again, and one walk
 //               becoming four inspections is four jobs raised for one unit.
-//   kind        move_in or move_out. `inspections.kind` is NOT NULL, and the
+//   kind        move_in, move_out or checkup. `inspections.kind` is NOT NULL, and the
 //               whole value of the record is two DATED walks of one unit:
 //               "the carpet was like that when I moved in" is the commonest
 //               dispute in the business and the kind is the answer to it.
@@ -104,6 +104,12 @@ const KIND_WORDS = {
     "in", "arrival", "start of tenancy", "tenancy start"],
   move_out: ["move out", "moveout", "moving out", "check out", "checkout", "move out inspection",
     "out", "departure", "end of tenancy", "tenancy end", "vacate", "vacating"],
+  // A walk in the middle of a lease. "Inspection" on its own is deliberately
+  // not here: an app that calls every walk an inspection would file every
+  // move-out as a checkup, which is the guess this list exists to refuse.
+  checkup: ["checkup", "check up", "check-up", "routine", "routine inspection", "periodic",
+    "periodic inspection", "mid lease", "midterm", "mid term", "interim", "annual inspection",
+    "spot check", "one off", "incident"],
 };
 export function inspectKindFor(raw) {
   const want = norm(raw);

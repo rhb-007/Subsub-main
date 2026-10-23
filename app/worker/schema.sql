@@ -1966,7 +1966,7 @@ CREATE TABLE IF NOT EXISTS inspections (
   -- building and "Apt 12" in the next, and a managing agent types what is on
   -- the door.
   unit          TEXT,
-  -- 'move_in' or 'move_out'. Validated in the Worker against
+  -- 'move_in', 'move_out' or 'checkup'. Validated in the Worker against
   -- shared/inspection.js rather than by a CHECK, the same trade 003 made for
   -- accounts.kind: a CHECK on a table this young is a full rebuild the first
   -- time a third kind is wanted.
@@ -2023,8 +2023,11 @@ CREATE TABLE IF NOT EXISTS inspection_photos (
   file_key      TEXT NOT NULL,
   name          TEXT,
   content_type  TEXT,
-  created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+  item_key      TEXT
 );
+-- 097: item_key names the checklist item the photo belongs to, or NULL for a
+-- photo of the room as a whole.
 CREATE INDEX IF NOT EXISTS idx_inspection_photos ON inspection_photos(room_id, created_at);
 
 CREATE TABLE IF NOT EXISTS inspection_items (

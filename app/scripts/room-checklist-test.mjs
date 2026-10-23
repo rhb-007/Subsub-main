@@ -78,8 +78,23 @@ const call = (env, path, { method = "GET", body } = {}) =>
 const json = async (r) => [r.status, await r.json().catch(() => ({}))];
 const room = (rooms, name) => (rooms || []).find((r) => r.name === name);
 const item = (r, key) => (r?.checklist || []).find((i) => i.key === key);
+// A room's status now follows its checklist (room-status-test), so a walk is
+// finished the way a person finishes one: the rest of each list marked good,
+// a room with no list marked OK, and a job raised when anything is flagged.
 const finish = async (env, id, rooms) => {
-  for (const r of rooms) await call(env, `/api/inspections/${id}/rooms/${r.id}`, { method: "PATCH", body: { status: "ok" } });
+  for (const r of rooms) {
+    const listed = (r.checklist || []).length
+      && (await call(env, `/api/inspections/${id}/rooms/${r.id}/items/all-good`, { method: "POST" })).status === 200;
+    // Without 096 there is nothing to mark, and the room takes a status the old way.
+    if (!listed) await call(env, `/api/inspections/${id}/rooms/${r.id}`, { method: "PATCH", body: { status: "ok" } });
+  }
+  const [, now] = await json(await call(env, `/api/inspections/${id}`));
+  if ((now.rooms || []).some((r) => r.status === "follow_up" || r.status === "fail")) {
+    await call(env, `/api/inspections/${id}/job`, { method: "POST", body: { trades: ["painting"] } });
+    // Raising the job finishes a walk with every room answered.
+    const [, after] = await json(await call(env, `/api/inspections/${id}`));
+    if (after.status === "finished") return [200, after];
+  }
   return json(await call(env, `/api/inspections/${id}`, { method: "PATCH", body: { finish: true } }));
 };
 
@@ -138,8 +153,8 @@ try {
   ck("an edit to the move-in shows on the draft move-out", item(room(r.rooms, "Bedroom 1"), "walls").moveIn?.condition === "nsp");
 
   console.log("\n-- finished, it stops moving --");
-  const [fs] = await finish(env, mo.id, mo.rooms);
-  ck("the move-out finishes", fs === 200, String(fs));
+  const [fs, fb] = await finish(env, mo.id, mo.rooms);
+  ck("the move-out finishes", fs === 200, `${fs} ${JSON.stringify(fb)}`);
   const stamped = db.prepare(`SELECT COUNT(*) n FROM inspection_items WHERE movein_from = ?`).get(mi.id).n;
   ck("the move-in's reading is stamped onto it", stamped >= 3, String(stamped));
   // Edit the move-in AFTER the move-out was finished.

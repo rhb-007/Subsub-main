@@ -175,3 +175,39 @@ export function parseCost(s) {
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return undefined;
   return Math.round(Number(t) * 100);
 }
+
+// THE ROOM'S STATUS IS A SUMMARY OF ITS CHECKLIST, worked out rather than
+// picked. Asked for as *"the top 3 status should be automatically selected by
+// the system if anything within the checklist specifies one of these (it's a
+// summary of the room), they should not be selectable"*.
+//
+//   Needs repair or Needs replacing on any item    -> fail (Damage)
+//   any other issue (cleaning, painting)          -> follow_up (Needs work)
+//   every item marked Good                        -> ok
+//   anything else                                 -> unchecked
+//
+// An issue found is an answer, so a room with one Damage item is flagged even
+// while the rest are unmarked: the form's own default covers the rest
+// ("unless otherwise noted"). But a room only part-way through and all good
+// so far is still being walked, so it stays unchecked until the last item is
+// marked -- which is what "Mark the rest good" is for.
+//
+// null when nothing is marked at all: the checklist has said nothing, so it
+// decides nothing, and a status set some other way (an inspection app, an
+// older walk) stands.
+export const DAMAGE_CONDITIONS = ["nr", "rp"];
+export function derivedRoomStatus(rows = []) {
+  const list = (rows || []).filter(Boolean);
+  const marked = list.filter((r) => r.condition);
+  if (!marked.length) return null;
+  if (marked.some((r) => DAMAGE_CONDITIONS.includes(r.condition))) return "fail";
+  if (marked.some((r) => r.condition !== "ok")) return "follow_up";
+  return marked.length === list.length ? "ok" : "unchecked";
+}
+
+// The items that put a room in that state, named, for the summary under it
+// and for the job's scope.
+export const flaggedItems = (rows = []) =>
+  (rows || []).filter((r) => r && r.condition && r.condition !== "ok");
+
+export const itemLabel = (row) => (row?.group ? `${row.group} ${String(row.label || "").toLowerCase()}` : String(row?.label || ""));

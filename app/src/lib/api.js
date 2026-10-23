@@ -392,8 +392,9 @@ export const api = {
     request(`/inspections/${id}/rooms/${roomId}/items/all-good`, { method: "POST" }),
   // The bytes go up through the same checked upload kind a tenant's report
   // photo uses -- one set of type and size limits, not two.
-  addInspectionPhotos: (id, roomId, photos) =>
-    request(`/inspections/${id}/rooms/${roomId}/photos`, { method: "POST", body: JSON.stringify({ photos }) }),
+  addInspectionPhotos: (id, roomId, photos, itemKey = null) =>
+    request(`/inspections/${id}/rooms/${roomId}/photos`, { method: "POST",
+      body: JSON.stringify(itemKey ? { photos, itemKey } : { photos }) }),
   removeInspectionPhoto: (id, roomId, photoId) =>
     request(`/inspections/${id}/rooms/${roomId}/photos/${photoId}`, { method: "DELETE" }),
   inspectionPhotoBlob: async (id, photoId) => {

@@ -74,7 +74,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   inspectionTradeScopes, quoteInspectionShape,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
 import { isUnitLayout, layoutLabel, layoutChange, layoutOrder } from "../shared/unitlayout.js";
-import { checklistFor, checklistRows, isItemCondition, roomKey, MAX_ITEM_COST_CENTS } from "../shared/roomchecklist.js";
+import { checklistFor, checklistRows, isItemCondition, roomKey, MAX_ITEM_COST_CENTS, derivedRoomStatus, itemLabel } from "../shared/roomchecklist.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
 import { MAX_REPORT_DRAFT_PHOTOS, REPORT_DRAFT_MODEL, reportDraftChoices, reportDraftContext,
@@ -9708,6 +9708,7 @@ export function missingSchema(err) {
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
   if (/\binspection_items\b/i.test(m)) return "096_inspection_items";
+  if (/\bitem_key\b/i.test(m) && /inspection_photos|no such column|has no column/i.test(m)) return "097_item_photos";
   if (/\bunit_layout\b/i.test(m)) return "095_unit_layout";
   if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
   if (/\bheld_assignments\b/i.test(m)) return "093_held_assignments";
@@ -18021,6 +18022,8 @@ const inspectionRoomToJs = (r, photos = [], { drafts = false } = {}) => ({
   photos: photos.map((p) => ({
     id: p.id, name: p.name || "photo", type: p.content_type || "image/jpeg",
     caption: p.caption || "",
+    // 097: the checklist item the photo was taken from, or null for the room.
+    itemKey: p.item_key || null,
     ...(drafts ? { draft: p.draft || "", draftUnclear: !!p.draft_unclear } : {}),
   })),
 });
@@ -18736,6 +18739,15 @@ app.patch("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE_
   }
   if (has("status")) {
     if (!isRoomStatus(b.status)) return c.json({ error: "bad_status" }, 400);
+    // ONCE THE CHECKLIST HAS SAID SOMETHING, IT DECIDES. The status is the
+    // summary of the items, and a press that overrode it would leave the
+    // summary and the items disagreeing on the record. A room nothing has
+    // been marked in still takes a status, because an inspection app, an
+    // older walk and a room with no checklist all set it that way.
+    let marked = false;
+    try { marked = await roomHasMarks(c.env.DB, room.id); }
+    catch (err) { if (!missingSchema(err)) throw err; }
+    if (marked) return c.json({ error: "status_from_checklist" }, 409);
     sets.push("status = ?"); vals.push(String(b.status));
   }
   if (has("note")) { sets.push("note = ?"); vals.push(String(b.note || "").trim().slice(0, 2000) || null); }
@@ -18764,6 +18776,32 @@ app.delete("/api/inspections/:id/rooms/:roomId", requireRole(...INSPECTION_WRITE
 // was recorded in it and nothing can be invented. A row left with nothing in
 // it is deleted, because no row means "nothing recorded" and an empty one is
 // a second way of saying it.
+// THE ROOM'S STATUS FOLLOWS ITS CHECKLIST, written whenever an item is. A
+// stored column rather than a value worked out on read, because a dozen
+// things read `inspection_rooms.status` -- the tally, the finish gate, the
+// flagged rooms a job is raised from, the trade suggestions, the owner's copy
+// -- and every one of them would otherwise need to learn the checklist.
+// `derivedRoomStatus` answers null when nothing is marked, and then the room
+// is left as it was: the checklist has decided nothing -- UNLESS this write
+// is what took the last mark off (`hadMarked`), in which case the status it
+// had was the checklist's and goes back to unchecked, or un-marking the one
+// Damage item would leave the room reading Damage for ever.
+async function roomHasMarks(db, roomId) {
+  const r = await db.prepare(
+    `SELECT 1 AS x FROM inspection_items WHERE room_id = ? AND condition IS NOT NULL LIMIT 1`).bind(roomId).first();
+  return !!r;
+}
+async function syncRoomStatus(db, room, hadMarked = false) {
+  const { results } = await db.prepare(
+    `SELECT * FROM inspection_items WHERE room_id = ?`).bind(room.id).all();
+  const rows = checklistRows(room.name, (results || []).map(itemFromRow));
+  const next = derivedRoomStatus(rows) || (hadMarked ? "unchecked" : null);
+  if (next && next !== room.status) {
+    await db.prepare(`UPDATE inspection_rooms SET status = ? WHERE id = ?`).bind(next, room.id).run();
+  }
+  return next;
+}
+
 async function roomForItems(c, auth) {
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return { res: c.json({ error, migration }, status) };
@@ -18811,6 +18849,7 @@ app.put("/api/inspections/:id/rooms/:roomId/items/:key", requireRole(...INSPECTI
   }
   const cols = Object.keys(sets);
   if (!cols.length) return c.json({ error: "nothing_to_change" }, 400);
+  const hadMarked = await roomHasMarks(c.env.DB, room.id);
   await c.env.DB.prepare(
     `INSERT INTO inspection_items (id, room_id, item_key, label, grp, ${cols.join(", ")}, updated_by, updated_at)
      VALUES (?, ?, ?, ?, ?, ${cols.map(() => "?").join(", ")}, ?, CURRENT_TIMESTAMP)
@@ -18824,6 +18863,7 @@ app.put("/api/inspections/:id/rooms/:roomId/items/:key", requireRole(...INSPECTI
        AND condition IS NULL AND note IS NULL AND cost_cents IS NULL
        AND movein_from IS NULL AND movein_condition IS NULL AND movein_note IS NULL`
   ).bind(room.id, key).run();
+  if (has("condition")) await syncRoomStatus(c.env.DB, room, hadMarked);
   return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
@@ -18850,6 +18890,7 @@ app.post("/api/inspections/:id/rooms/:roomId/items/all-good", requireRole(...INS
     if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "096_inspection_items" }, 503);
     throw err;
   }
+  await syncRoomStatus(c.env.DB, room);
   return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
@@ -18872,7 +18913,13 @@ app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole(...INSPECTION_
   if (have.n >= MAX_ROOM_PHOTOS) return c.json({ error: "too_many", max: MAX_ROOM_PHOTOS }, 409);
 
   const b = await c.req.json().catch(() => ({}));
-  const stmts = [];
+  // THE ITEM IS A CLAIM, checked against this room's own list, so a photo
+  // cannot be filed under an item the room does not have.
+  const itemKey = b.itemKey == null || b.itemKey === "" ? null : String(b.itemKey);
+  if (itemKey && !checklistFor(room.name).some((i) => i.key === itemKey)) {
+    return c.json({ error: "not_on_checklist" }, 400);
+  }
+  const rows = [];
   let added = 0;
   for (const p of Array.isArray(b.photos) ? b.photos : []) {
     const key = String(p?.key || "");
@@ -18881,16 +18928,35 @@ app.post("/api/inspections/:id/rooms/:roomId/photos", requireRole(...INSPECTION_
     // attached and then served back by the route below.
     if (!key.startsWith(`${auth.accountId}/report-photo/`) || key.includes("..")) continue;
     const type = String(p?.type || "").toLowerCase();
-    stmts.push(c.env.DB.prepare(
-      `INSERT INTO inspection_photos (id, room_id, file_key, name, content_type)
-       VALUES (?, ?, ?, ?, ?)`
-    ).bind(uid(), room.id, key, String(p?.name || "photo").slice(0, 120),
-      PHOTO_TYPES.has(type) ? type : "image/jpeg"));
+    rows.push({ id: uid(), key, name: String(p?.name || "photo").slice(0, 120),
+      type: PHOTO_TYPES.has(type) ? type : "image/jpeg" });
     if (have.n + ++added >= MAX_ROOM_PHOTOS) break;
   }
-  if (!stmts.length) return c.json({ error: "nothing_to_add" }, 400);
-  await c.env.DB.batch(stmts);
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+  if (!rows.length) return c.json({ error: "nothing_to_add" }, 400);
+  // `created_at` steps by a millisecond per photo, so the order they were
+  // chosen in is the order they are drawn in -- CURRENT_TIMESTAMP is to the
+  // second and a batch would otherwise come back in whatever order.
+  const base = Date.now();
+  const at = (i) => new Date(base + i).toISOString().replace("T", " ").replace("Z", "");
+  const insert = (withItem) => rows.map((r, i) => withItem
+    ? c.env.DB.prepare(
+      `INSERT INTO inspection_photos (id, room_id, file_key, name, content_type, created_at, item_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(r.id, room.id, r.key, r.name, r.type, at(i), itemKey)
+    : c.env.DB.prepare(
+      `INSERT INTO inspection_photos (id, room_id, file_key, name, content_type, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`).bind(r.id, room.id, r.key, r.name, r.type, at(i)));
+  let itemMigration = null;
+  try {
+    await c.env.DB.batch(insert(!!itemKey));
+  } catch (err) {
+    // A database without 097 keeps the photo, on the room, and says so:
+    // losing which item it showed costs a line, refusing it costs the photo.
+    if (!itemKey || missingSchema(err) !== "097_item_photos") throw err;
+    itemMigration = "097_item_photos";
+    await c.env.DB.batch(insert(false));
+  }
+  return c.json({ ok: true, added: rows.map((r) => r.id), ...(itemMigration ? { itemMigration } : {}),
+    rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 app.delete("/api/inspections/:id/rooms/:roomId/photos/:photoId", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {
@@ -19006,9 +19072,17 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
   if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
 
   const { results: have } = await c.env.DB.prepare(
-    `SELECT id FROM inspection_photos WHERE room_id = ? ORDER BY created_at`
+    `SELECT * FROM inspection_photos WHERE room_id = ? ORDER BY created_at`
   ).bind(room.id).all();
   const mine = new Set((have || []).map((p) => p.id));
+  // A photo taken from a checklist item is introduced by that item, so the
+  // model is told it is looking at "Walls" rather than guessing which of
+  // twenty-seven things in a kitchen the picture is about.
+  const list = checklistFor(room.name);
+  const itemOf = Object.fromEntries((have || []).filter((p) => p.item_key).map((p) => {
+    const i = list.find((x) => x.key === p.item_key);
+    return [p.id, i ? itemLabel(i) : ""];
+  }));
 
   const b = await c.req.json().catch(() => ({}));
   const want = [];
@@ -19033,7 +19107,7 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
   // something rather than a position in an array.
   const content = [];
   want.forEach((p, i) => {
-    content.push({ type: "text", text: `Photo ${i + 1}:` });
+    content.push({ type: "text", text: itemOf[p.id] ? `Photo ${i + 1} (of: ${itemOf[p.id]}):` : `Photo ${i + 1}:` });
     // Always JPEG: the browser re-encodes when it downscales, so the type
     // is a fact about our own pipeline rather than something to read off the
     // original -- and the original may be HEIC, which this API does not take.

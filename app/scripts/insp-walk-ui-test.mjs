@@ -219,8 +219,8 @@ try {
     }));
     t.ck("the tap-to-add chips are all still there", open.chips > 10 && open.chipsOff === 0, JSON.stringify(open));
     t.ck("so is the free-text box and its button", open.addBox && open.addBtn, JSON.stringify(open));
-    t.ck("and so is the header form, move-in and move-out included",
-      open.head && open.kinds === 2, JSON.stringify(open));
+    t.ck("and so is the header form, all three kinds included",
+      open.head && open.kinds === 3, JSON.stringify(open));
     // AND THE OLD SENTENCE IS GONE. Two things saying "add a room below" is
     // how somebody concludes there are two places to do it.
     t.ck("the empty-rooms paragraph is not said a second time",

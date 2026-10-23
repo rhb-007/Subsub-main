@@ -14987,6 +14987,77 @@ refactor.
   suggestions or the job's scope; those still read the room's note and
   captions.
 
+- **A ROOM'S STATUS IS ITS CHECKLIST'S SUMMARY, THE CHECKLIST LEADS THE ROOM,
+  EVERY ITEM HAS A CAMERA, AND A CHECKUP IS A THIRD KIND OF WALK.** Asked for
+  with a room on screen: the OK / Needs work / Damage buttons at the top, a
+  note box, then the checklist folded under them. *"The top 3 status should be
+  automatically selected by the system if anything within the checklist
+  specifies one of these (it's a summary of the room), they should not be
+  selectable, so put them at the bottom"*, *"the check list should be
+  prominent at the top of each room section and allow you to take photos
+  within each checklist item and automate the description of the photo (as
+  many photos as you want), each will have a check"*, and *"an inspection that
+  is neither a move in or move out, just a 1 off"*. Migration 097
+  (`inspection_photos.item_key`).
+
+  **`derivedRoomStatus` in `shared/roomchecklist.js` is the rule.** Needs
+  repair or Needs replacing on any item is **Damage**; any other issue
+  (cleaning, painting) is **Needs work**; every item Good is **OK**; part-way
+  and all good so far stays **Not checked**. An issue found is an answer, so
+  one Damage item flags the room while the rest are unmarked (the form's own
+  "unless otherwise noted" covers them). Nothing marked answers null and
+  decides nothing, so a status set by an inspection app or an older walk
+  stands.
+
+  **It is written to `inspection_rooms.status` when an item is saved**
+  (`syncRoomStatus`), not worked out on read, because a dozen things read that
+  column: the tally, the finish gate, the flagged rooms a job is raised from,
+  the trade suggestions and the owner's copy. Taking the last mark off puts
+  the room back to Not checked (`hadMarked`), or un-marking the one Damage item
+  would leave it reading Damage for ever. **A picked status is refused
+  (`status_from_checklist`) once any item is marked**; a room nothing has been
+  marked in still takes one, for the API, ingest and older walks. A room the
+  form has no list for ("Keys handed over") keeps the three buttons.
+
+  **On screen the room runs top to bottom the way it is walked**: the name and
+  a status pill, the checklist (open, with a count, a meter and *Mark the rest
+  good*), other photos of the room, comments, and the status last, read-only,
+  naming the items that decided it (*From the checklist: Walls (needs
+  painting)*). Each item row is a check (tap an empty one for Good, tap a tick
+  to take it off; over an issue it is a mark, not a button), the item, a
+  picker for what is wrong, and a camera. An issue row is tinted yellow, or red
+  for repair and replace. A comment box (and a cost, on a move-out) appears
+  once something is said about the item. The *Mark the item* nudge on a room
+  whose words describe work points at the room rather than picking a status
+  the route would now refuse.
+
+  **A photo can belong to one item**, checked against the room's own list
+  (`not_on_checklist` otherwise), and the drafting call introduces it as
+  *Photo 1 (of: Walls)*. **Taking a photo describes it**: the upload reply
+  names the new photos in the order chosen (`added`, with `created_at` stepped
+  a millisecond apiece so a batch is not reordered), and the screen drafts
+  them at once. A draft is still a draft, dashed until kept or edited, and a
+  failed draft never costs the photo. `MAX_ROOM_PHOTOS` went from 12 to 80.
+  Without 097 the photo is kept on the room and the reply names the file
+  (`itemMigration`). Contractors see the flagged items (no costs) beside the
+  rooms, and the job's scope lists them under each room.
+
+  **A checkup** (`INSPECTION_KINDS.checkup`) is a one-off walk in the middle of
+  a lease. Its tenant field reads *Tenant*, it suggests the tenant lets the
+  crew in, nothing is compared with it, and it is not a turnaround for
+  auto-scheduling. **Every kind raises a job, and the job's title says which
+  inspection** (*Checkup inspection work — unit 4*). The ingest reads
+  *routine*, *check-up*, *periodic* and the like as a checkup, and refuses a
+  bare *inspection*, because an app that calls every walk that would file
+  every move-out as a checkup. `inspections.kind` needed no rebuild: 055 left
+  it unchecked for exactly this.
+
+  `test:roomstatus` (30) and `test:inspectionui` (188). Nine server mutations and four browser ones fire,
+  each on its own assertion. `test:roomchecklist`'s finish helper marked rooms
+  OK by press, which the route now refuses; it walks them the way a person
+  does (the rest marked good, a job raised when anything is flagged).
+  **Pasting 097 is required** before photos keep their item.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
