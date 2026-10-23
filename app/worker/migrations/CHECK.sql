@@ -323,6 +323,9 @@ WITH spec(j) AS (SELECT
   ',["m094_gcal_connections","col","gcal_connections",["user_id","google_email","refresh_enc","calendar_id","time_zone","sync_on","block_on","connected_at","last_synced_at","last_error"]]' ||
   ',["m094_gcal_events","col","gcal_events",["user_id","visit_id","event_id","fingerprint","synced_at"]]' ||
   ',["m094_gcal_states","col","gcal_states",["state","user_id","return_to","time_zone","created_at","used_at"]]' ||
+  -- 095. The unit's layout on an inspection. Until it is run, choosing one
+  -- still adds its rooms and is not remembered.
+  ',["m095_unit_layout","col","inspections",["unit_layout"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

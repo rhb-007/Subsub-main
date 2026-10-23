@@ -12,6 +12,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { layoutChange, layoutLabel } from "../shared/unitlayout.js";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-inspection-test");
@@ -102,6 +103,15 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path === "/api/inspections/insp_1" && method === "PATCH") {
     sent.push({ path, body });
+    if ("unitLayout" in body) {
+      // The route's own plan, carried out on the fixture.
+      const plan = layoutChange(DETAIL.rooms, DETAIL.unitLayout || null, body.unitLayout);
+      const rooms = [...DETAIL.rooms.filter((r) => !plan.remove.includes(r.id)),
+        ...plan.add.map((name, i) => ({ id: `rl${i}`, name, status: "unchecked", note: "", photos: [] }))];
+      DETAIL = { ...DETAIL, unitLayout: body.unitLayout, rooms };
+      return [200, { ...DETAIL, layout: { layout: body.unitLayout, label: layoutLabel(body.unitLayout),
+        added: plan.add, removed: [], kept: plan.kept, skipped: 0, stored: true } }];
+    }
     DETAIL = body.finish ? { ...DETAIL, status: "finished" } : { ...DETAIL, ...body };
     return [200, DETAIL];
   }
@@ -369,6 +379,46 @@ try {
   // — a suite whose later assertions depend on what an earlier one left is a
   // suite that fails for the wrong reason.
   const FIXTURE = JSON.parse(JSON.stringify(DETAIL));
+
+  console.log("\n-- THE UNIT TYPE WRITES THE ROOMS --");
+  {
+    // Asked for as: pick the unit type and every room it implies is added, so
+    // the manager only changes what is different. Under the unit, name and
+    // date, which is where the request pointed.
+    DETAIL = { ...DETAIL, status: "draft", unitLayout: null };
+    const { ctx, page } = await openOne();
+    const where = await page.evaluate(() => {
+      const sel = document.querySelector(".insp-layout select");
+      const facts = document.querySelector(".insp-facts");
+      return sel && facts ? { below: sel.getBoundingClientRect().top >= facts.getBoundingClientRect().bottom - 1,
+        opts: [...sel.options].map((o) => o.textContent), value: sel.value } : null;
+    });
+    t.ck("there is a Unit type picker under the unit, the name and the date", !!where?.below, JSON.stringify(where));
+    t.ck("it offers a studio and the combinations asked for",
+      ["Studio", "1 BR × 1 BA", "1 BR × 2 BA", "2 BR × 1 BA", "2 BR × 2 BA", "2 BR × 3 BA"]
+        .every((x) => where?.opts?.includes(x)), JSON.stringify(where?.opts));
+    t.ck("and starts at Not set", where?.value === "");
+
+    sent.length = 0;
+    await page.evaluate(() => {
+      const sel = document.querySelector(".insp-layout select");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set;
+      set.call(sel, "2br-1ba"); sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(1200);
+    t.ck("choosing one sends it", sent.some((x) => x.body?.unitLayout === "2br-1ba"), JSON.stringify(sent));
+    const after = await page.evaluate(() => ({
+      value: document.querySelector(".insp-layout select")?.value,
+      note: document.querySelector(".insp-layout-note")?.innerText || "",
+    }));
+    const names = (await read(page)).rooms.map((r) => r.name);
+    t.ck("the bedrooms and the entry are now rooms on the walk",
+      ["Entry", "Hallway", "Bedroom 2"].every((n) => names.includes(n)), names.join(","));
+    t.ck("the picker keeps the choice", after.value === "2br-1ba", after.value);
+    t.ck("and the line under it says what was added", /Added/.test(after.note) && /Remove any/.test(after.note), after.note);
+    await ctx.close().catch(() => {});
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+  }
 
   console.log("\n-- THE HEADER IS EDITABLE WHILE IT IS A DRAFT --");
   {

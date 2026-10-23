@@ -73,6 +73,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
   contractorInspectionShape, isFlagged, suggestedAccessForInspection,
   inspectionTradeScopes, quoteInspectionShape,
   INSPECTION_READ_ROLES, INSPECTION_WRITE_ROLES } from "../shared/inspection.js";
+import { isUnitLayout, layoutLabel, layoutChange, layoutOrder } from "../shared/unitlayout.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
 import { MAX_REPORT_DRAFT_PHOTOS, REPORT_DRAFT_MODEL, reportDraftChoices, reportDraftContext,
@@ -9705,6 +9706,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bunit_layout\b/i.test(m)) return "095_unit_layout";
   if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
   if (/\bheld_assignments\b/i.test(m)) return "093_held_assignments";
   if (/\bgcal_(connections|events|states)\b/i.test(m)) return "094_google_calendar";
@@ -17934,7 +17936,74 @@ const inspectionRowToJs = (r) => ({
   tenantName: r.tenant_name || "", inspectedOn: r.inspected_on || null,
   status: r.status, finishedAt: r.finished_at || null, jobId: r.job_id || null,
   createdAt: r.created_at, createdBy: r.created_by || null,
+  unitLayout: r.unit_layout || null,
 });
+
+// The layout in a body: absent is "not asked", empty or null clears it, and
+// anything else must be a layout shared/unitlayout.js knows. Returns
+// undefined for absent so callers can tell "leave it" from "clear it".
+function layoutFromBody(b) {
+  if (!Object.prototype.hasOwnProperty.call(b || {}, "unitLayout")) return { value: undefined };
+  const v = b.unitLayout;
+  if (v === null || v === "") return { value: null };
+  if (!isUnitLayout(v)) return { error: "bad_layout" };
+  return { value: String(v) };
+}
+
+// CHOOSING A LAYOUT ADDS ITS ROOMS, AND CHANGING IT TAKES OFF ONLY WHAT NOBODY
+// HAS TOUCHED. The plan is shared/unitlayout.js's; this carries it out.
+//
+// The previous layout is read off the row, so a database without 095 has none
+// and the change only ever adds -- a missing column costs the removal, never a
+// room somebody walked. The layout is stored LAST and its failure is said on
+// the reply rather than refusing the rooms, because the rooms are the point.
+async function applyUnitLayout(db, row, toId) {
+  const { results } = await db.prepare(
+    `SELECT r.id, r.name, r.status, r.note, r.position,
+            (SELECT COUNT(*) FROM inspection_photos p WHERE p.room_id = r.id) AS photo_count
+       FROM inspection_rooms r WHERE r.inspection_id = ? ORDER BY r.position, r.created_at`
+  ).bind(row.id).all();
+  const rooms = (results || []).map((r) => ({ ...r, photoCount: Number(r.photo_count) || 0 }));
+  const from = row.unit_layout ?? null;
+  const plan = layoutChange(rooms, from, toId, { max: MAX_ROOMS });
+  const removedNames = rooms.filter((r) => plan.remove.includes(r.id)).map((r) => r.name);
+  for (const id of plan.remove) {
+    await db.prepare(`DELETE FROM inspection_rooms WHERE id = ? AND inspection_id = ?`).bind(id, row.id).run();
+  }
+  let pos = rooms.reduce((n, r) => Math.max(n, Number(r.position) || 0), -1);
+  for (const name of plan.add) {
+    pos += 1;
+    await db.prepare(
+      `INSERT INTO inspection_rooms (id, inspection_id, name, status, note, position)
+       VALUES (?, ?, ?, 'unchecked', NULL, ?)`
+    ).bind(uid(), row.id, name, pos).run();
+  }
+  // Walking order: the layout's rooms first, as the layout lists them, then
+  // anything added by hand in the order it was. Only written where it moved.
+  if (toId && (plan.add.length || plan.remove.length || from !== toId)) {
+    const { results: now } = await db.prepare(
+      `SELECT id, name, position FROM inspection_rooms WHERE inspection_id = ? ORDER BY position, created_at`
+    ).bind(row.id).all();
+    const order = layoutOrder(now || [], toId);
+    const posOf = Object.fromEntries((now || []).map((r) => [r.id, Number(r.position)]));
+    for (let i = 0; i < order.length; i++) {
+      if (posOf[order[i]] === i) continue;
+      await db.prepare(`UPDATE inspection_rooms SET position = ? WHERE id = ?`).bind(i, order[i]).run();
+    }
+  }
+  let stored = true;
+  try {
+    await db.prepare(`UPDATE inspections SET unit_layout = ? WHERE id = ?`).bind(toId, row.id).run();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    stored = false;
+  }
+  return {
+    layout: toId, label: layoutLabel(toId), added: plan.add, removed: removedNames,
+    kept: plan.kept, skipped: plan.skipped, stored,
+    ...(stored ? {} : { migration: "095_unit_layout" }),
+  };
+}
 // `drafts` decides whether the model's unkept drafts travel. THE CAPTION IS
 // THE RECORD AND THE DRAFT IS THE TEAM'S WORKING NOTE, so an owner reading
 // their own report gets captions and nothing else -- a sentence nobody kept
@@ -18129,6 +18198,8 @@ app.post("/api/inspections", requireRole(...INSPECTION_WRITE_ROLES), async (c) =
   const auth = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   if (!isInspectionKind(b.kind)) return c.json({ error: "bad_kind" }, 400);
+  const lay = layoutFromBody(b);
+  if (lay.error) return c.json({ error: lay.error }, 400);
   // The building is the only thing that decides whose this is, and a id in
   // the body is a claim: joining it back to the account is what makes it
   // true. A building this seat is not scoped to answers identically to one
@@ -18154,8 +18225,14 @@ app.post("/api/inspections", requireRole(...INSPECTION_WRITE_ROLES), async (c) =
   }
   await logActivity(c.env, auth.accountId, auth.userId, "inspection_started",
     `Started a ${INSPECTION_KINDS[b.kind].label.toLowerCase()} inspection${b.unit ? ` of unit ${b.unit}` : ""}`);
-  const row = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(id).first();
-  return c.json({ ...inspectionRowToJs(row), rooms: [] }, 201);
+  let row = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(id).first();
+  // A layout chosen on the form arrives with its rooms already in place, so
+  // the first screen is the walk rather than nine taps on chips.
+  if (!lay.value) return c.json({ ...inspectionRowToJs(row), rooms: [] }, 201);
+  const layout = await applyUnitLayout(c.env.DB, row, lay.value);
+  row = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(id).first();
+  return c.json({ ...inspectionRowToJs(row), unitLayout: lay.value,
+    rooms: await inspectionRooms(c.env.DB, id, { drafts: mayWriteInspection(auth.role) }), layout }, 201);
 });
 
 // Who may be sent this report, and who already has it. Both are read from
@@ -18422,10 +18499,18 @@ app.patch("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async 
     if (!isInspectionKind(b.kind)) return c.json({ error: "bad_kind" }, 400);
     sets.push("kind = ?"); vals.push(String(b.kind));
   }
-  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
-  await c.env.DB.prepare(`UPDATE inspections SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, row.id).run();
+  const lay = layoutFromBody(b);
+  if (lay.error) return c.json({ error: lay.error }, 400);
+  if (!sets.length && lay.value === undefined) return c.json({ error: "nothing_to_change" }, 400);
+  if (sets.length) {
+    await c.env.DB.prepare(`UPDATE inspections SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, row.id).run();
+  }
+  const layout = lay.value === undefined ? null : await applyUnitLayout(c.env.DB, row, lay.value);
   const after = await c.env.DB.prepare(`SELECT * FROM inspections WHERE id = ?`).bind(row.id).first();
-  return c.json({ ...inspectionRowToJs(after), rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+  return c.json({ ...inspectionRowToJs(after),
+    ...(layout && !layout.stored ? { unitLayout: lay.value } : {}),
+    rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }),
+    ...(layout ? { layout } : {}) });
 });
 
 app.delete("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async (c) => {

@@ -14880,6 +14880,43 @@ refactor.
   answers its client work from the dashboard panel, and has no link to
   follow.
 
+- **AN INSPECTION'S UNIT TYPE WRITES ITS ROOMS.** Asked for as *"when a unit
+  is selected we need to add the unit type studio, 1brx1ba, 1br x2ba ... and
+  based on what's selected it will add each of the rooms automatically ...
+  they only need to modify if different"*. A two-bedroom walk started with
+  nine taps on room chips. Migration 095 (`inspections.unit_layout`),
+  `app/shared/unitlayout.js`.
+
+  **The list is the combinations people have, not every arithmetic one**:
+  Studio, then 1 to 5 bedrooms with 1 to 4 bathrooms in half steps, never more
+  than one bathroom past the bedrooms. **The rooms are numbered even when there
+  is one** (*Bedroom 1*, *Bathroom 1*), so changing a 1 BR to a 2 BR adds
+  *Bedroom 2* beside the one already walked. A layout is Entry, Living room
+  (a studio's is *Living and sleeping area*), Kitchen, Hallway from two
+  bedrooms, each bedroom, each bathroom and a *Half bath*. Not smoke alarms or
+  keys: those are one tap on the chips and not every walk records them.
+
+  **Changing it takes off only what nobody has touched.** `layoutChange` adds
+  the new layout's missing rooms and removes rooms the OLD layout put there
+  that the new one lacks, only while unwalked, with no note and no photo. A
+  room walked or photographed stays, and the line under the picker names what
+  was taken off and what was kept and why. Rooms added by hand are never
+  removed. With no previous layout nothing is removed, because matching a
+  hand-typed room by name is a guess. The layout's rooms are put in walking
+  order, then everything else as it was.
+
+  **Where:** a *Unit type* select under Unit / Who / Walked on on the
+  inspection, and on the New inspection form, which defaults to the last walk
+  of the same unit at the same building, because a unit does not change layout
+  between move-in and move-out. The detail line shows the layout once finished.
+
+  **A database without 095 still gets the rooms**, and the reply says the type
+  was not kept (`stored: false`, naming the file), so a later change only adds.
+  `test:unitlayout` (39) and `test:inspectionui`; four server mutations fire
+  (the untouched check, the ordering, the 095 fallback, the bathroom cap).
+  Schema note: the 095 comment sits after the table in `schema.sql`, because a
+  comment before the last column breaks SQLite's DROP COLUMN rewrite.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

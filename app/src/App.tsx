@@ -89,6 +89,7 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   MAX_ROOM_PHOTOS, roomName, inspectionTally, flaggedRooms,
   whyNotFinish, canSendInspection, mayWriteInspection,
   suggestTrades, inspectionStep, quoteInspectionShape, unflaggedWork } from "../shared/inspection.js";
+import { UNIT_LAYOUTS, layoutLabel, layoutChangeText } from "../shared/unitlayout.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
@@ -38887,6 +38888,11 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   // save re-reads the inspection, and a box still showing what it opened with
   // is the stale-snapshot bug this file has grown four times.
   const [unit, setUnit] = useState(inspection.unit || "");
+  // The unit's layout, held locally so the select shows the choice while the
+  // rooms are being added, and the sentence saying what that did.
+  const [lay, setLay] = useState(inspection.unitLayout || "");
+  const [layNote, setLayNote] = useState("");
+  useEffect(() => { setLay(inspection.unitLayout || ""); }, [inspection.unitLayout]);
   const [who, setWho] = useState(inspection.tenantName || "");
   const [when, setWhen] = useState(inspection.inspectedOn || "");
   useEffect(() => {
@@ -38931,6 +38937,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
         : code === "reason_required" ? "Say why it is being reopened — that goes on the record."
         : code === "not_finished" ? "It has already been reopened."
         : code === "migration_needed" ? "SubSub needs a database update before this works. We've been told."
+        : code === "bad_layout" ? "That unit type isn't one SubSub knows. Pick one from the list."
         : "That didn't go through. Try again.");
     } finally { setBusy(""); }
   };
@@ -39016,6 +39023,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
           <span className="prop-addr">
             {property?.name || "A building"}
             {inspection.tenantName ? ` · ${inspection.tenantName}` : ""}
+            {inspection.unitLayout ? ` · ${layoutLabel(inspection.unitLayout)}` : ""}
             {inspection.inspectedOn ? ` · ${niceDay(inspection.inspectedOn)}` : ""}
           </span>
         </div>
@@ -39125,6 +39133,36 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
                 onBlur={() => when !== (inspection.inspectedOn || "")
                   && run("when", () => api.patchInspection(inspection.id, { inspectedOn: when }).then(onReload))} />
             </label>
+          </div>
+          {/* THE UNIT TYPE, WHICH WRITES THE ROOM LIST. Picking one adds the
+              entry, the living room, the kitchen, each bedroom and each
+              bathroom, so the walk starts with the rooms rather than with
+              nine taps on chips. Changing it adds what the new layout has and
+              takes off only rooms the old one put there that nobody has
+              recorded anything in -- a room walked or photographed stays, and
+              the sentence under it says which. */}
+          <div className="insp-layout">
+            <label className="fld">Unit type
+              <select value={lay} disabled={!!busy}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLay(v); setLayNote("");
+                  run("layout", async () => {
+                    const r = await api.patchInspection(inspection.id, { unitLayout: v || null });
+                    setLayNote(layoutChangeText(r.layout));
+                    settle(r);
+                  });
+                }}>
+                <option value="">Not set</option>
+                {UNIT_LAYOUTS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+            </label>
+            <p className="insp-layout-note" role="status">
+              {busy === "layout" ? "Adding the rooms…"
+                : layNote || (lay
+                  ? "Change it and the rooms follow. Anything you've walked or photographed stays."
+                  : "Pick one and its rooms are added for you: entry, kitchen, each bedroom and bathroom.")}
+            </p>
           </div>
         </div>
       )}
@@ -39922,6 +39960,18 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
     onGoJobs(made.jobId);
   };
 
+  // The New inspection form's unit type: what was picked, or else what the
+  // last walk of the same unit at the same building said. The list is newest
+  // first, so the first match is the latest.
+  const newLayout = (() => {
+    if (!form) return { value: "" };
+    if (form.layoutTouched) return { value: form.unitLayout || "" };
+    const u = String(form.unit || "").trim().toLowerCase();
+    const prior = u && form.propertyId ? inspections.find((i) => i.unitLayout
+      && i.propertyId === form.propertyId && String(i.unit || "").trim().toLowerCase() === u) : null;
+    return prior ? { value: prior.unitLayout, fromPrior: true } : { value: "" };
+  })();
+
   const shownInsp = inspections
     .filter((i) => !iKind || i.kind === iKind)
     .filter((i) => !iProp || i.propertyId === iProp)
@@ -40115,6 +40165,21 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
               <input value={form.unit || ""} maxLength={40} placeholder="3B"
                 onChange={(e) => setForm({ ...form, unit: e.target.value })} />
             </label>
+            {/* The unit type, which starts the walk with its rooms already on
+                it. Defaults to whatever the last walk of THIS unit at THIS
+                building said, because a unit does not change layout between a
+                move-in and a move-out -- until somebody picks for themselves. */}
+            <label className="fld">Unit type
+              <select value={newLayout.value}
+                onChange={(e) => setForm({ ...form, unitLayout: e.target.value, layoutTouched: true })}>
+                <option value="">Not set — add rooms yourself</option>
+                {UNIT_LAYOUTS.map((l) => <option key={l.id} value={l.id}>{l.label}</option>)}
+              </select>
+              <span className="fld-note">{newLayout.fromPrior
+                ? "Same as the last walk of this unit. Its rooms are added when you start."
+                : newLayout.value ? "Its rooms are added when you start. Change or remove any after."
+                : "Pick one and the entry, kitchen, bedrooms and bathrooms are added for you."}</span>
+            </label>
             <label className="fld">Who is {INSPECTION_KINDS[form.kind]?.verb || "moving"}
               <input value={form.tenantName || ""} maxLength={120}
                 onChange={(e) => setForm({ ...form, tenantName: e.target.value })} />
@@ -40135,7 +40200,8 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
                 onClick={async () => {
                   setBusy(true); setErr("");
                   try {
-                    const made = await api.createInspection(form);
+                    const { layoutTouched: _t, ...body } = form;
+                    const made = await api.createInspection({ ...body, unitLayout: newLayout.value || null });
                     setForm(null); await onReload(); await load(made.id);
                   } catch (e) {
                     console.error("[inspection] create failed:", e);
@@ -44508,6 +44574,10 @@ strong.insp-name{background:none;border:0;padding:0}
 .insp-head-edit{display:flex;flex-direction:column;gap:10px;
   padding:12px 14px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
 .insp-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px 12px}
+.insp-layout{display:grid;grid-template-columns:minmax(170px,260px) 1fr;gap:6px 14px;align-items:end}
+.insp-layout .fld{margin:0}
+.insp-layout-note{margin:0 0 10px;color:var(--ink-soft);font-size:12.5px;line-height:1.45}
+@media (max-width:560px){.insp-layout{grid-template-columns:1fr}.insp-layout-note{margin:0}}
 .insp-facts .fld{margin:0}
 /* Tap to add. A chip each, wrapping, and the list shrinks as the walk goes
    on — a standing-in-a-flat control is a thumb-width and one press. */

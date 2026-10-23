@@ -1987,8 +1987,14 @@ CREATE TABLE IF NOT EXISTS inspections (
   -- raising a second would be two contractors asked for the same work.
   job_id        TEXT REFERENCES jobs(id),
   created_by    TEXT REFERENCES users(id),
-  created_at    TEXT DEFAULT CURRENT_TIMESTAMP
+  created_at    TEXT DEFAULT CURRENT_TIMESTAMP,
+  unit_layout   TEXT
 );
+-- 095. inspections.unit_layout is the unit's layout ('studio', '2br-1.5ba'),
+-- checked against shared/unitlayout.js. Choosing one adds its rooms; changing
+-- it compares the old layout with the new, which is why it is kept. (The
+-- comment is out here because a comment before the last column breaks
+-- SQLite's DROP COLUMN rewrite, which a test uses to stand in for no 095.)
 CREATE INDEX IF NOT EXISTS idx_inspections_account ON inspections(account_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inspections_property ON inspections(property_id);
 
