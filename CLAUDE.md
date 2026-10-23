@@ -14979,9 +14979,9 @@ refactor.
   fire, each on its own assertion: the stamp ignored, changed meaning merely
   not good, a cost allowed on a move-in, the unit match dropped, the rooms not
   carried, and Mark the rest good overwriting answers. In the browser, drawing a move-out as a move-in fails three. `test:inspection`'s walk
-  fixture now marks the carried rooms. **Paste 096** before any of it saves;
-  until then the lists draw, saving names the file, and inspections finish as
-  before.
+  fixture now marks the carried rooms. **096 is pasted on the live database**
+  (13 columns, confirmed by the owner). On a database without it the lists
+  draw, saving names the file, and inspections finish as before.
 
   **Still open:** a flagged checklist item does not feed the trade
   suggestions or the job's scope; those still read the room's note and
