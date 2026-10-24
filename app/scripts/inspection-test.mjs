@@ -214,8 +214,6 @@ try {
     [s, after] = await json(await call(env, `/api/inspections/${id}/rooms`,
       { method: "POST", body: { name: "Afterthought" } }));
     ck("no room can be added to it", s === 409, `${s} ${after.error}`);
-    [s, after] = await json(await call(env, `/api/inspections/${id}`, { method: "DELETE" }));
-    ck("and it cannot be deleted", s === 409 && after.error === "already_finished", `${s} ${after.error}`);
     ck("but it is still readable",
       (await json(await call(env, `/api/inspections/${id}`)))[1].rooms.length === 3);
 
@@ -1140,6 +1138,45 @@ console.log("\n-- where the walk has got to, as steps --");
     ck("the walkthrough is drawn from the shared step", /inspectionStep\(/.test(APP));
     ck("and the browser does not keep its own step list",
       !/const INSPECTION_STEPS\s*=/.test(APP));
+  }
+
+  {
+    // DELETING. Asked for from the list, behind a confirmation. A draft goes
+    // for anybody who writes inspections; a FINISHED one is a record somebody
+    // may be relying on, so only an admin may, and the event log keeps it.
+    console.log("\n-- deleting an inspection --");
+    const { db, env } = seed();
+    const make = async (who) => {
+      const [, insp] = await json(await call(env, "/api/inspections", { method: "POST", who,
+        body: { kind: "move_out", propertyId: "p_ballard", unit: "7C" } }));
+      const [, r] = await json(await call(env, `/api/inspections/${insp.id}/rooms`,
+        { method: "POST", who, body: { name: "Boat shed" } }));
+      await call(env, `/api/inspections/${insp.id}/rooms/${r.rooms[0].id}`,
+        { method: "PATCH", who, body: { status: "ok" } });
+      return { id: insp.id, roomId: r.rooms[0].id };
+    };
+    const draft = await make("u_pm");
+    let [s] = await json(await call(env, `/api/inspections/${draft.id}`, { method: "DELETE", who: "u_pm" }));
+    ck("a project manager can delete a draft", s === 200, String(s));
+    ck("and its rooms go with it",
+      db.prepare(`SELECT COUNT(*) AS n FROM inspection_rooms WHERE inspection_id = ?`).get(draft.id).n === 0);
+
+    const done = await make("u_admin");
+    let [, fin] = await json(await call(env, `/api/inspections/${done.id}`, { method: "PATCH", body: { finish: true } }));
+    ck("(a finished one to delete)", fin.status === "finished", JSON.stringify(fin).slice(0, 80));
+    let b;
+    [s, b] = await json(await call(env, `/api/inspections/${done.id}`, { method: "DELETE", who: "u_pm" }));
+    ck("a project manager cannot delete a finished one", s === 403 && b.error === "admin_only_finished", `${s} ${b.error}`);
+    ck("and it is still there", (await json(await call(env, `/api/inspections/${done.id}`)))[0] === 200);
+    [s] = await json(await call(env, `/api/inspections/${done.id}`, { method: "DELETE" }));
+    ck("an admin can", s === 200, String(s));
+    ck("and then it is gone", (await json(await call(env, `/api/inspections/${done.id}`)))[0] === 404);
+    const ev = db.prepare(`SELECT * FROM events WHERE kind = 'inspection.deleted' AND subject_id = ?`).get(done.id);
+    ck("the deletion is on the record, with who and what it was",
+      !!ev && ev.actor_id === "u_admin" && /"status":"finished"/.test(ev.payload || "") && /"unit":"7C"/.test(ev.payload || ""),
+      JSON.stringify(ev));
+    [s] = await json(await call(env, `/api/inspections/${done.id}`, { method: "DELETE" }));
+    ck("deleting it twice is a not-found, not a second record", s === 404, String(s));
   }
 
 } finally { /* nothing to close */ }

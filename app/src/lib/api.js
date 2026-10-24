@@ -340,7 +340,8 @@ export const api = {
   // Shrunk on the way up -- see lib/photoshrink.js. Both doors that take a
   // photograph (a tenant's report and an inspection room) come through here,
   // so neither can be the one that still sends twelve megabytes.
-  uploadReportPhoto: async (file) => uploadFile("report-photo", await shrinkPhoto(file)),
+  uploadReportPhoto: async (file, { shrunk = false } = {}) =>
+    uploadFile("report-photo", shrunk ? file : await shrinkPhoto(file)),
   addReportPhotos: (jobId, photos) =>
     request(`/jobs/${jobId}/photos`, { method: "POST", body: JSON.stringify({ photos }) }),
   removeReportPhoto: (jobId, photoId) =>

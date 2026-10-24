@@ -28,7 +28,7 @@ import { runCheck } from "./lib/check-sql.mjs";
 import { whyNotDraft, readDrafts, draftSystem, draftContext, DRAFT_MODEL,
   DRAFT_SCHEMA, DRAFT_LONG_EDGE, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
   MAX_CAPTION, DRAFT_REFUSALS, DRAFT_THINKING, draftThinking,
-  knowsThinking } from "../shared/photodraft.js";
+  knowsThinking, PHOTO_DRAFTS_PER_HOUR } from "../shared/photodraft.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d ? "  -- " + d : ""}`); };
@@ -428,12 +428,15 @@ try {
     // rate limit has to stop is a loop.
     reply = answer([{ ref: 1, draft: "x", unclear: false }]);
     let limited = 0;
-    for (let i = 0; i < 44; i++) {
+    const tries = PHOTO_DRAFTS_PER_HOUR + 4;
+    ck("the limit counts photos one call at a time, enough for a unit walked item by item",
+      PHOTO_DRAFTS_PER_HOUR >= 300, String(PHOTO_DRAFTS_PER_HOUR));
+    for (let i = 0; i < tries; i++) {
       const [s] = await json(await call(env, `/api/inspections/${id}/rooms/${roomId}/drafts`,
         { method: "POST", body: { photos: [{ id: photos[0].id, data: px() }] } }));
       if (s === 429) limited++;
     }
-    ck("a loop is rate-limited rather than billed", limited > 0, `${limited} of 44 refused`);
+    ck("a loop is rate-limited rather than billed", limited > 0 && limited <= 4, `${limited} of ${tries} refused`);
   }
 
   console.log("\n-- when Anthropic does not answer --");

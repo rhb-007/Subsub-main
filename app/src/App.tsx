@@ -41,7 +41,7 @@ import {
   Map as MapIcon,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
-import { inPool } from "./lib/photoshrink.js";
+import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
 import { withDark } from "./lib/darkcss.js";
 import { useTheme } from "./lib/theme.js";
 import { tt, uiLocale, useLang, setLang, getLang, useDocLang } from "./lib/i18n.js";
@@ -7173,6 +7173,7 @@ export default function SubSub() {
              have offered an owner Finish, Raise a job, Send and a room form
              the server answers 403 to. */
           canEdit={mayWriteInspection(role)}
+          isAdmin={role === "admin"}
           onReload={async () => {
             try { setInspections(await api.listInspections()); }
             catch (e) { console.warn("[inspections] reload failed:", e?.message || e); }
@@ -38740,7 +38741,7 @@ function RoomStatusSummary({ room }) {
 }
 
 function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, onRemove, onAddPhotos, onRemovePhoto,
-  onCaption, onDraft, canAiDraft = false, moveOut = false, onItem, onAllGood }) {
+  onCaption, onDraft, onDrafted, canAiDraft = false, moveOut = false, onItem, onAllGood }) {
   const [name, setName] = useState(room.name);
   const [note, setNote] = useState(room.note || "");
   const [busy, setBusy] = useState("");
@@ -38757,6 +38758,30 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
     ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
     return next;
   });
+  // Photos whose description did not come back, each with its reason, so the
+  // empty box under it says why and offers the press that fixes it. An empty
+  // box with nothing beside it read as a description that was never coming.
+  const [draftMiss, setDraftMiss] = useState({});
+  // Describes each photo in its OWN call, several at once. One call for a
+  // batch made every photo wait for the slowest and lost the whole batch to
+  // one failure. Each photo's spinner now clears the moment its own words
+  // land, and a failure is that photo's alone.
+  const describeEach = async (items, srcs) => {
+    markDescribing(items.map((p) => p.id), true);
+    setDraftMiss((m) => { const n = { ...m }; items.forEach((p) => delete n[p.id]); return n; });
+    try {
+      await inPool(items, 4, async (ph) => {
+        try { await onDraft(room.id, [ph], srcs, { merge: true }); }
+        catch (e) {
+          console.warn("[inspection] draft:", ph.id, e?.body?.error || e?.message || e);
+          setDraftMiss((m) => ({ ...m, [ph.id]: e?.body?.error || "ai_unavailable" }));
+        } finally { markDescribing([ph.id], false); }
+      });
+    } finally {
+      markDescribing(items.map((p) => p.id), false);
+      onDrafted?.();
+    }
+  };
   const photos = room.photos || [];
   const hasList = (room.checklist || []).length > 0;
   // A photo under an item the room's list no longer has (a renamed room) is
@@ -38808,37 +38833,29 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
     if (!list.length) return;
     setPicking(itemKey || "room"); setErr("");
     try {
+      // Shrunk HERE rather than inside the upload, so the same small file is
+      // both what goes up and what the description is read from. Reading a
+      // twelve-megapixel original back off the device to describe it was a
+      // second full decode per photo.
+      const small = await inPool(list, 3, (f) => shrinkPhoto(f).catch(() => f));
       // Three at a time: one after another was most of the wait on a room of
       // twelve, and all at once on one bar of signal finishes none of them.
-      const up = await inPool(list, 3, async (f) => {
-        const { key, type, size } = await api.uploadReportPhoto(f);
+      const up = await inPool(small, 3, async (f) => {
+        const { key, type, size } = await api.uploadReportPhoto(f, { shrunk: true });
         return { key, type, size, name: f.name };
       });
       const res = await onAddPhotos(room.id, up, itemKey);
-      const notes = [];
-      if (res?.itemMigration) notes.push(`Saved on the room: linking a photo to its item needs a database update (${res.itemMigration}).`);
+      if (res?.itemMigration) setErr(`Saved on the room: linking a photo to its item needs a database update (${res.itemMigration}).`);
       const fresh = (res?.added || []).map((id) => ({ id }));
+      setPicking(null);
       if (fresh.length && canAiDraft && !locked) {
         // The files are still in hand, in the order the reply names them, so
         // the draft is read from them rather than downloading each one back.
         const local = {};
-        fresh.forEach((p, i) => { if (list[i]) local[p.id] = URL.createObjectURL(list[i]); });
-        try {
-          markDescribing(fresh.map((p) => p.id), true);
-          for (let i = 0; i < fresh.length; i += MAX_DRAFT_PHOTOS) {
-            const batch = fresh.slice(i, i + MAX_DRAFT_PHOTOS);
-            try { await onDraft(room.id, batch, local); }
-            finally { markDescribing(batch.map((p) => p.id), false); }
-          }
-        } catch (e) {
-          console.warn("[inspection] auto-draft:", e?.body?.error || e?.message || e);
-          notes.push(`The photo${fresh.length === 1 ? " is" : "s are"} saved. ${DRAFT_REFUSALS[e?.body?.error] || "The description could not be written just now."}`);
-        } finally {
-          Object.values(local).forEach((u) => URL.revokeObjectURL(u));
-          markDescribing(fresh.map((p) => p.id), false);
-        }
+        fresh.forEach((p, i) => { if (small[i]) local[p.id] = URL.createObjectURL(small[i]); });
+        try { await describeEach(fresh, local); }
+        finally { Object.values(local).forEach((u) => URL.revokeObjectURL(u)); }
       }
-      if (notes.length) setErr(notes.join(" "));
     } catch (e) {
       console.error("[inspection] photo:", e); setErr(words(e));
     } finally { setPicking(null); }
@@ -38869,8 +38886,18 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
             <span className="insp-swirl sm" aria-hidden="true" /> Describing this photo…
           </p>
         ) : (
-          <PhotoCaption photo={ph} locked={locked}
-            onSave={(caption) => onCaption(room.id, ph.id, caption)} />
+          <>
+            <PhotoCaption photo={ph} locked={locked}
+              onSave={(caption) => onCaption(room.id, ph.id, caption)} />
+            {!locked && draftMiss[ph.id] && !ph.caption && !ph.draft && (
+              <p className="insp-cap-miss" role="alert">
+                {DRAFT_REFUSALS[draftMiss[ph.id]] || "The description didn't come back."}{" "}
+                <button type="button" className="link-btn" onClick={() => describeEach([ph], shots)}>
+                  Describe again
+                </button>
+              </p>
+            )}
+          </>
         )}
       </div>
     );
@@ -38922,12 +38949,7 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
       {!locked && !whyNot && !picking && (
         <div className="insp-draft">
           <button type="button" className="insp-draft-go" disabled={!!busy}
-            onClick={() => run("draft", async () => {
-              const batch = undrafted.slice(0, MAX_DRAFT_PHOTOS);
-              markDescribing(batch.map((p) => p.id), true);
-              try { await onDraft(room.id, batch, shots); }
-              finally { markDescribing(batch.map((p) => p.id), false); }
-            })}>
+            onClick={() => run("draft", () => describeEach(undrafted.slice(0, MAX_DRAFT_PHOTOS), shots))}>
             <Sparkles size={14} />
             {busy === "draft" && <span className="insp-swirl sm" aria-hidden="true" />}
             {busy === "draft" ? "Reading the photos…"
@@ -39228,7 +39250,7 @@ function InspectionSummaryPanel({ inspection, rooms = [], onReload }) {
 
 function InspectionDetail({ inspection, property, onReload, onClose, onRaise, onGoJobs,
   subs = [], unitWord = "Unit", canEdit = true, onAddOwner,
-  autoTurnaround = false, onGoAutoSetting, onRooms, autoMiss = null, onAssign,
+  autoTurnaround = false, onGoAutoSetting, onRooms, onPhotoNotes, autoMiss = null, onAssign,
   onDismissAutoMiss }) {
   const [adding, setAdding] = useState("");
   const [busy, setBusy] = useState("");
@@ -39348,7 +39370,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
   // AND IT REVOKES ONLY WHAT IT MADE. `ReportPhoto` owns its url and
   // revoking that one blanks the thumbnail, so a url read out of `shots` is
   // borrowed and left alone.
-  const draftRoom = async (roomId, want, shots = {}) => {
+  const draftRoom = async (roomId, want, shots = {}, { merge = false } = {}) => {
     // Four at a time rather than one after another: each is a fetch (when
     // its thumbnail has not landed) and a decode, and twelve of those in a
     // row was most of the wait before the model was even asked.
@@ -39377,7 +39399,14 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
     });
     const body = prepared.filter(Boolean);
     if (!body.length) throw Object.assign(new Error("no_photos"), { body: { error: "no_photos" } });
-    settle(await api.draftInspectionPhotos(inspection.id, roomId, body));
+    const r = await api.draftInspectionPhotos(inspection.id, roomId, body);
+    // ONE PHOTO PER CALL, SEVERAL AT ONCE, AND EACH ANSWER IS MERGED RATHER
+    // THAN DRAWN WHOLE. Replies arrive in any order, and a reply read before
+    // another photo's draft was written would, drawn whole, blank that draft
+    // on screen. Merging takes only the drafts this reply carries; the full
+    // re-read once the batch is done is the server's word on everything else.
+    if (merge && Array.isArray(r?.rooms) && onPhotoNotes) onPhotoNotes(r.rooms);
+    else settle(r);
   };
 
   // One way in for both doors — a tapped suggestion and the typed box — so
@@ -39620,6 +39649,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             onCaption={(roomId, photoId, caption) =>
               api.captionInspectionPhoto(inspection.id, roomId, photoId, caption).then(settle)}
             onDraft={draftRoom}
+            onDrafted={onReload}
             moveOut={inspection.kind === "move_out"}
             onItem={(roomId, key, body) => api.putInspectionItem(inspection.id, roomId, key, body).then(settle)}
             onAllGood={(roomId) => api.inspectionItemsAllGood(inspection.id, roomId).then(settle)}
@@ -40289,8 +40319,12 @@ function InspectionSend({ inspection, onReload, onAddOwner }) {
 
 function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
   unitWord = "Unit", canEdit = true, onAddOwner, focus = null,
-  autoTurnaround = false, onGoAutoSetting, onNote, onAssign }) {
+  autoTurnaround = false, onGoAutoSetting, onNote, onAssign, isAdmin = false }) {
   const [form, setForm] = useState(null);
+  // The inspection being asked about before it is deleted. An inspection is a
+  // unit's worth of rooms, verdicts, notes and photos, so it is never removed
+  // straight off a trash icon.
+  const [deleting, setDeleting] = useState(null);
   const [open, setOpen] = useState(null);   // the loaded inspection
   // What auto-schedule could not do with the job just raised, kept on THIS
   // screen with the way forward beside it. It used to be a one-line note and
@@ -40428,6 +40462,18 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
           property={properties.find((p) => p.id === open.propertyId)}
           onReload={() => load(open.id)}
           onRooms={(rooms) => { ticket.current++; setOpen((o) => (o ? { ...o, rooms } : o)); }}
+          onPhotoNotes={(rooms) => {
+            ticket.current++;
+            const got = {};
+            rooms.forEach((rm) => (rm.photos || []).forEach((ph) => { if (ph.draft || ph.caption) got[ph.id] = ph; }));
+            setOpen((o) => (o ? { ...o, rooms: (o.rooms || []).map((rm) => ({
+              ...rm,
+              photos: (rm.photos || []).map((ph) => (got[ph.id] && !ph.draft && !ph.caption
+                ? { ...ph, draft: got[ph.id].draft, draftUnclear: got[ph.id].draftUnclear,
+                    caption: got[ph.id].caption || ph.caption }
+                : ph)),
+            })) } : o));
+          }}
           onRaise={raise}
           autoTurnaround={autoTurnaround} onGoAutoSetting={onGoAutoSetting}
           onGoJobs={onGoJobs}
@@ -40512,7 +40558,10 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
         {shownInsp.map((i) => {
           const p = properties.find((x) => x.id === i.propertyId);
           return (
-            <button key={i.id} className="insp-row" onClick={() => load(i.id)}>
+            // A DIV holding two buttons rather than one button, because the
+            // delete control cannot sit inside the button that opens the row.
+            <div key={i.id} className="insp-row-wrap">
+            <button className="insp-row" onClick={() => load(i.id)}>
               <div className="insp-row-main">
                 <div className="dr-title">
                   {INSPECTION_KINDS[i.kind]?.label || "Inspection"}
@@ -40558,9 +40607,45 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
                 : <span className="tn-chip plain">Job raised</span>)}
               <ArrowRight size={15} className="seat-go" />
             </button>
+            {/* A draft by any seat that writes inspections; a finished one by
+                an admin only, which is the route's rule -- a delete offered
+                where the server refuses it is a control that lies. */}
+            {canEdit && (i.status !== "finished" || isAdmin) && (
+              <button type="button" className="insp-row-del" aria-label="Delete inspection"
+                title="Delete inspection" onClick={() => setDeleting(i)}>
+                <Trash2 size={16} />
+              </button>
+            )}
+            </div>
           );
         })}
       </div>
+
+      {deleting && (() => {
+        const p = properties.find((x) => x.id === deleting.propertyId);
+        const label = `${INSPECTION_KINDS[deleting.kind]?.label || "Inspection"}${
+          deleting.unit ? ` — ${unitWord.toLowerCase()} ${deleting.unit}` : ""}`;
+        const fin = deleting.status === "finished";
+        return (
+          <ConfirmRemove verb="Delete" what="inspection" name={`the ${label.toLowerCase()} inspection`}
+            consequence={<>
+              This deletes the whole walk{p ? ` at ${p.name}` : ""}: {deleting.rooms} room
+              {deleting.rooms === 1 ? "" : "s"}, every checklist answer, note and photo
+              {fin ? ", and the finished report anybody it was sent to can open" : ""}.
+              It cannot be undone.
+              {deleting.jobId ? " The job raised from it stays on the Jobs screen." : ""}
+              {fin ? " It is recorded in the account's history as deleted by you." : ""}
+            </>}
+            explain={(e) => e?.body?.error === "admin_only_finished"
+              ? "Only an admin can delete a finished inspection." : null}
+            onCancel={() => setDeleting(null)}
+            onConfirm={async () => {
+              await api.removeInspection(deleting.id);
+              setDeleting(null);
+              onReload();
+            }} />
+        );
+      })()}
 
       {form && (
         <Modal onClose={() => setForm(null)}>
@@ -44567,6 +44652,9 @@ p.fld-note{margin:6px 0 0}
   font-weight:700;cursor:pointer}
 .insp-cap-keep:disabled{opacity:.55;cursor:default}
 .insp-cap-unclear{margin:0;font-size:11.5px;line-height:1.45;color:var(--ink-soft)}
+.insp-cap-miss{margin:4px 0 0;font-size:12px;line-height:1.45;color:var(--red)}
+.insp-cap-miss .link-btn{font:inherit;font-weight:700;color:var(--brand);background:none;border:0;padding:0;
+  text-decoration:underline;cursor:pointer}
 .insp-draft{margin-top:10px}
 .insp-draft-go{display:inline-flex;align-items:center;gap:7px;padding:9px 14px;
   border:1px solid color-mix(in srgb,var(--brand) 55%,var(--line));border-radius:9px;
@@ -44977,6 +45065,11 @@ p.fld-note{margin:6px 0 0}
   font:inherit;box-shadow:var(--shadow)}
 
 .insp-row:hover{border-color:var(--brand)}
+.insp-row-wrap{display:flex;align-items:stretch;gap:8px}
+.insp-row-wrap .insp-row{flex:1 1 auto;min-width:0}
+.insp-row-del{flex:none;width:46px;display:flex;align-items:center;justify-content:center;
+  border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink-soft);cursor:pointer}
+.insp-row-del:hover{color:var(--red);border-color:var(--red)}
 /* A BASIS, NOT a bare grow of 1, which is what makes the row above actually
    wrap. With a basis of zero this column shrinks to nothing rather than
    pushing the chips onto a second line, so wrapping changes nothing and the

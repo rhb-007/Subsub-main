@@ -1125,18 +1125,38 @@ Copy the code from "Let contractors apply from your own website" on your Contrac
 // "Everything sent to you, on one page." Asked for from a pack page, delivered
 // by email -- because holding a forwarded share proves somebody received mail
 // at an address once, not that they control it now.
-export function docInboxEmail({ toName, count, link, days }) {
-  const n = Number(count) || 0;
-  const many = n === 1 ? "one subcontractor has" : `${n} subcontractors have`;
-  const text = `Hi ${toName || "there"},
+// WHO SENT IT LEADS, AND THE READER IS NOT GREETED BY A WORD THE SENDER
+// TYPED. The share's to_name is whatever the subcontractor wrote in the
+// "who is it for" box, which is as often "Documents" or "Accounts payable"
+// as a person, so "Hi Documents" is what this used to say. A plain "Hello"
+// is right for all of them. What the reader needs is which companies sent
+// paperwork and what it is, so those are the subject and the first line.
+export function docInboxEmail({ senders = [], count, link, days }) {
+  const names = (Array.isArray(senders) ? senders : []).map((x) => String(x || "").trim()).filter(Boolean);
+  const n = Math.max(Number(count) || 0, names.length);
+  const shown = names.slice(0, 3);
+  const more = n - shown.length;
+  const who = shown.length === 0
+    ? (n === 1 ? "A subcontractor" : `${n || "Your"} subcontractors`)
+    : more > 0 ? `${shown.join(", ")} and ${more} more`
+    : shown.length === 1 ? shown[0]
+    : `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1]}`;
+  const one = n <= 1;
+  const text = `Hello,
 
-${many} sent you their compliance paperwork through SubSub. Here it all is on one page, with every expiry date:
+${who} ${one ? "has" : "have each"} sent you ${one ? "their" : "a"} compliance pack through SubSub: their insurance certificate, bond and agreement, whichever they have on file, each with its expiry date.
+
+${one ? "It is" : "They are all"} on one page here:
   ${link}
 
 No account needed. The link lasts ${days} days.
 
 -- SubSub`;
-  return { subject: "Everything sent to you, on one page", text, html: textToHtml(text, link) };
+  const subject = shown.length === 0 ? "Compliance packs sent to you"
+    : one ? `${shown[0]} sent you their compliance pack`
+    : n === 2 && shown.length === 2 ? `${shown[0]} and ${shown[1]} sent you compliance packs`
+    : `${shown[0]} and ${n - 1} others sent you compliance packs`;
+  return { subject, text, html: textToHtml(text, link) };
 }
 
 // A finished move-in or move-out report, to the owner of the building.

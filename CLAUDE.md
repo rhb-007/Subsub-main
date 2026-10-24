@@ -15199,6 +15199,62 @@ refactor.
   and the foot; the old page fails six. Its "inside thirty days" fixture was a
   fixed date that had passed, and is now fourteen days from today.
 
+- **AN INSPECTION CAN BE DELETED FROM THE LIST, EACH PHOTO IS DESCRIBED IN
+  ITS OWN CALL, AND THE PACK EMAIL NAMES WHO SENT IT.** Three asks in one
+  message.
+
+  **Delete is a trash control beside each row on the Inspections list**,
+  behind `ConfirmRemove`, which names the walk and says what goes: every room,
+  checklist answer, note and photo, and that it cannot be undone. The row is
+  now a div holding two buttons, because a delete cannot sit inside the button
+  that opens the row. **A draft can be deleted by any seat that writes
+  inspections. A finished one can be deleted by an admin only**
+  (`admin_only_finished` for anybody else), and the screen offers it on the
+  same rule. This reverses the old rule that a finished inspection could not be
+  deleted at all, at the owner's word. Every delete writes
+  `inspection.deleted` to the event log, with the kind, unit, building, status
+  and who did it, plus a line in the account feed. The rooms, items, photos,
+  sends and summary go with it (ON DELETE CASCADE); a job raised from it stays.
+
+  **Photos were slow, and some came back blank, for one reason that could not
+  be seen.** Draft calls were capped at 40 an hour per account. Once every item
+  had its own camera and every photo drafted itself, a unit walked item by item
+  passed 40 partway through. After that every draft answered `rate_limited`,
+  and the photo sat under an empty box. Batches also made every photo wait for
+  the slowest one in the call. Now:
+  - **One photo per call, four at a time** (`describeEach` in
+    `InspectionRoom`). Each spinner clears when that photo's words land, and a
+    failure belongs to that photo alone.
+  - **Each reply is merged, not drawn whole** (`onPhotoNotes`), because replies
+    arrive in any order and one read before another photo's draft was written
+    would blank it. One full re-read follows the batch.
+  - **A photo whose description did not come back says why, with Describe
+    again**, instead of an empty box.
+  - **The cap is `PHOTO_DRAFTS_PER_HOUR` (600)** in `shared/photodraft.js`,
+    which counts photos now.
+  - **Photos are shrunk before upload**, and that same small file is what the
+    description is read from (`uploadReportPhoto(file, {shrunk: true})`), so a
+    12-megapixel original is no longer decoded a second time.
+
+  **The "everything sent to you" email greets "Hello"**, not the share's
+  `to_name`. That is whatever the subcontractor typed in the "who is it for"
+  box, which came out as *Hi Documents*. The subject and the first line name the
+  companies that sent packs, newest first (*Pine Roofing and 2 others sent you
+  compliance packs*). The body says what is in them: their insurance
+  certificate, bond and agreement, whichever they have on file, with expiry
+  dates.
+
+  `test:inspection` (239), `test:inspectionui` (211), `test:inbox` (45),
+  `test:photodraft` (92). These mutations fire:
+  - pm allowed to delete a finished one: 4 assertions;
+  - delete without the modal: 3;
+  - drafts back in one batch call: 4;
+  - senders not passed to the email: 2.
+
+  **Not verified here:** the speed on a real iPad and a real model. What the
+  suites show is the shape: one call per photo, nothing left blank without a
+  reason.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

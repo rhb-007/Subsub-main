@@ -76,7 +76,7 @@ import { INSPECTION_KINDS, isInspectionKind, isRoomStatus, MAX_ROOM_PHOTOS, MAX_
 import { isUnitLayout, layoutLabel, layoutChange, layoutOrder } from "../shared/unitlayout.js";
 import { checklistFor, checklistRows, isItemCondition, roomKey, MAX_ITEM_COST_CENTS, derivedRoomStatus, itemLabel } from "../shared/roomchecklist.js";
 import { DRAFT_MODEL, DRAFT_SCHEMA, MAX_CAPTION, MAX_DRAFT_BYTES, MAX_DRAFT_PHOTOS,
-  draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft } from "../shared/photodraft.js";
+  draftSystem, draftContext, draftThinking, readDrafts, whyNotDraft, PHOTO_DRAFTS_PER_HOUR } from "../shared/photodraft.js";
 import { MAX_REPORT_DRAFT_PHOTOS, REPORT_DRAFT_MODEL, reportDraftChoices, reportDraftContext,
   reportDraftSchema, reportDraftSystem, reportDraftThinking, readReportDraft } from "../shared/reportdraft.js";
 import { SUMMARY_MODEL, SUMMARY_SCHEMA, countComments, readSummary,
@@ -15690,12 +15690,17 @@ app.post("/api/pack/:token/inbox", async (c) => {
       `INSERT INTO doc_inboxes (id, token, to_email, expires_at) VALUES (?, ?, ?, ?)`
     ).bind(uid(), token, share.to_email, expires).run();
 
+    // Who sent paperwork to this address, newest first, because the email
+    // leads with their names: "Ridge Roofing sent you their compliance pack"
+    // says what this is before the reader opens it.
     const { results: mine } = await c.env.DB.prepare(
-      `SELECT COUNT(DISTINCT company_id) AS n FROM doc_shares
-        WHERE to_email = ? AND revoked_at IS NULL`
+      `SELECT c.company AS name, MAX(ds.created_at) AS last FROM doc_shares ds
+         JOIN companies c ON c.id = ds.company_id
+        WHERE ds.to_email = ? AND ds.revoked_at IS NULL
+        GROUP BY ds.company_id ORDER BY last DESC`
     ).bind(share.to_email).all();
     const mail = docInboxEmail({
-      toName: share.to_name, count: mine?.[0]?.n || 0, days: INBOX_DAYS,
+      senders: (mine || []).map((r) => r.name), count: (mine || []).length, days: INBOX_DAYS,
       link: `${APP_ORIGIN}/?inbox=${encodeURIComponent(token)}`,
     });
     const res = await sendEmail(c.env, { to: share.to_email, ...mail });
@@ -18710,10 +18715,22 @@ app.delete("/api/inspections/:id", requireRole(...INSPECTION_WRITE_ROLES), async
   const auth = c.get("auth");
   const { row, error, status, migration } = await inspectionFor(c, auth, c.req.param("id"));
   if (error) return c.json({ error, migration }, status);
-  // A finished one is a record somebody may be relying on. A draft is
-  // somebody's half-written note and deleting it costs nothing.
-  if (row.status === "finished") return c.json({ error: "already_finished" }, 409);
+  // A draft is somebody's half-written note, so any seat that writes
+  // inspections may delete one. A FINISHED one is a record somebody may be
+  // relying on, so only an admin may, and it is recorded: the event log keeps
+  // what was deleted and by whom, because "it was there and now it is not" is
+  // the first thing asked afterwards. The rooms, items, photos, sends and
+  // summary go with it (ON DELETE CASCADE); a job raised from it stays.
+  const finished = row.status === "finished";
+  if (finished && auth.role !== "admin") return c.json({ error: "admin_only_finished" }, 403);
   await c.env.DB.prepare(`DELETE FROM inspections WHERE id = ?`).bind(row.id).run();
+  const what = `${INSPECTION_KINDS[row.kind]?.label.toLowerCase() || ""} inspection${
+    row.unit ? ` of unit ${row.unit}` : ""}`;
+  await logEvent(c.env, row.account_id, auth.userId, "inspection.deleted", row.id,
+    { kind: row.kind, unit: row.unit || null, propertyId: row.property_id,
+      status: row.status, finishedAt: row.finished_at || null, jobId: row.job_id || null });
+  await logActivity(c.env, row.account_id, auth.userId, "inspection_deleted",
+    `Deleted the ${finished ? "finished" : "draft"} ${what}`);
   return c.json({ ok: true });
 });
 
@@ -19095,10 +19112,12 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
   if (!room) return c.json({ error: "not_found" }, 404);
 
   // PER ACCOUNT, because every press spends real money and the one thing a
-  // rate limit has to stop is a loop. Forty presses an hour is far more
-  // walking than anybody does in one and well short of a bill worth
-  // noticing.
-  const rl = await rateLimit(c.env, "photo-draft", auth.accountId, { limit: 40, windowMinutes: 60 });
+  // rate limit has to stop is a loop. It was forty an hour when one call
+  // carried a room's worth of photos; the screen now describes each photo in
+  // a call of its own, and a unit walked item by item is easily sixty
+  // photos, so forty was a walk that went silent two thirds of the way
+  // through. PHOTO_DRAFTS_PER_HOUR still caps a loop at a few dollars.
+  const rl = await rateLimit(c.env, "photo-draft", auth.accountId, { limit: PHOTO_DRAFTS_PER_HOUR, windowMinutes: 60 });
   if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
 
   const { results: have } = await c.env.DB.prepare(

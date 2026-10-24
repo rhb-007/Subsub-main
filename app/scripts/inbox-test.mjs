@@ -106,6 +106,17 @@ console.log("\n-- asking for it costs an email, and names no address --");
   // otherwise leak the forwarder's address.
   ck("the answer does not say where it went",
     !JSON.stringify(out).includes("cascade"), JSON.stringify(out));
+  // Asked for in so many words: addressed by who is SENDING it, not by the
+  // word the subcontractor typed into the "who is it for" box -- which came
+  // out as "Hi Documents".
+  const txt = inbox[0]?.text || "";
+  ck("it never greets the reader by the share's typed name",
+    !/^Hi Priya/m.test(txt) && /^Hello,/m.test(txt), txt.slice(0, 40));
+  ck("the subject names a company that sent paperwork, newest first",
+    /^Pine Roofing and 2 others sent you compliance packs$/.test(inbox[0]?.subject || ""), inbox[0]?.subject);
+  ck("the body names every sender",
+    ["Ridge Roofing", "Bay Roofing", "Pine Roofing"].every((n) => txt.includes(n)), txt.slice(0, 160));
+  ck("and says what they sent", /insurance certificate, bond and agreement/.test(txt), txt.slice(0, 200));
   ck("and it says how long the link lasts",
     /The link lasts \d+ days/.test(inbox[0]?.text || ""),
     (inbox[0]?.text || "").slice(0, 60));

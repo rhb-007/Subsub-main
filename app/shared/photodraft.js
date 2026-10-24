@@ -90,6 +90,13 @@ export const MAX_DRAFT_BYTES = 400 * 1024;
 // note the model reads for context. It also bounds what one press can cost.
 export const MAX_DRAFT_PHOTOS = 12;
 
+// Draft calls per account per hour. The screen describes each photo in a
+// call of its own, so this counts photos rather than presses: six hundred is
+// ten units walked item by item in an hour, and still caps a loop at a few
+// dollars. It was forty when one call carried a whole room, which silenced a
+// walk two thirds of the way through once every photo was its own call.
+export const PHOTO_DRAFTS_PER_HOUR = 600;
+
 // A caption is a line, not an essay. The cap is on the stored value as well
 // as asked for in the prompt, because a prompt is a request and a column is
 // a guarantee.

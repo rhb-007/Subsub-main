@@ -34,6 +34,9 @@ let KIND = "property_manager";
 let ROLE = "admin";
 // One draft, mid-walk: a room marked OK, one flagged, one nobody has got to.
 let HOLD_DRAFT = 0;
+// Ids whose draft the stub refuses, so a photo that came back with nothing
+// can be seen saying so.
+let FAIL_DRAFT = new Set();
 let DETAIL = {
   id: "insp_1", propertyId: "prop_1", unit: "3B", kind: "move_out",
   tenantName: "Tess Nguyen", inspectedOn: "2026-10-02", status: "draft",
@@ -123,6 +126,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   const dr = /^\/api\/inspections\/insp_1\/rooms\/(r\d)\/drafts$/.exec(path);
   if (dr && method === "POST") {
     sent.push({ path, method, body });
+    if ((body.photos || []).some((p) => FAIL_DRAFT.has(p.id))) return [502, { error: "ai_unavailable" }];
     const want = new Set((body.photos || []).map((p) => p.id));
     DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => r.id !== dr[1] ? r : {
       ...r, photos: (r.photos || []).map((p) => want.has(p.id) ? { ...p, draft: "Two scuffs low on the wall." } : p) }) };
@@ -130,7 +134,11 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     // Held open when a test wants to see the screen while it waits.
     return HOLD_DRAFT ? new Promise((r) => setTimeout(() => r(reply), HOLD_DRAFT)) : reply;
   }
-  if (/^\/api\/inspections\/insp_1\/photos\//.test(path)) return [200, "img"];
+  // A real (one-pixel) PNG, so a photo can be described from its stored
+  // copy as well as from the file just picked -- which is what Describe
+  // again does.
+  if (/^\/api\/inspections\/insp_1\/photos\//.test(path)) return [200, null, { type: "image/png",
+    raw: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64") }];
   const room = /^\/api\/inspections\/insp_1\/rooms\/(r\d)$/.exec(path);
   if (room && method === "PATCH") {
     sent.push({ path, body });
@@ -142,6 +150,10 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     DETAIL = { ...DETAIL, rooms: [...DETAIL.rooms,
       { id: `r${DETAIL.rooms.length + 1}`, name: body.name, status: "unchecked", note: "", photos: [] }] };
     return [201, { ok: true, rooms: DETAIL.rooms }];
+  }
+  if (path === "/api/inspections/insp_1" && method === "DELETE") {
+    sent.push({ path, method });
+    return [200, { ok: true }];
   }
   if (path === "/api/inspections/insp_1" && method === "PATCH") {
     sent.push({ path, body });
@@ -1533,6 +1545,100 @@ try {
       await ctx.close().catch(() => {});
       DETAIL = JSON.parse(JSON.stringify(FIXTURE));
     }
+  }
+
+  console.log("\n-- deleting an inspection from the list asks first --");
+  {
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+    const { ctx, page } = await open();
+    await go(page, "^inspections");
+    await wait(900);
+    const has = await page.evaluate(() => !!document.querySelector(".insp-row-wrap .insp-row-del"));
+    t.ck("a draft's row carries a delete control", has);
+    sent.length = 0;
+    await page.evaluate(() => document.querySelector(".insp-row-del").click());
+    await wait(400);
+    const m = await page.evaluate(() => ({ h: document.querySelector(".modal h2")?.innerText || "",
+      p: document.querySelector(".modal .form-sub")?.innerText || "",
+      detail: !!document.querySelector(".insp-detail") }));
+    t.ck("pressing it opens a confirmation naming the walk", /Delete the move-out — unit 3b inspection/i.test(m.h), m.h);
+    t.ck("which says what goes", /\d rooms/.test(m.p) && /every checklist answer, note and photo/.test(m.p) && /cannot be undone/.test(m.p), m.p);
+    t.ck("and pressing it does not open the inspection", !m.detail);
+    t.ck("nothing is deleted until somebody agrees", !sent.some((x) => x.method === "DELETE"), JSON.stringify(sent));
+    await page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => /Cancel/.test(b.innerText))?.click());
+    await wait(300);
+    t.ck("Cancel leaves it there", !sent.some((x) => x.method === "DELETE")
+      && !(await page.evaluate(() => !!document.querySelector(".modal"))));
+    await page.evaluate(() => document.querySelector(".insp-row-del").click());
+    await wait(300);
+    await page.evaluate(() => document.querySelector(".modal .btn-danger")?.click());
+    await wait(600);
+    t.ck("Delete sends one delete", sent.filter((x) => x.method === "DELETE" && x.path === "/api/inspections/insp_1").length === 1,
+      JSON.stringify(sent));
+    await ctx.close().catch(() => {});
+
+    // A finished one: an admin is offered it, a project manager is not.
+    DETAIL = { ...DETAIL, status: "finished" };
+    for (const [role, want] of [["admin", true], ["pm", false]]) {
+      ROLE = role;
+      const o = await open();
+      await go(o.page, "^inspections");
+      await wait(900);
+      const row = await o.page.evaluate(() => ({ rows: document.querySelectorAll(".insp-row").length,
+        del: !!document.querySelector(".insp-row-del") }));
+      t.ck(`a finished one's delete is ${want ? "offered to an admin" : "not offered to a project manager"}`,
+        row.rows === 1 && row.del === want, JSON.stringify(row));
+      await o.ctx.close().catch(() => {});
+    }
+    ROLE = "admin";
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+  }
+
+  console.log("\n-- each photo is described in its own call, and a miss says so --");
+  {
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
+    const { ctx, page } = await openOne();
+    const { writeFileSync, mkdtempSync } = await import("node:fs");
+    const tmpd = mkdtempSync(join((await import("node:os")).tmpdir(), "insp2-"));
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+    writeFileSync(join(tmpd, "a.png"), png); writeFileSync(join(tmpd, "b.png"), png);
+    sent.length = 0;
+    // The second photo's draft is refused, whatever id it is given.
+    const realHas = FAIL_DRAFT.has.bind(FAIL_DRAFT);
+    FAIL_DRAFT = { has: (id) => /_1$/.test(id) || realHas(id) };
+    const input = await page.evaluateHandle(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Kitchen");
+      return r.querySelector(".insp-room-photos input[type=file]");
+    });
+    await input.asElement().uploadFile(join(tmpd, "a.png"), join(tmpd, "b.png"));
+    await wait(2500);
+    const calls = sent.filter((x) => /rooms\/r1\/drafts$/.test(x.path));
+    t.ck("two photos are two draft calls, one photo each",
+      calls.length === 2 && calls.every((x) => (x.body?.photos || []).length === 1), JSON.stringify(calls.map((x) => x.body?.photos?.length)));
+    const after = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Kitchen");
+      const shots = [...r.querySelectorAll(".insp-shot")];
+      return { n: shots.length,
+        texts: shots.map((x) => x.querySelector("textarea")?.value || ""),
+        miss: shots.map((x) => x.querySelector(".insp-cap-miss")?.innerText || ""),
+        spinning: r.querySelectorAll(".insp-shot-work").length };
+    });
+    t.ck("the one that came back is filled in", after.texts.filter((x) => /Two scuffs/.test(x)).length === 1, JSON.stringify(after));
+    t.ck("the one that did not says why, with a way to try again",
+      after.miss.filter((x) => /Couldn't reach the drafting service/.test(x) && /Describe again/.test(x)).length === 1, JSON.stringify(after));
+    t.ck("and nothing is left spinning", after.spinning === 0, JSON.stringify(after));
+    FAIL_DRAFT = new Set();
+    sent.length = 0;
+    await page.evaluate(() => document.querySelector(".insp-cap-miss .link-btn")?.click());
+    await wait(1500);
+    const again = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Kitchen");
+      return { texts: [...r.querySelectorAll(".insp-shot textarea")].map((x) => x.value), miss: r.querySelectorAll(".insp-cap-miss").length };
+    });
+    t.ck("Describe again fills it in", again.texts.every((x) => /Two scuffs/.test(x)) && again.miss === 0
+      && sent.filter((x) => /drafts$/.test(x.path)).length === 1, JSON.stringify(again));
+    await ctx.close().catch(() => {});
+    DETAIL = JSON.parse(JSON.stringify(FIXTURE));
   }
 
   console.log("\n-- nothing threw --");
