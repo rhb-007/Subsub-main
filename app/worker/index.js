@@ -18847,6 +18847,15 @@ app.put("/api/inspections/:id/rooms/:roomId/items/:key", requireRole(...INSPECTI
     }
     sets.cost_cents = n;
   }
+  // AN ITEM THAT IS NOT IN THE UNIT HAS NOTHING TO PUT RIGHT. Marking one
+  // Doesn't apply takes any cost off it, and a cost on one is refused, so the
+  // comparison's total can never carry a charge for a staircase that is not
+  // there. m096_inv_bad_item counts one that got past.
+  const nextCondition = has("condition") ? sets.condition : existing?.condition || null;
+  if (nextCondition === "na") {
+    if (has("costCents") && sets.cost_cents != null) return c.json({ error: "cost_not_applicable" }, 400);
+    if (existing?.cost_cents != null || has("costCents")) sets.cost_cents = null;
+  }
   const cols = Object.keys(sets);
   if (!cols.length) return c.json({ error: "nothing_to_change" }, 400);
   const hadMarked = await roomHasMarks(c.env.DB, room.id);

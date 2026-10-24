@@ -569,6 +569,42 @@ try {
     t.ck("and the check is drawn filled", ticked.pressed === "true" && ticked.bg !== "rgba(0, 0, 0, 0)" && ticked.bg !== "rgb(255, 255, 255)",
       JSON.stringify(ticked));
 
+    // DOESN'T APPLY: no staircase in this entry. Answered, grayed, a dash,
+    // no cost even on a move-out, and a tap on the dash takes it off.
+    sent.length = 0;
+    const ceilingRow = () => page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Ceiling");
+      const b = li?.querySelector("button.insp-cl-check");
+      return li ? { na: li.classList.contains("c-na"), issue: li.classList.contains("is-issue"),
+        label: b?.getAttribute("aria-label") || "", hasSvg: !!b?.querySelector("svg"),
+        cost: !!li.querySelector(".insp-cl-costbox"), note: !!li.querySelector(".insp-cl-note"),
+        strike: getComputedStyle(li.querySelector(".insp-cl-item")).textDecorationLine,
+        opts: [...li.querySelectorAll(".insp-cl-sel option")].map((o) => o.textContent) } : null;
+    });
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Ceiling");
+      const sel = li.querySelector(".insp-cl-sel");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, "value").set;
+      set.call(sel, "na"); sel.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await wait(600);
+    const nrow = await ceilingRow();
+    t.ck("an item can be marked Doesn't apply", nrow?.opts.at(-1) === "Doesn't apply"
+      && sent.some((x) => /items\/ceiling$/.test(x.path) && x.body?.condition === "na"), JSON.stringify({ o: nrow?.opts, sent }));
+    t.ck("it is drawn grayed and struck, not as an issue", nrow?.na && !nrow.issue && nrow.strike === "line-through", JSON.stringify(nrow));
+    t.ck("it takes no comment or cost on a move-out", nrow && !nrow.cost && !nrow.note, JSON.stringify(nrow));
+    t.ck("its check is a dash that clears it", nrow?.hasSvg && /doesn't apply, clear it/.test(nrow.label), nrow?.label);
+    sent.length = 0;
+    await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Ceiling");
+      li.querySelector("button.insp-cl-check").click();
+    });
+    await wait(600);
+    t.ck("tapping the dash takes it off", sent.some((x) => /items\/ceiling$/.test(x.path) && x.body?.condition === null), JSON.stringify(sent));
+
     // A CAMERA ON EVERY ITEM, AND THE PHOTO DESCRIBES ITSELF.
     sent.length = 0;
     const cam = await page.evaluateHandle(() => {

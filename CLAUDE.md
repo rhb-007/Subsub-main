@@ -15058,6 +15058,39 @@ refactor.
   does (the rest marked good, a job raised when anything is flagged).
   **Pasting 097 is required** before photos keep their item.
 
+- **AN ITEM THAT IS NOT IN THE UNIT IS ANSWERED "DOESN'T APPLY", NOT
+  REMOVED.** Asked as *"there's no staircase in entryway on this particular
+  unit, should we remove it or just have a different drop-down saying it
+  doesn't exist?"* A removed row looks the same as one somebody forgot, on the
+  document a deposit argument is run from, and the lists stay the industry
+  form's. So `na` ("Doesn't apply") is the last choice on every item's picker
+  (`ITEM_CONDITIONS`, `ITEM_CONDITION_ORDER`).
+
+  **It is an answer and never an issue.** `isIssueCondition` in
+  `shared/roomchecklist.js` is the one test, and every reader goes through it.
+  - It counts as checked, so good items plus "doesn't apply" make the room OK.
+  - It never flags a room, never counts as Changed on a move-out, and never
+    reaches a job's scope, the trade suggestions or the contractor's copy,
+    because those all read `flaggedItems`.
+  - **It takes no cost.** The route refuses one (`cost_not_applicable`), and
+    marking an item that had a cost takes the cost off.
+    `m096_inv_bad_item` now allows `na` and counts one carrying a cost.
+  - **Mark the rest good leaves it alone**, because it already has an answer.
+
+  **On screen** it is grayed and struck through, with a dash in the check, and
+  it has no comment or cost box. Tapping the dash takes it off, the same as
+  tapping a tick. The status line says *Every item is checked: 12 good, 1
+  doesn't apply*. No migration and no paste: `condition` is TEXT, and only
+  CHECK.sql's list changed.
+
+  `test:roomstatus` (45) and `test:inspectionui` (193). Six mutations fire:
+  treating it as an issue (7 assertions), the cost not cleared (3), the cost
+  not refused (1), each half of the invariant, and the dash not clearing.
+  The UI's `!na` guard on the cost box is a second guard that never fires on
+  its own, because the comment and cost row is not drawn for a row with no
+  issue, note or cost. `test:roomchecklist` pinned seven conditions and now
+  pins eight.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

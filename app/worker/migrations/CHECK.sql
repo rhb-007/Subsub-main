@@ -863,7 +863,8 @@ WITH inv(j) AS (SELECT '['
   -- 096. A checklist item with a condition the screen cannot draw, or a
   -- negative cost.
   || (',' || json_array('m096_inv_bad_item', (SELECT COUNT(*) FROM inspection_items
-    WHERE (condition IS NOT NULL AND condition NOT IN ('ok','nc','nsc','np','nsp','nr','rp'))
+    WHERE (condition IS NOT NULL AND condition NOT IN ('ok','nc','nsc','np','nsp','nr','rp','na'))
+       OR (condition = 'na' AND cost_cents IS NOT NULL)
        OR cost_cents < 0)))
   || ']'),
 found(name, value) AS (

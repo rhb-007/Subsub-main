@@ -36,7 +36,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, Minimize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, Circle,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, Circle, Minus,
   // Aliased: Map is the JavaScript built-in, which this file uses constantly.
   Map as MapIcon,
 } from "lucide-react";
@@ -91,7 +91,7 @@ import { INSPECTION_KINDS, ROOM_STATUSES, ROOM_STATUS_ORDER, STANDARD_ROOMS,
   suggestTrades, inspectionStep, quoteInspectionShape, unflaggedWork } from "../shared/inspection.js";
 import { UNIT_LAYOUTS, layoutLabel, layoutChangeText } from "../shared/unitlayout.js";
 import { ITEM_CONDITIONS, ITEM_CONDITION_ORDER, DEFAULT_CONDITION_TEXT, itemChanged, checklistTally,
-  parseCost, flaggedItems, itemLabel } from "../shared/roomchecklist.js";
+  parseCost, flaggedItems, itemLabel, isIssueCondition } from "../shared/roomchecklist.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
   MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
@@ -38536,7 +38536,8 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave, photos = [
   useEffect(() => { setNote(row.note || ""); }, [row.note]);
   useEffect(() => { setCost(row.costCents != null ? (row.costCents / 100).toFixed(2) : ""); }, [row.costCents]);
   const c = row.condition ? ITEM_CONDITIONS[row.condition] : null;
-  const issue = !!row.condition && row.condition !== "ok";
+  const issue = isIssueCondition(row.condition);
+  const na = row.condition === "na";
   const mi = row.moveIn;
   // THE CHECK IS THE "I HAVE LOOKED AT THIS" MARK. Empty until something is
   // said about the item, a green tick for Good, and the issue's own mark when
@@ -38545,7 +38546,10 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave, photos = [
   // rooms; tapping a tick takes it off. Over an issue it is a mark rather
   // than a button, because a press there would have to guess what to do with
   // the issue.
+  // Doesn't apply is a dash: answered, nothing wrong, nothing there. A tap
+  // on the dash takes it off, the same as a tap on a tick.
   const mark = row.condition === "ok" ? <Check size={15} />
+    : na ? <Minus size={15} />
     : issue ? (["nr", "rp"].includes(row.condition) ? <XCircle size={15} /> : <AlertTriangle size={14} />)
     : null;
   return (
@@ -38555,8 +38559,8 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave, photos = [
           <span className={`insp-cl-check ${row.condition ? "on" : ""}`} aria-hidden="true">{mark}</span>
         ) : (
           <button type="button" className={`insp-cl-check ${row.condition ? "on" : ""}`} disabled={busy}
-            aria-pressed={row.condition === "ok"} aria-label={`${row.label}: good`}
-            onClick={() => onSave({ condition: row.condition === "ok" ? null : "ok" })}>{mark}</button>
+            aria-pressed={row.condition === "ok"} aria-label={na ? `${row.label}: doesn't apply, clear it` : `${row.label}: good`}
+            onClick={() => onSave({ condition: row.condition === "ok" || na ? null : "ok" })}>{mark}</button>
         )}
         <span className="insp-cl-item">{row.label}</span>
         {changed && <span className="insp-cl-tag">Changed</span>}
@@ -38602,7 +38606,7 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave, photos = [
               placeholder={moveOut ? "Final comment" : "What is wrong with it"} aria-label={`${row.label} comment`}
               onChange={(e) => setNote(e.target.value)}
               onBlur={() => note.trim() !== (row.note || "") && onSave({ note })} />
-            {moveOut && (
+            {moveOut && !na && (
               <label className={`insp-cl-costbox ${costErr ? "bad" : ""}`}>
                 <span>$</span>
                 <input inputMode="decimal" value={cost} disabled={busy} placeholder="Cost"
@@ -38635,7 +38639,11 @@ function RoomStatusSummary({ room }) {
   const st = ROOM_STATUSES[room.status] || ROOM_STATUSES.unchecked;
   const why = flagged.length
     ? `From the checklist: ${flagged.slice(0, 4).map((i) => `${itemLabel(i)} (${ITEM_CONDITIONS[i.condition]?.label.toLowerCase()})`).join(", ")}${flagged.length > 4 ? `, and ${flagged.length - 4} more` : ""}.`
-    : room.status === "ok" && marked ? "Every item is checked and good."
+    : room.status === "ok" && marked
+      ? (() => {
+          const n = rows.filter((i) => i.condition === "na").length;
+          return n ? `Every item is checked: ${rows.length - n} good, ${n} ${n === 1 ? "doesn't" : "don't"} apply.` : "Every item is checked and good.";
+        })()
     : !marked && room.status !== "unchecked" ? "Set before the checklist was used. Checking an item replaces it."
     : `${t.total - t.answered} of ${t.total} item${t.total === 1 ? "" : "s"} still to check.`;
   return (
@@ -44903,6 +44911,12 @@ span.insp-cl-check{cursor:default}
 .insp-cl-row.c-ok .insp-cl-check{background:var(--brand);border-color:var(--brand)}
 .insp-cl-row.is-issue .insp-cl-check{background:#f5c518;border-color:#e0ad00;color:#3a2a00}
 .insp-cl-row.c-nr .insp-cl-check,.insp-cl-row.c-rp .insp-cl-check{background:#c62f2a;border-color:#c62f2a;color:#fff}
+/* Doesn't apply: answered and grayed, so the eye skips it. A dash in a gray
+   ring, the item name struck light, no tint, never a problem color. */
+.insp-cl-row.c-na .insp-cl-check{background:var(--ink-soft);border-color:var(--ink-soft);color:var(--card)}
+.insp-cl-row.c-na .insp-cl-item{color:var(--ink-soft);font-weight:500;text-decoration:line-through;
+  text-decoration-color:color-mix(in srgb,var(--ink-soft) 55%,transparent)}
+.insp-cl-row.c-na .insp-cl-sel{color:var(--ink-soft)}
 .insp-cl-item{flex:1;min-width:0;font-size:14px;font-weight:600;color:var(--ink)}
 .insp-cl-tag{flex:none;font-size:11px;font-weight:800;color:var(--ink);border-radius:999px;padding:2px 7px;
   background:color-mix(in srgb,var(--amber) 22%,transparent)}

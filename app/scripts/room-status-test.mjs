@@ -22,7 +22,8 @@
 
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
-import { derivedRoomStatus } from "../shared/roomchecklist.js";
+import { derivedRoomStatus, flaggedItems, checklistTally, itemChanged, ITEM_CONDITION_ORDER } from "../shared/roomchecklist.js";
+import { runCheck } from "./lib/check-sql.mjs";
 import { INSPECTION_KINDS, suggestedAccessForInspection, inspectionJobTitle } from "../shared/inspection.js";
 import { inspectKindFor } from "../shared/inspectingest.js";
 
@@ -55,6 +56,15 @@ console.log("\n-- the rule --");
     && derivedRoomStatus([row("nsc")]) === "follow_up");
   ck("every item good is OK", derivedRoomStatus([row("ok"), row("ok")]) === "ok");
   ck("part-way and all good so far is still not checked", derivedRoomStatus([row("ok"), row(null)]) === "unchecked");
+  ck("doesn't apply is offered last", ITEM_CONDITION_ORDER.at(-1) === "na");
+  ck("doesn't apply counts as checked: good plus not-there is OK", derivedRoomStatus([row("ok"), row("na")]) === "ok");
+  ck("doesn't apply alone never flags a room", derivedRoomStatus([row("na"), row(null)]) === "unchecked"
+    && derivedRoomStatus([row("na"), row("na")]) === "ok");
+  ck("doesn't apply beside an issue leaves the issue deciding", derivedRoomStatus([row("na"), row("np")]) === "follow_up");
+  ck("doesn't apply is not a flagged item", flaggedItems([row("na"), row("nr")]).length === 1);
+  ck("doesn't apply is answered and not flagged in the tally",
+    (() => { const t = checklistTally([{ checklist: [row("na"), row(null)] }]); return t.answered === 1 && t.flagged === 0; })());
+  ck("doesn't apply on a move-out is not a change", itemChanged({ condition: "na", moveIn: { condition: "ok" } }) === false);
   ck("a checkup is a third kind with its own tenant label",
     INSPECTION_KINDS.checkup?.label === "Checkup" && INSPECTION_KINDS.checkup.who === "Tenant");
   ck("a checkup suggests the tenant lets the crew in", suggestedAccessForInspection("checkup") === "tenant");
@@ -171,6 +181,35 @@ try {
   const [s5] = await json(await call(env, `/api/inspections/${mi.id}/job`, { method: "POST", body: { trades: ["plumbing"] } }));
   const mrow = db.prepare(`SELECT title FROM jobs WHERE title LIKE 'Move-in%'`).get();
   ck("a move-in raises a job that says so", (s5 === 201 || s5 === 200) && /^Move-in inspection work — unit 7/.test(mrow?.title || ""), mrow?.title);
+} catch (e) {
+  fail++; console.log("FAIL  threw --", e?.stack || e);
+}
+
+console.log("\n-- doesn't apply --");
+try {
+  const { db, env } = seed();
+  const [, mo] = await json(await call(env, "/api/inspections", { method: "POST",
+    body: { kind: "move_out", propertyId: "p_press", unit: "9" } }));
+  const [, rr] = await json(await call(env, `/api/inspections/${mo.id}/rooms`, { method: "POST", body: { name: "Bedroom 1" } }));
+  const bed = byName(rr.rooms, "Bedroom 1");
+  let [s, r] = await mark(env, mo.id, bed, "walls", "na");
+  ck("it is taken", s === 200 && byName(r.rooms, "Bedroom 1").checklist.find((i) => i.key === "walls")?.condition === "na", s);
+  ck("on its own it does not flag the room", byName(r.rooms, "Bedroom 1").status === "unchecked", byName(r.rooms, "Bedroom 1").status);
+  [s, r] = await json(await call(env, `/api/inspections/${mo.id}/rooms/${bed.id}/items/walls`, { method: "PUT", body: { costCents: 5000 } }));
+  ck("a cost on it is refused", s === 400 && r.error === "cost_not_applicable", `${s} ${r.error}`);
+  await mark(env, mo.id, bed, "floor", "nr");
+  await call(env, `/api/inspections/${mo.id}/rooms/${bed.id}/items/floor`, { method: "PUT", body: { costCents: 12000 } });
+  [s, r] = await mark(env, mo.id, bed, "floor", "na");
+  const floor = byName(r.rooms, "Bedroom 1").checklist.find((i) => i.key === "floor");
+  ck("marking an item that had a cost doesn't apply takes the cost off", floor?.condition === "na" && floor?.costCents == null,
+    JSON.stringify(floor));
+  [, r] = await json(await call(env, `/api/inspections/${mo.id}/rooms/${bed.id}/items/all-good`, { method: "POST" }));
+  const room = byName(r.rooms, "Bedroom 1");
+  ck("mark the rest good leaves it alone", room.checklist.find((i) => i.key === "walls")?.condition === "na");
+  ck("good plus doesn't apply makes the room OK", room.status === "ok", room.status);
+  ck("the invariant accepts it", Number(runCheck(db).m096_inv_bad_item) === 0, runCheck(db).m096_inv_bad_item);
+  db.prepare(`UPDATE inspection_items SET cost_cents = 100 WHERE item_key = 'walls'`).run();
+  ck("the invariant counts one carrying a cost", Number(runCheck(db).m096_inv_bad_item) === 1, runCheck(db).m096_inv_bad_item);
 } catch (e) {
   fail++; console.log("FAIL  threw --", e?.stack || e);
 }

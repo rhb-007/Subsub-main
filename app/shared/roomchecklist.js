@@ -23,8 +23,18 @@ export const ITEM_CONDITIONS = {
   nsp: { code: "NSP", label: "Needs spot painting" },
   nr:  { code: "NR",  label: "Needs repair" },
   rp:  { code: "RP",  label: "Needs replacing" },
+  // NOT IN THIS UNIT: no staircase in this entry, no dishwasher in this
+  // kitchen. The list is the industry form's and stays one list, so an item
+  // that is not there is answered rather than removed -- a removed row is
+  // indistinguishable from one somebody forgot, on the document a deposit
+  // argument is run from. It is an answer (it counts as checked) and never an
+  // issue: it cannot flag the room, take a cost, or reach a job's scope.
+  na:  { code: "N/A", label: "Doesn't apply" },
 };
-export const ITEM_CONDITION_ORDER = ["ok", "nc", "nsc", "np", "nsp", "nr", "rp"];
+export const ITEM_CONDITION_ORDER = ["ok", "nc", "nsc", "np", "nsp", "nr", "rp", "na"];
+// The answers that say nothing is wrong. Everything else is an issue.
+export const NO_ISSUE_CONDITIONS = ["ok", "na"];
+export const isIssueCondition = (c) => !!c && !NO_ISSUE_CONDITIONS.includes(c);
 export const isItemCondition = (c) => Object.prototype.hasOwnProperty.call(ITEM_CONDITIONS, String(c));
 export const DEFAULT_CONDITION_TEXT =
   "Unless otherwise noted, everything in this room is clean, in good working order and undamaged.";
@@ -148,7 +158,7 @@ export function checklistRows(roomName, stored = [], moveIn = null) {
 // screen says the move-in was blank rather than pretending it said "Good".
 export function itemChanged(row) {
   const out = row?.condition;
-  if (!out || out === "ok") return false;
+  if (!isIssueCondition(out)) return false;
   const was = row?.moveIn?.condition || null;
   return out !== was;
 }
@@ -159,7 +169,7 @@ export function checklistTally(rooms = []) {
     for (const i of r?.checklist || []) {
       total++;
       if (i.condition) answered++;
-      if (i.condition && i.condition !== "ok") flagged++;
+      if (isIssueCondition(i.condition)) flagged++;
       if (itemChanged(i)) changed++;
       if (Number.isFinite(i.costCents)) costCents += i.costCents;
     }
@@ -183,7 +193,7 @@ export function parseCost(s) {
 //
 //   Needs repair or Needs replacing on any item    -> fail (Damage)
 //   any other issue (cleaning, painting)          -> follow_up (Needs work)
-//   every item marked Good                        -> ok
+//   every item marked Good (or Doesn't apply)     -> ok
 //   anything else                                 -> unchecked
 //
 // An issue found is an answer, so a room with one Damage item is flagged even
@@ -201,13 +211,13 @@ export function derivedRoomStatus(rows = []) {
   const marked = list.filter((r) => r.condition);
   if (!marked.length) return null;
   if (marked.some((r) => DAMAGE_CONDITIONS.includes(r.condition))) return "fail";
-  if (marked.some((r) => r.condition !== "ok")) return "follow_up";
+  if (marked.some((r) => isIssueCondition(r.condition))) return "follow_up";
   return marked.length === list.length ? "ok" : "unchecked";
 }
 
 // The items that put a room in that state, named, for the summary under it
 // and for the job's scope.
 export const flaggedItems = (rows = []) =>
-  (rows || []).filter((r) => r && r.condition && r.condition !== "ok");
+  (rows || []).filter((r) => r && isIssueCondition(r.condition));
 
 export const itemLabel = (row) => (row?.group ? `${row.group} ${String(row.label || "").toLowerCase()}` : String(row?.label || ""));

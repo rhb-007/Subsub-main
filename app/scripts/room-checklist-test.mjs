@@ -44,7 +44,7 @@ console.log("\n-- the lists --");
     checklistFor("Sunroom").map((i) => i.label).slice(0, 3).join() === "Floor,Walls,Ceiling");
   ck("keys are unique within every list",
     Object.values(CHECKLISTS).every((l) => new Set(l.map((i) => i.key)).size === l.length));
-  ck("seven conditions, good first", ITEM_CONDITION_ORDER.length === 7 && ITEM_CONDITION_ORDER[0] === "ok");
+  ck("eight conditions, good first and doesn't apply last", ITEM_CONDITION_ORDER.length === 8 && ITEM_CONDITION_ORDER[0] === "ok" && ITEM_CONDITION_ORDER[7] === "na");
 
   const rows = checklistRows("Bedroom 1", [{ key: "floor", condition: "nr" }, { key: "old-thing", label: "Old thing", condition: "nc" }],
     { floor: { condition: "nr" } });
