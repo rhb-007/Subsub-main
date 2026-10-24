@@ -30285,15 +30285,13 @@ function DocPack({ token }) {
 
   return (
     <div className="pack-page">
+      {/* SubSub's mark sits OUTSIDE the card: the card is the subcontractor's
+          pack, and the page around it is what carried it. */}
+      <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
+        aria-label="SubSub, visit subsub.work">
+        <SubSubLogo height={22} />
+      </a>
       <div className="pack-card">
-        {/* WHOSE PAGE, WHO IT IS ABOUT, AND WHAT IT IS FOR. Somebody opening
-            this from an email has never heard of SubSub, so the page says
-            what a compliance pack is before it lists one. */}
-        <a className="pp-powered pack-powered" href="https://subsub.work/" target="_blank" rel="noopener"
-          aria-label="Powered by SubSub, visit subsub.work">
-          <span>Powered by</span>
-          <SubSubLogo height={15} mono />
-        </a>
         <span className="pack-kicker">Subcontractor compliance pack</span>
         <h1>{p.company}</h1>
         {(p.contact || p.where) && (
@@ -30304,12 +30302,7 @@ function DocPack({ token }) {
             {p.trades.map((t) => <span key={t.id} className="pack-trade">{t.label}</span>)}
           </div>
         )}
-        <p className="pack-what">
-          {p.company} is a subcontractor sharing the documents a general contractor or
-          property manager asks for before work starts: proof of insurance, bonding and
-          their signed agreement. Each one opens from here, and this page shows the
-          current copy whenever they renew.
-        </p>
+        <p className="pack-what">Their insurance, bond and agreement, always the current copy.</p>
         {p.sentTo && <p className="pack-to">Sent to {p.sentTo}</p>}
         {p.note && <p className="pack-note">&ldquo;{p.note}&rdquo;</p>}
 
@@ -30325,15 +30318,23 @@ function DocPack({ token }) {
           </div>
         )}
 
-        {/* The one thing on here that an emailed PDF genuinely cannot carry. */}
-        {p.license && !p.badge?.verified && (
-          <div className={`pack-lic ${p.licenseVerified ? "ok" : ""}`}>
-            {p.licenseVerified ? <ShieldCheck size={15} /> : <FileText size={15} />}
-            <span>
-              License {p.license}
-              {p.licenseVerified
-                ? ` · verified against the state registry${p.licenseCheckedAt ? ` on ${packDay(p.licenseCheckedAt)}` : ""}`
-                : ""}
+        {/* THE LICENSE, GREEN OR RED, AT A GLANCE. Verified is a green tick
+            with the number and the day SubSub checked it; anything else is a
+            red cross saying so. A state that licenses nobody earns the seal
+            with no number, so that one case draws no box at all. */}
+        {(p.license || !p.badge?.verified) && (
+          <div className={`pack-lic ${p.license && p.licenseVerified ? "ok" : "bad"}`}>
+            {p.license && p.licenseVerified ? <CheckCircle2 size={22} /> : <XCircle size={22} />}
+            <span className="pack-lic-text">
+              <b>{p.license && p.licenseVerified ? "License verified"
+                : p.license ? "License not verified" : "No license number on file"}</b>
+              <span>
+                {p.license
+                  ? (p.licenseVerified
+                    ? `#${p.license} · checked with the state${p.licenseCheckedAt ? ` on ${packDay(p.licenseCheckedAt)}` : ""}`
+                    : `#${p.license} · SubSub has not checked it with the state`)
+                  : "Ask them for it before work starts"}
+              </span>
             </span>
           </div>
         )}
@@ -30380,25 +30381,29 @@ function DocPack({ token }) {
           </p>
         )}
 
-        {/* The hook, and the honest version of it: an attachment cannot do
-            this, and that is the whole reason they sent it this way. */}
-        <div className="pack-cta">
-          <strong>This page stays current.</strong>
-          <span>
-            When {p.company} renews, this shows the new certificate rather than the
-            one that lapsed. Create a free account to keep it and be told before
-            anything expires.
-          </span>
-          <div className="pack-cta-acts">
-            <a className="btn-solid small" href="/">Create a free account</a>
-            {p.passportUrl && (
-              <a className="btn-ghost small" href={p.passportUrl} target="_blank" rel="noopener">
-                See their SubSub Passport
-              </a>
-            )}
-          </div>
-        </div>
+        {p.passportUrl && (
+          <a className="pack-passport" href={p.passportUrl} target="_blank" rel="noopener">
+            See their SubSub Passport
+          </a>
+        )}
       </div>
+
+      {/* THE AD. Whoever reads this hires subcontractors: a general
+          contractor or a property manager who asked for paperwork. So it
+          speaks to them, in large type, and goes to the plans. */}
+      <section className="pack-ad" aria-label="SubSub for general contractors and property managers">
+        <span className="pack-ad-kicker">For general contractors and property managers</span>
+        <h2>Keep every subcontractor organized in one place.</h2>
+        <ul>
+          <li><CheckCircle2 size={16} /> Every certificate, bond and license on one roster</li>
+          <li><CheckCircle2 size={16} /> Told before anything expires, not after</li>
+          <li><CheckCircle2 size={16} /> Send work orders and schedule the job from the same screen</li>
+        </ul>
+        <a className="pack-ad-btn" href="https://subsub.work/pricing" target="_blank" rel="noopener">
+          Create your free account
+        </a>
+        <span className="pack-ad-fine">Free to start. No card needed.</span>
+      </section>
       {/* The pull. Somebody reading one certificate very likely holds two or
           three more links from other subcontractors, and the value of having
           them together grows with each one -- which is the only thing here
@@ -30413,7 +30418,7 @@ function DocPack({ token }) {
           to live -- an opt-out somebody has to create an account for is not an
           opt-out, and there is no other page they are ever on. */}
       <PackStop token={token} company={p.company} />
-      {/* The official close, the same lockup the header carries. */}
+      {/* The official close: Powered by SubSub. */}
       <a className="pack-sign" href="https://subsub.work/" target="_blank" rel="noopener"
         aria-label="Powered by SubSub, visit subsub.work">
         <span>Powered by</span>
@@ -42794,13 +42799,17 @@ body{background:var(--paper)}
   padding:28px;max-width:620px;width:100%;box-shadow:var(--shadow)}
 .pack-kicker{font-size:10.5px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
   color:var(--ink-soft)}
-.pack-card h1{margin:6px 0 2px;font-size:26px;letter-spacing:-.02em}
+.pack-card h1{margin:8px 0 4px;font-size:36px;font-weight:800;line-height:1.1;letter-spacing:-.025em}
 .pack-lede{margin:0;font-size:13px;color:var(--ink-soft)}
 .pack-note{margin:10px 0 0;font-size:13.5px;font-style:italic}
-.pack-lic{display:flex;align-items:center;gap:7px;margin-top:14px;padding:9px 11px;
-  border-radius:9px;background:var(--paper);border:1px solid var(--line);
-  font-size:12.5px;color:var(--ink)}
-.pack-lic.ok{border-color:var(--ink-soft)}
+.pack-lic{display:flex;align-items:center;gap:12px;margin-top:16px;padding:13px 15px;
+  border-radius:12px;border:2px solid;font-size:13px}
+.pack-lic.ok{background:#eaf6ee;border-color:#2e8b57;color:#1d6a40}
+.pack-lic.bad{background:#fdeeec;border-color:#c62f2a;color:#a3241f}
+.pack-lic svg{flex:none}
+.pack-lic-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.pack-lic-text b{font-size:16px;font-weight:800}
+.pack-lic-text span{color:var(--ink);overflow-wrap:anywhere}
 .pack-docs{margin-top:16px;display:flex;flex-direction:column}
 .pack-doc{display:flex;gap:12px;align-items:center;justify-content:space-between;
   padding:13px 0;border-top:1px solid var(--line)}
@@ -42814,23 +42823,30 @@ body{background:var(--paper)}
   border-radius:8px}
 .pack-gated{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;
   color:var(--ink-soft);white-space:nowrap}
-.pack-cta{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);
-  display:flex;flex-direction:column;gap:6px;align-items:flex-start}
-.pack-cta strong{font-size:14px}
-.pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
-.pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
-.pack-powered{margin-bottom:14px}
+.pack-brand{display:inline-flex;color:#111;text-decoration:none}
+.pack-passport{display:inline-block;margin-top:16px;font-size:13px;font-weight:700;
+  color:var(--brand-dk)}
+.pack-ad{max-width:620px;width:100%;box-sizing:border-box;background:#123d2c;color:#fff;
+  border-radius:16px;padding:30px 28px;display:flex;flex-direction:column;align-items:flex-start;gap:12px}
+.pack-ad-kicker{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#E39B32}
+.pack-ad h2{margin:0;font-size:30px;font-weight:800;line-height:1.15;letter-spacing:-.02em;color:#fff}
+.pack-ad ul{list-style:none;margin:4px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.pack-ad li{display:flex;gap:9px;align-items:flex-start;font-size:15px;line-height:1.4;color:#e8f2ec}
+.pack-ad li svg{flex:none;margin-top:2px;color:#E39B32}
+.pack-ad-btn{margin-top:8px;display:inline-flex;align-items:center;justify-content:center;
+  min-height:50px;padding:0 26px;border-radius:12px;background:#E39B32;color:#111;
+  font-size:17px;font-weight:800;text-decoration:none}
+.pack-ad-btn:hover{background:#f0ad48}
+.pack-ad-fine{font-size:12.5px;color:#b9d2c4}
 .pack-trades{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .pack-trade{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;
   background:#eef7f1;color:var(--brand-dk);border:1px solid #cfe6d8}
-.pack-what{margin:12px 0 0;font-size:13.5px;line-height:1.6;color:var(--ink)}
+.pack-what{margin:12px 0 0;font-size:14px;line-height:1.5;color:var(--ink-soft)}
 .pack-to{margin:8px 0 0;font-size:12.5px;color:var(--ink-soft)}
 .pack-badge{margin-top:16px}
 .pack-file{display:block;font-size:11.5px;color:var(--ink-soft);margin-top:2px;
   overflow-wrap:anywhere}
-.pack-cta-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
-.pack-cta-acts a{margin-top:0}
 .pack-sign{display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;
   font-weight:600;color:#111;text-decoration:none}
 .pack-sign .ss-logo{color:#111}
@@ -43353,7 +43369,10 @@ body{background:var(--paper)}
 .pack-stop.done{color:var(--brand-dk)}
 @media (max-width:640px){
   .pack-card{padding:20px}
-  .pack-card h1{font-size:22px}
+  .pack-card h1{font-size:30px}
+  .pack-ad{padding:24px 20px}
+  .pack-ad h2{font-size:25px}
+  .pack-ad-btn{width:100%}
   .pack-doc{flex-direction:column;align-items:flex-start;gap:8px}
 }
 /* The way in to who is asking. Reads as the heading it replaces, with just

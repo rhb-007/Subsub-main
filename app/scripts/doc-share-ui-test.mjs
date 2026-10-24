@@ -186,7 +186,18 @@ try {
         lede: el.querySelector(".pack-lede")?.innerText || "",
         trades: [...el.querySelectorAll(".pack-trade")].map((x) => x.innerText),
         seal: el.querySelector(".pack-badge")?.innerText.replace(/\s+/g, " ").trim() || "",
-        headLogo: !!el.querySelector(".pack-powered .ss-logo"),
+        headLogo: !!document.querySelector(".pack-page > .pack-brand .ss-logo"),
+        logoInCard: !!el.querySelector(".ss-logo"),
+        poweredInCard: /Powered by/i.test(el.innerText),
+        h1Size: parseFloat(getComputedStyle(el.querySelector("h1")).fontSize),
+        h1Weight: Number(getComputedStyle(el.querySelector("h1")).fontWeight),
+        what: el.querySelector(".pack-what")?.innerText || "",
+        lic: (() => { const l = el.querySelector(".pack-lic"); return l ? { cls: l.className,
+          text: l.innerText.replace(/\s+/g, " "), border: getComputedStyle(l).borderColor } : null; })(),
+        ad: (() => { const a = document.querySelector(".pack-page > .pack-ad"); return a ? {
+          head: a.querySelector("h2")?.innerText || "", headSize: parseFloat(getComputedStyle(a.querySelector("h2")).fontSize),
+          href: a.querySelector(".pack-ad-btn")?.getAttribute("href") || "",
+          btn: a.querySelector(".pack-ad-btn")?.innerText || "" } : null; })(),
         footLogo: !!document.querySelector(".pack-page > .pack-sign .ss-logo"),
         footText: document.querySelector(".pack-page > .pack-sign")?.innerText || "" };
     });
@@ -210,14 +221,19 @@ try {
     t.ck("and the bond opens the bond", !!bond.link && /\/file\/d_bond$/.test(bond.link), String(bond.link));
 
     // WHAT THE PAGE IS, FOR SOMEBODY WHO HAS NEVER HEARD OF SUBSUB.
-    t.ck("it says it is a subcontractor's compliance pack", /Subcontractor compliance pack/i.test(pack.text)
-      && /is a subcontractor sharing the documents/.test(pack.text), pack.text.slice(0, 400));
+    t.ck("it says it is a subcontractor's compliance pack", /Subcontractor compliance pack/i.test(pack.text), pack.text.slice(0, 400));
+    t.ck("the explainer is one short line", pack.what.split(/\s+/).length <= 12 && /insurance/i.test(pack.what), pack.what);
+    t.ck("the name is a big bold headline", pack.h1Size >= 30 && pack.h1Weight >= 700, `${pack.h1Size} ${pack.h1Weight}`);
+    t.ck("a verified license is green with a check", pack.lic && /\bok\b/.test(pack.lic.cls)
+      && /License verified/.test(pack.lic.text) && /RIDGERR891QZ/.test(pack.lic.text)
+      && pack.lic.border === "rgb(46, 139, 87)", JSON.stringify(pack.lic));
     t.ck("with the trades they do", pack.trades.join(",") === "Roofing,Gutters", JSON.stringify(pack.trades));
     t.ck("the contact line has no empty separator", !/·\s*·/.test(pack.lede) && !/·\s*$/.test(pack.lede.trim()), pack.lede);
     t.ck("the SubSub Verified seal shows when earned, with what it rests on",
       /SubSub Verified/.test(pack.seal) && /registration active/.test(pack.seal), pack.seal);
     t.ck("and links to their Passport", pack.links.includes(PACK.passportUrl), JSON.stringify(pack.links));
-    t.ck("SubSub's own logo is at the top", pack.headLogo);
+    t.ck("SubSub's own logo is at the top, outside the card", pack.headLogo);
+    t.ck("and nothing in the card says Powered by", !pack.poweredInCard && !pack.logoInCard, pack.text.slice(0, 200));
     t.ck("and closes the page, Powered by SubSub", pack.footLogo && /Powered by/.test(pack.footText), pack.footText);
 
     // A document with no shelf life says so rather than looking unknown.
@@ -233,9 +249,10 @@ try {
       !pack.links.some((h) => /d_w9/.test(h || "")), JSON.stringify(pack.links));
 
     // The hook.
-    t.ck("it says the page stays current", /This page stays current/i.test(pack.text), pack.text);
-    t.ck("and offers an account without demanding one",
-      /Create a free account/i.test(pack.text), pack.text);
+    t.ck("under the card, an ad speaks to the people who hire", pack.ad
+      && /organized in one place/i.test(pack.ad.head) && pack.ad.headSize >= 24, JSON.stringify(pack.ad));
+    t.ck("and its button goes to the plans to create an account", pack.ad
+      && pack.ad.href === "https://subsub.work/pricing" && /Create your free account/i.test(pack.ad.btn), JSON.stringify(pack.ad));
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -243,7 +260,7 @@ try {
   console.log("\n-- a pack with no seal earned and no contact or town --");
   {
     const keep = PACK;
-    PACK = { ...PACK, contact: null, where: null, passportUrl: null, trades: [],
+    PACK = { ...PACK, contact: null, where: null, passportUrl: null, trades: [], licenseVerified: false,
       badge: { verified: false, name: null, line: "License not verified by SubSub · Insurance on file, no expiry date given" } };
     const ctx = await browser.createBrowserContext();
     const page = await ctx.newPage();
@@ -252,12 +269,16 @@ try {
     const v = await page.evaluate(() => {
       const el = document.querySelector(".pack-card");
       return el ? { seal: !!el.querySelector(".pack-badge"), lede: !!el.querySelector(".pack-lede"),
-        lic: !!el.querySelector(".pack-lic"), name: el.querySelector("h1")?.innerText || "",
+        lic: !!el.querySelector(".pack-lic"), licBad: !!el.querySelector(".pack-lic.bad"),
+        licBorder: el.querySelector(".pack-lic") ? getComputedStyle(el.querySelector(".pack-lic")).borderColor : "",
+        licText: el.querySelector(".pack-lic")?.innerText || "", name: el.querySelector("h1")?.innerText || "",
         pass: /Passport/.test(el.innerText) } : null;
     });
     t.ck("the page still draws", !!v && v.name === "Ridge Roofing", JSON.stringify(v));
     t.ck("no seal is drawn when it is not earned", v && !v.seal, JSON.stringify(v));
     t.ck("the license line stands in for it", v && v.lic, JSON.stringify(v));
+    t.ck("an unverified license is red with a cross", v && v.licBad && v.licBorder === "rgb(198, 47, 42)"
+      && /License not verified/.test(v.licText), JSON.stringify(v));
     t.ck("and no empty contact line", v && !v.lede, JSON.stringify(v));
     t.ck("and no Passport link when none is published", v && !v.pass, JSON.stringify(v));
     PACK = keep;

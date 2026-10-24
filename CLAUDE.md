@@ -15156,6 +15156,33 @@ refactor.
   likeliest cause is the data: the bond row pointing at the same file, or the
   same PDF uploaded twice. The file names on the page now show which.
 
+- **THE PACK PAGE: SUBSUB'S MARK OUTSIDE THE CARD, THE NAME AS A HEADLINE,
+  THE LICENSE GREEN OR RED, AND AN AD UNDER IT FOR WHOEVER HIRES.** Asked for
+  in five points with the signed-out pack on screen.
+  - **No *Powered by* inside the card.** The card is the subcontractor's
+    pack, so SubSub's logo (`.pack-brand`) sits above it on the page, small
+    and in color. The foot keeps *Powered by SubSub*.
+  - **The name is 36px and 800 weight** (30px on a phone).
+  - **The explainer went from 40 words to 9**: *Their insurance, bond and
+    agreement, always the current copy.*
+  - **The license is a box that reads at a glance**: green border and tint
+    with a check and *License verified*, the number and the day checked; red
+    with a cross and *License not verified* or *No license number on file*.
+    It is drawn beside the SubSub Verified seal now, not instead of it. The
+    one case with no box is a seal earned in a state that licenses nobody.
+    Red is what was asked for. It tells a GC the number has not been checked,
+    not that the license is bad, and the second line says so.
+  - **An ad under the card, for the people reading it.** Whoever opens a pack
+    hires subcontractors, so a forest band headed *Keep every subcontractor
+    organized in one place*, three lines on what they get, and **Create your
+    free account** to `subsub.work/pricing`. The old button went to `/`,
+    which on SubSub's own host is the sign-in form. The Passport link moved
+    into the card.
+
+  `test:docshareui` measures the headline, the license colors both ways, that
+  nothing in the card says Powered by, and the ad's headline, size and link.
+  Putting the old page back fails eight assertions, one per change.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
