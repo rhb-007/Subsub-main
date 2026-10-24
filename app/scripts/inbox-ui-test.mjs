@@ -132,7 +132,7 @@ try {
     });
     t.ck("the pack page offers it", !!ask, String(ask));
     t.ck("phrased as their problem, not ours",
-      /sent paperwork by more than one contractor/i.test(ask.text), ask.text);
+      /sent compliance packs by more than one subcontractor/i.test(ask.text), ask.text);
     t.ck("and says it will be emailed",
       /email you the link/i.test(ask.text), ask.text);
 
@@ -211,7 +211,9 @@ try {
       const ad = document.querySelector(".pack-page > .pack-ad.inbox-claim");
       const h1 = card?.querySelector("h1");
       return { mid: r ? (r.left + r.right) / 2 : 0, vw: innerWidth,
-        logoOut: !!document.querySelector(".pack-page > .pack-brand .ss-logo"),
+        logoOut: !!document.querySelector(".pack-page > .pack-top .pack-brand .ss-logo"),
+        signin: document.querySelector(".pack-top .pack-signin")?.innerText.trim() || "",
+        paperwork: /paperwork/i.test(document.body.innerText),
         h1Size: h1 ? parseFloat(getComputedStyle(h1).fontSize) : 0,
         adOut: !!ad && !card.contains(ad), adBg: ad ? getComputedStyle(ad).backgroundColor : "",
         adHead: ad?.querySelector("h2")?.innerText || "",
@@ -219,6 +221,8 @@ try {
     });
     t.ck("the card is centered on the page", Math.abs(look.mid - look.vw / 2) < 4, JSON.stringify(look));
     t.ck("SubSub's logo sits above it, outside the card", look.logoOut, JSON.stringify(look));
+    t.ck("with a way into an account beside it", /^(Sign in|Go to )/.test(look.signin), look.signin);
+    t.ck("and the page calls them compliance packs, not paperwork", !look.paperwork);
     t.ck("the heading is a big headline", look.h1Size >= 30, JSON.stringify(look));
     t.ck("the claim is the green ad band under the card", look.adOut
       && look.adBg === "rgb(18, 61, 44)" && /organized in one place/.test(look.adHead), JSON.stringify(look));

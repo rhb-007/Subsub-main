@@ -15255,6 +15255,43 @@ refactor.
   suites show is the shape: one call per photo, nothing left blank without a
   reason.
 
+- **THE PACK PAGE OFFERS SIGN IN, AND EVERY SCREEN AND EMAIL A PACK
+  RECIPIENT READS CALLS IT A "SUBCONTRACTOR COMPLIANCE PACK".** Two asks:
+  *"should we have a sign in to SubSub link on this page in case they are just
+  logged out?"* and *"use the same terminology across the site ... instead of
+  documents ... call it subcontractor compliance pack"*.
+
+  **Yes to Sign in, on the pack page and the "Sent to you" page.** A pack goes
+  to whatever address the subcontractor types. The sender cannot know whether
+  that person has an account, and the email opens in whatever browser is handy.
+  So the top line (`PackTop`) shows SubSub's mark in the middle and, on the
+  right:
+  - **Sign in** when signed out. It links to `/`, which on this host is the
+    sign-in form.
+  - **Go to <account>** when signed in. It also links to `/`, which is the
+    account.
+
+  The pack itself is the same for both. It sits above the logged-in gate, as it
+  always has.
+
+  **"Documents" was never our word.** It was the share's `to_name`, which is
+  whatever the subcontractor typed in the "who is it for" box. It printed as
+  *Sent to Documents* on the page and as *Hi Documents* in emails, and read as
+  a label. So:
+  - The page no longer prints the recipient's name.
+  - The pack email, the renewal email and the inbox email open with "Hello,".
+  - "Paperwork" is gone from everything a recipient reads:
+    - the email-me box (*Been sent compliance packs by more than one
+      subcontractor?*);
+    - the stop-updates line (*when a compliance pack renews*);
+    - the inbox page and its claim band;
+    - the subjects (*Ridge Roofing sent you their subcontractor compliance
+      pack*).
+
+  `test:docshareui` (59) and `test:inboxui` (72) pin both. Three mutations
+  fire: Sign in removed (2 assertions, signed in and signed out) and the old
+  box wording put back (2).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

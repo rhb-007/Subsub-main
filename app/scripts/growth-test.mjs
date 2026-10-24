@@ -88,7 +88,7 @@ console.log("\n-- a renewal reaches the people who were already sent it --");
     inbox[0]?.subject);
   ck("and the new date", inbox.some((m) => m.text.includes(iso(360))));
   ck("it says why they are hearing from us",
-    /sent you\s+their paperwork through SubSub/.test(inbox[0]?.text || ""),
+    /sent you\s+their subcontractor compliance pack through SubSub/.test(inbox[0]?.text || ""),
     (inbox[0]?.text || "").slice(0, 200));
   ck("and how to stop", /stop these updates/.test(inbox[0]?.text || ""));
 

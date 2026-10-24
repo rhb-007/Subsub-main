@@ -629,14 +629,16 @@ ${NOREPLY}`;
 //
 // The hook is the expiry. Anybody can attach a PDF -- what an attachment can
 // never do is tell you in eight months that the cover it showed has lapsed.
-export function docPackEmail({ company, contact, toName, note, link, days, kinds = [] }) {
+export function docPackEmail({ company, contact, note, link, days, kinds = [] }) {
   const who = company || "A subcontractor";
   const what = kinds.length
     ? kinds.map((k) => `  - ${DOC_LABELS[k] || k}`).join("\n")
-    : "  - Their current paperwork";
-  const text = `Hi ${toName || "there"},
+    : "  - Their current compliance documents";
+  // "Hello", not the to_name: that is whatever was typed in the "who is it
+  // for" box, which is as often "Documents" as a person.
+  const text = `Hello,
 
-${contact ? `${contact} at ${who}` : who} sent you their compliance paperwork${note ? `:\n\n  "${note}"` : "."}
+${contact ? `${contact} at ${who}` : who} sent you their subcontractor compliance pack${note ? `:\n\n  "${note}"` : "."}
 
 ${what}
 
@@ -649,7 +651,7 @@ Each document shows its carrier, coverage and expiry, and the page updates when 
 
 ${NOREPLY}`;
   return {
-    subject: `${who} sent you their insurance and paperwork`,
+    subject: `${who} sent you their subcontractor compliance pack`,
     text,
     html: textToHtml(text, link),
   };
@@ -1089,16 +1091,16 @@ export function workOrderIssuedSms({ job, trade, woNumber, account, respondBy, c
 // they are hearing from us in the first line, because the second most likely
 // reaction to an unexpected email is "who is this". Short: they did not ask
 // for a newsletter, they asked for a certificate.
-export function docRenewedEmail({ company, contact, toName, kind, expiresOn, link, days }) {
+export function docRenewedEmail({ company, contact, kind, expiresOn, link, days }) {
   const who = company || "A subcontractor";
   const what = DOC_LABELS[kind] || kind;
-  const text = `Hi ${toName || "there"},
+  const text = `Hello,
 
 ${who} renewed their ${what.toLowerCase()}. It now runs to ${expiresOn}.
 
   ${link}
 
-You're getting this because ${contact ? `${contact} at ${who}` : who} sent you their paperwork through SubSub. The link lasts ${days} days, and the page has a line to stop these updates.
+You're getting this because ${contact ? `${contact} at ${who}` : who} sent you their subcontractor compliance pack through SubSub. The link lasts ${days} days, and the page has a line to stop these updates.
 
 -- sent on behalf of ${who}, through SubSub`;
   return { subject: `${who} renewed their ${what.toLowerCase()}`, text, html: textToHtml(text, link) };
@@ -1144,7 +1146,7 @@ export function docInboxEmail({ senders = [], count, link, days }) {
   const one = n <= 1;
   const text = `Hello,
 
-${who} ${one ? "has" : "have each"} sent you ${one ? "their" : "a"} compliance pack through SubSub: their insurance certificate, bond and agreement, whichever they have on file, each with its expiry date.
+${who} ${one ? "has" : "have each"} sent you ${one ? "their" : "a"} subcontractor compliance pack through SubSub: their insurance certificate, bond and agreement, whichever they have on file, each with its expiry date.
 
 ${one ? "It is" : "They are all"} on one page here:
   ${link}
@@ -1152,10 +1154,10 @@ ${one ? "It is" : "They are all"} on one page here:
 No account needed. The link lasts ${days} days.
 
 -- SubSub`;
-  const subject = shown.length === 0 ? "Compliance packs sent to you"
-    : one ? `${shown[0]} sent you their compliance pack`
-    : n === 2 && shown.length === 2 ? `${shown[0]} and ${shown[1]} sent you compliance packs`
-    : `${shown[0]} and ${n - 1} others sent you compliance packs`;
+  const subject = shown.length === 0 ? "Subcontractor compliance packs sent to you"
+    : one ? `${shown[0]} sent you their subcontractor compliance pack`
+    : n === 2 && shown.length === 2 ? `${shown[0]} and ${shown[1]} sent you subcontractor compliance packs`
+    : `${shown[0]} and ${n - 1} others sent you subcontractor compliance packs`;
   return { subject, text, html: textToHtml(text, link) };
 }
 

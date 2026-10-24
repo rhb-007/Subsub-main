@@ -5790,7 +5790,8 @@ export default function SubSub() {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        <DocPack token={packToken} />
+        <DocPack token={packToken}
+          seat={loggedIn ? { role, accountName: account?.name } : null} />
       </div>
     );
   }
@@ -30235,7 +30236,7 @@ function ConnectAsks({ requests, onRespond, onReload }) {
 // What it does that an attachment cannot: say what the cover actually is, and
 // say whether it is still good TODAY. A PDF sent in March is silent about
 // June. This is not.
-function DocPack({ token }) {
+function DocPack({ token, seat = null }) {
   const [p, setP] = useState(null);
   const [err, setErr] = useState(null);
 
@@ -30288,10 +30289,7 @@ function DocPack({ token }) {
     <div className="pack-page">
       {/* SubSub's mark sits OUTSIDE the card: the card is the subcontractor's
           pack, and the page around it is what carried it. */}
-      <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
-        aria-label="SubSub, visit subsub.work">
-        <SubSubLogo height={22} />
-      </a>
+      <PackTop seat={seat} />
       <div className="pack-card">
         <span className="pack-kicker">Subcontractor compliance pack</span>
         <h1>{p.company}</h1>
@@ -30304,7 +30302,6 @@ function DocPack({ token }) {
           </div>
         )}
         <p className="pack-what">Their insurance, bond and agreement, always the current copy.</p>
-        {p.sentTo && <p className="pack-to">Sent to {p.sentTo}</p>}
         {p.note && <p className="pack-note">&ldquo;{p.note}&rdquo;</p>}
 
         {/* THE SEAL, ONLY WHEN EARNED. The Passport's own rule: a license
@@ -31468,7 +31465,7 @@ function DocInbox({ token, seat = null }) {
   if (err) {
     return (
       <div className="pack-page">
-        <InboxBrand />
+        <PackTop seat={seat} />
         <div className="pack-card pack-gone">
           <AlertTriangle size={26} />
           <h2>{err === "expired" ? "That link has expired"
@@ -31492,14 +31489,15 @@ function DocInbox({ token, seat = null }) {
   const { rows = [], summary = {} } = box;
   return (
     <div className="pack-page wide">
-      <InboxBrand />
+      <PackTop seat={seat} />
       <div className="pack-card">
         <span className="pack-kicker">Subcontractor compliance packs</span>
         <h1 className="inbox-h">Sent to you</h1>
         <p className="inbox-sub">
           {summary.companies === 1
             ? "One subcontractor has"
-            : `${summary.companies} subcontractors have`} sent you their paperwork.
+            : `${summary.companies} subcontractors have`} sent you {summary.companies === 1
+            ? "their subcontractor compliance pack" : "their subcontractor compliance packs"}.
           Always the current copy.
         </p>
 
@@ -31559,14 +31557,28 @@ function DocInbox({ token, seat = null }) {
 
 // The same frame the single pack page wears: SubSub's mark above the card,
 // Powered by SubSub at the foot.
-function InboxBrand() {
+// THE PAGE'S TOP LINE: SubSub's mark in the middle and a way into an account
+// on the right. Whoever opens a pack is very often a general contractor or a
+// property manager who already has a SubSub account and is simply signed out
+// on this device -- the link came by email, and email opens in whatever
+// browser is handy. So signed out it says Sign in, and signed in it says which
+// account and goes there. Both go to this origin's front door, which is the
+// sign-in form when nobody is signed in and the account when somebody is.
+function PackTop({ seat = null }) {
   return (
-    <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
-      aria-label="SubSub, visit subsub.work">
-      <SubSubLogo height={22} />
-    </a>
+    <div className="pack-top">
+      <span />
+      <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
+        aria-label="SubSub, visit subsub.work">
+        <SubSubLogo height={22} />
+      </a>
+      <a className="pack-signin" href="/">
+        {seat ? <><span>Go to {seat.accountName || "your account"}</span> <ArrowRight size={14} /></> : <span>Sign in</span>}
+      </a>
+    </div>
   );
 }
+
 function InboxSign() {
   return (
     <a className="pack-sign" href="https://subsub.work/" target="_blank" rel="noopener"
@@ -31619,7 +31631,7 @@ function InboxClaim({ token, count, seat }) {
         {added === 0
           ? "They were already on it, so nothing changed."
           : `${added} ${added === 1 ? "contractor is" : "contractors are"} on
-             ${seat?.accountName || "your account"}, with the paperwork they sent.
+             ${seat?.accountName || "your account"}, with the compliance packs they sent.
              Nothing is assigned to anybody — sending you a certificate is
              agreeing to be hireable, not agreeing to have been hired.`}
       </p>
@@ -31663,7 +31675,7 @@ function InboxClaim({ token, count, seat }) {
     <section className="pack-ad inbox-claim">
       <h2>Keep every subcontractor organized in one place.</h2>
       <p>
-        Put {many} on {seat.accountName || "your"} roster with the paperwork they already
+        Put {many} on {seat.accountName || "your"} roster with the compliance packs they already
         sent, and SubSub chases the certificates when they lapse. You do not have to type
         any of it in — they already did.
       </p>
@@ -31697,16 +31709,16 @@ function AskForInbox({ token }) {
         <CheckCircle2 size={15} />
         {/* Deliberately not naming the address: a forwarded token would
             otherwise tell the forwarder's colleague where it went. */}
-        <span>Sent. Check the inbox this document was emailed to.</span>
+        <span>Sent. Check the inbox this compliance pack was emailed to.</span>
       </div>
     );
   }
   return (
     <div className="inbox-ask">
       <div>
-        <b>Been sent paperwork by more than one contractor?</b>
-        <span>See every pack sent to this address on one page, with what has expired
-          since. We will email you the link.</span>
+        <b>Been sent compliance packs by more than one subcontractor?</b>
+        <span>See every subcontractor compliance pack sent to this address on one page,
+          with what has expired since. We'll email you the link.</span>
       </div>
       <button className="btn-ghost sm" disabled={state === "busy"}
         onClick={async () => {
@@ -31740,7 +31752,7 @@ function PackStop({ token, company }) {
         {done === "err"
           ? "That didn't save. Try again in a moment."
           : done === "all"
-            ? "Done \u2014 no more emails when anybody's paperwork renews."
+            ? "Done \u2014 no more emails when any subcontractor's compliance pack renews."
             : `Done \u2014 no more emails when ${company} renews. This page still works.`}
       </p>
     );
@@ -31748,12 +31760,12 @@ function PackStop({ token, company }) {
   return open ? (
     <p className="pack-stop">
       <button onClick={() => stop(false)}>Just {company}</button>
-      <button onClick={() => stop(true)}>Any contractor</button>
+      <button onClick={() => stop(true)}>Any subcontractor</button>
       <button className="plain" onClick={() => setOpen(false)}>Never mind</button>
     </p>
   ) : (
     <button className="pack-stop plain" onClick={() => setOpen(true)}>
-      Stop emailing me when paperwork renews
+      Stop emailing me when a compliance pack renews
     </button>
   );
 }
@@ -42935,6 +42947,13 @@ body{background:var(--paper)}
   color:var(--ink-soft);white-space:nowrap}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
 .pack-brand{display:inline-flex;color:#111;text-decoration:none}
+.pack-top{width:100%;max-width:620px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
+.pack-page.wide .pack-top{max-width:760px}
+.pack-signin{justify-self:end;display:inline-flex;align-items:center;gap:5px;min-height:40px;padding:0 14px;
+  border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);
+  font-size:14px;font-weight:700;text-decoration:none;white-space:nowrap;min-width:0;max-width:100%}
+.pack-signin span{overflow:hidden;text-overflow:ellipsis}
+.pack-signin:hover{border-color:var(--brand);color:var(--brand)}
 .pack-passport{display:inline-block;margin-top:16px;font-size:13px;font-weight:700;
   color:var(--brand-dk)}
 .pack-ad{max-width:620px;width:100%;box-sizing:border-box;background:#123d2c;color:#fff;

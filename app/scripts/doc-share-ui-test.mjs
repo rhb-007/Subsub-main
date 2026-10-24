@@ -164,6 +164,24 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- a signed-in reader is offered their account --");
+  {
+    PACK_ERR = null;
+    const { ctx, page } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_sam", accountId: "acc_gc" }, viewport: { width: 1200, height: 1200 }, path: "/?pack=TOKEN123" });
+    await page.goto(`http://outerhome.subsub.work:${WEB}/?pack=TOKEN123`, { waitUntil: "networkidle2" });
+    await wait(2200);
+    const top = await page.evaluate(() => {
+      const a = document.querySelector(".pack-top .pack-signin");
+      return { card: !!document.querySelector(".pack-card"),
+        link: a ? { text: a.innerText.replace(/\s+/g, " ").trim(), href: a.getAttribute("href") } : null };
+    });
+    t.ck("the pack still shows to somebody signed in", top.card);
+    t.ck("and the top line says which account and goes there",
+      /^Go to /.test(top.link?.text || "") && top.link.href === "/", JSON.stringify(top.link));
+    await ctx.close();
+  }
+
   console.log("\n-- and the contractor who receives it --");
   {
     PACK_ERR = null;
@@ -186,7 +204,7 @@ try {
         lede: el.querySelector(".pack-lede")?.innerText || "",
         trades: [...el.querySelectorAll(".pack-trade")].map((x) => x.innerText),
         seal: el.querySelector(".pack-badge")?.innerText.replace(/\s+/g, " ").trim() || "",
-        headLogo: !!document.querySelector(".pack-page > .pack-brand .ss-logo"),
+        headLogo: !!document.querySelector(".pack-page > .pack-top .pack-brand .ss-logo"),
         logoInCard: !!el.querySelector(".ss-logo"),
         poweredInCard: /Powered by/i.test(el.innerText),
         h1Size: parseFloat(getComputedStyle(el.querySelector("h1")).fontSize),
@@ -198,6 +216,9 @@ try {
           head: a.querySelector("h2")?.innerText || "", headSize: parseFloat(getComputedStyle(a.querySelector("h2")).fontSize),
           href: a.querySelector(".pack-ad-btn")?.getAttribute("href") || "",
           btn: a.querySelector(".pack-ad-btn")?.innerText || "" } : null; })(),
+        signin: (() => { const a = document.querySelector(".pack-top .pack-signin"); return a
+          ? { text: a.innerText.trim(), href: a.getAttribute("href") } : null; })(),
+        pageText: document.body.innerText,
         footLogo: !!document.querySelector(".pack-page > .pack-sign .ss-logo"),
         footText: document.querySelector(".pack-page > .pack-sign")?.innerText || "" };
     });
@@ -233,6 +254,17 @@ try {
       /SubSub Verified/.test(pack.seal) && /registration active/.test(pack.seal), pack.seal);
     t.ck("and links to their Passport", pack.links.includes(PACK.passportUrl), JSON.stringify(pack.links));
     t.ck("SubSub's own logo is at the top, outside the card", pack.headLogo);
+    // Whoever opens a pack is often somebody with an account who is signed
+    // out on this device; the link came by email.
+    t.ck("signed out, the top line offers Sign in, to the sign-in page",
+      pack.signin?.text === "Sign in" && pack.signin.href === "/", JSON.stringify(pack.signin));
+    // One name for one thing: the sender's "who is it for" box is not a label.
+    t.ck("it does not print the share's typed recipient name", !/Sent to /.test(pack.text), pack.text.slice(0, 300));
+    t.ck("and nothing on the page calls it paperwork", !/paperwork/i.test(pack.pageText),
+      (pack.pageText.match(/.{0,40}paperwork.{0,40}/i) || [""])[0]);
+    t.ck("the email-me box speaks of subcontractor compliance packs",
+      /compliance packs by more than one subcontractor/.test(pack.pageText) && /every subcontractor compliance pack/.test(pack.pageText),
+      (pack.pageText.match(/Been sent.{0,160}/) || [""])[0]);
     t.ck("and nothing in the card says Powered by", !pack.poweredInCard && !pack.logoInCard, pack.text.slice(0, 200));
     t.ck("and closes the page, Powered by SubSub", pack.footLogo && /Powered by/.test(pack.footText), pack.footText);
 
