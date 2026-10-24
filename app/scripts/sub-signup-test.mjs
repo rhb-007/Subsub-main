@@ -355,6 +355,18 @@ const SITE = 5257;
     t.ck("   and carrying the expiry, which an attached PDF cannot",
       (packBody.docs || []).some((d) => d.kind === "insurance" && d.expiresOn === "2027-06-30"),
       JSON.stringify(packBody.docs));
+    // What the redesigned page reads: the seal the Passport's rule decides
+    // (here unearned -- no license SubSub checked), and each row's own file.
+    t.ck("   with the SubSub Verified answer, from the Passport's rule",
+      packBody.badge && typeof packBody.badge.verified === "boolean" && /Insurance/.test(packBody.badge.line || ""),
+      JSON.stringify(packBody.badge));
+    t.ck("   and each document names the file it opens",
+      (packBody.docs || []).filter((d) => d.readable).every((d) => !!d.fileName)
+        && (packBody.docs || []).some((d) => d.readable),
+      JSON.stringify(packBody.docs));
+    t.ck("   but never the W-9's name", (packBody.docs || []).find((d) => d.kind === "w9")?.fileName == null,
+      JSON.stringify(packBody.docs));
+    t.ck("   and trades as a list", Array.isArray(packBody.trades), JSON.stringify(packBody.trades));
 
     // And the line that must not move while fixing the above: somebody else's
     // company is still not writable. The hole this check was added to close is

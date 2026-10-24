@@ -15124,6 +15124,38 @@ refactor.
   filled opens no picker. `test:inspectionui` reads the window after the raise.
   Dropping the call fails it.
 
+- **THE COMPLIANCE PACK PAGE SAYS WHAT IT IS, CARRIES SUBSUB'S MARK, AND
+  SHOWS THE SEAL ONLY WHEN EARNED.** Reported with a pack open signed out: it
+  named nobody's trade, said nothing about what a compliance pack is to a
+  general contractor who had never heard of SubSub, ended in a plain text line,
+  and read *Oleksandr Burdak · · sent to Documents*.
+  - **Powered by SubSub, the real logo, at the top and the foot**, the
+    Passport's lockup.
+  - **The kicker reads *Subcontractor compliance pack*, the trades are chips,
+    and one sentence says what it is for**: the documents a GC or property
+    manager asks for before work starts, each openable, current whenever they
+    renew. *Sent to* is its own line.
+  - **The contact line is joined, not concatenated**, so a missing town leaves
+    no empty separator.
+  - **SubSub Verified is drawn only when earned, by the Passport's own rule**
+    (`passportBadge`: a license SubSub checked or a state that issues none,
+    plus insurance with a date still ahead), with what it rests on under it.
+    The route computes it from the same trades the Passport reads. Unearned, no
+    seal is drawn and the license line stays, because a "not verified" badge on
+    a page a sub sent to win work says less than the license line does.
+  - **A link to their Passport** when it is published.
+  - **Each row names the file it opens** (`packRow.fileName`, never the W-9's),
+    so a row opening the wrong document is visible before it is opened.
+
+  `test:docshareui` (48) and `test:subsignup` (139). Drawing the seal when not
+  earned, and the old concatenated contact line, each fail their own assertion.
+
+  **Not found: why the bond opened the insurance.** Every write of
+  `company_docs.file_key` is the upload route, which takes the key the upload
+  just returned for that kind, and the file route serves by row id. So the
+  likeliest cause is the data: the bond row pointing at the same file, or the
+  same PDF uploaded twice. The file names on the page now show which.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -15601,8 +15601,29 @@ app.get("/api/pack/:token", async (c) => {
       WHERE id = ?`).bind(row.id).run().catch(() => {});
 
   const lic = parseJson(row.license_check, null);
+  // WHO THIS IS AND WHETHER SUBSUB VOUCHES FOR THEM, read the way the
+  // Passport reads it: the same trades, the same badge rule (a license SubSub
+  // checked or a state that issues none, plus insurance with a date still
+  // ahead), and a link to their Passport when it is published. Each is best
+  // effort, so a database behind the code costs that line and not the page.
+  let passport = null;
+  try {
+    passport = await c.env.DB.prepare(`SELECT * FROM passports WHERE company_id = ?`)
+      .bind(row.company_id).first();
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  const trades = (await passportTrades(c.env, passport || {}, row.company_id))
+    .filter((t) => TRADE_IDS.has(t));
+  const ins = docs.insurance || null;
+  const badge = passportBadge({
+    state: company?.state, licenseNumber: company?.license,
+    check: checkView(lic, company?.license), trades,
+    insurance: { onFile: !!(ins && ins.fileName) || !!company?.insurance, expiresOn: ins?.expiresOn || null },
+  });
   return c.json({
     company: row.company,
+    trades: trades.map((id) => ({ id, label: tradeLabel(id) })),
+    badge: { verified: badge.verified, name: badge.name, line: badge.line },
+    passportUrl: passport?.published_at ? passportUrl(passport.slug) : null,
     contact: row.contact || null,
     where: [row.city, row.state].filter(Boolean).join(", ") || null,
     license: row.license || null,

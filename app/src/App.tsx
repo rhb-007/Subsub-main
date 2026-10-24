@@ -30286,16 +30286,47 @@ function DocPack({ token }) {
   return (
     <div className="pack-page">
       <div className="pack-card">
-        <span className="pack-kicker">Compliance documents</span>
+        {/* WHOSE PAGE, WHO IT IS ABOUT, AND WHAT IT IS FOR. Somebody opening
+            this from an email has never heard of SubSub, so the page says
+            what a compliance pack is before it lists one. */}
+        <a className="pp-powered pack-powered" href="https://subsub.work/" target="_blank" rel="noopener"
+          aria-label="Powered by SubSub, visit subsub.work">
+          <span>Powered by</span>
+          <SubSubLogo height={15} mono />
+        </a>
+        <span className="pack-kicker">Subcontractor compliance pack</span>
         <h1>{p.company}</h1>
-        <p className="pack-lede">
-          {p.contact ? `${p.contact} · ` : ""}{p.where || ""}
-          {p.sentTo ? ` · sent to ${p.sentTo}` : ""}
+        {(p.contact || p.where) && (
+          <p className="pack-lede">{[p.contact, p.where].filter(Boolean).join(" · ")}</p>
+        )}
+        {p.trades?.length > 0 && (
+          <div className="pack-trades">
+            {p.trades.map((t) => <span key={t.id} className="pack-trade">{t.label}</span>)}
+          </div>
+        )}
+        <p className="pack-what">
+          {p.company} is a subcontractor sharing the documents a general contractor or
+          property manager asks for before work starts: proof of insurance, bonding and
+          their signed agreement. Each one opens from here, and this page shows the
+          current copy whenever they renew.
         </p>
+        {p.sentTo && <p className="pack-to">Sent to {p.sentTo}</p>}
         {p.note && <p className="pack-note">&ldquo;{p.note}&rdquo;</p>}
 
+        {/* THE SEAL, ONLY WHEN EARNED. The Passport's own rule: a license
+            SubSub checked (or a state that issues none) and insurance with a
+            date still ahead. Under it, exactly what it rests on. Unearned, no
+            seal is drawn, because a badge reading "not verified" on a page a
+            sub sent to win work says less than the license line below. */}
+        {p.badge?.verified && (
+          <div className="pp-badge on pack-badge">
+            <span className="pp-badge-name"><ShieldCheck size={18} /> {p.badge.name}</span>
+            <span className="pp-badge-line">{p.badge.line}</span>
+          </div>
+        )}
+
         {/* The one thing on here that an emailed PDF genuinely cannot carry. */}
-        {p.license && (
+        {p.license && !p.badge?.verified && (
           <div className={`pack-lic ${p.licenseVerified ? "ok" : ""}`}>
             {p.licenseVerified ? <ShieldCheck size={15} /> : <FileText size={15} />}
             <span>
@@ -30315,6 +30346,7 @@ function DocPack({ token }) {
               <div key={d.kind} className={`pack-doc ${lapsed ? "lapsed" : ""}`}>
                 <div className="pack-doc-main">
                   <b>{DOC_LABELS[d.kind] || d.kind}</b>
+                  {d.fileName && <span className="pack-file">{d.fileName}</span>}
                   <div className="pack-doc-facts">
                     {d.issuer && <span>{d.issuer}</span>}
                     {d.policyNo && <span>Policy {d.policyNo}</span>}
@@ -30357,7 +30389,14 @@ function DocPack({ token }) {
             one that lapsed. Create a free account to keep it and be told before
             anything expires.
           </span>
-          <a className="btn-solid small" href="/">Create a free account</a>
+          <div className="pack-cta-acts">
+            <a className="btn-solid small" href="/">Create a free account</a>
+            {p.passportUrl && (
+              <a className="btn-ghost small" href={p.passportUrl} target="_blank" rel="noopener">
+                See their SubSub Passport
+              </a>
+            )}
+          </div>
         </div>
       </div>
       {/* The pull. Somebody reading one certificate very likely holds two or
@@ -30374,6 +30413,12 @@ function DocPack({ token }) {
           to live -- an opt-out somebody has to create an account for is not an
           opt-out, and there is no other page they are ever on. */}
       <PackStop token={token} company={p.company} />
+      {/* The official close, the same lockup the header carries. */}
+      <a className="pack-sign" href="https://subsub.work/" target="_blank" rel="noopener"
+        aria-label="Powered by SubSub, visit subsub.work">
+        <span>Powered by</span>
+        <SubSubLogo height={18} mono />
+      </a>
       <p className="pack-foot">Sent by {p.company} through SubSub</p>
     </div>
   );
@@ -42775,6 +42820,20 @@ body{background:var(--paper)}
 .pack-cta span{font-size:12.5px;color:var(--ink-soft);line-height:1.55}
 .pack-cta a{margin-top:6px;text-decoration:none}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+.pack-powered{margin-bottom:14px}
+.pack-trades{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.pack-trade{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;
+  background:#eef7f1;color:var(--brand-dk);border:1px solid #cfe6d8}
+.pack-what{margin:12px 0 0;font-size:13.5px;line-height:1.6;color:var(--ink)}
+.pack-to{margin:8px 0 0;font-size:12.5px;color:var(--ink-soft)}
+.pack-badge{margin-top:16px}
+.pack-file{display:block;font-size:11.5px;color:var(--ink-soft);margin-top:2px;
+  overflow-wrap:anywhere}
+.pack-cta-acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}
+.pack-cta-acts a{margin-top:0}
+.pack-sign{display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;
+  font-weight:600;color:#111;text-decoration:none}
+.pack-sign .ss-logo{color:#111}
 /* Becoming the hiring side. Its own chrome rather than the upgrade gate's,
    because that one's amber badge says "you have hit a limit" and its green box
    is where a price goes -- and this costs nothing and is not a limit. A neutral

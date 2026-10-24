@@ -92,6 +92,10 @@ export function packRow(doc = {}) {
     // The expiry crosses for every kind, including the gated one: "we hold a
     // W-9" is worth saying even when the document itself is not readable.
     expiresOn: doc.expiresOn || null,
+    // The name it was uploaded under, so a reader can tell which file each
+    // row opens: a bond row opening a certificate of insurance is then
+    // visible before it is opened rather than after.
+    fileName: shown ? (doc.fileName || null) : null,
     // Whether there is a file to open from this page at all.
     readable: shown && !!doc.fileKey,
     gated: !shown && !!doc.uploadedAt,

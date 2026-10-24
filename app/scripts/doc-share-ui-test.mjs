@@ -46,11 +46,16 @@ let PACK = {
   company: "Ridge Roofing", contact: "Sam Ridge", where: "Seattle, WA",
   license: "RIDGERR891QZ", licenseVerified: true, licenseCheckedAt: "2026-09-12",
   sentTo: "Priya", note: "As asked on Tuesday.", expiresAt: "2026-10-10 00:00:00",
+  trades: [{ id: "roofing", label: "Roofing" }, { id: "gutters", label: "Gutters" }],
+  badge: { verified: true, name: "SubSub Verified", line: "WA L&I registration active · Insurance on file through Mar 14, 2027" },
+  passportUrl: "https://app.subsub.work/p/ridge-roofing-k7q2m",
   docs: [
     { kind: "insurance", onFile: true, issuer: "Cascade Mutual", policyNo: "POL-44812",
-      coverageCents: 200000000, expiresOn: "2027-03-14", readable: true, gated: false, id: "d_ins" },
+      coverageCents: 200000000, expiresOn: "2027-03-14", readable: true, gated: false, id: "d_ins",
+      fileName: "ridge-coi-2026.pdf" },
     { kind: "bond", onFile: true, issuer: "Western Surety", policyNo: "BND-991",
-      coverageCents: 3000000, expiresOn: null, readable: true, gated: false, id: "d_bond" },
+      coverageCents: 3000000, expiresOn: null, readable: true, gated: false, id: "d_bond",
+      fileName: "ridge-bond.pdf" },
     { kind: "contract", onFile: true, expiresOn: null, readable: true, gated: false, id: "d_con" },
     // THE ONE THAT MUST NOT BE OPENABLE.
     { kind: "w9", onFile: true, issuer: null, policyNo: null, coverageCents: null,
@@ -177,7 +182,13 @@ try {
         docs: [...el.querySelectorAll(".pack-doc")].map((d) => ({
           text: d.innerText.replace(/\s+/g, " ").trim(),
           link: d.querySelector("a")?.getAttribute("href") || null })),
-        links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href")) };
+        links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href")),
+        lede: el.querySelector(".pack-lede")?.innerText || "",
+        trades: [...el.querySelectorAll(".pack-trade")].map((x) => x.innerText),
+        seal: el.querySelector(".pack-badge")?.innerText.replace(/\s+/g, " ").trim() || "",
+        headLogo: !!el.querySelector(".pack-powered .ss-logo"),
+        footLogo: !!document.querySelector(".pack-page > .pack-sign .ss-logo"),
+        footText: document.querySelector(".pack-page > .pack-sign")?.innerText || "" };
     });
     t.ck("the page opens with no account at all", !!pack, String(pack));
     t.ck("naming the subcontractor", /Ridge Roofing/.test(pack.text), pack.text.slice(0, 80));
@@ -192,6 +203,22 @@ try {
     t.ck("and the expiry, which is the whole point",
       /Current through Mar 14, 2027/.test(ins.text), ins.text);
     t.ck("it can be opened", !!ins.link && /\/pack\/TOKEN123\/file\/d_ins/.test(ins.link), String(ins.link));
+    // Each row names its own file and opens its own document.
+    const bond = pack.docs.find((d) => /Surety bond/.test(d.text));
+    t.ck("each row names the file it opens", /ridge-coi-2026\.pdf/.test(ins.text) && /ridge-bond\.pdf/.test(bond.text),
+      JSON.stringify([ins.text, bond.text]));
+    t.ck("and the bond opens the bond", !!bond.link && /\/file\/d_bond$/.test(bond.link), String(bond.link));
+
+    // WHAT THE PAGE IS, FOR SOMEBODY WHO HAS NEVER HEARD OF SUBSUB.
+    t.ck("it says it is a subcontractor's compliance pack", /Subcontractor compliance pack/i.test(pack.text)
+      && /is a subcontractor sharing the documents/.test(pack.text), pack.text.slice(0, 400));
+    t.ck("with the trades they do", pack.trades.join(",") === "Roofing,Gutters", JSON.stringify(pack.trades));
+    t.ck("the contact line has no empty separator", !/·\s*·/.test(pack.lede) && !/·\s*$/.test(pack.lede.trim()), pack.lede);
+    t.ck("the SubSub Verified seal shows when earned, with what it rests on",
+      /SubSub Verified/.test(pack.seal) && /registration active/.test(pack.seal), pack.seal);
+    t.ck("and links to their Passport", pack.links.includes(PACK.passportUrl), JSON.stringify(pack.links));
+    t.ck("SubSub's own logo is at the top", pack.headLogo);
+    t.ck("and closes the page, Powered by SubSub", pack.footLogo && /Powered by/.test(pack.footText), pack.footText);
 
     // A document with no shelf life says so rather than looking unknown.
     const con = pack.docs.find((d) => /Signed subcontractor agreement/.test(d.text));
@@ -210,6 +237,30 @@ try {
     t.ck("and offers an account without demanding one",
       /Create a free account/i.test(pack.text), pack.text);
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- a pack with no seal earned and no contact or town --");
+  {
+    const keep = PACK;
+    PACK = { ...PACK, contact: null, where: null, passportUrl: null, trades: [],
+      badge: { verified: false, name: null, line: "License not verified by SubSub · Insurance on file, no expiry date given" } };
+    const ctx = await browser.createBrowserContext();
+    const page = await ctx.newPage();
+    await page.goto(`http://outerhome.subsub.work:${WEB}/?pack=TOKEN123`, { waitUntil: "networkidle2" });
+    await wait(2200);
+    const v = await page.evaluate(() => {
+      const el = document.querySelector(".pack-card");
+      return el ? { seal: !!el.querySelector(".pack-badge"), lede: !!el.querySelector(".pack-lede"),
+        lic: !!el.querySelector(".pack-lic"), name: el.querySelector("h1")?.innerText || "",
+        pass: /Passport/.test(el.innerText) } : null;
+    });
+    t.ck("the page still draws", !!v && v.name === "Ridge Roofing", JSON.stringify(v));
+    t.ck("no seal is drawn when it is not earned", v && !v.seal, JSON.stringify(v));
+    t.ck("the license line stands in for it", v && v.lic, JSON.stringify(v));
+    t.ck("and no empty contact line", v && !v.lede, JSON.stringify(v));
+    t.ck("and no Passport link when none is published", v && !v.pass, JSON.stringify(v));
+    PACK = keep;
     await ctx.close();
   }
 
