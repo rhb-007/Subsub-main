@@ -7158,7 +7158,11 @@ export default function SubSub() {
             const js = await api.listJobs().catch(() => null);
             if (Array.isArray(js)) setJobs(js);
             const j = (Array.isArray(js) ? js : jobs).find((x) => x.id === jobId);
-            if (j) setAssigning({ job: j, trade: trade || (j.trades || [])[0] });
+            // With no trade named, the first one nobody is on yet. A job every
+            // trade of which is already filled has nothing to pick, so nothing
+            // opens.
+            const slot = trade || (j?.trades || []).find((t) => !j.assignments?.[t]);
+            if (j && slot) setAssigning({ job: j, trade: slot });
           } : null}
           unitWord={tenantWhere(kindOf(account)) === "office" ? "Suite" : "Unit"}
           /* AN OWNER READS. The capability gets them the tab -- a move-out
@@ -38578,8 +38582,8 @@ function InspectionItemRow({ row, ro, moveOut, changed, busy, onSave, photos = [
         )}
         {canPhoto && (
           <label className={`insp-cl-cam ${photos.length ? "has" : ""}`} title={`Add photos of ${row.label}`}>
-            <Camera size={15} />
-            {picking ? <span>…</span> : photos.length > 0 && <span>{photos.length}</span>}
+            {picking ? <span className="insp-swirl sm" aria-hidden="true" /> : <Camera size={15} />}
+            {!picking && photos.length > 0 && <span>{photos.length}</span>}
             <input type="file" accept="image/*" multiple hidden disabled={picking}
               aria-label={`Add photos of ${row.label}`}
               onChange={(e) => { onPick(e.target.files); e.target.value = ""; }} />
@@ -38669,6 +38673,15 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
   const [err, setErr] = useState("");
   const [shots, setShots] = useState({});
   const [lightbox, setLightbox] = useState(null);
+  // Which photos are being described right now, so each one says so on its
+  // own thumbnail rather than the room carrying one line somebody scrolls
+  // past. Held by id, because the draft can land for some before others.
+  const [describing, setDescribing] = useState(() => new Set());
+  const markDescribing = (ids, on) => setDescribing((cur) => {
+    const next = new Set(cur);
+    ids.forEach((id) => (on ? next.add(id) : next.delete(id)));
+    return next;
+  });
   const photos = room.photos || [];
   const hasList = (room.checklist || []).length > 0;
   // A photo under an item the room's list no longer has (a renamed room) is
@@ -38736,14 +38749,18 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
         const local = {};
         fresh.forEach((p, i) => { if (list[i]) local[p.id] = URL.createObjectURL(list[i]); });
         try {
+          markDescribing(fresh.map((p) => p.id), true);
           for (let i = 0; i < fresh.length; i += MAX_DRAFT_PHOTOS) {
-            await onDraft(room.id, fresh.slice(i, i + MAX_DRAFT_PHOTOS), local);
+            const batch = fresh.slice(i, i + MAX_DRAFT_PHOTOS);
+            try { await onDraft(room.id, batch, local); }
+            finally { markDescribing(batch.map((p) => p.id), false); }
           }
         } catch (e) {
           console.warn("[inspection] auto-draft:", e?.body?.error || e?.message || e);
           notes.push(`The photo${fresh.length === 1 ? " is" : "s are"} saved. ${DRAFT_REFUSALS[e?.body?.error] || "The description could not be written just now."}`);
         } finally {
           Object.values(local).forEach((u) => URL.revokeObjectURL(u));
+          markDescribing(fresh.map((p) => p.id), false);
         }
       }
       if (notes.length) setErr(notes.join(" "));
@@ -38755,22 +38772,34 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
   // One renderer for the room's photos and every item's, so a thumbnail, its
   // caption box and its remove button are the same thing wherever they sit,
   // and the lightbox walks every photo in the room in one order.
-  const renderPhotos = (list) => list.map((ph) => (
-    <div key={ph.id} className="insp-shot">
-      <div className="ph-holder">
-        <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
-          load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
-          onOpen={() => setLightbox(photos.indexOf(ph))} />
-        {!locked && (
-          <button type="button" className="ph-x" disabled={!!busy}
-            aria-label={`Remove ${ph.name}`}
-            onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
+  const renderPhotos = (list) => list.map((ph) => {
+    const working = describing.has(ph.id) && !ph.caption;
+    return (
+      <div key={ph.id} className={`insp-shot ${working ? "is-describing" : ""}`}>
+        <div className="ph-holder">
+          <ReportPhoto photo={ph} onLoaded={(id, u) => setShots((m) => ({ ...m, [id]: u }))}
+            load={() => api.inspectionPhotoBlob(inspectionId, ph.id)}
+            onOpen={() => setLightbox(photos.indexOf(ph))} />
+          {working && (
+            <span className="insp-shot-work" aria-hidden="true"><span className="insp-swirl" /></span>
+          )}
+          {!locked && (
+            <button type="button" className="ph-x" disabled={!!busy}
+              aria-label={`Remove ${ph.name}`}
+              onClick={() => run("del", () => onRemovePhoto(room.id, ph.id))}><X size={12} /></button>
+          )}
+        </div>
+        {working ? (
+          <p className="insp-describing" role="status">
+            <span className="insp-swirl sm" aria-hidden="true" /> Describing this photo…
+          </p>
+        ) : (
+          <PhotoCaption photo={ph} locked={locked}
+            onSave={(caption) => onCaption(room.id, ph.id, caption)} />
         )}
       </div>
-      <PhotoCaption photo={ph} locked={locked}
-        onSave={(caption) => onCaption(room.id, ph.id, caption)} />
-    </div>
-  ));
+    );
+  });
 
   return (
     <div className={`insp-room st-${room.status} ${ringed ? "insp-ring" : ""}`} ref={nodeRef}>
@@ -38800,14 +38829,17 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
           {roomPhotos.length > 0 && <div className="insp-shots">{renderPhotos(roomPhotos)}</div>}
           {!locked && photos.length < MAX_ROOM_PHOTOS && (
             <label className="ph-add">
-              <Camera size={14} /> {picking === "room" ? "Uploading and describing…" : hasList ? "Add room photos" : "Add photos"}
+              {picking === "room" ? <span className="insp-swirl sm" aria-hidden="true" /> : <Camera size={14} />}
+              {" "}{picking === "room" ? "Uploading and describing…" : hasList ? "Add room photos" : "Add photos"}
               <input type="file" accept="image/*" multiple hidden disabled={!!picking}
                 onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
             </label>
           )}
         </div>
       )}
-      {picking && picking !== "room" && <p className="insp-busy">Uploading and describing the photos…</p>}
+      {picking && picking !== "room" && (
+        <p className="insp-busy"><span className="insp-swirl sm" aria-hidden="true" /> Uploading and describing the photos…</p>
+      )}
 
       {/* DRAFTING WHAT IS LEFT. New photos describe themselves; this is for
           the ones taken before that, or whose draft failed. Offered only when
@@ -38815,8 +38847,14 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
       {!locked && !whyNot && !picking && (
         <div className="insp-draft">
           <button type="button" className="insp-draft-go" disabled={!!busy}
-            onClick={() => run("draft", () => onDraft(room.id, undrafted.slice(0, MAX_DRAFT_PHOTOS), shots))}>
+            onClick={() => run("draft", async () => {
+              const batch = undrafted.slice(0, MAX_DRAFT_PHOTOS);
+              markDescribing(batch.map((p) => p.id), true);
+              try { await onDraft(room.id, batch, shots); }
+              finally { markDescribing(batch.map((p) => p.id), false); }
+            })}>
             <Sparkles size={14} />
+            {busy === "draft" && <span className="insp-swirl sm" aria-hidden="true" />}
             {busy === "draft" ? "Reading the photos…"
               : undrafted.length === 1 ? "Describe the 1 photo without a note"
               : `Describe ${Math.min(undrafted.length, MAX_DRAFT_PHOTOS)} photos without notes`}
@@ -38829,7 +38867,7 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
           one thing about this feature a person is entitled to know. */}
       {!locked && canAiDraft && (
         <p className="insp-draft-note">
-          Photos are described by Claude as they are added. Nothing else about the
+          Photos are described automatically as they are added. Nothing else about the
           property, the tenant or the building is sent, and you edit every line.
         </p>
       )}
@@ -40264,7 +40302,12 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
     setAutoMiss(null);
     const said = autoRaiseText(made.auto);
     if (said && onNote) onNote(said);
+    // THE NEXT THING TO DO IS PICK WHO FIXES IT. Landing on the job alone
+    // left the manager to find Assign on it; the job opens behind the picker
+    // for the first trade nobody is on, so closing the picker still leaves
+    // them on the job they just raised.
     onGoJobs(made.jobId);
+    if (onAssign) await onAssign(made.jobId);
   };
 
   // The New inspection form's unit type: what was picked, or else what the
@@ -44949,7 +44992,20 @@ span.insp-cl-check{cursor:default}
 .insp-room-pill.st-fail{background:#c62f2a;border-color:#c62f2a;color:#fff}
 .insp-sub{font:800 11px Inter,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft)}
 .insp-room-photos{display:flex;flex-direction:column;gap:7px}
-.insp-busy{margin:0;font-size:12.5px;color:var(--ink-soft)}
+.insp-busy{margin:0;font-size:12.5px;color:var(--ink-soft);display:flex;align-items:center;gap:8px}
+/* The working swirl, shown on each photo while its description is written.
+   Still turns, more slowly, for a reader who asked for less motion: a
+   spinner that stops reads as a screen that has hung. */
+.insp-swirl{display:inline-block;flex:none;width:28px;height:28px;border-radius:50%;
+  border:3px solid rgba(20,122,73,.22);border-top-color:var(--brand);
+  animation:insp-swirl .8s linear infinite;vertical-align:middle}
+.insp-swirl.sm{width:14px;height:14px;border-width:2px}
+@keyframes insp-swirl{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.insp-swirl{animation-duration:2.4s}}
+.insp-shot-work{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,.62);border-radius:8px;pointer-events:none}
+.insp-describing{margin:0;display:flex;align-items:center;gap:8px;font-size:12.5px;
+  color:var(--ink-soft);font-style:italic;min-height:36px}
 .insp-status,.insp-status-pick{border-top:1px solid var(--line);padding-top:10px;display:flex;flex-direction:column;gap:5px}
 .insp-status-lab{font:800 11px Inter,sans-serif;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-soft)}
 .insp-status-val{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;font:800 13.5px Inter,sans-serif;

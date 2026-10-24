@@ -15091,6 +15091,39 @@ refactor.
   issue, note or cost. `test:roomchecklist` pinned seven conditions and now
   pins eight.
 
+- **THE INSPECTION SCREEN NAMES NO AI PROVIDER, AND EACH PHOTO SHOWS A SWIRL
+  WHILE ITS DESCRIPTION IS WRITTEN.** Asked for as *"don't mention Claude on
+  these explanations in inspections"* and *"as pictures are being processed ...
+  your progress or activity swirl"*. The note under the photos now says they are
+  *described automatically*; the rest of it (nothing else is sent, you edit
+  every line) is unchanged. The provider stays named in code comments and on
+  the staff console's setup check, which customers never see.
+
+  **The swirl is per photo, not per room.** `describing` in `InspectionRoom`
+  holds the ids being drafted, set by the auto-draft after an upload and by the
+  Describe press, and cleared per batch in a `finally`, so a failed draft never
+  leaves a photo spinning. While it holds an id that photo draws a turning ring
+  over its thumbnail and *Describing this photo...* in place of its caption box,
+  so nobody types into a box the draft is about to fill. The upload labels, the
+  item camera and the Describe button carry a small one too. For a reader who
+  asked for less motion it turns more slowly rather than stopping, because a
+  spinner that stops reads as a screen that has hung. The stub harness now
+  accepts a route that answers with a promise, so `test:inspectionui` holds the
+  draft reply open and reads the screen in the meantime. `test:photodraftui`
+  requires the note to name no provider anywhere on screen.
+
+- **RAISING A JOB FROM AN INSPECTION OPENS THE CONTRACTOR PICKER, NOT JUST
+  THE JOB.** Reported as *"it should redirect to selecting service providers
+  to fix the things that need to be fixed"*. After the raise, the screen went
+  to Jobs with the new job open, leaving the manager to find Assign on it.
+  Now the job still opens behind, and the same assign window the job card uses
+  opens over it for the first trade nobody is on. That window is seeded with
+  that trade's scope from the walk. Closing it leaves the manager on the job.
+  If auto-schedule could not place anybody, the screen still stays on the
+  inspection with the reason, as before. A job whose every trade is already
+  filled opens no picker. `test:inspectionui` reads the window after the raise.
+  Dropping the call fails it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

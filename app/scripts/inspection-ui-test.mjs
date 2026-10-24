@@ -33,6 +33,7 @@ const PARA = "Nail-hole repair and paint through the walls and floors.";
 let KIND = "property_manager";
 let ROLE = "admin";
 // One draft, mid-walk: a room marked OK, one flagged, one nobody has got to.
+let HOLD_DRAFT = 0;
 let DETAIL = {
   id: "insp_1", propertyId: "prop_1", unit: "3B", kind: "move_out",
   tenantName: "Tess Nguyen", inspectedOn: "2026-10-02", status: "draft",
@@ -125,7 +126,9 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     const want = new Set((body.photos || []).map((p) => p.id));
     DETAIL = { ...DETAIL, rooms: DETAIL.rooms.map((r) => r.id !== dr[1] ? r : {
       ...r, photos: (r.photos || []).map((p) => want.has(p.id) ? { ...p, draft: "Two scuffs low on the wall." } : p) }) };
-    return [200, { ok: true, rooms: DETAIL.rooms }];
+    const reply = [200, { ok: true, rooms: DETAIL.rooms }];
+    // Held open when a test wants to see the screen while it waits.
+    return HOLD_DRAFT ? new Promise((r) => setTimeout(() => r(reply), HOLD_DRAFT)) : reply;
   }
   if (/^\/api\/inspections\/insp_1\/photos\//.test(path)) return [200, "img"];
   const room = /^\/api\/inspections\/insp_1\/rooms\/(r\d)$/.exec(path);
@@ -188,6 +191,12 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     name: "Press Apartments", address: "1620 Belmont Ave", city: "Seattle", state: "WA",
     zip: "98122", units: 141, notes: "", ownedByAnother: false, ownerDeclared: false }]];
   if (path === "/api/payouts/status") return [200, { status: "none", ready: false, requirements: [], configured: false }];
+  // Once raised, the job is on the list, so the picker the raise opens has a
+  // job to open over.
+  if (path === "/api/jobs" && DETAIL.jobId === "job_new") return [200, [{ id: "job_new", accountId: "acc_x",
+    title: "Move-out inspection work", propertyId: "prop_1", address: "1620 Belmont Ave", zip: "98122",
+    date: "2026-11-20", status: "active", approvedAt: "2026-10-20T00:00:00Z", trades: ["painting", "plumbing"],
+    assignments: {}, notes: "", scope: "", measurementDocs: [], photos: [] }]];
   if (path === "/api/jobs" || path === "/api/subs" || path === "/api/invites"
     || path === "/api/connect-requests" || path === "/api/my-connect-requests"
     || path === "/api/tenants" || path === "/api/clients" || path === "/api/visits") return [200, []];
@@ -616,8 +625,25 @@ try {
     const { writeFileSync, mkdtempSync } = await import("node:fs");
     const tmpd = mkdtempSync(join((await import("node:os")).tmpdir(), "insp-"));
     writeFileSync(join(tmpd, "wall.png"), png);
+    HOLD_DRAFT = 2500;
     await cam.asElement().uploadFile(join(tmpd, "wall.png"));
+    await wait(1200);
+    // WHILE IT IS BEING DESCRIBED, IT SAYS SO, on the photo itself.
+    const working = await page.evaluate(() => {
+      const r = [...document.querySelectorAll(".insp-room")].find((x) => x.querySelector("input.insp-name")?.value === "Bathroom 1");
+      const li = [...r.querySelectorAll(".insp-cl-row")].find((x) => x.querySelector(".insp-cl-item")?.innerText === "Walls");
+      const shot = li?.querySelector(".insp-shot");
+      const sw = shot?.querySelector(".insp-shot-work .insp-swirl");
+      return { shot: !!shot, swirl: !!sw, anim: sw ? getComputedStyle(sw).animationName : "",
+        line: shot?.querySelector(".insp-describing")?.innerText || "",
+        box: !!shot?.querySelector("textarea") };
+    });
+    t.ck("while a photo is being described, a swirl turns on it", working.shot && working.swirl && working.anim === "insp-swirl", JSON.stringify(working));
+    t.ck("and its note says it is describing, with no empty box yet", /Describing this photo/.test(working.line) && !working.box, JSON.stringify(working));
     await wait(2500);
+    HOLD_DRAFT = 0;
+    const gone = await page.evaluate(() => document.querySelectorAll(".insp-shot.is-describing, .insp-shot-work").length);
+    t.ck("and the swirl goes once the description lands", gone === 0, String(gone));
     const added = sent.find((x) => /rooms\/r3\/photos$/.test(x.path));
     t.ck("a photo taken from an item is filed under it", added?.body?.itemKey === "walls", JSON.stringify(added?.body));
     t.ck("and is described without a press", sent.some((x) => /rooms\/r3\/drafts$/.test(x.path)), JSON.stringify(sent.map((x) => x.path)));
@@ -839,7 +865,14 @@ try {
       ["tenant", "manager", "none"].includes(
         sent.find((x) => /\/job$/.test(x.path))?.body?.access),
       JSON.stringify(sent.find((x) => /\/job$/.test(x.path))?.body));
-    // It lands on the Jobs screen, which is where the work now is.
+    // IT LANDS ON PICKING WHO FIXES IT, with the job open behind: the first
+    // trade nobody is on, so the next press is choosing a contractor.
+    const picker = await page.evaluate(() => {
+      const m = [...document.querySelectorAll(".modal")].pop();
+      return m ? (m.innerText || "").replace(/\s+/g, " ").slice(0, 400) : "";
+    });
+    t.ck("and it opens the contractor picker for the first open trade",
+      /painting/i.test(picker) && /Move-out inspection work/.test(picker), picker);
     t.ck("and it lands on Jobs",
       await page.evaluate(() => !!document.querySelector(".ss-main")
         && /jobs/i.test(document.querySelector("nav button.on")?.innerText || "")),

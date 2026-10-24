@@ -180,7 +180,10 @@ try {
     t.ck("and names how many it will read", /2 photos/.test(b?.label || ""), b?.label);
     // WHAT LEAVES, at the control. A photograph of the inside of somebody's
     // home going to a third party is not guessable from a button.
-    t.ck("the note says the photo is read by Claude", /Claude/.test(b?.note || ""), b?.note);
+    // The owner does not want the provider named to anybody using the product.
+    t.ck("the note says photos are described automatically", /described automatically/.test(b?.note || ""), b?.note);
+    const vendor = await page.evaluate(() => /Claude|Anthropic/i.test(document.body.innerText));
+    t.ck("and names no AI provider anywhere on the screen", !vendor, String(vendor));
     t.ck("and that nothing else about the property goes", /Nothing else about the/i.test(b?.note || ""), b?.note);
     t.ck("and that the manager edits every line", /you edit every line/i.test(b?.note || ""), b?.note);
     await ctx.close();

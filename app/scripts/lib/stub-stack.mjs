@@ -119,7 +119,9 @@ export function serveApi({ port, routes, delay = 0 }) {
     // wrong account's data -- which is exactly the bug that wanted testing.
     // Fourth argument, so every caller written against routes(path, method,
     // body) keeps working untouched.
-    const hit = routes(path, req.method, sent, req.headers);
+    // A route may answer with a promise, to hold a reply open while a test
+    // reads what the screen draws in the meantime.
+    const hit = await routes(path, req.method, sent, req.headers);
     const [status, body, extra] = hit === undefined ? [200, []] : hit;
     // A third element lets a route answer with something that is not JSON.
     // Every route here has been a JSON one until compliance documents needed
