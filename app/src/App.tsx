@@ -112,7 +112,7 @@ import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
 import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/accessplan.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
   mayAnswer as visitMayAnswer, partySaid as visitPartySaid, mayConfirm as visitMayConfirm,
-  outcomeAsker } from "../shared/visitparty.js";
+  outcomeAsker, joinAnd } from "../shared/visitparty.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -30236,6 +30236,39 @@ function ConnectAsks({ requests, onRespond, onReload }) {
 // What it does that an attachment cannot: say what the cover actually is, and
 // say whether it is still good TODAY. A PDF sent in March is silent about
 // June. This is not.
+// "today", "yesterday", "12 days ago". Read from the day only, on the
+// reader's clock, so a time of day cannot make it read a day off.
+function daysAgoText(stamp) {
+  const day = String(stamp || "").slice(0, 10);
+  const t = Date.parse(`${day}T12:00:00`);
+  if (!Number.isFinite(t)) return "";
+  const now = new Date();
+  const todayNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12).getTime();
+  const n = Math.round((todayNoon - t) / 86400000);
+  if (n <= 0) return "today";
+  if (n === 1) return "yesterday";
+  return `${n} days ago`;
+}
+
+// The order a hiring party asks for them: bond, insurance, agreement, W-9.
+const PACK_SUMMARY_ORDER = ["bond", "insurance", "contract", "w9"];
+const PACK_SUMMARY_WORDS = {
+  bond: "surety bond", insurance: "certificate of insurance",
+  contract: "signed subcontractor agreement", w9: "IRS Form W-9",
+};
+function packSummary(p) {
+  const on = new Set(p.docs.filter((d) => d.onFile).map((d) => d.kind));
+  const have = PACK_SUMMARY_ORDER.filter((k) => on.has(k)).map((k) => PACK_SUMMARY_WORDS[k]);
+  const who = p.company || "This subcontractor";
+  const lead = have.length
+    ? `In this compliance pack you'll find ${who}'s ${joinAnd(have)}.`
+    : `${who} has not added any documents to this compliance pack yet.`;
+  // No agreement is the ordinary state before the two of you work together:
+  // it is signed once you connect, so say that rather than leave a gap.
+  return on.has("contract") ? lead
+    : `${lead} A subcontractor agreement is added once you connect and sign one.`;
+}
+
 function DocPack({ token, seat = null }) {
   const [p, setP] = useState(null);
   const [err, setErr] = useState(null);
@@ -30284,6 +30317,10 @@ function DocPack({ token, seat = null }) {
   if (!p) return <div className="pack-page"><div className="pack-card"><p className="cov-hint">Loading…</p></div></div>;
 
   const today = new Date().toISOString().slice(0, 10);
+  // The newest upload among what is on file. uploaded_at is a SQLite
+  // timestamp or an ISO string; both start with the day, so text max works.
+  const packUpdated = p.docs.filter((d) => d.onFile && d.uploadedAt)
+    .map((d) => String(d.uploadedAt)).sort().pop() || null;
 
   return (
     <div className="pack-page">
@@ -30301,8 +30338,15 @@ function DocPack({ token, seat = null }) {
             {p.trades.map((t) => <span key={t.id} className="pack-trade">{t.label}</span>)}
           </div>
         )}
-        <p className="pack-what">Their insurance, bond and agreement, always the current copy.</p>
-        {p.note && <p className="pack-note">&ldquo;{p.note}&rdquo;</p>}
+        {/* WHAT IS IN IT, NAMED. Only what is on file, in the order a GC
+            asks for it. The note the sub wrote is NOT here: it is a message to
+            this reader, so it goes in the email that carried the link. */}
+        <p className="pack-what">{packSummary(p)}</p>
+        {packUpdated && (
+          <p className="pack-updated">
+            <Clock size={13} /> Last updated {packDay(packUpdated.slice(0, 10))} · {daysAgoText(packUpdated)}
+          </p>
+        )}
 
         {/* THE SEAL, ONLY WHEN EARNED. The Passport's own rule: a license
             SubSub checked (or a state that issues none) and insurance with a
@@ -30350,6 +30394,9 @@ function DocPack({ token, seat = null }) {
                     {d.issuer && <span>{d.issuer}</span>}
                     {d.policyNo && <span>Policy {d.policyNo}</span>}
                     {d.coverageCents != null && <span>{formatMoney(String(d.coverageCents / 100))}</span>}
+                    {d.uploadedAt && (
+                      <span className="pack-doc-upd">Updated {packDay(String(d.uploadedAt).slice(0, 10))} ({daysAgoText(d.uploadedAt)})</span>
+                    )}
                     <span className={lapsed ? "pack-bad" : d.expiresOn ? "pack-good" : ""}>
                       {d.expiresOn
                         ? `${lapsed ? "Expired" : "Current through"} ${packDay(d.expiresOn)}`
@@ -42923,7 +42970,6 @@ body{background:var(--paper)}
   color:var(--ink-soft)}
 .pack-card h1{margin:8px 0 4px;font-size:36px;font-weight:800;line-height:1.1;letter-spacing:-.025em}
 .pack-lede{margin:0;font-size:13px;color:var(--ink-soft)}
-.pack-note{margin:10px 0 0;font-size:13.5px;font-style:italic}
 .pack-lic{display:flex;align-items:center;gap:12px;margin-top:16px;padding:13px 15px;
   border-radius:12px;border:2px solid;font-size:13px}
 .pack-lic.ok{background:#eaf6ee;border-color:#2e8b57;color:#1d6a40}
@@ -42972,6 +43018,7 @@ body{background:var(--paper)}
 .pack-trade{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;
   background:#eef7f1;color:var(--brand-dk);border:1px solid #cfe6d8}
 .pack-what{margin:12px 0 0;font-size:14px;line-height:1.5;color:var(--ink-soft)}
+.pack-updated{display:flex;align-items:center;gap:6px;margin:8px 0 0;font-size:13px;font-weight:600;color:var(--ink)}
 .pack-to{margin:8px 0 0;font-size:12.5px;color:var(--ink-soft)}
 .pack-badge{margin-top:16px}
 .pack-file{display:block;font-size:11.5px;color:var(--ink-soft);margin-top:2px;

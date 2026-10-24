@@ -42,6 +42,9 @@ const SUB = {
 let SHARES = [];
 const sends = [], revokes = [];
 // What the recipient's page is served.
+// Upload days counted back from today, so "N days ago" is checkable.
+const daysBack = (n) => { const d = new Date(); d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} 15:30:00`; };
 let PACK = {
   company: "Ridge Roofing", contact: "Sam Ridge", where: "Seattle, WA",
   license: "RIDGERR891QZ", licenseVerified: true, licenseCheckedAt: "2026-09-12",
@@ -52,14 +55,14 @@ let PACK = {
   docs: [
     { kind: "insurance", onFile: true, issuer: "Cascade Mutual", policyNo: "POL-44812",
       coverageCents: 200000000, expiresOn: "2027-03-14", readable: true, gated: false, id: "d_ins",
-      fileName: "ridge-coi-2026.pdf" },
+      fileName: "ridge-coi-2026.pdf", uploadedAt: daysBack(3) },
     { kind: "bond", onFile: true, issuer: "Western Surety", policyNo: "BND-991",
       coverageCents: 3000000, expiresOn: null, readable: true, gated: false, id: "d_bond",
-      fileName: "ridge-bond.pdf" },
-    { kind: "contract", onFile: true, expiresOn: null, readable: true, gated: false, id: "d_con" },
+      fileName: "ridge-bond.pdf", uploadedAt: daysBack(40) },
+    { kind: "contract", onFile: true, expiresOn: null, readable: true, gated: false, id: "d_con", uploadedAt: daysBack(1) },
     // THE ONE THAT MUST NOT BE OPENABLE.
     { kind: "w9", onFile: true, issuer: null, policyNo: null, coverageCents: null,
-      expiresOn: null, readable: false, gated: true, id: "d_w9" },
+      expiresOn: null, readable: false, gated: true, id: "d_w9", uploadedAt: daysBack(200) },
   ],
 };
 let PACK_ERR = null;
@@ -210,6 +213,7 @@ try {
         h1Size: parseFloat(getComputedStyle(el.querySelector("h1")).fontSize),
         h1Weight: Number(getComputedStyle(el.querySelector("h1")).fontWeight),
         what: el.querySelector(".pack-what")?.innerText || "",
+        updated: el.querySelector(".pack-updated")?.innerText.replace(/\s+/g, " ").trim() || "",
         lic: (() => { const l = el.querySelector(".pack-lic"); return l ? { cls: l.className,
           text: l.innerText.replace(/\s+/g, " "), border: getComputedStyle(l).borderColor } : null; })(),
         ad: (() => { const a = document.querySelector(".pack-page > .pack-ad"); return a ? {
@@ -243,7 +247,15 @@ try {
 
     // WHAT THE PAGE IS, FOR SOMEBODY WHO HAS NEVER HEARD OF SUBSUB.
     t.ck("it says it is a subcontractor's compliance pack", /Subcontractor compliance pack/i.test(pack.text), pack.text.slice(0, 400));
-    t.ck("the explainer is one short line", pack.what.split(/\s+/).length <= 12 && /insurance/i.test(pack.what), pack.what);
+    t.ck("the summary names what is in it, in the order asked for",
+      /In this compliance pack you'll find Ridge Roofing's surety bond, certificate of insurance, signed subcontractor agreement and IRS Form W-9\./.test(pack.what), pack.what);
+    t.ck("with an agreement on file, it says nothing about connecting", !/connect/i.test(pack.what), pack.what);
+    t.ck("the newest upload is the pack's last update, with days since",
+      /^Last updated .+ · yesterday$/.test(pack.updated), pack.updated);
+    t.ck("each row says when it was updated", /Updated .+ \(3 days ago\)/.test(ins.text)
+      && /\(40 days ago\)/.test(bond.text), JSON.stringify([ins.text, bond.text]));
+    t.ck("the sub's note to the recipient is not on the page (it is in the email)",
+      !/As asked on Tuesday/.test(pack.pageText), pack.text.slice(0, 300));
     t.ck("the name is a big bold headline", pack.h1Size >= 30 && pack.h1Weight >= 700, `${pack.h1Size} ${pack.h1Weight}`);
     t.ck("a verified license is green with a check", pack.lic && /\bok\b/.test(pack.lic.cls)
       && /License verified/.test(pack.lic.text) && /RIDGERR891QZ/.test(pack.lic.text)
@@ -293,6 +305,7 @@ try {
   {
     const keep = PACK;
     PACK = { ...PACK, contact: null, where: null, passportUrl: null, trades: [], licenseVerified: false,
+      docs: PACK.docs.filter((d) => d.kind !== "contract"),
       badge: { verified: false, name: null, line: "License not verified by SubSub · Insurance on file, no expiry date given" } };
     const ctx = await browser.createBrowserContext();
     const page = await ctx.newPage();
@@ -304,7 +317,7 @@ try {
         lic: !!el.querySelector(".pack-lic"), licBad: !!el.querySelector(".pack-lic.bad"),
         licBorder: el.querySelector(".pack-lic") ? getComputedStyle(el.querySelector(".pack-lic")).borderColor : "",
         licText: el.querySelector(".pack-lic")?.innerText || "", name: el.querySelector("h1")?.innerText || "",
-        pass: /Passport/.test(el.innerText) } : null;
+        pass: /Passport/.test(el.innerText), what: el.querySelector(".pack-what")?.innerText || "" } : null;
     });
     t.ck("the page still draws", !!v && v.name === "Ridge Roofing", JSON.stringify(v));
     t.ck("no seal is drawn when it is not earned", v && !v.seal, JSON.stringify(v));
@@ -313,6 +326,9 @@ try {
       && /License not verified/.test(v.licText), JSON.stringify(v));
     t.ck("and no empty contact line", v && !v.lede, JSON.stringify(v));
     t.ck("and no Passport link when none is published", v && !v.pass, JSON.stringify(v));
+    t.ck("with no agreement, the summary leaves it out and says when it comes",
+      v && /find Ridge Roofing's surety bond, certificate of insurance and IRS Form W-9\./.test(v.what)
+      && /added once you connect and sign one/.test(v.what), v && v.what);
     PACK = keep;
     await ctx.close();
   }

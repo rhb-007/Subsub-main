@@ -15292,6 +15292,31 @@ refactor.
   fire: Sign in removed (2 assertions, signed in and signed out) and the old
   box wording put back (2).
 
+- **THE PACK PAGE SAYS WHAT IS IN IT AND WHEN IT LAST CHANGED, AND THE SUB'S
+  NOTE IS IN THE EMAIL, NOT ON THE PAGE.** Three asks with the Alexburd Llc pack
+  on screen.
+  - **The note came off the page.** It is the subcontractor writing to the one
+    person they sent it to, so it belongs in the email that carried the link,
+    where `docPackEmail` already puts it. On the page it read as part of the
+    pack, to anybody the link was forwarded to.
+  - **The explainer is a summary of what is on file** (`packSummary`): *In
+    this compliance pack you'll find Alexburd Llc's surety bond, certificate of
+    insurance, signed subcontractor agreement and IRS Form W-9*, in that order,
+    naming only what is on file. With no agreement it adds *A subcontractor
+    agreement is added once you connect and sign one*, because before the two
+    work together there is no agreement to send, and a gap with no reason reads
+    as something missing.
+  - **"Last updated Oct 21, 2026 · 3 days ago"** under it, from the newest
+    `uploadedAt` among what is on file, and **each row says "Updated <date>
+    (N days ago)"**. Counted by day on the reader's clock (`daysAgoText`), with
+    *today* and *yesterday*. That is when the file was uploaded, not when it
+    expires; the row's own expiry stays beside it.
+
+  `test:docshareui` (64). Three mutations fire: the note back on the page, the
+  connect line said with an agreement on file, and the first upload read as the
+  newest. The last survived until the fixture's newest upload was not its first
+  row.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
