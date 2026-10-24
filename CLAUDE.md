@@ -15183,6 +15183,22 @@ refactor.
   nothing in the card says Powered by, and the ad's headline, size and link.
   Putting the old page back fails eight assertions, one per change.
 
+- **"SENT TO YOU" WEARS THE PACK PAGE'S DESIGN, AND IT WAS NEVER CENTERED.**
+  Asked for as the summary of every pack sent to one address matching the
+  pack page. Its wrapper was `.pack-wrap`, which had no layout rule at all, so
+  the card sat flush left on an iPad. It is `.pack-page` now (one wrapper for
+  both pages). It has SubSub's logo above the card, a kicker and a 36px
+  headline, and one short line in place of two sentences. Each row has a bold
+  name and an **Open pack** button: the old `btn-ghost sm` was a size the
+  stylesheet does not define. It closes with Powered by SubSub.
+  **The claim is the forest ad band**, outside the card, in all four of its
+  states (signed out, an admin, another seat, done). The class names
+  (`inbox-claim`, `.done`, `inbox-claim-fine`) and the claim's links are
+  unchanged.
+  `test:inboxui` (70) measures the centering, the logo, the headline, the band
+  and the foot; the old page fails six. Its "inside thirty days" fixture was a
+  fixed date that had passed, and is now fourteen days from today.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

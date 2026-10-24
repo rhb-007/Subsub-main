@@ -54,7 +54,7 @@ const INBOX = {
              { kind: "w9", onFile: true, expiresOn: null, gated: true }] },
     { token: "tok_pine", company: "Pine Roofing", contact: "Pip Pine", where: "Everett, WA",
       sentAt: "2026-09-25", expiresAt: "2026-10-09",
-      docs: [{ kind: "insurance", onFile: true, expiresOn: "2026-10-09", gated: false }] },
+      docs: [{ kind: "insurance", onFile: true, expiresOn: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10), gated: false }] },
     { token: "tok_ridge", company: "Ridge Roofing", contact: "Sam Ridge", where: "Seattle, WA",
       sentAt: "2026-09-18", expiresAt: "2026-10-02",
       docs: [{ kind: "insurance", onFile: true, expiresOn: "2027-04-01", gated: false }] },
@@ -203,7 +203,26 @@ try {
     t.ck("not to a mode nothing handles",
       !/signup=1/.test(claim.href || ""), String(claim.href));
     t.ck("the pitch is that they did not type it",
-      /They already did|they already did/.test(body), body.slice(-260));
+      /typed in, by them/.test(body), body.slice(-260));
+
+    // The same design as the single pack page.
+    const look = await page.evaluate(() => {
+      const card = document.querySelector(".pack-card"), r = card?.getBoundingClientRect();
+      const ad = document.querySelector(".pack-page > .pack-ad.inbox-claim");
+      const h1 = card?.querySelector("h1");
+      return { mid: r ? (r.left + r.right) / 2 : 0, vw: innerWidth,
+        logoOut: !!document.querySelector(".pack-page > .pack-brand .ss-logo"),
+        h1Size: h1 ? parseFloat(getComputedStyle(h1).fontSize) : 0,
+        adOut: !!ad && !card.contains(ad), adBg: ad ? getComputedStyle(ad).backgroundColor : "",
+        adHead: ad?.querySelector("h2")?.innerText || "",
+        foot: document.querySelector(".pack-page > .pack-sign")?.innerText || "" };
+    });
+    t.ck("the card is centered on the page", Math.abs(look.mid - look.vw / 2) < 4, JSON.stringify(look));
+    t.ck("SubSub's logo sits above it, outside the card", look.logoOut, JSON.stringify(look));
+    t.ck("the heading is a big headline", look.h1Size >= 30, JSON.stringify(look));
+    t.ck("the claim is the green ad band under the card", look.adOut
+      && look.adBg === "rgb(18, 61, 44)" && /organized in one place/.test(look.adHead), JSON.stringify(look));
+    t.ck("and the page closes Powered by SubSub", /Powered by/.test(look.foot), look.foot);
 
     // Nothing about the mailbox, and nothing about who else these
     // subcontractors work for.

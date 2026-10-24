@@ -31466,7 +31466,8 @@ function DocInbox({ token, seat = null }) {
 
   if (err) {
     return (
-      <div className="pack-wrap">
+      <div className="pack-page">
+        <InboxBrand />
         <div className="pack-card pack-gone">
           <AlertTriangle size={26} />
           <h2>{err === "expired" ? "That link has expired"
@@ -31481,23 +31482,24 @@ function DocInbox({ token, seat = null }) {
                 : "Open any document link you were sent and ask again \u2014 it takes one tap."}
           </p>
         </div>
-        <p className="pack-foot">Powered by SubSub</p>
+        <InboxSign />
       </div>
     );
   }
-  if (!box) return <div className="pack-wrap"><div className="pack-card">Loading…</div></div>;
+  if (!box) return <div className="pack-page"><div className="pack-card">Loading…</div></div>;
 
   const { rows = [], summary = {} } = box;
   return (
-    <div className="pack-wrap wide">
+    <div className="pack-page wide">
+      <InboxBrand />
       <div className="pack-card">
-        <h2 className="inbox-h">Sent to you</h2>
+        <span className="pack-kicker">Subcontractor compliance packs</span>
+        <h1 className="inbox-h">Sent to you</h1>
         <p className="inbox-sub">
           {summary.companies === 1
             ? "One subcontractor has"
-            : `${summary.companies} subcontractors have`} sent you their compliance
-          paperwork. This page shows what each one actually says today — not what it
-          said when it was emailed to you.
+            : `${summary.companies} subcontractors have`} sent you their paperwork.
+          Always the current copy.
         </p>
 
         {/* The reason to have opened this at all, said first. A count and a
@@ -31538,17 +31540,39 @@ function DocInbox({ token, seat = null }) {
                   <span className="inbox-doc none">Nothing on file</span>
                 )}
               </div>
-              <a className="btn-ghost sm" href={`/?pack=${encodeURIComponent(r.token)}`}>Open</a>
+              <a className="btn-ghost small inbox-open" href={`/?pack=${encodeURIComponent(r.token)}`}>
+                Open pack</a>
             </div>
           ))}
         </div>
-
-        {/* The claim. Their roster is already built -- by the people who
-            wanted to be on it -- which is the whole pitch. */}
-        <InboxClaim token={token} count={summary.companies} seat={seat} />
       </div>
-      <p className="pack-foot">Powered by SubSub</p>
+
+      {/* The claim, drawn as the pack page's ad band: whoever reads this
+          hires subcontractors, and their roster is already built -- by the
+          people who wanted to be on it -- which is the whole pitch. */}
+      <InboxClaim token={token} count={summary.companies} seat={seat} />
+      <InboxSign />
     </div>
+  );
+}
+
+// The same frame the single pack page wears: SubSub's mark above the card,
+// Powered by SubSub at the foot.
+function InboxBrand() {
+  return (
+    <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
+      aria-label="SubSub, visit subsub.work">
+      <SubSubLogo height={22} />
+    </a>
+  );
+}
+function InboxSign() {
+  return (
+    <a className="pack-sign" href="https://subsub.work/" target="_blank" rel="noopener"
+      aria-label="Powered by SubSub, visit subsub.work">
+      <span>Powered by</span>
+      <SubSubLogo height={18} mono />
+    </a>
   );
 }
 
@@ -31588,8 +31612,8 @@ function InboxClaim({ token, count, seat }) {
   const many = count === 1 ? "this contractor" : `these ${count}`;
 
   if (state === "done") return (
-    <div className="inbox-claim done">
-      <h3><CheckCircle2 size={18} /> On your roster now</h3>
+    <section className="pack-ad inbox-claim done">
+      <h2><CheckCircle2 size={24} /> On your roster now</h2>
       <p>
         {added === 0
           ? "They were already on it, so nothing changed."
@@ -31600,48 +31624,49 @@ function InboxClaim({ token, count, seat }) {
       </p>
       {/* This link is spent: claiming sets claimed_at, so coming back here
           answers "already claimed". The way on has to be offered now. */}
-      <a className="btn-solid" href="/">Open SubSub</a>
-    </div>
+      <a className="pack-ad-btn" href="/">Open SubSub</a>
+    </section>
   );
 
   if (!seat) return (
-    <div className="inbox-claim">
-      <h3>Keep this, and be told before anything expires.</h3>
-      <p>
-        A free account keeps {many} on one roster, chases the certificates when they
-        lapse, and lets you add the rest of your contractors. You do not have to type
-        any of it in — they already did.
-      </p>
+    <section className="pack-ad inbox-claim">
+      <span className="pack-ad-kicker">For general contractors and property managers</span>
+      <h2>Keep every subcontractor organized in one place.</h2>
+      <ul>
+        <li><CheckCircle2 size={16} /> {count === 1 ? "This one is" : `These ${count} are`} already typed in, by them</li>
+        <li><CheckCircle2 size={16} /> Told before anything expires, not after</li>
+        <li><CheckCircle2 size={16} /> Send work orders and schedule the job from the same screen</li>
+      </ul>
       {/* Back to this page afterwards, not to a dashboard: the token is what
           knows which contractors are being claimed, and the claim happens here. */}
-      <a className="btn-solid"
+      <a className="pack-ad-btn"
         href={`https://subsub.work/get-started.html?inbox=${encodeURIComponent(token)}`}>
         Claim {many}
       </a>
-      <p className="inbox-claim-fine">Free for three contractors. No card.</p>
-    </div>
+      <p className="inbox-claim-fine">Free for up to three subcontractors. No card needed.</p>
+    </section>
   );
 
   if (!admin) return (
-    <div className="inbox-claim">
-      <h3>Keep this, and be told before anything expires.</h3>
+    <section className="pack-ad inbox-claim">
+      <h2>Keep every subcontractor organized in one place.</h2>
       <p>
         Adding contractors to {seat.accountName || "this account"} is an admin&rsquo;s job,
         and your seat here is not one. Forward this page to whoever runs the account and
         they can claim {many} in one tap.
       </p>
-    </div>
+    </section>
   );
 
   return (
-    <div className="inbox-claim">
-      <h3>Keep this, and be told before anything expires.</h3>
+    <section className="pack-ad inbox-claim">
+      <h2>Keep every subcontractor organized in one place.</h2>
       <p>
         Put {many} on {seat.accountName || "your"} roster with the paperwork they already
         sent, and SubSub chases the certificates when they lapse. You do not have to type
         any of it in — they already did.
       </p>
-      <button className="btn-solid" disabled={state === "busy"}
+      <button className="pack-ad-btn" disabled={state === "busy"}
         onClick={async () => {
           setState("busy");
           try {
@@ -31659,7 +31684,7 @@ function InboxClaim({ token, count, seat }) {
         <p className="inbox-claim-fine err">That didn&rsquo;t save &mdash; nothing was added.
           Try again in a moment.</p>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -43311,7 +43336,7 @@ body{background:var(--paper)}
 }
 
 /* ---- The inbox -------------------------------------------------------- */
-.pack-wrap.wide .pack-card{max-width:760px}
+.pack-page.wide .pack-card,.pack-page.wide .pack-ad{max-width:760px}
 .inbox-ask{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:18px;
   padding:15px 17px;background:var(--paper);border:1px solid var(--line);border-radius:12px}
 .inbox-ask > div{flex:1;min-width:200px;display:flex;flex-direction:column;gap:3px}
@@ -43321,8 +43346,8 @@ body{background:var(--paper)}
 .inbox-ask.done{color:var(--brand-dk);font-size:13px;font-weight:600}
 .inbox-ask.done svg{flex:none;color:var(--brand)}
 .inbox-ask-err{flex:1 0 100%;margin:0;font-size:12px;color:var(--red)}
-.inbox-h{margin:0 0 6px;font-size:22px;font-weight:700;letter-spacing:-.015em}
-.inbox-sub{margin:0 0 18px;font-size:13.5px;line-height:1.55;color:var(--ink-soft);max-width:60ch}
+.pack-card h1.inbox-h{margin:8px 0 6px}
+.inbox-sub{margin:0 0 18px;font-size:14px;line-height:1.5;color:var(--ink-soft);max-width:60ch}
 .inbox-alert{display:flex;gap:9px;align-items:flex-start;padding:13px 15px;border-radius:11px;
   background:#fbf2e2;border:1px solid #e6d3ab;color:var(--amber-ink);font-size:13px;
   line-height:1.5;margin-bottom:18px}
@@ -43333,7 +43358,7 @@ body{background:var(--paper)}
 .inbox-row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 15px;
   border:1px solid var(--line);border-radius:11px;background:var(--card)}
 .inbox-main{display:flex;flex-direction:column;gap:2px;min-width:150px;flex:1}
-.inbox-co{font-size:14.5px;font-weight:600}
+.inbox-co{font-size:17px;font-weight:800;letter-spacing:-.01em}
 .inbox-meta{font-size:11.5px;color:var(--ink-soft)}
 .inbox-docs{display:flex;gap:6px;flex-wrap:wrap;flex:2;min-width:190px}
 .inbox-doc{display:inline-flex;align-items:baseline;gap:5px;font-size:10.5px;font-weight:600;
@@ -43344,15 +43369,16 @@ body{background:var(--paper)}
 .inbox-doc.warn{background:#fbf2e2;border-color:#e6d3ab;color:var(--amber-ink)}
 .inbox-doc.bad{background:#fbeeea;border-color:#e8c4b8;color:var(--red)}
 .inbox-doc.none{font-style:italic;text-transform:none}
-.inbox-claim{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
-.inbox-claim h3{margin:0 0 7px;font-size:17px;font-weight:700;letter-spacing:-.01em}
-.inbox-claim p{margin:0 0 14px;font-size:13.5px;line-height:1.55;color:var(--ink-soft);max-width:58ch}
+.inbox-claim p{margin:0;font-size:15px;line-height:1.55;color:#e8f2ec;max-width:58ch}
+button.pack-ad-btn{border:0;font-family:inherit;cursor:pointer}
+button.pack-ad-btn:disabled{opacity:.6;cursor:default}
+.inbox-open{flex:none;text-decoration:none}
 /* "Free for three contractors. No card." under the button, and the failure
    line. Small, because it answers a worry rather than making a claim. */
-.inbox-claim-fine{margin:10px 0 0;font-size:11.5px;color:var(--ink-soft)}
-.inbox-claim-fine.err{color:var(--red);font-weight:600}
-.inbox-claim.done h3{display:flex;align-items:center;gap:8px;color:var(--brand-dk)}
-.inbox-claim.done h3 svg{flex:none;color:var(--brand)}
+.inbox-claim .inbox-claim-fine{margin:0;font-size:12.5px;color:#b9d2c4}
+.inbox-claim .inbox-claim-fine.err{color:#ffb4a8;font-weight:700}
+.inbox-claim.done h2{display:flex;align-items:center;gap:10px}
+.inbox-claim.done h2 svg{flex:none;color:#E39B32}
 @media (max-width:560px){.inbox-row{align-items:flex-start}.inbox-docs{flex:1 0 100%}}
 .pack-stats{display:flex;gap:16px;flex-wrap:wrap;margin:0 0 14px;padding-bottom:12px;
   border-bottom:1px solid var(--line);font-size:11.5px;color:var(--ink-soft)}
