@@ -38722,7 +38722,7 @@ function Modal({ children, onClose, wide, className = "" }) {
 // Dirtiness is DERIVED by comparing the box against what it was seeded
 // with, rather than a `touched` flag set in the change handler: a flag is a
 // second record of one fact and it is the one that gets missed.
-function PhotoCaption({ photo, locked, onSave }) {
+function PhotoCaption({ photo, locked, onSave, onRedo = null }) {
   const kept = photo.caption || "";
   const draft = photo.draft || "";
   // AN UNREADABLE PHOTOGRAPH DOES NOT SEED THE BOX. The model's answer there
@@ -38768,13 +38768,22 @@ function PhotoCaption({ photo, locked, onSave }) {
           <span className="insp-cap-tag"><Sparkles size={11} /> Drafted — edit it or keep it</span>
           <button type="button" className="insp-cap-keep" disabled={busy}
             onClick={() => save(text)}>Keep</button>
+          {/* 17. A DESCRIPTION CAN BE ASKED FOR AGAIN. A new draft replaces the
+              old one, never a kept caption, so it is offered only while the
+              box still holds a draft. */}
+          {onRedo && (
+            <button type="button" className="insp-cap-redo" disabled={busy} onClick={onRedo}>
+              <RotateCcw size={12} /> Describe again
+            </button>
+          )}
         </div>
       )}
       {!kept && !!draft && photo.draftUnclear && (
         /* The model said it could not make this one out. Its words, below an
            empty box rather than inside it, because what it could not see is
            worth knowing and is not the record. */
-        <p className="insp-cap-unclear">Couldn't read this one — {draft}</p>
+        <p className="insp-cap-unclear">Couldn't read this one — {draft}
+          {onRedo && <> <button type="button" className="link-btn" onClick={onRedo}>Describe again</button></>}</p>
       )}
       {err && <p className="cov-hint" role="alert">{err}</p>}
     </div>
@@ -38802,6 +38811,9 @@ function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood, photosF
   const rows = room.checklist || [];
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
+  // 17. What "Mark the rest good" deliberately left: an item with a photo
+  // nobody has marked is being recorded, very often because it is wrong.
+  const [leftOut, setLeftOut] = useState([]);
   if (!rows.length) return null;
   const t = checklistTally([room]);
   const missing = room.checklistMigration;
@@ -38831,8 +38843,9 @@ function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood, photosF
         {moveOut && t.costCents > 0 && <span className="insp-cl-cost">{formatCents(t.costCents)}</span>}
         {!ro && t.answered < t.total && (
           <button type="button" className="btn-ghost small insp-cl-allgood" disabled={!!busy}
-            onClick={async () => { setBusy("all"); setErr("");
-              try { await onAllGood(room.id); } catch { setErr("That didn't save. Try again."); }
+            onClick={async () => { setBusy("all"); setErr(""); setLeftOut([]);
+              try { const r = await onAllGood(room.id); setLeftOut(Array.isArray(r?.left) ? r.left : []); }
+              catch { setErr("That didn't save. Try again."); }
               finally { setBusy(""); } }}>
             <CheckCircle2 size={13} /> {busy === "all" ? "Marking…" : "Mark the rest good"}
           </button>
@@ -38842,6 +38855,10 @@ function InspectionChecklist({ room, locked, moveOut, onItem, onAllGood, photosF
         <span style={{ width: `${t.total ? Math.round((t.answered / t.total) * 100) : 0}%` }} />
       </div>
       <p className="insp-cl-default">{DEFAULT_CONDITION_TEXT}</p>
+      {leftOut.length > 0 && (
+        <p className="insp-cl-left" role="status"><Camera size={13} /> Left for you to mark, because it has a
+          photo: {joinAnd(leftOut)}.</p>
+      )}
       {missing && <p className="fld-err">The checklist needs a database update ({missing}) before it can be saved.</p>}
       {locked && !shown.length && <p className="prop-none">Nothing was noted beyond that.</p>}
       <ul className="insp-cl-rows">
@@ -39146,7 +39163,8 @@ function InspectionRoom({ inspectionId, room, locked, nodeRef, ringed, onPatch, 
         ) : (
           <>
             <PhotoCaption photo={ph} locked={locked}
-              onSave={(caption) => onCaption(room.id, ph.id, caption)} />
+              onSave={(caption) => onCaption(room.id, ph.id, caption)}
+              onRedo={canAiDraft && !locked ? () => describeEach([ph], shots) : null} />
             {!locked && draftMiss[ph.id] && !ph.caption && !ph.draft && (
               <p className="insp-cap-miss" role="alert">
                 {DRAFT_REFUSALS[draftMiss[ph.id]] || "The description didn't come back."}{" "}
@@ -39910,7 +39928,7 @@ function InspectionDetail({ inspection, property, onReload, onClose, onRaise, on
             onDrafted={onReload}
             moveOut={inspection.kind === "move_out"}
             onItem={(roomId, key, body) => api.putInspectionItem(inspection.id, roomId, key, body).then(settle)}
-            onAllGood={(roomId) => api.inspectionItemsAllGood(inspection.id, roomId).then(settle)}
+            onAllGood={(roomId) => api.inspectionItemsAllGood(inspection.id, roomId).then((r) => { settle(r); return r; })}
             /* Read off the inspection rather than assumed: only the Worker
                knows whether there is a key, and a button that cannot work
                must not be drawn. */
@@ -44938,6 +44956,11 @@ p.fld-note{margin:6px 0 0}
 .insp-cap-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .insp-cap-tag{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:650;
   color:var(--brand)}
+.insp-cap-redo{display:inline-flex;align-items:center;gap:4px;min-height:32px;padding:0 10px;border-radius:999px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;font-size:12px;font-weight:700;cursor:pointer}
+.insp-cap-redo:hover{border-color:var(--brand);color:var(--brand)}
+.insp-cl-left{display:flex;gap:6px;align-items:flex-start;margin:6px 0 0;font-size:12.5px;color:var(--ink-soft)}
+.insp-cl-left svg{flex:none;margin-top:2px}
 .insp-cap-keep{padding:4px 11px;border:1px solid var(--brand);border-radius:999px;
   background:var(--brand);color:#fff;font:inherit;font-size:11.5px;
   font-weight:700;cursor:pointer}

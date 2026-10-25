@@ -111,7 +111,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path === "/api/inspections/insp_1/rooms/r1/drafts" && method === "POST") {
     sent.push({ what: "draft", body });
-    PHOTOS = PHOTOS.map((p, i) => ({ ...p, draft: `Drafted note ${i + 1}.`, draftUnclear: false }));
+    PHOTOS = PHOTOS.map((p, i) => ({ ...p, draft: p.draft || `Drafted note ${i + 1}.`, draftUnclear: false }));
     return [200, { ok: true, drafted: PHOTOS.length, rooms: DETAIL().rooms }];
   }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
@@ -157,6 +157,7 @@ const shots = (page) => page.evaluate(() => [...document.querySelectorAll(".insp
     borderStyle: cs ? cs.borderTopStyle : null,
     tag: (el.querySelector(".insp-cap-tag")?.innerText || "").replace(/\s+/g, " ").trim(),
     keep: !!el.querySelector(".insp-cap-keep"),
+    redo: !!el.querySelector(".insp-cap-redo"),
     unclear: (el.querySelector(".insp-cap-unclear")?.innerText || "").replace(/\s+/g, " ").trim(),
   };
 }));
@@ -229,6 +230,18 @@ try {
       rows[0]?.isDraft === true && rows[0]?.borderStyle === "dashed", JSON.stringify(rows[0]));
     t.ck("it says it is a draft", /Drafted/.test(rows[0]?.tag || ""), rows[0]?.tag);
     t.ck("and offers a way to keep it", rows[0]?.keep === true);
+
+    // 17. And a way to ask for it again, which asks the route for that photo.
+    t.ck("and to describe it again", rows[0]?.redo === true, JSON.stringify(rows[0]));
+    {
+      const before = sent.length;
+      await page.evaluate(() => document.querySelector(".insp-cap-redo").click());
+      await wait(900);
+      const redo = sent.slice(before);
+      t.ck("Describe again asks for that one photo", redo.length === 1 && redo[0].what === "draft"
+        && redo[0].body.photos?.length === 1, JSON.stringify(redo.map((x) => [x.what, x.body?.photos?.length])));
+      sent.length = before;
+    }
 
     // THE WHOLE RULE. Clicking away from a sentence nobody has read leaves
     // the record empty: a preselection mistaken for your own choice is worse

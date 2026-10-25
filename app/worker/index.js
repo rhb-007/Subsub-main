@@ -18995,8 +18995,25 @@ app.post("/api/inspections/:id/rooms/:roomId/items/all-good", requireRole(...INS
   if (res) return res;
   const list = checklistFor(room.name);
   if (!list.length) return c.json({ error: "no_checklist" }, 400);
+  // 17. AN ITEM WITH A PHOTO NOBODY HAS MARKED IS NOT "THE REST". A photo
+  // of the ceiling is somebody recording the ceiling, very often because it
+  // is wrong, so marking it Good with everything else would file the stain
+  // as fine. It is left for them and named on the reply.
+  let photographed = new Set();
+  try {
+    const { results: ph } = await c.env.DB.prepare(
+      `SELECT DISTINCT item_key FROM inspection_photos WHERE room_id = ? AND item_key IS NOT NULL`
+    ).bind(room.id).all();
+    photographed = new Set((ph || []).map((r) => r.item_key));
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  const left = [];
   try {
     for (const i of list) {
+      if (photographed.has(i.key)) {
+        const got = await c.env.DB.prepare(
+          `SELECT condition FROM inspection_items WHERE room_id = ? AND item_key = ?`).bind(room.id, i.key).first();
+        if (!got?.condition) { left.push(i.label); continue; }
+      }
       await c.env.DB.prepare(
         `INSERT INTO inspection_items (id, room_id, item_key, label, grp, condition, updated_by, updated_at)
          VALUES (?, ?, ?, ?, ?, 'ok', ?, CURRENT_TIMESTAMP)
@@ -19010,7 +19027,7 @@ app.post("/api/inspections/:id/rooms/:roomId/items/all-good", requireRole(...INS
     throw err;
   }
   await syncRoomStatus(c.env.DB, room);
-  return c.json({ ok: true, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
+  return c.json({ ok: true, left, rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 
 // Photos, attached after the bytes are already in R2 through
@@ -19293,9 +19310,35 @@ app.post("/api/inspections/:id/rooms/:roomId/drafts", requireRole(...INSPECTION_
     if (migrationNeeded) return c.json({ error: "migration_needed", migration: "057_photo_captions" }, 503);
     throw err;
   }
+  // 17. A PHOTO OF AN ITEM MARKS THE ITEM, when nobody has. The model's
+  // condition fills an UNANSWERED item and only that: an answer somebody gave
+  // is theirs and a draft never overwrites it, the same rule the caption
+  // follows. Written through the item table and syncRoomStatus, so the room's
+  // status follows exactly as it does for a tap. Best effort: a database
+  // without 096 keeps the drafts and marks nothing.
+  const marked = [];
+  try {
+    const hadMarked = await roomHasMarks(c.env.DB, room.id);
+    for (const d of drafts) {
+      const ph = (have || []).find((p) => p.id === want[d.ref - 1].id);
+      const item = ph?.item_key ? list.find((i) => i.key === ph.item_key) : null;
+      if (!d.condition || !item) continue;
+      const r = await c.env.DB.prepare(
+        `INSERT INTO inspection_items (id, room_id, item_key, label, grp, condition, updated_by, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(room_id, item_key) DO UPDATE SET condition = excluded.condition,
+           updated_by = excluded.updated_by, updated_at = excluded.updated_at
+         WHERE inspection_items.condition IS NULL`
+      ).bind(uid(), room.id, item.key, item.label, item.group, d.condition, auth.userId).run();
+      if (r?.meta?.changes !== 0) marked.push({ key: item.key, condition: d.condition });
+    }
+    if (marked.length) await syncRoomStatus(c.env.DB, room, hadMarked);
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
   await logActivity(c.env, auth.accountId, auth.userId, "inspection_drafted",
     `Drafted notes for ${drafts.length} photo${drafts.length === 1 ? "" : "s"} in ${room.name}`);
-  return c.json({ ok: true, drafted: drafts.length,
+  return c.json({ ok: true, drafted: drafts.length, marked,
     rooms: await inspectionRooms(c.env.DB, row.id, { drafts: mayWriteInspection(auth.role) }) });
 });
 

@@ -173,8 +173,47 @@ try {
     ck("the schema closes additionalProperties, which the API requires",
       DRAFT_SCHEMA.additionalProperties === false
       && DRAFT_SCHEMA.properties.photos.items.additionalProperties === false);
-    ck("and requires all three fields of an entry",
-      JSON.stringify(DRAFT_SCHEMA.properties.photos.items.required) === '["ref","draft","unclear"]');
+    ck("and requires every field of an entry, the condition included",
+      JSON.stringify(DRAFT_SCHEMA.properties.photos.items.required) === '["ref","draft","unclear","condition"]');
+    // 17. The condition rides along, and an unclear photo or "unknown" names none.
+    ck("a condition is read back", readDrafts({ photos: [{ ref: 1, draft: "Stained", unclear: false, condition: "nr" }] }, 1)[0].condition === "nr");
+    ck("unknown is no condition", readDrafts({ photos: [{ ref: 1, draft: "Hm", unclear: false, condition: "unknown" }] }, 1)[0].condition === null);
+    ck("nor is one on an unclear photo", readDrafts({ photos: [{ ref: 1, draft: "Dark", unclear: true, condition: "nr" }] }, 1)[0].condition === null);
+    ck("nor a code that is not on the form", readDrafts({ photos: [{ ref: 1, draft: "x", unclear: false, condition: "bad" }] }, 1)[0].condition === null);
+    ck("the prompt asks for it in the form's codes", /set condition to the one that fits that item/.test(draftSystem({})));
+  }
+
+  console.log("\n-- 17. a photo of an item marks the item, and only an unanswered one --");
+  {
+    const { db, env } = seed();
+    const [, insp] = await json(await call(env, "/api/inspections", { method: "POST",
+      body: { kind: "move_in", propertyId: "p_press", unit: "12c" } }));
+    const [, r1] = await json(await call(env, `/api/inspections/${insp.id}/rooms`, { method: "POST", body: { name: "Living room" } }));
+    const roomId = r1.rooms[0].id;
+    const shoot = async (itemKey, i) => (await json(await call(env, `/api/inspections/${insp.id}/rooms/${roomId}/photos`,
+      { method: "POST", body: { itemKey, photos: [{ key: `acc1/report-photo/${itemKey}-${i}.jpg`, type: "image/jpeg", name: `${itemKey}.jpg` }] } })))[1];
+    await shoot("ceiling", 1); await shoot("floor", 2); const last = await shoot("walls", 3);
+    const ph = Object.fromEntries(last.rooms[0].photos.map((p) => [p.itemKey, p.id]));
+    // The floor was already answered Good by the manager.
+    await call(env, `/api/inspections/${insp.id}/rooms/${roomId}/items/floor`, { method: "PUT", body: { condition: "ok" } });
+    reply = answer([
+      { ref: 1, draft: "Water staining across the ceiling.", unclear: false, condition: "nr" },
+      { ref: 2, draft: "Floor looks scuffed.", unclear: false, condition: "nc" },
+    ]);
+    const [s, out] = await json(await call(env, `/api/inspections/${insp.id}/rooms/${roomId}/drafts`,
+      { method: "POST", body: { photos: [{ id: ph.ceiling, data: px() }, { id: ph.floor, data: px() }] } }));
+    const cond = (k) => db.prepare("SELECT condition FROM inspection_items WHERE room_id = ? AND item_key = ?").get(roomId, k)?.condition || null;
+    ck("it drafts", s === 200, `${s} ${JSON.stringify(out).slice(0, 120)}`);
+    ck("the stained ceiling is marked Needs repair from its photo", cond("ceiling") === "nr", String(cond("ceiling")));
+    ck("an answer somebody gave is never overwritten", cond("floor") === "ok", String(cond("floor")));
+    ck("the reply says which it marked", JSON.stringify(out.marked) === '[{"key":"ceiling","condition":"nr"}]', JSON.stringify(out.marked));
+    const status = db.prepare("SELECT status FROM inspection_rooms WHERE id = ?").get(roomId).status;
+    ck("and the room's status follows, as it does for a tap", status === "fail", status);
+    // Mark the rest good: the walls have a photo nobody has marked.
+    const [, ag] = await json(await call(env, `/api/inspections/${insp.id}/rooms/${roomId}/items/all-good`, { method: "POST" }));
+    ck("Mark the rest good leaves an item with an unmarked photo", cond("walls") === null && (ag.left || []).includes("Walls"),
+      `${cond("walls")} ${JSON.stringify(ag.left)}`);
+    ck("and marks the others", cond("doors") === "ok" && cond("ceiling") === "nr", `${cond("doors")} ${cond("ceiling")}`);
   }
 
   console.log("\n-- the request Anthropic actually receives --");

@@ -15376,6 +15376,33 @@ refactor.
   `test:jobaddtenant` (12). Dropping the Schedule-tab control and putting the
   old headline back each fail their own assertion.
 
+- **A PHOTO OF A CHECKLIST ITEM MARKS THE ITEM, A DESCRIPTION CAN BE ASKED
+  FOR AGAIN, AND "MARK THE REST GOOD" LEAVES A PHOTOGRAPHED ITEM ALONE.**
+  Reported with a living room's Ceiling photo described as *"water staining and
+  discoloration"*, while the Ceiling item and the room both still read *Not
+  checked*. Asked for as *"status should be automatically selected based on the
+  description of the image ... if there is an issue with one aspect like the
+  floor and you select mark all others as good, it should mark all others as
+  good except for the one with issues"*, and a redo.
+  - **The draft carries a condition** (`DRAFT_SCHEMA.condition`, the form's
+    own codes plus `unknown`), asked for only of a photo labelled with its
+    item. `readDrafts` drops it on an unclear photo, an `unknown`, or a code
+    not on the form.
+  - **The draft route writes it to an UNANSWERED item only**, through the item
+    table and `syncRoomStatus`, so the room follows as it does for a tap. An
+    answer somebody gave is never overwritten (the same rule as the caption),
+    and the reply names what it marked (`marked`).
+  - **"Mark the rest good" leaves an item that has a photo and no condition**,
+    because a photo of the ceiling is somebody recording the ceiling. The reply
+    names them (`left`), and the checklist says *Left for you to mark, because
+    it has a photo: Walls.*
+  - **Describe again** sits beside Keep on every unkept draft, and beside
+    *Couldn't read this one*. It asks for that one photo; a kept caption is
+    never replaced, so it is not offered once one is kept.
+  `test:photodraft` (104) and `test:photodraftui` (39). Three mutations fire:
+  the draft overwriting an answer (two assertions), the photographed item
+  marked good (one), and the redo control (two).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

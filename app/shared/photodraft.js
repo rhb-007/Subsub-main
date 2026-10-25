@@ -137,6 +137,9 @@ export const DRAFT_REFUSALS = {
 // `ref` is the 1-based position in the request, matching the "Photo 1:"
 // labels, and never our photo id -- the id is ours and the model has no use
 // for it.
+// The codes are roomchecklist.js's, minus "doesn't apply" (a photo of a
+// thing shows it IS there) and plus "unknown".
+export const DRAFT_CONDITIONS = ["ok", "nc", "nsc", "np", "nsp", "nr", "rp", "unknown"];
 export const DRAFT_SCHEMA = {
   type: "object",
   properties: {
@@ -154,8 +157,14 @@ export const DRAFT_SCHEMA = {
           // one. So it may say it cannot tell, and the screen says so
           // rather than seeding a confident sentence.
           unclear: { type: "boolean" },
+          // 17. THE CONDITION THE DESCRIPTION IMPLIES, for a photo of one
+          // checklist item, in the form's own codes. It fills an item nobody
+          // has answered, so a photo of a stained ceiling marks the ceiling,
+          // and through it the room. "unknown" when it is unclear or not
+          // about one item -- an invented condition is worse than none.
+          condition: { type: "string", enum: DRAFT_CONDITIONS },
         },
-        required: ["ref", "draft", "unclear"],
+        required: ["ref", "draft", "unclear", "condition"],
         additionalProperties: false,
       },
     },
@@ -198,6 +207,9 @@ export function draftSystem({ kindLabel = "Move-in" } = {}) {
     "- No pleasantries, no opening phrase, no \"this photo shows\". Start with the thing itself.",
     "- Never state anything the photograph does not show. If it is too dark, blurred, or too close to tell, set unclear to true and say in one short sentence what you can and cannot make out.",
     "",
+    "",
+    "When a photograph is labelled with the checklist item it is of (\"Photo 1 (of: Ceiling)\"), also set condition to the one that fits that item: ok (in good order), nc (needs cleaning), nsc (needs spot cleaning), np (needs painting), nsp (needs spot painting), nr (needs repair), rp (needs replacing). Water staining, cracks, holes, breaks and anything not working are nr or rp. Use unknown when it is unclear or the photograph is not of one item.",
+    "",
     "The manager will edit every line before it is kept, so a plain draft is more useful than a confident one.",
   ].join("\n");
 }
@@ -234,7 +246,9 @@ export function readDrafts(parsed, count) {
     const text = String(item?.draft || "").trim().slice(0, MAX_CAPTION);
     if (!text) continue;
     seen.add(ref);
-    out.push({ ref, draft: text, unclear: !!item?.unclear });
+    const cond = DRAFT_CONDITIONS.includes(item?.condition) && item.condition !== "unknown" && !item?.unclear
+      ? item.condition : null;
+    out.push({ ref, draft: text, unclear: !!item?.unclear, condition: cond });
   }
   return out;
 }
