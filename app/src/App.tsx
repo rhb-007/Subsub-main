@@ -4582,6 +4582,27 @@ export default function SubSub() {
     setJobs((js) => js.map((j) => j.id === jobId
       ? { ...j, access, accessEffective: access } : j));
   };
+  // 15/16. The tenant, added from the job and named on it in one press. The
+  // seat first (on this building and unit, invited), then the job. Awaited, so
+  // a refusal on either half is said rather than drawn as done.
+  const addJobTenant = async (job, f) => {
+    const res = await api.addTenant({ firstName: f.firstName, lastName: f.lastName,
+      email: f.email, phone: f.phone, unit: f.unit, propertyId: job.propertyId });
+    try {
+      await api.patchJob(job.id, { accessUserId: res.userId });
+    } catch (e) {
+      const err = new Error("bad_tenant"); err.body = { error: "bad_tenant" }; throw err;
+    }
+    setUsers((us) => us.some((u) => u.id === res.userId) ? us
+      : [...us, { id: res.userId, name: res.name, email: res.email || "", phone: res.phone || null }]);
+    setJobs((js) => js.map((j) => j.id !== job.id ? j : {
+      ...j, accessUserId: res.userId,
+      // The route pre-answers an unanswered job "the tenant needs to be in",
+      // the same rule the create form follows; the card agrees before a reload.
+      ...(!j.access ? { access: "tenant", accessEffective: "tenant" } : {}) }));
+    logEvent("tenant_added", `Added ${res.name} as the tenant on ${job.title}`);
+    return res;
+  };
   // A CLIENT'S WORK, answered from our own account. See /api/my-work/:woId/*.
   const respondAway = async (woId, status) => {
     await api.respondMyWork(woId, status);
@@ -8030,6 +8051,7 @@ export default function SubSub() {
                            is asked: a time the crew put forward. */
                         onAnswerVisit={maySetAccess(role) ? answerVisit : null}
                         onVisitOutcome={maySetAccess(role) ? visitOutcome : null}
+                        onAddTenant={maySetAccess(role) && hasProperties(account) ? addJobTenant : null}
                         onAssign={() => {
                           const slot = j.trades.find((t) => !j.assignments[t]) || j.trades[0];
                           if (slot) setAssigning({ job: j, trade: slot });
@@ -16322,11 +16344,86 @@ function AccessPanel({ plan, viewer, jobId, onSaved, compact = false }) {
   );
 }
 
+// THE TENANT, ADDED FROM THE JOB. A move-in very often has nobody on the unit
+// yet, and the way in to the unit runs through them. A first name and a way to
+// reach them is enough: the seat is made on this building and unit, the invite
+// goes, and they are named on this job, so the next time proposed asks them.
+function AddJobTenant({ job, onAdd }) {
+  const unit0 = job.fromInspection?.unit || "";
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ firstName: "", lastName: "", phone: "", email: "", unit: unit0 });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const ERR = {
+    name_required: "Add their first name.",
+    contact_required: "Add a mobile or an email, so they can be invited.",
+    bad_email: "That email doesn't look right.",
+    bad_phone: "That mobile doesn't look right.",
+    already_a_member: "That person is already on your team, not a tenant.",
+    bad_tenant: "They were added, but couldn't be named on this job. Pick them with Edit.",
+  };
+  if (!open) {
+    return (
+      <div className="ajt">
+        <span><UserPlus size={15} /> <b>Who is moving in?</b> Add the tenant so they can let the
+          crew in and confirm the time.</span>
+        <button type="button" className="btn-solid" onClick={() => setOpen(true)}>
+          <Plus size={14} /> Add the tenant
+        </button>
+      </div>
+    );
+  }
+  return (
+    <form className="ajt-form" onSubmit={async (e) => {
+      e.preventDefault();
+      setBusy(true); setErr("");
+      try {
+        await onAdd(job, f);
+      } catch (x) {
+        setErr(ERR[x?.body?.error || x?.message] || "That didn't save. Try again in a moment.");
+      } finally { setBusy(false); }
+    }}>
+      <div className="ajt-head"><UserPlus size={15} /> Add the tenant for {unit0 ? `unit ${unit0}` : "this job"}</div>
+      <div className="ajt-grid">
+        <label className="fld">First name<input value={f.firstName} onChange={set("firstName")} autoComplete="off" /></label>
+        <label className="fld">Last name <span className="opt">optional</span><input value={f.lastName} onChange={set("lastName")} autoComplete="off" /></label>
+        <label className="fld">Mobile<input type="tel" value={f.phone} onChange={set("phone")} inputMode="tel" /></label>
+        <label className="fld">Email<input type="email" value={f.email} onChange={set("email")} /></label>
+        <label className="fld">Unit<input value={f.unit} onChange={set("unit")} /></label>
+      </div>
+      <p className="fld-note">A mobile or an email is enough. They are invited to SubSub to confirm times.</p>
+      {err && <p className="ajt-err">{err}</p>}
+      <div className="ajt-acts">
+        <button type="button" className="btn-ghost" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
+        <button type="submit" className="btn-solid" disabled={busy || !f.firstName.trim() || (!f.phone.trim() && !f.email.trim())}>
+          {busy ? "Adding\u2026" : "Add and invite"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit, onVisitOutcome = null,
-  canSetAccess = false, hiresWord = "contractor", part = "both" }) {
+  canSetAccess = false, hiresWord = "contractor", part = "both", onAddTenant = null }) {
   // 073. How the crew gets in, re-read whenever the answer or the window moves.
   const [accPlan, setAccPlan] = useJobAccess(job.id,
-    `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}`);
+    `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}|${accessTenant(job) || ""}`);
+  // 15/16. NOBODY NAMED AS THE TENANT, ON A JOB WHERE ONE IS WANTED: the
+  // tenant has to be in, or the job came from a move-in walk. Adding them is
+  // done here, beside the time and the way in, rather than by sending
+  // somebody to another screen -- which is where "Add them under Account ->
+  // Tenants" sent them, to a tab that no longer exists.
+  const wantsTenant = !!onAddTenant && !accessTenant(job) && !!job.propertyId
+    && (needsTenantConfirm(job.accessEffective) || job.fromInspection?.kind === "move_in");
+  // Held here, not in the form: naming them takes the form away (the job now
+  // has a tenant), and the confirmation has to outlive it.
+  const [tenantAdded, setTenantAdded] = useState("");
+  const addTenant = async (j, f) => { const r = await onAddTenant(j, f); setTenantAdded(r?.name || f.firstName); return r; };
+  const addedLine = tenantAdded ? (
+    <p className="ajt-done"><CheckCircle2 size={14} /> {tenantAdded} is the tenant on this job now, and
+      was invited to SubSub. They confirm the next time proposed.</p>
+  ) : null;
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
   // NOBODY ON THE JOB. A window can be agreed before anybody is hired -- that
@@ -16460,10 +16557,12 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
                 drew the sentence and said nothing about that would promise a
                 confirmation step that is never going to happen. */}
             {needsTenantConfirm(job.accessEffective) && !canAskTenant(job) && (
-              <span className="va-nobody"><AlertTriangle size={12} /> Nobody on this unit has a
-                login yet, so setting a time books it. Add them under
-                Account{" "}&rarr; Tenants and they can confirm the next one.</span>
+              <span className="va-nobody"><AlertTriangle size={12} /> No tenant is named on this
+                job yet, so setting a time books it without asking anybody. Add them below and they
+                confirm the next one.</span>
             )}
+            {wantsTenant && <AddJobTenant job={job} onAdd={addTenant} />}
+            {addedLine}
             {canSetAccess && (
               <div className="va-pick">
                 {accessChoices(job).map((k) => (
@@ -16601,6 +16700,8 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
       </div>
       <div className={part === "visit" || part === "none" ? "jt-off" : "jt-on"}>
         <AccessPanel plan={accPlan} viewer="team" jobId={job.id} onSaved={setAccPlan} />
+        {wantsTenant && <AddJobTenant job={job} onAdd={addTenant} />}
+        {addedLine}
       </div>
     </div>
   );
@@ -45802,6 +45903,20 @@ span.insp-cl-check{cursor:default}
 .jr-whennote.jrw-wait{background:#fbf0dd;color:var(--amber-ink)}
 .jr-whennote.jrw-plain{background:var(--paper);color:var(--ink-soft)}
 .jr-whenmsg{margin:6px 0 0;font-size:12.5px;font-style:italic;color:var(--ink-soft)}
+/* 15/16. Adding the tenant from the job. */
+.ajt{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:space-between;
+  margin-top:10px;padding:12px 14px;border:1px solid var(--line);border-left:4px solid var(--amber);
+  border-radius:12px;background:var(--card)}
+.ajt > span{flex:1 1 280px;font-size:13.5px;line-height:1.45}
+.ajt > span svg{vertical-align:-3px;margin-right:4px;color:var(--amber)}
+.ajt .btn-solid{min-height:42px}
+.ajt-form{margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.ajt-head{display:flex;align-items:center;gap:6px;font-weight:800;font-size:14px;margin-bottom:10px}
+.ajt-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px 12px}
+.ajt-err{margin:8px 0 0;color:#a3342a;font-size:13px}
+.ajt-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+.ajt-done{display:flex;gap:6px;align-items:flex-start;margin:10px 0 0;font-size:13.5px;color:var(--brand)}
+.ajt-done svg{flex:none;margin-top:2px}
 .visit-access{display:flex;align-items:flex-start;gap:7px;margin:0 0 8px;padding:8px 10px;
   border-radius:10px;background:var(--paper);font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
 .visit-access > svg{flex:none;margin-top:2px}

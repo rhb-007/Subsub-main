@@ -103,11 +103,20 @@ export function accessHeadline(plan, viewer) {
   const t = (plan?.people || []).find((p) => p.side === "tenant");
   const m = (plan?.people || []).find((p) => p.side === "manager");
   const crew = (plan?.people || []).find((p) => p.side === "crew");
-  const crewName = crew?.company || "the crew";
+  // Every company coming, not the first: a job with two crews was drawn as
+  // one of them being let in.
+  const crews = [...new Set((plan?.people || []).filter((p) => p.side === "crew")
+    .map((p) => p.company).filter(Boolean))];
+  const crewName = crews.length > 1 ? `${crews.slice(0, -1).join(", ")} and ${crews[crews.length - 1]}`
+    : crew?.company || "the crew";
+  // A first name with the role beside it, or the role alone. "The tenant
+  // (the tenant)" was the first of those with no name to put in it.
+  const tenantWho = t?.firstName ? `${t.firstName} (the tenant)` : "The tenant";
   if (kind === "tenant") {
     if (viewer === "tenant") return `You let ${crewName} in.`;
-    if (viewer === "crew") return `${t?.firstName || "The tenant"} (the tenant) lets you in.`;
-    return `${t?.firstName || "The tenant"} (the tenant) lets ${crewName} in.`;
+    if (viewer === "crew") return `${tenantWho} lets you in.`;
+    if (!t && viewer === "team") return `The tenant lets ${crewName} in, and nobody is named as the tenant yet.`;
+    return `${tenantWho} lets ${crewName} in.`;
   }
   if (kind === "manager") {
     if (viewer === "tenant") return `${m?.firstName || "The managing agent"} from the office lets the crew in. You do not need to be home.`;

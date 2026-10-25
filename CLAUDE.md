@@ -15354,6 +15354,28 @@ refactor.
   managers*) and one line now sit above the box. The box's own heading became
   an H3. `test:unitcalc` pins the title.
 
+- **A MOVE-IN WITH NOBODY NAMED AS THE TENANT IS FIXED FROM THE JOB, ON THE
+  SCHEDULE AND ACCESS TABS.** Reported with the Schedule tab reading *"Nobody
+  on this unit has a login yet ... Add them under Account -> Tenants"*, a tab
+  that no longer exists (Tenants is its own screen), and the Access tab
+  reading *"The tenant (the tenant) lets Cascade Apartment Services in"*.
+  - **`AddJobTenant`** draws on both tabs when the job has a building and no
+    tenant on it (`accessTenant`), and the tenant either has to be in or the
+    job came from a move-in walk. It asks for a first name, a mobile or an
+    email, and the unit (filled in from the inspection). One press makes the
+    tenant seat on that building and unit through `POST /api/tenants`, which
+    invites them, then names them on the job with `PATCH /api/jobs/:id
+    {accessUserId}`, so the next time proposed asks them. Each half is awaited,
+    and a refusal is named. The confirmation is held by `VisitBlock`, because
+    naming the tenant takes the form away. Admin and pm, on an account with
+    buildings, the same gate as the access picker.
+  - **The headline names a tenant once, or not at all**: *Ana (the tenant)
+    lets ...*, or *The tenant lets ...*, and with nobody on the job, *... and
+    nobody is named as the tenant yet.* It names every crew coming, not the
+    first.
+  `test:jobaddtenant` (12). Dropping the Schedule-tab control and putting the
+  old headline back each fail their own assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
