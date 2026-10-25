@@ -414,7 +414,13 @@ app.use("/api/*", async (c, next) => {
     || c.req.path.startsWith("/api/user-invite/")
     // Somebody a subcontractor sent their paperwork to. They have no account
     // -- not having to get one is the point -- and the token is the auth.
-    || c.req.path.startsWith("/api/pack/")
+    //
+    // EXCEPT the documents themselves and adding the sender to a roster: the
+    // page is a sign-up funnel, so the files open for a signed-in team seat
+    // and nobody else. Those two go through this middleware like any other
+    // signed-in call.
+    || (c.req.path.startsWith("/api/pack/")
+      && !/^\/api\/pack\/[^/]+\/(file\/|add$)/.test(c.req.path))
     // A lien waiver asked of somebody by link -- most often the supply house
     // at the bottom of a chain, which has no account and no reason to want
     // one. Same shape as the pack: 32 random bytes naming one waiver, emailed
@@ -1440,6 +1446,17 @@ app.post("/api/signup", async (c) => {
   // plan and the signup count read zero.
   await recordAccountCreated(c.env, { accountId, plan, billing, source: "system" });
 
+  // Signed up from a compliance pack: the subcontractor who sent it lands on
+  // the new roster, when the address signing up is the one it was sent to.
+  // Never fails the signup.
+  let packAdded = null;
+  if (b.packToken && /^[A-Za-z0-9_-]{16,128}$/.test(String(b.packToken))) {
+    try {
+      const r = await addPackSender(c.env, { accountId, userId, token: b.packToken, email });
+      packAdded = r.added ? r.company : null;
+    } catch (err) { console.warn("signup: pack sender not added", err?.message || err); }
+  }
+
   // A company that can be hired has a Passport from its first minute, so the
   // code on the truck opens on day one. Best effort: a database without 077,
   // or a mint that fails, must never cost somebody their account -- the tab
@@ -1489,6 +1506,8 @@ app.post("/api/signup", async (c) => {
     hasPassword: !!chosen,
     // Signed up with Google: the way back in is "Continue with Google".
     viaGoogle: !!google,
+    // The subcontractor whose pack they came from, when it was added.
+    packAdded,
     // The app is reached at the account's own subdomain once DNS is pointed
     // at it; the caller decides whether to send them there or to app.*.
     // Branding, and with it a company hostname, is a Scale feature. A Basic
@@ -15814,6 +15833,55 @@ app.post("/api/inbox/:token/claim", requireRole("admin"), async (c) => {
   }
 });
 
+// THE SENDER ONTO THE READER'S ROSTER. The point of the page: a general
+// contractor or a property manager signs in (or signs up) and the
+// subcontractor who sent the pack lands on their account, as an invited
+// engagement with the documents already there.
+//
+// Only for the address the pack was SENT to. Holding a forwarded link is not
+// proof of being that person, and an engagement opens every document on the
+// company, the W-9 included. A different address is told so by name, and the
+// page offers the inbox email, which goes to the address the pack was sent to.
+async function addPackSender(env, { accountId, userId, token, email }) {
+  const share = await env.DB.prepare(
+    `SELECT s.*, co.company FROM doc_shares s JOIN companies co ON co.id = s.company_id
+      WHERE s.token = ?`).bind(String(token || "")).first();
+  if (!share || share.revoked_at) return { error: "not_found" };
+  if (String(share.to_email || "").trim().toLowerCase() !== String(email || "").trim().toLowerCase()) {
+    return { error: "sent_to_another_address" };
+  }
+  // Your own company sending you its own pack is not a contractor to hire.
+  if (share.company_id === ownCompanyId(accountId)) return { error: "own_company" };
+  const have = await env.DB.prepare(
+    `SELECT status FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, share.company_id).first();
+  // Already there, or taken off deliberately: never quietly put back.
+  if (have) return { ok: true, added: false, status: have.status, company: share.company };
+  await env.DB.prepare(
+    `INSERT INTO engagements (id, account_id, company_id, status, notes)
+     VALUES (?, ?, ?, 'invited', ?)`
+  ).bind(uid(), accountId, share.company_id, "Sent you their compliance pack.").run();
+  await logEvent(env, accountId, userId, "pack.added", share.id, { companyId: share.company_id });
+  await logActivity(env, accountId, userId, "pack_added",
+    `Added ${share.company}, who sent their compliance pack`);
+  return { ok: true, added: true, company: share.company, companyId: share.company_id };
+}
+
+app.post("/api/pack/:token/add", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  try {
+    const me = await c.env.DB.prepare(`SELECT email FROM users WHERE id = ?`).bind(userId).first();
+    const r = await addPackSender(c.env, { accountId, userId, token: c.req.param("token"), email: me?.email });
+    if (r.error === "not_found") return c.json(r, 404);
+    if (r.error) return c.json(r, 403);
+    return c.json(r);
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (!migration) throw err;
+    return c.json({ error: "migration_needed", migration }, 503);
+  }
+});
+
 // "Stop telling me when this renews."
 //
 // Keyed by the SHARE TOKEN, which the recipient already holds and which
@@ -15852,7 +15920,11 @@ app.post("/api/pack/:token/stop", async (c) => {
   }
 });
 
-app.get("/api/pack/:token/file/:docId", async (c) => {
+// The documents open for a SIGNED-IN team seat, never for a bare link. The
+// pack page is the start of a funnel: whoever a sub sends it to sees what is on
+// file, and has to sign in or create an account to read the files. A tenant or
+// a contractor seat is not who a subcontractor sends their paperwork to.
+app.get("/api/pack/:token/file/:docId", requireRole("admin", "pm"), async (c) => {
   const rl = await rateLimit(c.env, "pack-file", clientIp(c), { limit: 240, windowMinutes: 60 });
   if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
 

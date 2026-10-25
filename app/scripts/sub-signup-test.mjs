@@ -368,6 +368,58 @@ const SITE = 5257;
       JSON.stringify(packBody.docs));
     t.ck("   and trades as a list", Array.isArray(packBody.trades), JSON.stringify(packBody.trades));
 
+    {
+    // 5b. THE FUNNEL. The page is public; the FILES are not. A bare link gets
+    //     nothing, and the sender lands on a roster only for the address the
+    //     pack was sent to.
+    const insId = (packBody.docs || []).find((d) => d.kind === "insurance")?.id;
+    const bare = await worker.fetch(new Request(
+      `https://api.subsub.work/api/pack/${token}/file/${insId}`), env);
+    t.ck("5b. the file does not open from the link alone", bare.status === 401 || bare.status === 403,
+      String(bare.status));
+    // A general contractor who signs up FROM this pack, with the address it
+    // was sent to: the sub is on their roster before they ever sign in.
+    const gcUp = await worker.fetch(new Request("https://api.subsub.work/api/signup", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "general_contractor", company: "Cascade Builders",
+        name: "Priya Rao", email: "priya@cascade.test", subdomain: "cascadebuilders",
+        plan: "basic", packToken: token }),
+    }), env);
+    const gc = await gcUp.json().catch(() => ({}));
+    t.ck("    signing up from the pack adds the sender", gcUp.status === 201 && gc.packAdded === "Ridge Roofing",
+      `${gcUp.status} ${JSON.stringify(gc).slice(0, 120)}`);
+    t.ck("    as an invited engagement on the new account",
+      db.prepare("SELECT status FROM engagements WHERE account_id = ? AND company_id = ?")
+        .get(gc.accountId, myCompanyId)?.status === "invited");
+    const gcSeat = { "X-User-Id": gc.userId, "X-Account-Id": gc.accountId };
+    const signedIn = await worker.fetch(new Request(
+      `https://api.subsub.work/api/pack/${token}/file/${insId}`, { headers: gcSeat }),
+      { ...env, FILES: { get: async () => ({ body: "%PDF", httpMetadata: { contentType: "application/pdf" } }) } });
+    t.ck("    and signed in, the file is served", signedIn.status === 200, String(signedIn.status));
+    const addAgain = await worker.fetch(new Request(`https://api.subsub.work/api/pack/${token}/add`,
+      { method: "POST", headers: gcSeat }), env);
+    const againBody = await addAgain.json().catch(() => ({}));
+    t.ck("    adding again changes nothing", addAgain.status === 200 && againBody.added === false,
+      `${addAgain.status} ${JSON.stringify(againBody)}`);
+    // Somebody else, holding a forwarded link.
+    const fwdUp = await worker.fetch(new Request("https://api.subsub.work/api/signup", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "general_contractor", company: "Forwarded Co",
+        name: "Fred Fwd", email: "fred@forwarded.test", subdomain: "forwardedco",
+        plan: "basic", packToken: token }),
+    }), env);
+    const fwd = await fwdUp.json().catch(() => ({}));
+    t.ck("    a forwarded link does not put the sender on another roster at signup",
+      fwdUp.status === 201 && !fwd.packAdded
+        && !db.prepare("SELECT 1 FROM engagements WHERE account_id = ?").get(fwd.accountId),
+      JSON.stringify(fwd).slice(0, 120));
+    const fwdAdd = await worker.fetch(new Request(`https://api.subsub.work/api/pack/${token}/add`,
+      { method: "POST", headers: { "X-User-Id": fwd.userId, "X-Account-Id": fwd.accountId } }), env);
+    t.ck("    nor from the page, by name", fwdAdd.status === 403
+      && (await fwdAdd.json().catch(() => ({}))).error === "sent_to_another_address", String(fwdAdd.status));
+
+    }
+
     // And the line that must not move while fixing the above: somebody else's
     // company is still not writable. The hole this check was added to close is
     // that cmp_own_<accountId> is derivable from a public route.

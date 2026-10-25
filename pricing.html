@@ -431,7 +431,11 @@ body.nav-open{overflow:hidden}
   .cta-row .btn{width:100%;justify-content:center}
 }
 .units-band{margin-top:40px;display:grid;grid-template-columns:1.1fr 1fr;gap:28px;align-items:start;background:#fff;border:1px solid var(--line, #DDE4E0);border-radius:16px;padding:26px 28px}
-.units-band h2{margin:0 0 10px}
+.units-band h2,.units-band h3{margin:0 0 10px}
+.units-head{margin-top:56px;max-width:720px}
+.units-head h2{margin:0 0 8px}
+.units-head p{margin:0;color:var(--muted);line-height:1.55}
+.units-head + .units-band{margin-top:22px}
 .units-band p{margin:0 0 10px;line-height:1.55}
 .units-tiers{width:100%;border-collapse:collapse;font-size:15px}
 .units-tiers th,.units-tiers td{padding:9px 10px;border-bottom:1px solid var(--line, #DDE4E0);text-align:left}
@@ -613,9 +617,18 @@ body.nav-open{overflow:hidden}
       <!-- 084. Accounts that keep buildings. Every figure here is the one in
            app/shared/unitpricing.js, which the checkout charges by;
            test:unitcalc reads that module and pins each one. -->
-      <div class="units-band" id="units">
+      <!-- A TITLE THAT NAMES WHO THIS IS FOR. Asked for so a property
+           manager knows the box below is talking to them, not to the GC the
+           table above is mostly written for. -->
+      <div class="units-wrap" id="units">
+      <div class="units-head">
+        <span class="eyebrow">For property managers, portfolio managers and building owners</span>
+        <h2 class="h-lg">Pricing for property managers</h2>
+        <p>Same plans as everybody else, priced by the units you manage once your buildings pass 80.</p>
+      </div>
+      <div class="units-band">
         <div>
-          <h2 class="h-md">Managing more than 80 units?</h2>
+          <h3 class="h-md">Managing more than 80 units?</h3>
           <p>Property managers, portfolio managers and building owners pay the same <b>$99 a month</b>
             until their buildings hold more than 80 units.</p>
           <p>Past 80, Scale is <b>$1.25 per occupied unit a month</b>, never less than $99, billed
@@ -642,6 +655,7 @@ body.nav-open{overflow:hidden}
           <a class="btn btn-forest" id="unitsGoBtn"
              href="get-started.html?plan=scale&amp;billing=monthly&amp;as=property%20manager">Start on Scale</a>
         </div>
+      </div>
       </div>
     </div>
   </section>

@@ -818,6 +818,20 @@ export const api = {
   revokeDocShare: (id) => request(`/doc-shares/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
   // The public page. No session -- the token is the whole of the auth.
   docPack: (token) => request(`/pack/${encodeURIComponent(token)}`),
+  // A file out of a pack, for a signed-in team seat. Fetched with the
+  // session's headers, which a bare link cannot carry.
+  packFileBlob: async (token, docId) => {
+    const res = await fetch(`${API_BASE}/pack/${encodeURIComponent(token)}/file/${encodeURIComponent(docId)}`,
+      { headers: await authHeaders() });
+    if (!res.ok) {
+      let code = `pack_file_${res.status}`;
+      try { code = (await res.json())?.error || code; } catch { /* not json */ }
+      throw new Error(code);
+    }
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || "" };
+  },
+  addPackSender: (token) => request(`/pack/${encodeURIComponent(token)}/add`, { method: "POST" }),
   // Keyed by the token they already hold, so there is no second secret and
   // nobody can unsubscribe anybody else.
   stopPackUpdates: (token, all) => request(`/pack/${encodeURIComponent(token)}/stop`,

@@ -5786,7 +5786,12 @@ export default function SubSub() {
     );
   }
 
-  if (packToken) {
+  // "Sign in" on a pack row is /?pack=T&signin=1: signed out it draws the
+  // sign-in form, and once signed in the same address is the pack again, now
+  // with the files open.
+  const packSignin = typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("signin") === "1";
+  if (packToken && !(packSignin && !loggedIn)) {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
@@ -30291,8 +30296,33 @@ function DocPack({ token, seat = null }) {
     return () => { alive = false; };
   }, [token]);
 
-  const fileUrl = (docId) =>
-    `${API_BASE}/pack/${encodeURIComponent(token)}/file/${encodeURIComponent(docId)}`;
+  // THE PAGE IS A FUNNEL. Whoever a sub sends this to sees what is on file,
+  // and opening any of it takes a SubSub account: signed out, every row offers
+  // Create account and Sign in, and the server refuses the file to anybody
+  // who is not a signed-in team seat. Both doors carry the token, so the sub
+  // who sent it lands on the new account's roster.
+  const signupUrl = `https://subsub.work/get-started.html?pack=${encodeURIComponent(token)}`;
+  const signinUrl = `/?pack=${encodeURIComponent(token)}&signin=1`;
+  const teamSeat = !!seat && (seat.role === "admin" || seat.role === "pm");
+  // Signed in: the files are fetched with the session, on mount rather than
+  // on the press, so Open is an ordinary link iOS will not block as a popup.
+  const [files, setFiles] = useState({});
+  useEffect(() => {
+    if (!teamSeat || !p) return undefined;
+    let alive = true;
+    const made = [];
+    for (const d of p.docs.filter((x) => x.onFile && x.readable && x.id)) {
+      setFiles((f) => ({ ...f, [d.id]: { busy: true } }));
+      api.packFileBlob(token, d.id)
+        .then((r) => { made.push(r.url); if (alive) setFiles((f) => ({ ...f, [d.id]: { url: r.url } })); })
+        .catch((e) => {
+          console.error("[pack] file failed:", e);
+          if (alive) setFiles((f) => ({ ...f, [d.id]: { err: true } }));
+        });
+    }
+    return () => { alive = false; made.forEach((u) => URL.revokeObjectURL(u)); };
+  }, [teamSeat, p, token]);
+  const [add, setAdd] = useState({ state: "idle" });   // idle | busy | done | err
   // Always with the year. formatDay drops it, which is right on a job card
   // about next Tuesday and wrong here: "current through Mar 14" of which year
   // is the one question this page exists to answer.
@@ -30381,6 +30411,16 @@ function DocPack({ token, seat = null }) {
           </div>
         )}
 
+        {!seat && p.docs.some((d) => d.onFile) && (
+          <div className="pack-gate">
+            <Lock size={18} />
+            <span>
+              <b>Sign in or create a free account to open these.</b>
+              <span>{p.company} is added to your SubSub account with every document on file.</span>
+            </span>
+          </div>
+        )}
+
         <div className="pack-docs">
           {p.docs.filter((d) => d.onFile).map((d) => {
             // The status logic is shared/docs.js's, read against today.
@@ -30404,15 +30444,28 @@ function DocPack({ token, seat = null }) {
                     </span>
                   </div>
                 </div>
-                {d.readable ? (
-                  <a className="btn-ghost small" href={fileUrl(d.id)} target="_blank" rel="noreferrer">
-                    <Download size={13} /> Open
-                  </a>
-                ) : (
-                  // The W-9. Said plainly rather than left looking broken.
-                  <span className="pack-gated" title="Held back on purpose">
+                {!seat ? (
+                  // Signed out: no file, only the two ways in.
+                  <span className="pack-doc-cta">
+                    <a className="pack-cta-solid" href={signupUrl}>Create account</a>
+                    <a className="pack-cta-ghost" href={signinUrl}>Sign in</a>
+                  </span>
+                ) : !teamSeat ? (
+                  <span className="pack-gated"><Lock size={12} /> Needs a company account</span>
+                ) : !d.readable ? (
+                  // The W-9 carries a tax number: it opens from the roster once
+                  // the sender is on it, never from a link.
+                  <span className="pack-gated" title="Opens from your roster">
                     <Lock size={12} /> On file
                   </span>
+                ) : files[d.id]?.url ? (
+                  <a className="btn-ghost small" href={files[d.id].url} target="_blank" rel="noreferrer">
+                    <Download size={13} /> Open
+                  </a>
+                ) : files[d.id]?.err ? (
+                  <span className="pack-gated">Couldn&rsquo;t open</span>
+                ) : (
+                  <span className="pack-gated">Opening&hellip;</span>
                 )}
               </div>
             );
@@ -30420,10 +30473,55 @@ function DocPack({ token, seat = null }) {
         </div>
 
         {p.docs.some((d) => d.gated) && (
-          <p className="cov-hint">
-            The W-9 is on file and is not in this link — it carries a tax number,
-            so reading it needs an account.
+          <p className="cov-hint pack-w9">
+            {seat
+              ? <>The W-9 carries a tax number, so it opens from your roster once {p.company} is on it.</>
+              : <>The W-9 carries a tax number, so reading it needs
+                an <a href={signupUrl}>account</a>.</>}
           </p>
+        )}
+
+        {/* THE PULL, for an admin already signed in: the sender onto this
+            account's roster in one press. Only the address the pack was sent
+            to may do it; anybody else is pointed at the inbox email below. */}
+        {seat?.role === "admin" && (
+          <div className={`pack-add ${add.state === "done" ? "done" : ""}`}>
+            {add.state === "done" ? (
+              <>
+                <CheckCircle2 size={18} />
+                <span>{add.added
+                  ? `${p.company} is on ${seat.accountName || "your"} roster now, with these documents.`
+                  : `${p.company} is already on ${seat.accountName || "your"} roster.`}</span>
+                <a className="pack-cta-ghost" href="/">Open SubSub</a>
+              </>
+            ) : (
+              <>
+                <span>Add {p.company} to {seat.accountName || "your account"} and SubSub keeps
+                  these documents current for you.</span>
+                <button className="pack-cta-solid" disabled={add.state === "busy"}
+                  onClick={async () => {
+                    setAdd({ state: "busy" });
+                    try {
+                      const r = await api.addPackSender(token);
+                      setAdd({ state: "done", added: !!r?.added });
+                    } catch (e) {
+                      console.error("[pack] add failed:", e);
+                      setAdd({ state: "err", code: e?.body?.error || e?.message });
+                    }
+                  }}>
+                  {add.state === "busy" ? "Adding\u2026" : `Add ${p.company}`}
+                </button>
+                {add.state === "err" && (
+                  <p className="pack-add-err">
+                    {add.code === "sent_to_another_address"
+                      ? "This pack was sent to a different address than the one you signed in with. Use \u201cEmail me the link\u201d below and add them from that email."
+                      : add.code === "own_company" ? "That is your own company."
+                      : "That didn\u2019t save. Try again in a moment."}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
         )}
 
         {p.passportUrl && (
@@ -30444,7 +30542,7 @@ function DocPack({ token, seat = null }) {
           <li><CheckCircle2 size={16} /> Told before anything expires, not after</li>
           <li><CheckCircle2 size={16} /> Send work orders and schedule the job from the same screen</li>
         </ul>
-        <a className="pack-ad-btn" href="https://subsub.work/pricing" target="_blank" rel="noopener">
+        <a className="pack-ad-btn" href={signupUrl}>
           Create your free account
         </a>
         <span className="pack-ad-fine">Free to start. No card needed.</span>
@@ -42992,6 +43090,32 @@ body{background:var(--paper)}
 .pack-gated{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;
   color:var(--ink-soft);white-space:nowrap}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
+/* The funnel: signed out, every row is Create account and Sign in. */
+.pack-gate{display:flex;gap:12px;align-items:flex-start;margin:18px 0 4px;padding:14px 16px;
+  border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:12px;background:var(--paper)}
+.pack-gate > svg{flex:none;margin-top:2px;color:var(--amber)}
+.pack-gate b{display:block;font-size:15px}
+.pack-gate span span{display:block;margin-top:3px;font-size:13px;color:var(--ink-soft)}
+.pack-doc-cta{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;flex:none}
+.pack-cta-solid,.pack-cta-ghost{display:inline-flex;align-items:center;justify-content:center;
+  min-height:40px;padding:0 14px;border-radius:10px;font-size:13.5px;font-weight:800;
+  text-decoration:none;white-space:nowrap;cursor:pointer;font-family:inherit}
+.pack-cta-solid{background:var(--brand);color:#fff;border:1px solid var(--brand)}
+.pack-cta-solid:hover{filter:brightness(.95)}
+.pack-cta-ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
+.pack-cta-ghost:hover{border-color:var(--brand);color:var(--brand)}
+.pack-w9 a{color:var(--brand);font-weight:700}
+.pack-add{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
+  margin-top:16px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--paper);
+  font-size:14px}
+.pack-add > span{flex:1 1 260px}
+.pack-add.done{border-color:var(--brand)}
+.pack-add.done > svg{color:var(--brand);flex:none}
+.pack-add-err{flex-basis:100%;margin:0;font-size:13px;color:#a3342a}
+@media (max-width:560px){
+  .pack-doc{flex-wrap:wrap}
+  .pack-doc-cta{width:100%;justify-content:flex-start}
+}
 .pack-brand{display:inline-flex;color:#111;text-decoration:none}
 .pack-top{width:100%;max-width:620px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
 .pack-page.wide .pack-top{max-width:760px}

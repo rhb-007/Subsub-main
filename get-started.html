@@ -844,6 +844,11 @@ body.nav-open{overflow:hidden}
      another origin. Kept only if it looks like one of our tokens. */
   var inboxTok = (qs.get('inbox') || '').trim();
   if(!/^[A-Za-z0-9_-]{16,128}$/.test(inboxTok)) inboxTok = '';
+  /* Arrived from one compliance pack: the subcontractor who sent it lands on
+     the new account's roster when the address signing up is the one it was
+     sent to. The server checks that; this only carries the token. */
+  var packTok = (qs.get('pack') || '').trim();
+  if(!/^[A-Za-z0-9_-]{16,128}$/.test(packTok)) packTok = '';
   var SCALE_PRICE = { monthly: '$99/mo · unlimited', annual: '$990/yr · unlimited' };
 
   /* ---- what the page says when the person being asked is HIRED ----------
@@ -1561,7 +1566,8 @@ body.nav-open{overflow:hidden}
       referral: ssReadRef(),
       // Signed up with Google: the server reads the address off this token,
       // not off the email box above.
-      googleToken: googleToken || undefined
+      googleToken: googleToken || undefined,
+      packToken: packTok || undefined
     };
 
     fetch(API + '/signup', {
@@ -1604,6 +1610,9 @@ body.nav-open{overflow:hidden}
           inboxTok
             ? res.body.signInUrl.replace(/\/+$/, '')
               + '/?inbox=' + encodeURIComponent(inboxTok)
+            : packTok
+            ? res.body.signInUrl.replace(/\/+$/, '')
+              + '/?pack=' + encodeURIComponent(packTok) + '&signin=1'
             : res.body.signInUrl);
       }
 
@@ -1628,6 +1637,12 @@ body.nav-open{overflow:hidden}
         invites += ' The contractors who sent you their paperwork are waiting to be '
           + 'added \u2014 the button below picks that back up.';
         if(btn){ btn.textContent = 'Sign in and add them'; }
+      }
+      /* From one pack: say whether the sender is on the roster already. */
+      if(packTok && !inboxTok){
+        invites += res.body.packAdded
+          ? ' ' + res.body.packAdded + ' is on your roster with the compliance pack they sent.'
+          : ' Sign in and open the compliance pack again to add the subcontractor who sent it.';
       }
 
       /* What happens next is not the same job. A hiring account approves

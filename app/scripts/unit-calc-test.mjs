@@ -28,9 +28,12 @@ const t = tally();
 const usd = (c) => "$" + (c / 100).toLocaleString("en-US", { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 });
 
 console.log("\n-- the page's figures are the module's --");
-const band = (html.match(/<div class="units-band" id="units">([\s\S]*?)<\/section>/) || [])[1] || "";
+const band = (html.match(/<div class="units-wrap" id="units">([\s\S]*?)<\/section>/) || [])[1] || "";
 const text = band.replace(/<!--[\s\S]*?-->/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 t.ck("the section is there", band.length > 0);
+// A title that names who it is for, so a property manager knows it is them.
+t.ck("it is titled for property managers, by name", /<h2[^>]*>Pricing for property managers<\/h2>/.test(band)
+  && /For property managers, portfolio managers and building owners/.test(text), text.slice(0, 160));
 t.ck("the threshold", text.includes(`more than ${UNIT_THRESHOLD} units`), text.slice(0, 200));
 t.ck("the unit price", text.includes(`${usd(UNIT_PRICE_CENTS)} per occupied unit`));
 t.ck("the minimum", text.includes(`${usd(MIN_MONTHLY_CENTS)} a month`) && text.includes(`never less than ${usd(MIN_MONTHLY_CENTS)}`));

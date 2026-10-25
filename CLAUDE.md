@@ -15317,6 +15317,43 @@ refactor.
   newest. The last survived until the fixture's newest upload was not its first
   row.
 
+- **A COMPLIANCE PACK IS THE START OF A SIGNUP FUNNEL: SIGNED OUT, NOTHING
+  DOWNLOADS, AND SIGNING UP PUTS THE SENDER ON THE NEW ROSTER.** Asked for as
+  *"the whole point of having this and sending to a contractor is to get them
+  to sign up and create an account, which then pulls this subcontractor into
+  their account."* The page itself stays public and still says everything on
+  file: names, carriers, policy numbers, dates, the license box. What changed
+  is opening anything.
+  - **Signed out, every row's action is Create account and Sign in**, with a
+    line above the documents saying why, and the word *account* in the W-9
+    note is a signup link. The ad's button goes to signup too. **Create account
+    is `get-started.html?pack=<token>`** and **Sign in is
+    `/?pack=<token>&signin=1`**, which draws the sign-in form and, once signed
+    in, the same pack with the files open.
+  - **The server agrees.** `GET /api/pack/:token/file/:docId` is no longer on
+    the public list; it is `requireRole("admin", "pm")`, so a bare link gets a
+    401. A signed-in team seat's files are fetched with the session on mount
+    (`api.packFileBlob`), so Open is an ordinary link on an iPad. The W-9 still
+    never comes through the pack: it opens from the roster.
+  - **The sender joins the roster only for the address the pack was SENT
+    to** (`addPackSender`). An engagement opens every document on the company,
+    the W-9 included, and holding a forwarded link is not proof of being that
+    person. Signup with `packToken` adds them when the signup email matches;
+    `POST /api/pack/:token/add` (admin) does it from the page, and a
+    different address gets `sent_to_another_address` by name, pointing at the
+    inbox email, which goes to the address the pack was sent to. Already on
+    the roster, or taken off it, is never quietly changed.
+  `test:docshareui` (74) and `test:subsignup` (146). Three mutations fire: the
+  signed-out CTAs dropped, the email check dropped (two assertions), and the
+  file route made public again.
+
+- **THE PER-UNIT PRICING ON THE PRICING PAGE HAS A TITLE NAMING WHO IT IS
+  FOR.** *"Need to add more of a title here, so property managers know we are
+  talking to them specifically."* An eyebrow (*For property managers,
+  portfolio managers and building owners*), an H2 (*Pricing for property
+  managers*) and one line now sit above the box. The box's own heading became
+  an H3. `test:unitcalc` pins the title.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

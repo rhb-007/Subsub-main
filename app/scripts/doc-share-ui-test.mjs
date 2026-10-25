@@ -40,7 +40,7 @@ const SUB = {
 };
 
 let SHARES = [];
-const sends = [], revokes = [];
+const sends = [], revokes = [], fileAsks = [], adds = [];
 // What the recipient's page is served.
 // Upload days counted back from today, so "N days ago" is checkable.
 const daysBack = (n) => { const d = new Date(); d.setDate(d.getDate() - n);
@@ -73,7 +73,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   // what links this login to the contractor record -- without it the portal
   // says the login is not linked to one and none of their screens render.
   if (path === "/api/account-users") return [200, [
-    { id: "u_sam", name: "Sam Ridge", email: "sam@ridge.test", phone: null, role: "contractor",
+    { id: "u_sam", name: "Sam Ridge", email: "sam@ridge.test", phone: null, role: GC.user.role,
       subId: "cmp_ridge", propertyIds: [], unit: null, hasLogin: true,
       inviteSentAt: null, hasAvatar: false },
   ]];
@@ -96,6 +96,8 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     SHARES = SHARES.map((s) => s.id === rv[1] ? { ...s, state: "revoked" } : s);
     return [200, { ok: true }];
   }
+  if (/^\/api\/pack\/[^/]+\/file\//.test(path)) { fileAsks.push(path); return [200, { pdf: true }]; }
+  if (/^\/api\/pack\/[^/]+\/add$/.test(path) && method === "POST") { adds.push(path); return [200, { ok: true, added: true }]; }
   if (/^\/api\/pack\//.test(path)) {
     if (PACK_ERR) return [PACK_ERR.status, PACK_ERR.body];
     return [200, PACK];
@@ -185,6 +187,39 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- signed in as an admin, the files open and the sender can be added --");
+  {
+    PACK_ERR = null; fileAsks.length = 0; adds.length = 0;
+    GC.user.role = "admin";
+    const { ctx, page } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_sam", accountId: "acc_gc" }, viewport: { width: 1200, height: 1200 }, path: "/?pack=TOKEN123" });
+    await page.goto(`http://outerhome.subsub.work:${WEB}/?pack=TOKEN123`, { waitUntil: "networkidle2" });
+    await wait(2400);
+    const v = await page.evaluate(() => ({
+      rows: [...document.querySelectorAll(".pack-doc")].map((d) => ({
+        text: d.innerText.replace(/\s+/g, " ").trim(),
+        open: d.querySelector("a")?.getAttribute("href") || null,
+        cta: !!d.querySelector(".pack-doc-cta") })),
+      gate: !!document.querySelector(".pack-gate"),
+      addBtn: document.querySelector(".pack-add button")?.innerText || "",
+    }));
+    const ins = v.rows.find((r) => /Certificate of insurance/.test(r.text));
+    const w9 = v.rows.find((r) => /W-9/.test(r.text));
+    t.ck("signed in, the files are fetched with the session", fileAsks.some((p) => /\/file\/d_ins$/.test(p))
+      && fileAsks.some((p) => /\/file\/d_bond$/.test(p)), JSON.stringify(fileAsks));
+    t.ck("and never the W-9", !fileAsks.some((p) => /d_w9/.test(p)), JSON.stringify(fileAsks));
+    t.ck("each row opens its own file from what was fetched", /^blob:/.test(ins?.open || ""), JSON.stringify(ins));
+    t.ck("no sign-up buttons for somebody signed in", !v.rows.some((r) => r.cta) && !v.gate, JSON.stringify(v));
+    t.ck("the W-9 still opens from the roster, not here", w9 && w9.open === null, JSON.stringify(w9));
+    t.ck("an admin is offered to add the sender", /Add Ridge Roofing/.test(v.addBtn), v.addBtn);
+    await page.evaluate(() => document.querySelector(".pack-add button")?.click());
+    await wait(900);
+    const done = await page.evaluate(() => document.querySelector(".pack-add")?.innerText || "");
+    t.ck("pressing it adds them, once", adds.length === 1 && /on Outerhome roster now/.test(done), `${adds.length} ${done}`);
+    GC.user.role = "contractor";
+    await ctx.close();
+  }
+
   console.log("\n-- and the contractor who receives it --");
   {
     PACK_ERR = null;
@@ -192,6 +227,7 @@ try {
     const page = await ctx.newPage();
     const crashes = [];
     page.on("pageerror", (e) => crashes.push(e.message));
+    fileAsks.length = 0;
     // No seat, no session, nothing. That is the whole point.
     await page.goto(`http://outerhome.subsub.work:${WEB}/?pack=TOKEN123`, { waitUntil: "networkidle2" });
     await wait(2200);
@@ -202,7 +238,11 @@ try {
       return { text: el.innerText.replace(/\s+/g, " ").trim(),
         docs: [...el.querySelectorAll(".pack-doc")].map((d) => ({
           text: d.innerText.replace(/\s+/g, " ").trim(),
-          link: d.querySelector("a")?.getAttribute("href") || null })),
+          link: d.querySelector("a")?.getAttribute("href") || null,
+          cta: { create: d.querySelector(".pack-cta-solid")?.getAttribute("href") || null,
+            signin: d.querySelector(".pack-cta-ghost")?.getAttribute("href") || null } })),
+        gate: document.querySelector(".pack-gate")?.innerText.replace(/\s+/g, " ") || "",
+        w9Link: document.querySelector(".pack-w9 a")?.getAttribute("href") || null,
         links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href")),
         lede: el.querySelector(".pack-lede")?.innerText || "",
         trades: [...el.querySelectorAll(".pack-trade")].map((x) => x.innerText),
@@ -238,12 +278,18 @@ try {
     t.ck("the coverage", /\$2,000,000/.test(ins.text), ins.text);
     t.ck("and the expiry, which is the whole point",
       /Current through Mar 14, 2027/.test(ins.text), ins.text);
-    t.ck("it can be opened", !!ins.link && /\/pack\/TOKEN123\/file\/d_ins/.test(ins.link), String(ins.link));
-    // Each row names its own file and opens its own document.
+    // THE FUNNEL: signed out, nothing downloads. Every row is Create account
+    // and Sign in, and both carry the token.
+    t.ck("signed out, no row links to a file", !pack.links.some((h) => /\/file\//.test(h || "")), JSON.stringify(pack.links));
+    t.ck("every row offers Create account, to signup with the pack",
+      pack.docs.every((d) => d.cta.create === "https://subsub.work/get-started.html?pack=TOKEN123"), JSON.stringify(pack.docs.map((d) => d.cta)));
+    t.ck("and Sign in, back to this pack", pack.docs.every((d) => d.cta.signin === "/?pack=TOKEN123&signin=1"),
+      JSON.stringify(pack.docs.map((d) => d.cta)));
+    t.ck("the page says why, above the documents", pack.gate && /create a free account to open these/i.test(pack.gate), pack.gate);
     const bond = pack.docs.find((d) => /Surety bond/.test(d.text));
-    t.ck("each row names the file it opens", /ridge-coi-2026\.pdf/.test(ins.text) && /ridge-bond\.pdf/.test(bond.text),
+    t.ck("each row names the file it holds", /ridge-coi-2026\.pdf/.test(ins.text) && /ridge-bond\.pdf/.test(bond.text),
       JSON.stringify([ins.text, bond.text]));
-    t.ck("and the bond opens the bond", !!bond.link && /\/file\/d_bond$/.test(bond.link), String(bond.link));
+    t.ck("no file was fetched", fileAsks.length === 0, JSON.stringify(fileAsks));
 
     // WHAT THE PAGE IS, FOR SOMEBODY WHO HAS NEVER HEARD OF SUBSUB.
     t.ck("it says it is a subcontractor's compliance pack", /Subcontractor compliance pack/i.test(pack.text), pack.text.slice(0, 400));
@@ -286,17 +332,17 @@ try {
 
     // THE ONE THAT MATTERS.
     const w9 = pack.docs.find((d) => /W-9/.test(d.text));
-    t.ck("the W-9 is listed as on file", /On file/.test(w9.text), w9.text);
-    t.ck("with no way to open it", w9.link === null, String(w9.link));
+    t.ck("the W-9 is listed", /IRS Form W-9/.test(w9.text), w9.text);
     t.ck("and the page says why", /carries a tax number/i.test(pack.text), pack.text);
+    t.ck("the word account in that line signs them up", pack.w9Link === "https://subsub.work/get-started.html?pack=TOKEN123", String(pack.w9Link));
     t.ck("no file link anywhere points at it",
       !pack.links.some((h) => /d_w9/.test(h || "")), JSON.stringify(pack.links));
 
     // The hook.
     t.ck("under the card, an ad speaks to the people who hire", pack.ad
       && /organized in one place/i.test(pack.ad.head) && pack.ad.headSize >= 24, JSON.stringify(pack.ad));
-    t.ck("and its button goes to the plans to create an account", pack.ad
-      && pack.ad.href === "https://subsub.work/pricing" && /Create your free account/i.test(pack.ad.btn), JSON.stringify(pack.ad));
+    t.ck("and its button signs them up, carrying the pack", pack.ad
+      && pack.ad.href === "https://subsub.work/get-started.html?pack=TOKEN123" && /Create your free account/i.test(pack.ad.btn), JSON.stringify(pack.ad));
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
