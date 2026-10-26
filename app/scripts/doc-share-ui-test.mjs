@@ -239,8 +239,8 @@ try {
         docs: [...el.querySelectorAll(".pack-doc")].map((d) => ({
           text: d.innerText.replace(/\s+/g, " ").trim(),
           link: d.querySelector("a")?.getAttribute("href") || null,
-          cta: { create: d.querySelector(".pack-cta-solid")?.getAttribute("href") || null,
-            signin: d.querySelector(".pack-cta-ghost")?.getAttribute("href") || null } })),
+          open: d.querySelector("button.pack-open")?.innerText.trim() || null,
+          ctaLinks: d.querySelectorAll(".pack-cta-solid, .pack-cta-ghost").length })),
         gate: document.querySelector(".pack-gate")?.innerText.replace(/\s+/g, " ") || "",
         w9Link: document.querySelector(".pack-w9 a")?.getAttribute("href") || null,
         links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href")),
@@ -281,10 +281,27 @@ try {
     // THE FUNNEL: signed out, nothing downloads. Every row is Create account
     // and Sign in, and both carry the token.
     t.ck("signed out, no row links to a file", !pack.links.some((h) => /\/file\//.test(h || "")), JSON.stringify(pack.links));
-    t.ck("every row offers Create account, to signup with the pack",
-      pack.docs.every((d) => d.cta.create === "https://subsub.work/get-started.html?pack=TOKEN123"), JSON.stringify(pack.docs.map((d) => d.cta)));
-    t.ck("and Sign in, back to this pack", pack.docs.every((d) => d.cta.signin === "/?pack=TOKEN123&signin=1"),
-      JSON.stringify(pack.docs.map((d) => d.cta)));
+    t.ck("every row keeps its Open button", pack.docs.length > 0 && pack.docs.every((d) => d.open === "Open"),
+      JSON.stringify(pack.docs.map((d) => d.open)));
+    t.ck("and no row carries the sign-in buttons inline", pack.docs.every((d) => d.ctaLinks === 0),
+      JSON.stringify(pack.docs.map((d) => d.ctaLinks)));
+    // Pressing Open asks them to sign in or create an account, in a window.
+    t.ck("no window before the press", !(await page.$(".pack-gate-modal")));
+    await page.click(".pack-doc button.pack-open");
+    await wait(300);
+    const gm = await page.evaluate(() => {
+      const m = document.querySelector(".modal.pack-gate-modal");
+      return m ? { text: m.innerText.replace(/\s+/g, " "),
+        create: m.querySelector(".pack-cta-solid")?.getAttribute("href") || null,
+        signin: m.querySelector(".pack-cta-ghost")?.getAttribute("href") || null } : null;
+    });
+    t.ck("pressing Open opens a sign-in window", !!gm, String(gm));
+    t.ck("it names the document pressed", gm && /Sign in to open/.test(gm.text), gm?.text);
+    t.ck("Create account goes to signup with the pack", gm?.create === "https://subsub.work/get-started.html?pack=TOKEN123", gm?.create);
+    t.ck("and Sign in comes back to this pack", gm?.signin === "/?pack=TOKEN123&signin=1", gm?.signin);
+    await page.click(".pack-gate-modal .modal-close");
+    await wait(200);
+    t.ck("closing it leaves the page as it was", !(await page.$(".pack-gate-modal")));
     t.ck("the page says why, above the documents", pack.gate && /create a free account to open these/i.test(pack.gate), pack.gate);
     const bond = pack.docs.find((d) => /Surety bond/.test(d.text));
     t.ck("each row names the file it holds", /ridge-coi-2026\.pdf/.test(ins.text) && /ridge-bond\.pdf/.test(bond.text),

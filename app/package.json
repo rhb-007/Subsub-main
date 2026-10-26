@@ -214,6 +214,7 @@
     "test:docview": "node --no-warnings scripts/docview-test.mjs",
     "test:docdraft": "node --no-warnings scripts/doc-draft-test.mjs",
     "test:docdraftui": "node scripts/doc-draft-ui-test.mjs",
+    "test:docverdictui": "node scripts/doc-verdict-ui-test.mjs",
     "test:docviewui": "node scripts/doc-view-ui-test.mjs",
     "test:quotes": "node scripts/quotes-test.mjs",
     "test:quotesui": "node scripts/quotes-ui-test.mjs",

@@ -1354,6 +1354,18 @@ function licenseOk(sub) {
   return licenseActive(sub?.licenseCheck);
 }
 
+// Why a document verdict was not saved. Named, because "try again" is the
+// wrong advice for most of these, and the document stays as it was.
+function reviewErrText(err) {
+  const code = err?.body?.error || (err?.status ? String(err.status) : "no_connection");
+  if (code === "impersonation_expired") return "Your staff sign-in has run out, so this was not saved. Sign in to this account again from the console; your answers are still here.";
+  if (code === "401" || code === "unauthorized") return "You have been signed out, so this was not saved. Sign in again; your answers are still here until you close this.";
+  if (code === "403" || code === "forbidden") return "Only an admin or a project manager can review documents.";
+  if (code === "not_found" || code === "404") return "This contractor is not on your roster any more, so this was not saved.";
+  if (code === "no_connection") return "Couldn't reach SubSub, so this was not saved. Check your connection and press it again.";
+  return `This was not saved (${code}). Your answers are still here; press it again.`;
+}
+
 // Why pressing Verify did not produce a check. Named, because "try again"
 // is the wrong advice for most of these.
 function licenseVerifyErrText(err) {
@@ -4454,31 +4466,41 @@ export default function SubSub() {
     });
   };
 
-  const reviewSubDoc = (id, kind, verdict, data) => {
-    const sb = subs.find((x) => x.id === id);
-    if (sb) logEvent(verdict === "verified" ? "doc_verified" : "doc_rejected",
-      `${verdict === "verified" ? "Verified" : "Rejected"} ${DOC_LABELS_INLINE[kind]} for ${sb.company}`);
+  // AWAITED, and drawn only once the server has it. It used to patch the row
+  // to verified, close the window and hand the request to `persist`, which
+  // only logs -- so a refused verdict (a staff sign-in past its thirty
+  // minutes, being signed out, a dropped connection) read as saved until the
+  // next reload put the document straight back in Documents to verify. That
+  // is "it's not saving, it keeps asking me to review the same document".
+  // A refusal now throws, and the review window stays open with the reason.
+  const reviewSubDoc = async (id, kind, verdict, data) => {
     const review = {
       status: verdict, ...data,
       verifiedBy: me.name, verifiedAt: new Date().toISOString().slice(0, 10),
     };
-    // Drawn straight away, and re-read after, because the server also writes
-    // the certificate's own row and the roster reads its expiry from there.
+    await api.reviewDocument(id, kind, review);
+    const sb = subs.find((x) => x.id === id);
+    if (sb) logEvent(verdict === "verified" ? "doc_verified" : "doc_rejected",
+      `${verdict === "verified" ? "Verified" : "Rejected"} ${DOC_LABELS_INLINE[kind]} for ${sb.company}`);
+    // Drawn once the server has it, and re-read after, because the server also
+    // writes the certificate's own row and the roster reads its expiry there.
     patchEngagement(id, {
       docReview: { ...((engagements.find((e) => e.companyId === id
         && e.accountId === account.id) || {}).docReview || {}), [kind]: review },
     });
-    persist("reviewDocument", api.reviewDocument(id, kind, review)
-      .then(() => hydrateAccount(account.id, currentUserId, { quiet: true })));
+    hydrateAccount(account.id, currentUserId, { quiet: true })
+      .catch((e) => console.error("[review] re-read failed:", e));
+    reviewGuard.current = null;
     setReviewing(null);
   };
   const verifySubDoc = (id, kind, data) => reviewSubDoc(id, kind, "verified", data);
   // A rejection carries straight on into the "send them the reason" mail,
   // because a document turned down and nobody told is a contractor waiting on
   // a job that will never be issued. The docReview passed here is the one just
-  // recorded, so the mail names the right gap.
-  const rejectSubDoc = (id, kind, data) => {
-    reviewSubDoc(id, kind, "rejected", data);
+  // recorded, so the mail names the right gap. Only once the rejection is
+  // recorded: a mail about a verdict the server refused would be a lie.
+  const rejectSubDoc = async (id, kind, data) => {
+    await reviewSubDoc(id, kind, "rejected", data);
     const target = subs.find((x) => x.id === id);
     if (target) {
       // The KIND travels, because the server picks between "upload your
@@ -9500,6 +9522,18 @@ function DocReview({ sub, kind, brand, guard, onVerify, onReject, onSaveDraft, o
 
   const [saving, setSaving] = useState("");
   const [saveErr, setSaveErr] = useState("");
+  // The verdict is awaited; a refusal keeps this window open with the reason
+  // on it, because closing would read as saved.
+  const [deciding, setDeciding] = useState(false);
+  const [decideErr, setDecideErr] = useState("");
+  const decide = async (fn, payload) => {
+    setDeciding(true); setDecideErr("");
+    try { await fn(kind, payload); }
+    catch (err) {
+      console.error("[review] verdict failed:", err);
+      setDecideErr(reviewErrText(err));
+    } finally { setDeciding(false); }
+  };
   const park = async (payload, closeAfter) => {
     setSaving(payload ? "save" : "discard"); setSaveErr("");
     try {
@@ -9701,12 +9735,13 @@ function DocReview({ sub, kind, brand, guard, onVerify, onReject, onSaveDraft, o
                 ? <><Send size={15} /> Send back {wrongItems.length} to fix</>
                 : <><XCircle size={15} /> Reject</>}
             </button>
-            <button className="btn-solid" disabled={!canVerify}
-              onClick={() => onVerify(kind, collect())}>
-              <CheckCircle2 size={15} /> Verify document
+            <button className="btn-solid rv-verify" disabled={!canVerify || deciding}
+              onClick={() => decide(onVerify, collect())}>
+              <CheckCircle2 size={15} /> {deciding ? "Saving\u2026" : "Verify document"}
             </button>
           </div>
           {saveErr && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {saveErr}</p>}
+          {decideErr && <p className="fld-err rv-decide-err" role="alert"><AlertTriangle size={12} /> {decideErr}</p>}
         </>
       ) : (
         <>
@@ -9734,13 +9769,14 @@ function DocReview({ sub, kind, brand, guard, onVerify, onReject, onSaveDraft, o
           )}
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setRejecting(false)}>Back</button>
-            <button className="btn-warn" disabled={!wrongItems.length && !note.trim()}
-              onClick={() => onReject(kind, { findings: found, checks: ticked, note: note.trim() })}>
+            <button className="btn-warn" disabled={(!wrongItems.length && !note.trim()) || deciding}
+              onClick={() => decide(onReject, { findings: found, checks: ticked, note: note.trim() })}>
               <XCircle size={15} /> {wrongItems.length
                 ? `Send back ${wrongItems.length} thing${wrongItems.length === 1 ? "" : "s"} to fix`
                 : "Reject & notify contractor"}
             </button>
           </div>
+          {decideErr && <p className="fld-err rv-decide-err" role="alert"><AlertTriangle size={12} /> {decideErr}</p>}
         </>
       )}
       {/* Says what leaving costs BEFORE it is pressed rather than after, and
@@ -30398,8 +30434,8 @@ function DocPack({ token, seat = null }) {
   }, [token]);
 
   // THE PAGE IS A FUNNEL. Whoever a sub sends this to sees what is on file,
-  // and opening any of it takes a SubSub account: signed out, every row offers
-  // Create account and Sign in, and the server refuses the file to anybody
+  // and opening any of it takes a SubSub account: signed out, Open on a row
+  // asks them to sign in or create one, and the server refuses the file to anybody
   // who is not a signed-in team seat. Both doors carry the token, so the sub
   // who sent it lands on the new account's roster.
   const signupUrl = `https://subsub.work/get-started.html?pack=${encodeURIComponent(token)}`;
@@ -30424,6 +30460,9 @@ function DocPack({ token, seat = null }) {
     return () => { alive = false; made.forEach((u) => URL.revokeObjectURL(u)); };
   }, [teamSeat, p, token]);
   const [add, setAdd] = useState({ state: "idle" });   // idle | busy | done | err
+  // The document a signed-out reader pressed Open on, while the sign-in or
+  // create-account window is up.
+  const [gate, setGate] = useState(null);
   // Always with the year. formatDay drops it, which is right on a job card
   // about next Tuesday and wrong here: "current through Mar 14" of which year
   // is the one question this page exists to answer.
@@ -30546,11 +30585,13 @@ function DocPack({ token, seat = null }) {
                   </div>
                 </div>
                 {!seat ? (
-                  // Signed out: no file, only the two ways in.
-                  <span className="pack-doc-cta">
-                    <a className="pack-cta-solid" href={signupUrl}>Create account</a>
-                    <a className="pack-cta-ghost" href={signinUrl}>Sign in</a>
-                  </span>
+                  // Signed out: the row keeps its Open button, and pressing it
+                  // asks them to sign in or create an account. No file is
+                  // fetched, because the server refuses it to a stranger.
+                  <button type="button" className="btn-ghost small pack-open"
+                    onClick={() => setGate(d)}>
+                    <Download size={13} /> Open
+                  </button>
                 ) : !teamSeat ? (
                   <span className="pack-gated"><Lock size={12} /> Needs a company account</span>
                 ) : !d.readable ? (
@@ -30669,6 +30710,21 @@ function DocPack({ token, seat = null }) {
         <SubSubLogo height={18} mono />
       </a>
       <p className="pack-foot">Sent by {p.company} through SubSub</p>
+      {gate && (
+        <Modal onClose={() => setGate(null)} className="pack-gate-modal">
+          <Lock size={22} className="pgm-icon" />
+          <h3>Sign in to open {DOC_LABELS[gate.kind] || "this document"}</h3>
+          <p>
+            Opening {p.company}&rsquo;s documents takes a free SubSub account.
+            {" "}{p.company} is added to your account with every document on file, kept current.
+          </p>
+          <div className="pgm-actions">
+            <a className="pack-cta-solid" href={signupUrl}>Create account</a>
+            <a className="pack-cta-ghost" href={signinUrl}>Sign in</a>
+          </div>
+          <span className="pgm-fine">Free to start. No card needed.</span>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -43209,7 +43265,7 @@ body{background:var(--paper)}
 .pack-gated{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;
   color:var(--ink-soft);white-space:nowrap}
 .pack-foot{font-size:11.5px;color:var(--ink-soft)}
-/* The funnel: signed out, every row is Create account and Sign in. */
+/* The funnel: signed out, Open on a row asks them to sign in or create an account. */
 .pack-gate{display:flex;gap:12px;align-items:flex-start;margin:18px 0 4px;padding:14px 16px;
   border:1px solid var(--line);border-left:4px solid var(--amber);border-radius:12px;background:var(--paper)}
 .pack-gate > svg{flex:none;margin-top:2px;color:var(--amber)}
@@ -43224,6 +43280,14 @@ body{background:var(--paper)}
 .pack-cta-ghost{background:var(--card);color:var(--ink);border:1px solid var(--line)}
 .pack-cta-ghost:hover{border-color:var(--brand);color:var(--brand)}
 .pack-w9 a{color:var(--brand);font-weight:700}
+.pack-open{flex:none}
+.pack-gate-modal{max-width:440px;text-align:center}
+.pack-gate-modal .pgm-icon{color:var(--amber);margin:4px auto 0;display:block}
+.pack-gate-modal h3{margin:10px 0 6px;font-size:20px}
+.pack-gate-modal p{margin:0 0 18px;color:var(--ink-soft);font-size:14.5px;line-height:1.5}
+.pgm-actions{display:flex;flex-direction:column;gap:10px}
+.pgm-actions a{min-height:46px;font-size:15px}
+.pgm-fine{display:block;margin-top:12px;font-size:12.5px;color:var(--ink-soft)}
 .pack-add{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
   margin-top:16px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--paper);
   font-size:14px}

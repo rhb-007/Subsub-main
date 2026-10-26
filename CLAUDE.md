@@ -15403,6 +15403,31 @@ refactor.
   the draft overwriting an answer (two assertions), the photographed item
   marked good (one), and the redo control (two).
 
+- **A SIGNED-OUT PACK ROW KEEPS ITS OPEN BUTTON, AND OPEN ASKS THEM TO SIGN
+  IN.** Asked for as *"this needs to be a modal, so put the download call to
+  action back"*. The funnel put Create account and Sign in on every row, which
+  read as six sign-up forms rather than a list of documents. Each row now has
+  **Open** again; signed out, it opens one window naming the document, with
+  **Create account** (`get-started.html?pack=<token>`) and **Sign in**
+  (`/?pack=<token>&signin=1`). Nothing is fetched, and the server still refuses
+  the file to a stranger. `test:docshareui` (80); an Open that does nothing
+  fails four.
+
+- **A DOCUMENT VERDICT IS SAVED BEFORE THE SCREEN SAYS SO.** Reported as
+  *"reviewing subcontractor docs, adding answers, saving, but it's not saving,
+  keeps prompting me to review the same document"*. `reviewSubDoc` patched the
+  row to verified, closed the window and handed the request to `persist`, which
+  only logs. So a refused verdict read as saved until the next reload put the
+  document back in Documents to verify: the save-that-reports-success shape,
+  again. The likeliest live cause is a staff sign-in past its thirty minutes.
+  **Not verified:** the live refusal. It now awaits: Verify and the send-back
+  button say *Saving...*, a refusal keeps the window open with the reason
+  (`reviewErrText`) and the answers still in it, and only a saved verdict
+  closes it and re-reads the roster. A rejection's email goes only after the
+  rejection is recorded. *Save and finish later* still saves a draft, which by
+  design leaves the document awaiting review. `test:docverdictui` (11);
+  swallowing the refusal fails three.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
