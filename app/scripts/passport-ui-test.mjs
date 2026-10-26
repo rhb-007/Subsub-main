@@ -132,7 +132,8 @@ const readPage = (page) => page.evaluate(() => {
     badgeOn: !!c?.querySelector(".pp-badge.on"),
     line: c?.querySelector(".pp-badge-line")?.innerText || "",
     trades: [...(c?.querySelectorAll(".pp-trades li") || [])].map((l) => l.innerText),
-    facts: (c?.querySelector(".pp-facts")?.innerText || "").replace(/\s+/g, " "),
+    facts: (c?.querySelector(".pp-docs")?.innerText || "").replace(/\s+/g, " "),
+    lic: (() => { const l = c?.querySelector(".pp-docs .pack-lic"); return l ? { ok: l.classList.contains("ok"), t: l.innerText.replace(/\s+/g, " ") } : null; })(),
     qr: !!c?.querySelector("svg.qr"),
     head: (() => {
       const hd = c?.querySelector(".pp-head"), b = hd?.querySelector(".pp-head-cta, .pp-head-chip"), h = hd?.querySelector("h1");
@@ -203,12 +204,16 @@ const readPage = (page) => page.evaluate(() => {
     access: (c?.querySelector(".pp-access")?.innerText || "").replace(/\s+/g, " "),
     signup: c?.querySelector(".pp-access a")?.getAttribute("href") || null,
     powered: (() => {
-      const pw = c?.querySelector(".pp-head .pp-powered"), h = c?.querySelector(".pp-head h1");
-      if (!pw || !h) return null;
-      const logo = pw.querySelector("svg.ss-logo");
-      return { t: pw.innerText.replace(/\s+/g, " ").trim(), mark: !!logo && logo.querySelectorAll("path").length > 3,
-        black: logo ? getComputedStyle(logo).color === "rgb(17, 17, 17)" : false,
-        below: pw.getBoundingClientRect().top >= h.getBoundingClientRect().bottom - 1 };
+      // SubSub's mark sits outside the card, top LEFT, the compliance pack
+      // page's frame; the card opens on a kicker and the company's name.
+      const top = document.querySelector(".pack-page > .pack-top"), logo = top?.querySelector(".pack-brand svg.ss-logo");
+      const cr = c?.getBoundingClientRect(), lr = logo?.getBoundingClientRect();
+      if (!top || !logo || !cr) return null;
+      return { mark: logo.querySelectorAll("path").length > 3, outside: !c.contains(logo),
+        left: Math.abs(lr.left - cr.left) < 4, above: lr.bottom <= cr.top + 1,
+        kicker: c.querySelector(".pp-head .pack-kicker")?.innerText.trim() || "",
+        inCardLockup: !!c.querySelector(".pp-powered"),
+        h1px: parseFloat(getComputedStyle(c.querySelector("h1")).fontSize) };
     })(),
     contact: (c?.querySelector(".pp-contact")?.innerText || "").replace(/\s+/g, " "),
     tel: c?.querySelector('.pp-contact a[href^="tel:"]')?.getAttribute("href") || null,
@@ -251,8 +256,10 @@ try {
     t.ck("the trades", r.trades.join() === "Roofing,Gutters", r.trades.join());
     t.ck("the license, the insurer and the W-9 as Yes",
       /BAYROR\*123/.test(r.facts) && /Acme Mutual/.test(r.facts) && /W-9 On file/.test(r.facts), r.facts);
-    t.ck("the header is the company, then the SubSub logo in black and Powered by | Passport under it",
-      r.powered?.t === "Powered by Passport" && r.powered.mark && r.powered.black && r.powered.below, JSON.stringify(r.powered));
+    t.ck("SubSub's logo sits outside the card, top left, like the compliance pack page",
+      !!r.powered?.mark && r.powered.outside && r.powered.left && r.powered.above && !r.powered.inCardLockup, JSON.stringify(r.powered));
+    t.ck("the card opens on a kicker and a big headline", /passport/i.test(r.powered?.kicker || "") && r.powered.h1px >= 28, JSON.stringify(r.powered));
+    t.ck("the license is the green box at a glance", r.lic?.ok && /License verified/.test(r.lic.t) && /BAYROR\*123/.test(r.lic.t), JSON.stringify(r.lic));
     t.ck("the header's CTA names the sub", r.head?.t === "Connect with Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
     t.ck("a QR code of its own address in the header", !!r.qr && !!r.side, JSON.stringify(r.side));
     t.ck("the CTA is on the left, under the name and the lede", !!r.side?.ctaUnderLede && !!r.side.ctaLeft, JSON.stringify(r.side));

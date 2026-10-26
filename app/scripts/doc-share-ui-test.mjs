@@ -248,6 +248,9 @@ try {
         trades: [...el.querySelectorAll(".pack-trade")].map((x) => x.innerText),
         seal: el.querySelector(".pack-badge")?.innerText.replace(/\s+/g, " ").trim() || "",
         headLogo: !!document.querySelector(".pack-page > .pack-top .pack-brand .ss-logo"),
+        // On the LEFT, level with the card's own left edge, not centered.
+        headLogoLeft: (() => { const g = document.querySelector(".pack-top .pack-brand")?.getBoundingClientRect();
+          return !!g && Math.abs(g.left - el.getBoundingClientRect().left) < 4; })(),
         logoInCard: !!el.querySelector(".ss-logo"),
         poweredInCard: /Powered by/i.test(el.innerText),
         h1Size: parseFloat(getComputedStyle(el.querySelector("h1")).fontSize),
@@ -329,6 +332,7 @@ try {
       /SubSub Verified/.test(pack.seal) && /registration active/.test(pack.seal), pack.seal);
     t.ck("and links to their Passport", pack.links.includes(PACK.passportUrl), JSON.stringify(pack.links));
     t.ck("SubSub's own logo is at the top, outside the card", pack.headLogo);
+    t.ck("and on the left, not the middle", pack.headLogoLeft);
     // Whoever opens a pack is often somebody with an account who is signed
     // out on this device; the link came by email.
     t.ck("signed out, the top line offers Sign in, to the sign-in page",

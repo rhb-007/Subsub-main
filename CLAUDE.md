@@ -15479,6 +15479,27 @@ refactor.
   pastes: the ALTER TABLE, then the index). Until then scheduling is one time
   per job, exactly as before.
 
+- **THE PASSPORT WEARS THE COMPLIANCE PACK PAGE'S DESIGN, AND SUBSUB'S LOGO
+  SITS TOP LEFT ON BOTH.** Asked for as making the Passport look like the pack
+  page a non-user sees, with *"the subsub header logo should go on the left,
+  not middle of page"*. They are one company's public face drawn twice: the
+  pack page is sent to one address and opens the files, and the Passport is
+  public and opens nothing. So they share one frame:
+  - **`PackTop` is a flex row**: the logo on the left, level with the card's
+    left edge, and Sign in or *Go to your account* on the right. It is no
+    longer a three-column grid with the logo in the middle.
+  - **The Passport now uses `PackTop` above its card.** The *Powered by SubSub
+    | Passport* lockup inside the header is gone. The card opens on the kicker
+    *Subcontractor Passport* and a 36px headline (30px on a phone), and the
+    page closes with *Powered by SubSub*.
+  - **The trades are the pack page's green chips**, and **the license is its
+    green or red box** at the top of the Compliance pack section, replacing
+    the License row in the facts. A state that licenses nobody earns the seal
+    with no number, so that one case draws no box.
+
+  `test:docshareui` (81) and `test:passportui` (87). Putting the centered grid
+  back fails one assertion in each.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

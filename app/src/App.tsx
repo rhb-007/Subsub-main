@@ -31339,6 +31339,9 @@ function PassportPage({ slug, seat = null }) {
   const where = [p.city, p.state].filter(Boolean).join(", ");
   return (
     <div className="pack-page pp-page">
+      {/* The compliance pack page's frame: SubSub's mark outside the card, top
+          left, with Sign in on the right. The card is the sub's. */}
+      <PackTop seat={seat} />
       <div className="pack-card pp-card">
         {/* The company first and largest, and under it whose page this is:
             SubSub's mark and "Powered by SubSub | Passport". It used to open
@@ -31346,17 +31349,8 @@ function PassportPage({ slug, seat = null }) {
             read as a heading about us rather than about them. */}
         <header className="pp-head">
           <div className="pp-head-who">
+            <span className="pack-kicker">Subcontractor Passport</span>
             <h1>{p.name}</h1>
-            {/* The real lockup, mark and wordmark, in black, then the product
-                name set to match it -- not the mark beside the word typed in
-                the page's own font, which read as a caption rather than a logo. */}
-            <a className="pp-powered" href="https://subsub.work/" target="_blank" rel="noopener"
-              aria-label="Powered by SubSub Passport — visit subsub.work">
-              <span>Powered by</span>
-              <SubSubLogo height={15} mono />
-              <span className="pp-pipe" aria-hidden="true" />
-              <b className="pp-pass">Passport</b>
-            </a>
             {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
             {/* The one press the page exists for sits under the name it
                 connects to, on the left where the eye already is. Under the QR
@@ -31372,7 +31366,7 @@ function PassportPage({ slug, seat = null }) {
           </div>
         </header>
         {p.trades.length > 0 && (
-          <ul className="pp-trades">{p.trades.map((t) => <li key={t.id}>{t.label}</li>)}</ul>
+          <ul className="pp-trades">{p.trades.map((t) => <li key={t.id} className="pack-trade">{t.label}</li>)}</ul>
         )}
         {p.about && <p className="pp-about">{p.about}</p>}
 
@@ -31396,12 +31390,21 @@ function PassportPage({ slug, seat = null }) {
           <section className="pp-docs" aria-label="Compliance pack">
             <h3><FileText size={18} /> Compliance pack</h3>
             <PassportBadge badge={p.badge} />
+            {/* The license at a glance, the compliance pack page's green or red
+                box. A state that licenses nobody earns the seal with no number,
+                so that one case draws no box. */}
+            {(p.license || !p.badge?.verified) && (
+              <div className={`pack-lic ${p.license?.ok ? "ok" : "bad"}`}>
+                {p.license?.ok ? <CheckCircle2 size={22} /> : <XCircle size={22} />}
+                <span className="pack-lic-text">
+                  <b>{p.license?.ok ? "License verified" : p.license ? "License not verified" : "No license number on file"}</b>
+                  <span>{p.license ? `#${p.license.number} · ${p.license.text}` : "Ask them for it before work starts"}</span>
+                </span>
+              </div>
+            )}
             <dl className="claim-facts pp-facts">
               {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
               {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
-              <div><dt><Award size={14} /> License</dt>
-                <dd>{p.license ? <>{p.license.number}<span className={`pp-sub${p.license.ok ? " ok" : ""}`}>{p.license.text}</span></>
-                  : <span className="pp-sub">{p.badge?.line?.split(" · ")[0]}</span>}</dd></div>
               <div><dt><Shield size={14} /> Insurance</dt>
                 <dd>{p.insurance ? <>{p.insurance.carrier || "Certificate on file"}<span className="pp-sub">{p.insurance.text}</span></>
                   : <span className="pp-sub">No certificate on file</span>}</dd></div>
@@ -31429,6 +31432,7 @@ function PassportPage({ slug, seat = null }) {
           </div>
         )}
       </div>
+      <InboxSign />
       <p className="pack-foot">A SubSub Passport. Free for subcontractors, forever. Not legal advice; confirm a license with the state.</p>
       {big !== null && (
         // The same lightbox every other photo set uses: previous, next, a
@@ -31978,7 +31982,6 @@ function DocInbox({ token, seat = null }) {
 function PackTop({ seat = null }) {
   return (
     <div className="pack-top">
-      <span />
       <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
         aria-label="SubSub, visit subsub.work">
         <SubSubLogo height={22} />
@@ -43415,9 +43418,10 @@ body{background:var(--paper)}
   .pack-doc-cta{width:100%;justify-content:flex-start}
 }
 .pack-brand{display:inline-flex;color:#111;text-decoration:none}
-.pack-top{width:100%;max-width:620px;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px}
+.pack-top{width:100%;max-width:620px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.pp-page .pack-top{max-width:980px}
 .pack-page.wide .pack-top{max-width:760px}
-.pack-signin{justify-self:end;display:inline-flex;align-items:center;gap:5px;min-height:40px;padding:0 14px;
+.pack-signin{margin-left:auto;display:inline-flex;align-items:center;gap:5px;min-height:40px;padding:0 14px;
   border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);
   font-size:14px;font-weight:700;text-decoration:none;white-space:nowrap;min-width:0;max-width:100%}
 .pack-signin span{overflow:hidden;text-overflow:ellipsis}
@@ -43750,7 +43754,7 @@ body{background:var(--paper)}
    Opened from a QR code on a job site, so it is laid out for a phone first:
    one column, 48px controls, and the badge's own line under it in words. */
 .pp-page{justify-content:flex-start;padding-top:12px}
-.pp-card h1{font-size:26px;line-height:1.15;overflow-wrap:anywhere;margin:0}
+.pp-card h1{font-size:36px;font-weight:800;line-height:1.1;letter-spacing:-.025em;overflow-wrap:anywhere;margin:4px 0 0}
 .pp-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .pp-head-who{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto}
 .pp-head .pack-lede{margin:2px 0 0}
@@ -43806,8 +43810,8 @@ body{background:var(--paper)}
 .pp-badge-name.off{color:var(--ink-soft)}
 .pp-badge-line{font-size:12.5px;line-height:1.5;color:var(--ink)}
 .pp-trades{list-style:none;margin:14px 0 0;padding:0;display:flex;flex-wrap:wrap;gap:6px}
-.pp-trades li{padding:5px 10px;border-radius:999px;background:var(--paper);border:1px solid var(--line);
-  font-size:12.5px;font-weight:700}
+.pp-trades li{padding:5px 10px;font-size:12.5px}
+.pp-docs .pack-lic{margin-top:12px}
 .pp-about{margin:12px 0 0;font-size:14px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
 .pp-facts dd{display:flex;flex-direction:column;gap:2px}
 .pp-sub{display:block;font-size:12px;font-weight:500;color:var(--ink-soft);line-height:1.45}
@@ -43902,7 +43906,7 @@ body{background:var(--paper)}
   border-style:dashed}
 @media (max-width:560px){
   .pp-card{padding:18px}
-  .pp-card h1{font-size:22px}
+  .pp-card h1{font-size:30px}
   .pp-share .pp-sbtn{flex:1 1 calc(50% - 8px);justify-content:center}
   .pp-req-btns{width:100%}
   .pp-req-btns > *{flex:1}
