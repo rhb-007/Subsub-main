@@ -15475,9 +15475,9 @@ refactor.
   `test:appointments` (30) and `test:appointmentsui` (13). Four mutations fire:
   superseding across companies (nine assertions), a crew answering another
   company's time (two), the screen not sending the company (one), and the
-  tenant's screen drawing one panel (two). **Pasting 098 is required** (two
-  pastes: the ALTER TABLE, then the index). Until then scheduling is one time
-  per job, exactly as before.
+  tenant's screen drawing one panel (two). **098 is pasted on the live
+  database** (the column check read 1, confirmed by the owner), so each
+  company on a job now gets its own appointment there.
 
 - **THE PASSPORT WEARS THE COMPLIANCE PACK PAGE'S DESIGN, AND SUBSUB'S LOGO
   SITS TOP LEFT ON BOTH.** Asked for as making the Passport look like the pack
