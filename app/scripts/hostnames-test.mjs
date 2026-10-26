@@ -35,6 +35,12 @@ globalThis.fetch = async (url, init = {}) => {
     world.dns.push(rec);
     return json({ success: true, result: rec });
   }
+  if (/^\/client\/v4\/zones\/z1\/dns_records\/rec\w+$/.test(u.pathname) && m === "PATCH") {
+    const id = u.pathname.split("/").pop();
+    const rec = world.dns.find((r) => r.id === id);
+    Object.assign(rec, body);
+    return json({ success: true, result: rec });
+  }
   if (/^\/client\/v4\/zones\/z1\/dns_records\/rec\d+$/.test(u.pathname) && m === "DELETE") {
     const id = u.pathname.split("/").pop();
     world.dns = world.dns.filter(r => r.id !== id);
@@ -56,10 +62,20 @@ globalThis.fetch = async (url, init = {}) => {
       return json({ success: true, result: null });
     }
     if (!world.domains[name]) return json({ success: false, errors: [{ message: "not found" }] }, 404);
+    if (m === "PATCH") {
+      world.retried = (world.retried || 0) + 1;
+      // Pages looks again and finds the CNAME this time.
+      const hasCname = world.dns.some((r) => r.name === name && r.type === "CNAME" && r.content === "subsub-app.pages.dev");
+      if (hasCname) world.domains[name] = { name, status: "pending" };
+      return json({ success: true, result: world.domains[name] });
+    }
     return json({ success: true, result: world.domains[name] });
   }
   throw new Error("unexpected call " + m + " " + u.pathname);
 };
+
+const cloudflareStub = globalThis.fetch;
+const cleanEnv = { ...env };
 
 const eq = (label, got, want) => {
   const g = JSON.stringify(got), w = JSON.stringify(want);
@@ -212,3 +228,30 @@ console.log("Cloudflare's error_chain is not thrown away");
   const r = await provisionHostname(env, "newco");
   eq("chain included", r.error, "dns: Invalid request headers — Invalid format for Authorization header");
 }
+
+console.log("a stuck validation and a wrong record");
+{
+  globalThis.fetch = cloudflareStub;
+  const env = cleanEnv;
+  world = { dns: [], domains: {} };
+  // Pages registered before the record existed and kept the old answer.
+  world.domains["rudd.subsub.work"] = { name: "rudd.subsub.work", status: "pending",
+    validation_data: { error_message: "CNAME record not set" } };
+  let r2 = await provisionHostname(env, "rudd");
+  eq("Pages is asked to look again", world.retried, 1);
+  eq("and the stale error is gone", { status: r2.status, error: r2.error }, { status: "pending", error: null });
+
+  world = { dns: [{ id: "recours", name: "rudd.subsub.work", type: "CNAME", content: "subsub-unclaimed.workers.dev",
+    proxied: true, comment: "SubSub branded hostname — managed automatically, do not edit" }], domains: {} };
+  r2 = await provisionHostname(env, "rudd");
+  eq("our own record pointing elsewhere is put right", world.dns[0].content, "subsub-app.pages.dev");
+  eq("and provisioning goes on", r2.ok, true);
+
+  world = { dns: [{ id: "rechand", name: "rudd.subsub.work", type: "A", content: "192.0.2.1", proxied: false }], domains: {} };
+  r2 = await provisionHostname(env, "rudd");
+  eq("a record added by hand is not edited", world.dns[0].content, "192.0.2.1");
+  eq("and is named in the error", { ok: r2.ok, says: /A record pointing at 192\.0\.2\.1 \(not proxied\)/.test(r2.error || "") },
+    { ok: false, says: true });
+  eq("nothing is registered on Pages over it", Object.keys(world.domains).length, 0);
+}
+

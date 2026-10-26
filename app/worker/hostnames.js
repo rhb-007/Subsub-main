@@ -126,10 +126,31 @@ export function tokenShapeProblem(raw) {
 
 // The CNAME. 81057 is "record already exists", which is the answer we want
 // from a retry, so it counts as success rather than as a failure to report.
+//
+// A RECORD THAT EXISTS IS NOT A RECORD THAT IS RIGHT. This used to stop at
+// "there is a record for that name", so a record pointing somewhere else --
+// or not proxied -- read as done while Pages went on answering "CNAME record
+// not set" for ever, and pressing "Set it up now" changed nothing. So the
+// record is read: one this code wrote is put right; one somebody added by
+// hand is reported with what it says, and never edited.
 async function ensureDnsRecord(cfg, host) {
+  const want = `${cfg.project}.pages.dev`;
   const found = await cf(cfg, `/zones/${cfg.zoneId}/dns_records?name=${encodeURIComponent(host)}`);
   if (found.ok && Array.isArray(found.result) && found.result.length) {
-    return { ok: true, existed: true, id: found.result[0].id };
+    const rec = found.result.find((r) => r.type === "CNAME") || found.result[0];
+    const right = rec.type === "CNAME" && String(rec.content || "").toLowerCase() === want && rec.proxied !== false;
+    if (right) return { ok: true, existed: true, id: rec.id };
+    if (/SubSub branded hostname/i.test(rec.comment || "")) {
+      const fixed = await cf(cfg, `/zones/${cfg.zoneId}/dns_records/${rec.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ type: "CNAME", name: host, content: want, proxied: true, ttl: 1 }),
+      });
+      if (fixed.ok) return { ok: true, existed: true, fixed: true, id: rec.id };
+      return { ok: false, error: errText(fixed) };
+    }
+    return { ok: false, error: `${host} already has a ${rec.type} record pointing at ${rec.content || "nothing"}`
+      + `${rec.proxied === false ? " (not proxied)" : ""}, added by hand. It needs to be a proxied CNAME to ${want}; `
+      + "change it in Cloudflare DNS, then press Set it up now." };
   }
 
   const made = await cf(cfg, `/zones/${cfg.zoneId}/dns_records`, {
@@ -261,7 +282,20 @@ export async function provisionHostname(env, subdomain) {
   // Registering is not the same as being live: the certificate takes a
   // minute or two. Report what Cloudflare says now and let the sweep
   // promote it to active rather than claiming it early.
-  return checkHostname(env, subdomain);
+  const now = await checkHostname(env, subdomain);
+  // PAGES CHECKS THE CNAME WHEN THE DOMAIN IS ADDED, AND A DOMAIN THAT FOUND
+  // NONE THEN CAN SIT ON "CNAME record not set" AFTER THE RECORD EXISTS. The
+  // record is right by now (the step above saw to it), so ask Pages to look
+  // again -- PATCH on the domain is Cloudflare's "retry validation". Every run
+  // of this, the button and the nightly sweep alike, does it while the answer
+  // is not active.
+  if (now.ok && now.status !== "active" && (now.error || dns.fixed)) {
+    const retried = await cf(cfg,
+      `/accounts/${cfg.accountId}/pages/projects/${cfg.project}/domains/${encodeURIComponent(host)}`,
+      { method: "PATCH", body: "{}" });
+    if (retried.ok) return checkHostname(env, subdomain);
+  }
+  return now;
 }
 
 // Take it down again -- a downgrade, or a deleted account. Missing at either

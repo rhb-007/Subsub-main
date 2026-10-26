@@ -15606,6 +15606,27 @@ refactor.
   by the owner), so a second business can be added there. `test:switcher` has one failure that predates this change (a
   contractor seat's wording).
 
+- **"CNAME RECORD NOT SET" ON A BRANDED ADDRESS COULD NOT BE CLEARED FROM
+  THE CONSOLE.** Reported on Rudd Development: *Setting up* with Cloudflare's
+  *CNAME record not set*, and *Set it up now* changing nothing.
+  `ensureDnsRecord` stopped at "a record exists for that name", so a record
+  pointing somewhere else, or not proxied, read as done. And Pages checks the
+  CNAME when the domain is added, so a domain that found none then can keep
+  that error after the record exists; nothing asked it to look again.
+  - **The record is read.** A proxied CNAME to `<project>.pages.dev` is
+    right. One this code wrote (its comment says so) is put right with a
+    PATCH. One somebody added by hand is never edited: the error names its
+    type, target and whether it is proxied, and nothing is registered on Pages
+    over it.
+  - **Pages is asked to retry validation** (`PATCH` on the domain, which
+    Cloudflare's SDK documents as "Retry the validation status of a single
+    domain") whenever the answer is not active and carries an error, or the
+    record was just fixed. *Set it up now* and the nightly sweep both do it.
+  `test:hostnames`; dropping the retry fails two assertions and dropping the
+  record check fails three. **Not verified:** the live state of
+  `rudd.subsub.work`, since Cloudflare and public DNS are unreachable from
+  here.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
