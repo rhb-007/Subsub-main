@@ -2671,3 +2671,20 @@ CREATE TABLE IF NOT EXISTS gcal_states (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   used_at    TEXT
 );
+
+-- ---------------------------------------------------------------------------
+-- 099 — a second business on one login
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS business_links (
+  id           TEXT PRIMARY KEY,
+  account_a    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_b    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  created_by   TEXT,
+  created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  discount_on  TEXT,
+  discount_at  TEXT
+);
+-- 099. One pair per account, either side; discount_on is the account Stripe
+-- is discounting now. (After the table, for SQLite's DROP COLUMN rewrite.)
+CREATE UNIQUE INDEX IF NOT EXISTS ux_business_links_a ON business_links(account_a);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_business_links_b ON business_links(account_b);

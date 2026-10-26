@@ -165,6 +165,8 @@ import { mintSlug, isSlug, passportUrl, validPassportEdit, publicPassport, passp
   CAPTION_MAX as PASSPORT_CAPTION_MAX } from "../shared/passport.js";
 import { unitPriced, unitPricing, UNIT_PRICED_KINDS, UNIT_THRESHOLD, UNIT_PRICE_CENTS,
   MIN_MONTHLY_CENTS, validEstimate, pricingRows, yearlyAllowed, effectiveBilling } from "../shared/unitpricing.js";
+import { LINKED_DISCOUNT_PERCENT, LINKED_COUPON_ID, secondKinds, linkRefusal, managesBuildings,
+  discountTarget } from "../shared/linked.js";
 import { calConfigured, fetchSlots, createBooking } from "./demo.js";
 import { bbbLive, fetchBbbRating } from "./bbb.js";
 import { parseBbbProfileUrl, bbbPublic, bbbOwnView } from "../shared/bbb.js";
@@ -1802,6 +1804,30 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
   const setupMeta = setup
     ? { setup_cents: String(setup.cents), setup_tier: setup.tier, setup_units: String(setup.units) } : {};
 
+  // 099. The cheaper of two linked businesses checks out with the discount
+  // already on, so the first invoice is right rather than corrected on the
+  // second. Asked as though this account were already paying, which is what
+  // finishing the checkout makes true. Stripe takes a coupon OR promotion
+  // codes on a session, never both, so this one replaces the box.
+  let linkedDiscount = false;
+  try {
+    const link = await businessLinkOf(c.env, accountId);
+    if (link) {
+      const mine = await linkSide(c.env, accountId, link.account_b === accountId);
+      const other = await linkSide(c.env, link.account_a === accountId ? link.account_b : link.account_a,
+        link.account_a === accountId);
+      if (mine && cycle === "annual") mine.monthlyCents = Math.round(99000 / 12);
+      if (mine && discountTarget({ ...mine, paying: true }, other) === accountId) {
+        await ensureLinkedCoupon(c.env);
+        linkedDiscount = true;
+      }
+    }
+  } catch (err) {
+    // A discount that could not be worked out is applied by the sync after
+    // the webhook; it must not stop somebody paying.
+    console.warn("[billing] linked discount at checkout:", err?.message || err);
+  }
+
   // Embedded renders Stripe's form inside our own page; hosted sends the
   // browser to stripe.com. The caller asks for embedded only when it has a
   // publishable key to mount it with, so a build without one still works
@@ -1813,7 +1839,7 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
     mode: "subscription",
     line_items: lineItems,
     client_reference_id: accountId,
-    allow_promotion_codes: true,
+    ...(linkedDiscount ? { discounts: [{ coupon: LINKED_COUPON_ID }] } : { allow_promotion_codes: true }),
     // Reuse the customer if this account has ever paid, so a second
     // subscription does not arrive under a second customer with the same
     // email and split their billing history in two.
@@ -1861,7 +1887,7 @@ app.post("/api/billing/checkout", requireRole("admin"), async (c) => {
           // A double-tapped button within the same minute is one checkout, not
           // two. The spelling is part of the key: a retry after a refusal is a
           // different request, and reusing the key would replay the refusal.
-          idempotencyKey: `checkout:${accountId}:${cycle}:${units.line.kind}${units.line.quantity}:${setup ? setup.cents : 0}:${embedded ? attempt.ui_mode : "h"}:${Math.floor(Date.now() / 60000)}`,
+          idempotencyKey: `checkout:${accountId}:${cycle}:${units.line.kind}${units.line.quantity}:${setup ? setup.cents : 0}:${linkedDiscount ? "L" : ""}:${embedded ? attempt.ui_mode : "h"}:${Math.floor(Date.now() / 60000)}`,
         });
         if (attempt !== attempts[0]) {
           console.warn("[billing] checkout fell back to",
@@ -2040,6 +2066,8 @@ app.get("/api/billing", requireRole("admin", "pm"), async (c) => {
     configured: !!c.env.STRIPE_SECRET_KEY,
     sms,
     units,
+    // 099. The other business this one is linked to, and who is discounted.
+    linked: await linkedView(c.env, accountId).catch(() => null),
     invoices: invoices.map((i) => ({
       id: i.id, amountCents: i.amount_cents, status: i.status,
       periodStart: i.period_start, periodEnd: i.period_end,
@@ -2157,6 +2185,10 @@ async function applySubscription(env, account, sub) {
     await syncHostname(env, { id: account.id, subdomain: account.subdomain, plan },
       { reason: "stripe" });
   }
+
+  // 099. Whether this account pays decides which of a linked pair is
+  // discounted. Never throws.
+  await syncLinkedDiscount(env, account.id);
 }
 
 // What a subscription charges a month, normalized: a yearly plan is the year
@@ -9736,6 +9768,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\bbusiness_links\b/i.test(m)) return "099_business_links";
   if (/\binspection_items\b/i.test(m)) return "096_inspection_items";
   if (/\bitem_key\b/i.test(m) && /inspection_photos|no such column|has no column/i.test(m)) return "097_item_photos";
   if (/\bunit_layout\b/i.test(m)) return "095_unit_layout";
@@ -26029,6 +26062,16 @@ app.get("/api/platform/bootstrap", async (c) => {
     return unitPricing(a.kind, pricingRows(portfolios[a.id] || [], estimates[a.id] || null).rows).monthlyCents;
   };
 
+  // 099. Who is linked to whom, and which side Stripe is discounting.
+  const linkOf = {};
+  try {
+    const { results: lr } = await c.env.DB.prepare(`SELECT * FROM business_links`).all();
+    for (const l of lr || []) {
+      linkOf[l.account_a] = { otherId: l.account_b, discounted: l.discount_on === l.account_a };
+      linkOf[l.account_b] = { otherId: l.account_a, discounted: l.discount_on === l.account_b };
+    }
+  } catch (err) { if (!missingSchema(err)) console.warn("[platform] links unavailable:", err?.message || err); }
+
   return c.json({
     // Financial figures are omitted for a standard user here too, not just on
     // the dedicated revenue route — otherwise the omission is cosmetic.
@@ -26048,6 +26091,8 @@ app.get("/api/platform/bootstrap", async (c) => {
       subscriptionStatus: a.subscription_status, currentPeriodEnd: a.current_period_end,
       createdAt: (a.created_at || "").slice(0, 10),
       unitMonthlyCents: unitMonthly(a),
+      linkedAccountId: linkOf[a.id]?.otherId || null,
+      linkedDiscountPct: linkOf[a.id]?.discounted ? LINKED_DISCOUNT_PERCENT : 0,
       status: "active",
     })),
     users: users.results.map(({ created_at, ...u }) => ({ ...u, createdAt: (created_at || "").slice(0, 10) })),
@@ -26275,6 +26320,300 @@ async function auditPlatform(env, staff, accountId, kind, text, meta) {
   ).bind(accountId || null, staff.userId, kind, accountId || null, payload));
   await env.DB.batch(stmts);
 }
+
+// ---------------------------------------------------------------------------
+// 099. A second business on one login
+// ---------------------------------------------------------------------------
+// A general contractor that also manages buildings is two businesses, kept as
+// two accounts (see shared/linked.js for why not one hybrid). This makes the
+// second one, puts the same person on it as admin, connects the management
+// side to the construction side's company, and keeps the cheaper of the two
+// LINKED_DISCOUNT_PERCENT off while both pay.
+
+// The pair this account is in, null for none, undefined for a database
+// without 099 (the caller names the file).
+async function businessLinkOf(env, accountId) {
+  try {
+    return await env.DB.prepare(
+      `SELECT * FROM business_links WHERE account_a = ? OR account_b = ?`).bind(accountId, accountId).first();
+  } catch (err) {
+    if (missingSchema(err)) return undefined;
+    throw err;
+  }
+}
+
+// Connect the management side to the construction side's company, as though
+// a connect request had been asked and accepted -- because it has, by the one
+// person who answers for both. Same rows the accept route writes: an active
+// engagement on the hiring account, and the construction side's team seated
+// there as contractors so they can read the work they are given.
+async function connectLinkedBusiness(env, { hiringAccountId, companyId, trades, actorId }) {
+  const engagementId = uid();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO engagements (id, account_id, company_id, status, categories, caps)
+       VALUES (?, ?, ?, 'active', ?, '[]')`
+    ).bind(engagementId, hiringAccountId, companyId, JSON.stringify(trades || [])).run();
+  } catch (err) {
+    if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+  }
+  const { results: team } = await env.DB.prepare(
+    `SELECT DISTINCT m.user_id FROM memberships m JOIN accounts a ON a.id = m.account_id
+      WHERE a.company_id = ? AND m.role IN ('admin', 'pm')`).bind(companyId).all();
+  for (const r of team || []) {
+    try {
+      await env.DB.prepare(
+        `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+      ).bind(uid(), r.user_id, hiringAccountId, companyId).run();
+    } catch (err) {
+      if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+    }
+  }
+  await logEvent(env, hiringAccountId, actorId, "engagement.connected", engagementId,
+    { companyId, via: "linked_business" });
+  return engagementId;
+}
+
+// Make the second business. `from` is the first account's row; `owner` is the
+// user who becomes admin of the new one. Answers { status, body }.
+async function createSecondBusiness(c, { from, ownerId, name, subdomain: rawSub, kind, staff = null }) {
+  const env = c.env;
+  name = String(name || "").trim();
+  const subdomain = validSubdomain(rawSub);
+  if (!name) return { status: 400, body: { error: "name_required" } };
+  if (!subdomain) return { status: 400, body: { error: "invalid_subdomain" } };
+  const refused = linkRefusal(from.kind, kind);
+  if (refused) return { status: 400, body: { error: refused, allowed: secondKinds(from.kind) } };
+
+  const link = await businessLinkOf(env, from.id);
+  if (link === undefined) return { status: 503, body: { error: "migration_needed", migration: "099_business_links" } };
+  if (link) return { status: 409, body: { error: "already_linked" } };
+  const taken = await env.DB.prepare(`SELECT id FROM accounts WHERE subdomain = ?`).bind(subdomain).first();
+  if (taken) return { status: 409, body: { error: "subdomain_taken" } };
+
+  // What carries over is what is the same business: its trades, its colors and
+  // its mark. Not the plan -- the new one starts on Basic and is subscribed on
+  // its own, which is what the discount is measured against.
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, trades, theme, use_default_mark)
+     VALUES (?, ?, ?, ?, 'basic', 'monthly', ?, ?, ?)`
+  ).bind(id, name, subdomain, kind, from.trades || null, from.theme || null,
+    from.use_default_mark == null ? 1 : from.use_default_mark).run();
+
+  // The logo is copied, never shared: an object two accounts point at is one
+  // that deleting either account takes from the other.
+  if (from.logo_key && env.FILES) {
+    try {
+      const obj = await env.FILES.get(from.logo_key);
+      if (obj) {
+        const key = `${id}/logo/${String(from.logo_key).split("/").pop()}`;
+        await env.FILES.put(key, await obj.arrayBuffer(), { httpMetadata: obj.httpMetadata });
+        await env.DB.prepare(`UPDATE accounts SET logo_key = ? WHERE id = ?`).bind(key, id).run();
+      }
+    } catch (err) { console.warn("second business: logo not copied", err?.message || err); }
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
+  ).bind(uid(), ownerId, id).run();
+
+  const newCo = await ensureAccountCompany(env, id);
+  if (newCo) {
+    // The business card the first one already has, where there is one.
+    const owner = await env.DB.prepare(`SELECT name, email, phone FROM users WHERE id = ?`).bind(ownerId).first();
+    const prev = from.company_id
+      ? await env.DB.prepare(`SELECT contact, email, phone, city, state, zip FROM companies WHERE id = ?`)
+        .bind(from.company_id).first() : null;
+    await env.DB.prepare(
+      `UPDATE companies SET contact = COALESCE(contact, ?), email = COALESCE(email, ?), phone = COALESCE(phone, ?),
+              city = COALESCE(city, ?), state = COALESCE(state, ?), zip = COALESCE(zip, ?) WHERE id = ?`
+    ).bind(prev?.contact || owner?.name || null, prev?.email || realEmail(owner?.email) || null,
+      prev?.phone || owner?.phone || null, prev?.city || null, prev?.state || null, prev?.zip || null, newCo).run()
+      .catch((err) => console.warn("second business: contact not copied", err?.message || err));
+    try { await ensurePassport(env, newCo); }
+    catch (err) { console.warn("second business: passport not made", err?.message || err); }
+  }
+
+  await env.DB.prepare(
+    `INSERT INTO business_links (id, account_a, account_b, created_by) VALUES (?, ?, ?, ?)`
+  ).bind(uid(), from.id, id, staff ? staff.userId : ownerId).run();
+
+  // Connected from the management side to the construction side's company.
+  // The first account's own company row is made here if nothing has made it
+  // yet, which signing up normally has.
+  const hiring = managesBuildings(kind) ? id : from.id;
+  const companyId = managesBuildings(kind)
+    ? (from.company_id || await ensureAccountCompany(env, from.id)) : newCo;
+  let connected = false;
+  if (companyId) {
+    let trades = [];
+    try { trades = JSON.parse(from.trades || "[]") || []; } catch { trades = []; }
+    await connectLinkedBusiness(env, { hiringAccountId: hiring, companyId, trades, actorId: ownerId });
+    connected = true;
+  }
+
+  await recordAccountCreated(env, { accountId: id, plan: "basic", billing: "monthly",
+    source: staff ? "platform_admin" : "linked" });
+  const text = `${name} was added as a second business of ${from.name}`;
+  if (staff) {
+    await auditPlatform(env, staff, id, "account_created", `${staff.name}: ${text}`, { linkedTo: from.id });
+  }
+  await logActivity(env, from.id, staff ? null : ownerId, "linked_business", text).catch(() => {});
+  await logActivity(env, id, staff ? null : ownerId, "linked_business", text).catch(() => {});
+
+  return { status: 201, body: { id, name, subdomain, kind, plan: "basic", connected,
+    discountPercent: LINKED_DISCOUNT_PERCENT } };
+}
+
+// Is this account paying, and what does its own month cost?
+async function linkSide(env, accountId, second) {
+  const a = await env.DB.prepare(
+    `SELECT id, kind, plan, billing, comped, stripe_subscription_id, subscription_status FROM accounts WHERE id = ?`
+  ).bind(accountId).first();
+  if (!a) return null;
+  const paying = a.plan === "scale" && !a.comped && !!a.stripe_subscription_id
+    && ENTITLED.has(a.subscription_status || "");
+  let monthlyCents = effectiveBilling(a) === "annual" ? Math.round(99000 / 12) : MIN_MONTHLY_CENTS;
+  if (unitPriced(a.kind) && effectiveBilling(a) !== "annual") {
+    monthlyCents = (await accountUnitPricing(env, accountId, a.kind)).monthlyCents;
+  }
+  return { id: a.id, kind: a.kind, paying, monthlyCents, second, sub: a.stripe_subscription_id };
+}
+
+// The one coupon every linked account is on. Created the first time it is
+// needed, under a fixed id, so there is never more than one.
+async function ensureLinkedCoupon(env) {
+  try {
+    return await stripeCall(env, `/coupons/${LINKED_COUPON_ID}`, { method: "GET" });
+  } catch (err) {
+    if (err.status !== 404) throw err;
+  }
+  return stripeCall(env, "/coupons", {
+    params: { id: LINKED_COUPON_ID, percent_off: LINKED_DISCOUNT_PERCENT, duration: "forever",
+      name: `Second business: ${LINKED_DISCOUNT_PERCENT}% off` },
+    idempotencyKey: `coupon:${LINKED_COUPON_ID}`,
+  });
+}
+
+// Bring Stripe in step with who should have the discount. Best effort and
+// never throws: it runs after a subscription changes, and a webhook must not
+// fail over a discount. The nightly sweep catches anything missed.
+//
+// It REPLACES the subscription's discounts, so a promotion code somebody used
+// at checkout is replaced by this one -- stated rather than hidden, and this
+// one is the larger in every case SubSub offers.
+async function syncLinkedDiscount(env, accountId) {
+  try {
+    const link = await businessLinkOf(env, accountId);
+    if (!link) return { skipped: link === undefined ? "migration_needed" : "not_linked" };
+    if (!env.STRIPE_SECRET_KEY) return { skipped: "billing_not_configured" };
+    const a = await linkSide(env, link.account_a, false);
+    const b = await linkSide(env, link.account_b, true);
+    const target = discountTarget(a, b);
+    if ((link.discount_on || null) === (target || null)) return { target, changed: false };
+    // Off the one that had it, then on the one that should.
+    for (const side of [a, b]) {
+      if (!side?.sub) continue;
+      const had = link.discount_on === side.id, wants = target === side.id;
+      if (had && !wants) {
+        await stripeCall(env, `/subscriptions/${side.sub}`, { params: { discounts: "" } });
+        await logActivity(env, side.id, null, "plan_changed",
+          `The ${LINKED_DISCOUNT_PERCENT}% second-business discount comes off from the next bill.`).catch(() => {});
+      }
+    }
+    if (target) {
+      const side = [a, b].find((x) => x?.id === target);
+      await ensureLinkedCoupon(env);
+      await stripeCall(env, `/subscriptions/${side.sub}`,
+        { params: { discounts: [{ coupon: LINKED_COUPON_ID }] } });
+      await logActivity(env, side.id, null, "plan_changed",
+        `Scale is ${LINKED_DISCOUNT_PERCENT}% off from the next bill, because your other business pays for SubSub too.`).catch(() => {});
+    }
+    await env.DB.prepare(`UPDATE business_links SET discount_on = ?, discount_at = ? WHERE id = ?`)
+      .bind(target || null, new Date().toISOString(), link.id).run();
+    return { target, changed: true };
+  } catch (err) {
+    console.error("[linked] discount sync failed:", accountId, err?.message || err);
+    return { error: String(err?.message || err) };
+  }
+}
+
+// Nightly: every pair, so a price that moved (a portfolio crossing 80 units)
+// or a webhook that was missed is caught the same night.
+async function linkedDiscountSweep(env) {
+  let rows;
+  try { ({ results: rows } = await env.DB.prepare(`SELECT account_a FROM business_links`).all()); }
+  catch (err) { if (missingSchema(err)) return { skipped: "migration_needed" }; throw err; }
+  let changed = 0, failed = 0;
+  for (const r of rows || []) {
+    const out = await syncLinkedDiscount(env, r.account_a);
+    if (out.changed) changed += 1;
+    if (out.error) failed += 1;
+  }
+  return { pairs: (rows || []).length, changed, failed };
+}
+
+// What the account's own screens say about the pair.
+async function linkedView(env, accountId) {
+  const link = await businessLinkOf(env, accountId);
+  if (link === undefined) return { migration: "099_business_links" };
+  if (!link) return null;
+  const otherId = link.account_a === accountId ? link.account_b : link.account_a;
+  const other = await env.DB.prepare(`SELECT id, name, subdomain, kind FROM accounts WHERE id = ?`)
+    .bind(otherId).first();
+  // Which side the discount goes to once both pay, so the screen can say so
+  // before either has subscribed.
+  let cheaper = null;
+  try {
+    const mine = await linkSide(env, accountId, link.account_b === accountId);
+    const theirs = await linkSide(env, otherId, link.account_b === otherId);
+    const t = mine && theirs ? discountTarget({ ...mine, paying: true }, { ...theirs, paying: true }) : null;
+    cheaper = t === accountId ? "this" : t === otherId ? "other" : null;
+  } catch (err) { console.warn("[linked] cheaper side:", err?.message || err); }
+  return {
+    other: other ? { id: other.id, name: other.name, subdomain: other.subdomain, kind: other.kind } : null,
+    discountOn: link.discount_on === accountId ? "this" : link.discount_on === otherId ? "other" : null,
+    cheaper,
+    discountPercent: LINKED_DISCOUNT_PERCENT,
+  };
+}
+
+// The account's own door. Admin of the first account becomes admin of the
+// second, and nobody else is moved: the team can be added on the new one.
+app.get("/api/account/second-business", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  const a = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  return c.json({ linked: await linkedView(c.env, accountId), allowed: secondKinds(a?.kind),
+    discountPercent: LINKED_DISCOUNT_PERCENT });
+});
+
+app.post("/api/account/second-business", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const from = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!from) return c.json({ error: "not_found" }, 404);
+  const out = await createSecondBusiness(c, { from, ownerId: userId, name: b.name, subdomain: b.subdomain, kind: b.kind });
+  return c.json(out.body, out.status);
+});
+
+// The console's door: the same, for the account's first admin.
+app.post("/api/platform/accounts/:id/second-business", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  const from = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(c.req.param("id")).first();
+  if (!from) return c.json({ error: "not_found" }, 404);
+  const admin = await c.env.DB.prepare(
+    `SELECT user_id FROM memberships WHERE account_id = ? AND role = 'admin' ORDER BY rowid LIMIT 1`
+  ).bind(from.id).first();
+  if (!admin) return c.json({ error: "no_admin_on_account" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  const out = await createSecondBusiness(c, { from, ownerId: admin.user_id, name: b.name,
+    subdomain: b.subdomain, kind: b.kind, staff });
+  return c.json(out.body, out.status);
+});
 
 app.post("/api/platform/accounts", async (c) => {
   const { error, staff } = await requireStaff(c);
@@ -28273,7 +28612,7 @@ export default {
          ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
-         ["unit-billing", unitBillingSweep], ["bbb", bbbSweep]]
+         ["unit-billing", unitBillingSweep], ["linked-discount", linkedDiscountSweep], ["bbb", bbbSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep],
          ["held", heldSweep], ["gcal", gcalSweep]];
 

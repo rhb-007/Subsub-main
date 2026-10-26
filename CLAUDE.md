@@ -15550,6 +15550,62 @@ refactor.
   `test:signupwelcome` (91) and `test:consolelists` (127). Dropping the welcome
   flag fails two assertions.
 
+- **A GENERAL CONTRACTOR THAT ALSO MANAGES BUILDINGS RUNS TWO LINKED
+  ACCOUNTS, AND THE CHEAPER ONE IS HALF OFF WHILE BOTH PAY.** Asked how to set
+  up a GC who is also a property manager, then *"build this and discount the
+  cheaper account, ie. the GC account"*. Migration 099 (`business_links`),
+  `app/shared/linked.js`.
+
+  **Two accounts, not one hybrid kind.** The kind decides the roster's word,
+  the agreement's party names, buildings and tenants, the handyman rule,
+  whether the company can be hired and the price, and a third kind has no
+  sensible answer to several of those. It is also usually two businesses in
+  fact: two LLCs, two insurance policies, two sets of 1099s.
+
+  **Account -> Company -> "Also run a second business?"** (admin), and the
+  same in the console's account window (superadmin, for the account's first
+  admin). It offers only the other side: a GC or subcontractor adds a
+  property manager, portfolio manager or building owner, and the reverse.
+  Two of one side is `same_side`, and an account is in at most one pair
+  (`already_linked`, from either side). The new account:
+  - has the same person as admin, and nobody else moved;
+  - copies the trades, colors and mark (the logo object is copied in R2,
+    never shared, so deleting one account cannot take the other's logo);
+  - starts on Basic and is subscribed on its own;
+  - **is connected**: the management side gets an active engagement with the
+    construction side's company, under its trades, and the construction
+    team's other people are seated there as contractors. The owner already
+    holds the admin seat there, and one person has one seat per account, so
+    their work arrives at home as client work.
+
+  **The discount is a Stripe coupon (`subsub-linked-business-50`, 50%,
+  forever), made once under a fixed id.** `discountTarget` decides: only while
+  BOTH pay (Scale, a live subscription, not comped), the one with the lower
+  month, a tie going to the side that is not unit-priced, then to the business
+  added second. A property manager is never under $99, so it is the GC in
+  practice. `syncLinkedDiscount` runs after every subscription webhook and in
+  a nightly sweep, tells Stripe only when the answer changes
+  (`business_links.discount_on` is what we last told it), and takes the
+  coupon off when one side stops paying. **The cheaper one's checkout carries
+  the coupon already**, so the first invoice is right; Stripe takes a coupon or
+  promotion codes on a session, never both, so that checkout has no code box.
+  Applying it replaces any discount already on the subscription. Every change
+  writes a line in that account's feed.
+
+  **On screen:** the Company panel names the other business with Open and
+  says which side is or will be discounted; the Subscription tab carries a
+  *Second business discount* line; the account switcher adds the kind to a
+  team seat (*you are admin there · property manager*), so the two read apart.
+  The console's MRR takes the discount off the discounted account.
+
+  `test:linked` (41) and `test:linkedui` (10). Dropping the both-pay rule fails
+  three; dropping the checkout coupon fails one. **Not verified here:** a live
+  Stripe coupon and subscription update; both are the documented shapes
+  (read from the `stripe` SDK's types) and the first real pair is the test.
+  **Pasting 099 is required.** Until then the panel names the file and nothing
+  is created. `test:switcher` has one failure that predates this change (a
+  contractor seat's wording).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

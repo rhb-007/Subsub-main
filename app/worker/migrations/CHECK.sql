@@ -332,6 +332,8 @@ WITH spec(j) AS (SELECT
   ',["m097_item_photos","col","inspection_photos",["item_key"]]' ||
   -- 098. A visit can belong to one company on the job.
   ',["m098_visit_company","col","visits",["company_id"]]' ||
+  -- 099. A second business on one login, and its discount.
+  ',["m099_business_links","col","business_links",["id","account_a","account_b","created_by","created_at","discount_on","discount_at"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -868,6 +870,13 @@ WITH inv(j) AS (SELECT '['
     WHERE (condition IS NOT NULL AND condition NOT IN ('ok','nc','nsc','np','nsp','nr','rp','na'))
        OR (condition = 'na' AND cost_cents IS NOT NULL)
        OR cost_cents < 0)))
+  -- 099. An account in two pairs (a on one, b on another), or a discount
+  -- recorded on an account that is in neither side of its own row.
+  || (',' || json_array('m099_inv_bad_link', (SELECT COUNT(*) FROM business_links l
+    WHERE l.account_a = l.account_b
+       OR EXISTS (SELECT 1 FROM business_links o WHERE o.id <> l.id
+                   AND (o.account_a IN (l.account_a, l.account_b) OR o.account_b IN (l.account_a, l.account_b)))
+       OR (l.discount_on IS NOT NULL AND l.discount_on NOT IN (l.account_a, l.account_b)))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

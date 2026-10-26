@@ -549,6 +549,8 @@ export const api = {
   // Billing. Checkout and portal both answer with a Stripe URL for the
   // browser to follow — card details never touch this app.
   getBilling: () => request("/billing"),
+  secondBusiness: () => request("/account/second-business"),
+  addSecondBusiness: (b) => request("/account/second-business", { method: "POST", body: JSON.stringify(b) }),
   // Turn the account's text messages off, or back on (admin).
   setSmsOff: (off) => request("/billing/sms", { method: "PUT", body: JSON.stringify({ off }) }),
   // mode "embedded" asks for a session we can mount inside our own page;
@@ -1036,6 +1038,7 @@ export const api = {
     // Writes. Deleting takes the name back as confirmation -- the server
     // checks it, so a stale id cannot remove the wrong customer.
     createAccount: (data) => request("/platform/accounts", { method: "POST", body: JSON.stringify(data) }),
+    addSecondBusiness: (id, data) => request(`/platform/accounts/${id}/second-business`, { method: "POST", body: JSON.stringify(data) }),
     patchAccount: (id, patch) =>
       request(`/platform/accounts/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
     // An account's own fee terms. Reading is any staff member; setting is a

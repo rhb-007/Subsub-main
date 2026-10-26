@@ -110,6 +110,7 @@ import { offDays as companyOffDays } from "../shared/crews.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
 import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/accessplan.js";
+import { secondKinds, buildsForHire } from "../shared/linked.js";
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
   mayAnswer as visitMayAnswer, partySaid as visitPartySaid, mayConfirm as visitMayConfirm,
   outcomeAsker, joinAnd } from "../shared/visitparty.js";
@@ -964,10 +965,16 @@ const seedSubscriptionEvents = [
 // Normalized MRR in cents: annual ÷ 12, so a $990/yr account is $82.50/mo.
 const mrrOf = (acct) => {
   if (!acct || acct.status === "canceled" || acct.plan !== "scale") return 0;
-  if (acct.billing === "annual") return Math.round(99000 / 12);
+  if (acct.billing === "annual") {
+    const y = Math.round(99000 / 12);
+    return Number(acct.linkedDiscountPct) > 0 ? Math.round(y * (100 - Number(acct.linkedDiscountPct)) / 100) : y;
+  }
   // 084: a portfolio past 80 units is billed per occupied unit, which the
   // bootstrap works out from the same rule the checkout charges by.
-  return Number(acct.unitMonthlyCents) > 0 ? Number(acct.unitMonthlyCents) : 9900;
+  const full = Number(acct.unitMonthlyCents) > 0 ? Number(acct.unitMonthlyCents) : 9900;
+  // 099. The cheaper of two linked businesses is discounted while both pay.
+  const pct = Number(acct.linkedDiscountPct) || 0;
+  return pct > 0 ? Math.round(full * (100 - pct) / 100) : full;
 };
 
 // ---- Properties ---------------------------------------------------------
@@ -3850,7 +3857,11 @@ export default function SubSub() {
       if (!a) return null;
       return {
         accountId: m.accountId, name: a.name, subdomain: a.subdomain, role: m.role,
-        what: seatDescription(m.role, roleLabelIn(kindOf(a), m.role), kindOf(a)),
+        // 099. A team seat names the kind of business too, so a general
+        // contractor who also manages buildings can tell their two apart.
+        what: seatDescription(m.role, roleLabelIn(kindOf(a), m.role), kindOf(a))
+          + (["admin", "pm"].includes(m.role) && ACCOUNT_KINDS[kindOf(a)]
+            ? ` · ${ACCOUNT_KINDS[kindOf(a)].label.toLowerCase()}` : ""),
         waiting: seatWaiting[m.accountId] || 0,
       };
     })
@@ -6024,6 +6035,9 @@ export default function SubSub() {
             await platformWrite(() => api.platform.patchAccount(id, patch),
               "Could not change that account.");
           }}
+          onAddSecondBusiness={async (id, data) =>
+            platformWrite(() => api.platform.addSecondBusiness(id, data),
+              "Could not add that business.")}
           onCreateAccount={async (data) =>
             platformWrite(() => api.platform.createAccount(data),
               "Could not create that account.")}
@@ -8174,6 +8188,7 @@ export default function SubSub() {
           the nudge email told them it existed. */}
       {tab === "account" && (
         <AccountView themeCtl={themeCtl} langCtl={langCtl} langEligible={langEligible}
+          onOpenLinked={async (id) => { await reloadAccounts(); await goToSeat(id); }}
           me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
           properties={accountProperties}
           seatCount={seatCount} atSeatLimit={atSeatLimit}
@@ -10028,7 +10043,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
-  onSetEngagedAs,
+  onSetEngagedAs, onAddSecondBusiness,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth, onIntegrationHealth }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
@@ -11075,6 +11090,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
             <CompPanel account={open.a} onSave={(patch) => onPatchAccount(open.a.id, patch)} />
 
             <FeeTermsPanel accountId={open.a.id} canEdit={isSuper} />
+
+            <ConsoleLinkPanel account={open.a} accounts={accounts} canEdit={isSuper}
+              onOpen={(id) => setOpenId(id)} onAdd={(b) => onAddSecondBusiness(open.a.id, b)} />
 
             <AttributionPanel accountId={open.a.id} />
 
@@ -13147,6 +13165,76 @@ function AttributionPanel({ accountId }) {
             </ul>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// 099. The console's view of a linked pair: which account this one is paired
+// with and whether it is the discounted one, or a form to add the other
+// business for the account's first admin. Superadmin to add, because it makes
+// an account; anybody on staff reads it.
+function ConsoleLinkPanel({ account, accounts, canEdit, onOpen, onAdd }) {
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const other = account.linkedAccountId ? accounts.find((a) => a.id === account.linkedAccountId) : null;
+  const allowed = secondKinds(account.kind);
+  if (!other && (!canEdit || !allowed.length)) return null;
+  return (
+    <div className="pf-panel pf-linkpanel">
+      <div className="pf-panel-hd"><h3>Second business</h3></div>
+      {other ? (
+        <>
+          <p className="pf-note">
+            Linked with{" "}
+            <button type="button" className="pf-linkbtn" onClick={() => onOpen(other.id)}>{other.name}</button>
+            {" "}({ACCOUNT_KINDS[other.kind]?.label || other.kind}).{" "}
+            {Number(account.linkedDiscountPct) > 0
+              ? `This account is the discounted one: ${account.linkedDiscountPct}% off while both pay.`
+              : Number(other.linkedDiscountPct) > 0
+                ? `${other.name} is the discounted one; this account pays in full.`
+                : "No discount applied yet: it starts once both pay for Scale."}
+          </p>
+        </>
+      ) : !form ? (
+        <>
+          <p className="pf-note">Not linked. Adds the other kind of business for this account's admin, with the same
+            logo, colors and trades, and connects the management side to the construction side. The cheaper one is
+            half off while both pay.</p>
+          <button className="pf-mini" onClick={() => setForm({ kind: allowed[0], name: "", subdomain: "" })}>
+            <Plus size={13} /> Add a second business</button>
+        </>
+      ) : (
+        <div className="pf-form-grid">
+          <label className="pf-fld"><span>Kind</span>
+            <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              {allowed.map((k) => <option key={k} value={k}>{ACCOUNT_KINDS[k]?.label || k}</option>)}
+            </select></label>
+          <label className="pf-fld"><span>Business name</span>
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+          <label className="pf-fld"><span>Subdomain</span>
+            <input value={form.subdomain}
+              onChange={(e) => setForm({ ...form, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} />
+            {form.subdomain && <em className="pf-fld-hint">{form.subdomain}.subsub.work</em>}</label>
+          {err && <p className="pf-err" role="alert">{err}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => { setForm(null); setErr(""); }}>Cancel</button>
+            <button className="btn-solid" disabled={busy || !form.name.trim() || !form.subdomain}
+              onClick={async () => {
+                setBusy(true); setErr("");
+                try { await onAdd(form); setForm(null); }
+                catch (e) {
+                  const c = e?.body?.error;
+                  setErr(c === "subdomain_taken" ? "That subdomain is taken."
+                    : c === "no_admin_on_account" ? "This account has no admin to own the second business."
+                      : c === "already_linked" ? "This account already has a second business."
+                        : c === "migration_needed" ? `Run ${e.body.migration}.sql first.`
+                          : "That didn't work.");
+                } finally { setBusy(false); }
+              }}>Create it</button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -23176,6 +23264,33 @@ function BillingManage({ accentHex, onFellBack }) {
 // 084. What Scale costs an account that keeps buildings, with its own numbers
 // in it. Read off /api/billing, which works it out with the same rule the
 // checkout and the monthly sync charge by, so this cannot quote another price.
+// 099. On the Subscription tab: which of the two linked businesses is
+// discounted, and why. Read off /api/billing, from the same rule the sync
+// tells Stripe, so the screen and the invoice cannot disagree.
+function LinkedDiscountNote() {
+  const [l, setL] = useState(null);
+  useEffect(() => {
+    let live = true;
+    api.getBilling().then((b) => { if (live) setL(b?.linked || null); }).catch(() => {});
+    return () => { live = false; };
+  }, []);
+  if (!l?.other) return null;
+  const pct = l.discountPercent || 50;
+  return (
+    <div className="unit-price linked-discount">
+      <h4>{tt("Second business discount")}</h4>
+      <p className="up-lead">
+        {l.discountOn === "this"
+          ? <>{tt("Scale on this account is")}{" "}<b>{pct}% {tt("off")}</b>{tt(", because")} {l.other.name} {tt("pays for SubSub too.")}</>
+          : l.discountOn === "other"
+            ? <>{l.other.name}{" "}{tt("is the cheaper of your two businesses, so it gets the")} {pct}% {tt("discount. This account pays its full price.")}</>
+            : <>{tt("Linked with")} {l.other.name}. {tt("Once both are on Scale, the cheaper one is")} {pct}% {tt("off")}
+              {l.cheaper === "this" ? tt(" — that will be this one.") : l.cheaper === "other" ? ` — ${tt("that will be")} ${l.other.name}.` : "."}</>}
+      </p>
+    </div>
+  );
+}
+
 function UnitPrice({ onLoad }) {
   const [u, setU] = useState(null);
   useEffect(() => {
@@ -23831,6 +23946,122 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
 // calendar, which is theirs to grant and not this account's to take. A switch
 // that said "auto-schedule jobs" and nothing else would be asking for consent
 // to something nobody had described.
+// 099. A SECOND BUSINESS ON ONE LOGIN. A general contractor that also
+// manages buildings (or the other way round) is two businesses, kept as two
+// accounts: the kind decides the roster's word, the buildings, the tenants,
+// the handyman rule and the price, and a hybrid has no answer to several of
+// them. This makes the other one, with the same person as admin, its logo,
+// colors and trades copied, and the management side already connected to the
+// construction side. The cheaper of the two is half off while both pay.
+const KIND_SUBDOMAIN_HINT = { general_contractor: "build", subcontractor: "build",
+  property_manager: "pm", portfolio_manager: "pm", building_owner: "owner" };
+function SecondBusinessPanel({ accountName, subdomain, onOpen }) {
+  const [data, setData] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.secondBusiness().then((d) => { if (live) setData(d); }).catch(() => { if (live) setData({ error: true }); });
+    return () => { live = false; };
+  }, []);
+  if (!data || data.error || !(data.allowed || []).length && !data.linked) return null;
+  const linked = data.linked;
+  const pct = data.discountPercent || 50;
+  if (linked?.migration) {
+    return (
+      <div className="portal-panel settings-panel sb-panel">
+        <h4>{tt("Your other business")}</h4>
+        <p className="panel-note">{tt("The database isn't migrated yet — run")} {linked.migration}.sql.</p>
+      </div>
+    );
+  }
+  if (linked?.other) {
+    const o = linked.other;
+    return (
+      <div className="portal-panel settings-panel sb-panel" id="second-business">
+        <h4>{tt("Your other business")}</h4>
+        <div className="sb-linked">
+          <div>
+            <b>{o.name}</b>
+            <span>{tt(ACCOUNT_KINDS[o.kind]?.label || "")} · {o.subdomain}.subsub.work</span>
+          </div>
+          <button type="button" className="btn-ghost" onClick={() => onOpen?.(o.id)}>
+            {tt("Open")} {o.name}</button>
+        </div>
+        <p className="cov-hint">
+          {linked.discountOn === "this"
+            ? `${tt("This account's Scale is")} ${pct}% ${tt("off, because")} ${o.name} ${tt("pays for SubSub too.")}`
+            : linked.discountOn === "other"
+              ? `${o.name} ${tt("is")} ${pct}% ${tt("off, because this account pays for SubSub too.")}`
+              : linked.cheaper === "this"
+                ? `${tt("Once both are on Scale, this one is")} ${pct}% ${tt("off.")}`
+                : linked.cheaper === "other"
+                  ? `${tt("Once both are on Scale,")} ${o.name} ${tt("is")} ${pct}% ${tt("off.")}`
+                  : `${tt("Once both are on Scale, the cheaper one is")} ${pct}% ${tt("off.")}`}
+        </p>
+      </div>
+    );
+  }
+  const allowed = data.allowed || [];
+  const open = () => setForm({ kind: allowed[0], name: "",
+    subdomain: `${subdomain || ""}${KIND_SUBDOMAIN_HINT[allowed[0]] || "2"}`.slice(0, 40) });
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.addSecondBusiness(form);
+      setForm(null);
+      setData({ ...data, linked: { other: { id: r.id, name: r.name, subdomain: r.subdomain, kind: r.kind },
+        discountOn: null, cheaper: null, discountPercent: pct } });
+      onOpen?.(r.id, { justMade: true });
+    } catch (e) {
+      const code = e?.body?.error;
+      setErr(code === "subdomain_taken" ? tt("That address is taken. Try another.")
+        : code === "invalid_subdomain" ? tt("Use letters, numbers and single dashes for the address.")
+          : code === "name_required" ? tt("Give the business a name.")
+            : code === "already_linked" ? tt("This account already has a second business.")
+              : code === "migration_needed" ? `${tt("The database isn't migrated yet — run")} ${e.body.migration}.sql.`
+                : tt("That didn't work. Try again."));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="portal-panel settings-panel sb-panel" id="second-business">
+      <h4>{tt("Also run a second business?")}</h4>
+      <p className="panel-note">
+        {buildsForHire(allowed[0])
+          ? tt("If you also do the construction, set up your contracting company as its own account. You can send your buildings' repairs to it with a real work order, and it can work for other clients too.")
+          : tt("If you also manage buildings, set up your property management company as its own account, with its buildings, tenants and inspections. It's connected to")}
+        {!buildsForHire(allowed[0]) && <> {accountName}{tt(", so you can send its repairs your own way.")}</>}
+        {" "}{tt("You sign in once and switch between them. The cheaper of the two is")} {pct}% {tt("off while both are on Scale.")}
+      </p>
+      {!form ? (
+        <button type="button" className="btn-solid" onClick={open}><Plus size={14} /> {tt("Add a second business")}</button>
+      ) : (
+        <div className="sb-form">
+          <label className="fld"><span>{tt("What kind")}</span>
+            <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              {allowed.map((k) => <option key={k} value={k}>{tt(ACCOUNT_KINDS[k]?.label || k)}</option>)}
+            </select></label>
+          <label className="fld"><span>{tt("Business name")}</span>
+            <input value={form.name} placeholder={tt("Rudd Property Management")}
+              onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+          <label className="fld"><span>{tt("Address")}</span>
+            <input value={form.subdomain}
+              onChange={(e) => setForm({ ...form, subdomain: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "") })} />
+            <em className="fld-note">{form.subdomain}.subsub.work</em></label>
+          <p className="cov-hint">{tt("Your logo, colors and trades are copied over. It starts on Basic; upgrade it from its own Subscription tab.")}</p>
+          {err && <p className="fld-err" role="alert"><AlertTriangle size={12} /> {err}</p>}
+          <div className="form-actions">
+            <button type="button" className="btn-ghost" onClick={() => { setForm(null); setErr(""); }}>{tt("Cancel")}</button>
+            <button type="button" className="btn-solid" disabled={busy || !form.name.trim() || !form.subdomain}
+              onClick={save}>{busy ? tt("Setting it up…") : tt("Create the second business")}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AutoTurnaroundPanel({ on, onSave }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -23885,7 +24116,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
   added = null, onDismissAdded, openPane = null,
   payoutsLanded = false, onPayoutsHandled, gcalLanded = null,
-  themeCtl = null, langCtl = null, langEligible = false }) {
+  themeCtl = null, langCtl = null, langEligible = false, onOpenLinked = null }) {
   // Only set when the in-app card form could not be drawn at all.
   const [billingFellBack, setBillingFellBack] = useState(false);
   // accountKind is already a prop; the user form needs it to know which
@@ -24374,6 +24605,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         <AutoTurnaroundPanel on={autoTurnaround} onSave={onSetAutoTurnaround} />
       )}
 
+      {pane === "company" && canManage && (
+        <SecondBusinessPanel accountName={brand?.name} subdomain={applySubdomain} onOpen={onOpenLinked} />
+      )}
+
       {/* Only a general contractor. The other three kinds hire and are not
           hired, so this panel would be a QR code for something they will
           never do. */}
@@ -24852,6 +25087,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           {unitPriced(accountKind) && (
             <UnitPrice onLoad={setUnitInfo} />
           )}
+          <LinkedDiscountNote />
 
           {unitKind ? (
             <div className="cycle-row">
@@ -47536,6 +47772,10 @@ a.meas-dl{text-decoration:none}
   color:#fff;padding:2px 6px;border-radius:20px;margin-left:6px;vertical-align:1px}
 .notify-opt.disabled{opacity:.5;cursor:not-allowed}
 .fld-err{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--red);font-weight:600;margin:8px 0 0}
+.sb-linked{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}
+.sb-linked b{display:block;font-size:15px}
+.sb-linked span{font-size:13px;color:var(--ink-soft)}
+.sb-form{display:grid;gap:12px;margin-top:6px;max-width:520px}
 /* 084. Units and occupied units side by side, with the billing rule under
    them in words so a blank box is a decision rather than a guess. */
 .prop-units{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -49683,6 +49923,7 @@ iframe.dv-frame{display:block}
 .pf-created h3{display:flex;align-items:center;gap:8px;color:var(--brand)}
 .pf-created ul{margin:8px 0 0;padding-left:18px;line-height:1.7;font-size:14px}
 .pf-created li.no{color:var(--red,#b5442e)}
+.pf-linkpanel .pf-err{margin:8px 0 0;color:var(--red);font-weight:600;font-size:14px;grid-column:1/-1}
 .pf-newform .pf-err{margin:12px 0 0;color:var(--red);font-weight:600;font-size:14px}
 .pf-adduser-4{grid-template-columns:repeat(4,1fr)}
 .pf-adduser-grid{display:grid;gap:8px;margin-bottom:12px}
