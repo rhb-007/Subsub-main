@@ -15524,6 +15524,32 @@ refactor.
   `test:passportui` (86) and `test:docshareui` (85) were moved to the new rule.
   Dropping the place line and the QR from `PackHeader` fails three.
 
+- **AN ACCOUNT CREATED IN THE CONSOLE WELCOMES ITS OWNER, AND THE REST OF THE
+  TEAM CAN BE ADDED IN THE SAME PRESS.** Asked for as *"it should create the
+  account and send an invite email welcoming them to subsub ... and prompt
+  them to create their password, it should also allow you to add multiple
+  users"*. The owner was already sent an invite, but it read *"Staff added you
+  to Rudd Development"*, which is the wrong news for a company that has never
+  heard of SubSub, and the form still said to *"open the new account and send
+  a reset link"*.
+  - **The owner gets `userInviteEmail({welcome: true})`**: *Welcome to SubSub:
+    Rudd Development is ready*, they are its admin, and the link to choose a
+    password. Under 100 words.
+  - **Other people on the team** are rows on the New account form (name,
+    email, optional mobile, project manager or admin), posted as `users`. Each
+    gets the ordinary invite to choose a password, from nobody by name,
+    because the staff member is not somebody they know and the owner did not
+    add them. **Every row is checked before the account is written**, so a bad
+    row refuses the whole create and names it (`row`), and the form says
+    *Person 2 on the team needs a real email*. A blank row is skipped, a role
+    other than admin is a project manager, an address used twice (the owner's
+    included) is `duplicate_email`, and with no owner the first person is
+    forced to admin, the rule the add-user route already follows.
+  - **The form now says who was emailed** after Create, instead of closing
+    silently.
+  `test:signupwelcome` (91) and `test:consolelists` (127). Dropping the welcome
+  flag fails two assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

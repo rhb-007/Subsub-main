@@ -6024,10 +6024,9 @@ export default function SubSub() {
             await platformWrite(() => api.platform.patchAccount(id, patch),
               "Could not change that account.");
           }}
-          onCreateAccount={async (data) => {
-            await platformWrite(() => api.platform.createAccount(data),
-              "Could not create that account.");
-          }}
+          onCreateAccount={async (data) =>
+            platformWrite(() => api.platform.createAccount(data),
+              "Could not create that account.")}
           // Returns what Cloudflare said, so the panel can show it without
           // waiting for the reload the other writes trigger.
           onSyncHostname={async (id) =>
@@ -10041,6 +10040,10 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // thing the password reset already records about itself.
   const [roleErr, setRoleErr] = useState("");
   const [newAccount, setNewAccount] = useState(null);   // form data while open
+  // What creating it sent, and to whom. Closing the form on success said
+  // nothing, so "did the owner get an email" was a trip to the mail log.
+  const [createdAccount, setCreatedAccount] = useState(null);
+  const [newAccountErr, setNewAccountErr] = useState("");
   const [newCompany, setNewCompany] = useState(null);
   const [editCompanyId, setEditCompanyId] = useState(null);
   // THE FORM OPENED WHERE NOBODY COULD SEE IT. It rendered after the whole
@@ -10770,7 +10773,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
               {isSuper && (
                 <button className="btn-solid" onClick={() => setNewAccount({
                   name: "", subdomain: "", kind: "general_contractor", plan: "basic", billing: "monthly",
-                  ownerName: "", ownerEmail: "", ownerPhone: "", trades: [],
+                  ownerName: "", ownerEmail: "", ownerPhone: "", trades: [], users: [],
                 })}>
                   <Plus size={14} /> New account
                 </button>
@@ -10816,6 +10819,43 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                       onChange={(e) => setNewAccount({ ...newAccount, ownerPhone: formatPhone(e.target.value) })} /></label>
                 </div>
 
+                {/* THE REST OF THE TEAM, IN THE SAME PRESS. Adding a project
+                    manager used to mean creating the account, opening it and
+                    adding them one at a time. Each person gets their own
+                    invite to choose a password. Admin or project manager only:
+                    a contractor seat has a company behind it and comes from
+                    the roster. */}
+                <div className="pf-newusers">
+                  <span className="pf-trades-hd">Other people on the team <em className="pf-opt">optional — each gets an invite to choose a password</em></span>
+                  {newAccount.users.map((u, i) => {
+                    const set = (patch) => setNewAccount({ ...newAccount,
+                      users: newAccount.users.map((x, j) => (j === i ? { ...x, ...patch } : x)) });
+                    return (
+                      <div key={i} className="pf-newuser" data-row={i}>
+                        <label className="pf-fld"><span>Full name</span>
+                          <input placeholder="Sam Ortiz" value={u.name} onChange={(e) => set({ name: e.target.value })} /></label>
+                        <label className="pf-fld"><span>Work email</span>
+                          <input placeholder="sam@example.com" type="email" value={u.email} onChange={(e) => set({ email: e.target.value })} /></label>
+                        <label className="pf-fld"><span>Mobile <em className="pf-opt">optional</em></span>
+                          <input placeholder="(206) 555-0100" inputMode="tel" maxLength={13} value={u.phone}
+                            onChange={(e) => set({ phone: formatPhone(e.target.value) })} /></label>
+                        <label className="pf-fld"><span>Role</span>
+                          <select value={u.role} onChange={(e) => set({ role: e.target.value })}>
+                            <option value="pm">{ACCOUNT_KINDS[newAccount.kind]?.roleLabels?.pm || "Project manager"}</option>
+                            <option value="admin">Admin</option>
+                          </select></label>
+                        <button type="button" className="pf-newuser-x" aria-label={`Remove ${u.name || "this person"}`}
+                          onClick={() => setNewAccount({ ...newAccount, users: newAccount.users.filter((_, j) => j !== i) })}>
+                          <X size={16} /></button>
+                      </div>
+                    );
+                  })}
+                  <button type="button" className="btn-ghost pf-adduser"
+                    onClick={() => setNewAccount({ ...newAccount,
+                      users: [...newAccount.users, { name: "", email: "", phone: "", role: "pm" }] })}>
+                    <Plus size={14} /> Add a person</button>
+                </div>
+
                 {/* Signup asks for these and the console did not, so an account
                     created here arrived with no trades and the app had nothing
                     to decide what to ask their subcontractors to prove. */}
@@ -10841,20 +10881,56 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 </div>
 
                 <p className="pf-note">
-                  Creates the account and an admin membership for the owner. Nobody is signed in and no
-                  password is set: open the new account and send a reset link, which is how they get in.
+                  Creates the account with the owner as its admin, and emails them a welcome to SubSub
+                  with a link to choose their password. Everybody else listed gets their own invite.
                   {newAccount.plan === "basic"
                     ? " They sign in at app.subsub.work — a Basic account reserves its subdomain but does not serve it."
                     : " Their own subdomain only answers once it is added as a custom domain in Cloudflare; until then they sign in at app.subsub.work."}
                 </p>
+                {newAccountErr && <p className="pf-err" role="alert">{newAccountErr}</p>}
                 <div className="form-actions">
-                  <button className="btn-ghost" onClick={() => setNewAccount(null)}>Cancel</button>
+                  <button className="btn-ghost" onClick={() => { setNewAccount(null); setNewAccountErr(""); }}>Cancel</button>
                   <button className="btn-solid"
                     disabled={!newAccount.name.trim() || !newAccount.subdomain.trim() || !newAccount.ownerName.trim() || !newAccount.ownerEmail.trim()}
                     onClick={async () => {
-                      try { await onCreateAccount(newAccount); setNewAccount(null); }
-                      catch { /* the console has already said why; keep the form */ }
+                      setNewAccountErr("");
+                      try {
+                        const r = await onCreateAccount(newAccount);
+                        setCreatedAccount({ name: newAccount.name, ownerName: newAccount.ownerName,
+                          ownerEmail: newAccount.ownerEmail, ownerInvite: r?.ownerInvite || null,
+                          userInvites: r?.userInvites || [] });
+                        setNewAccount(null);
+                      } catch (e) {
+                        // A row refused by name says which row, so it can be fixed in place.
+                        const row = e?.body?.row;
+                        const why = { name_required: "needs a name", invalid_email: "needs a real email",
+                          invalid_phone: "has a mobile that isn't a US number",
+                          duplicate_email: "uses an email that is already on this account" }[e?.body?.error];
+                        if (Number.isInteger(row) && why) setNewAccountErr(`Person ${row + 1} on the team ${why}.`);
+                      }
                     }}>Create account</button>
+                </div>
+              </div>
+            )}
+            {createdAccount && !newAccount && (
+              <div className="pf-panel pf-created" role="status">
+                <h3><Check size={16} /> {createdAccount.name} is set up</h3>
+                <ul>
+                  {[{ name: createdAccount.ownerName, email: createdAccount.ownerEmail, role: "admin",
+                      invite: createdAccount.ownerInvite, welcome: true },
+                    ...createdAccount.userInvites].map((p) => (
+                    <li key={p.email} className={p.invite?.invited ? "ok" : "no"}>
+                      <b>{p.name}</b> · {p.role === "admin" ? "Admin" : "Project manager"} ·{" "}
+                      {p.invite?.invited
+                        ? `${p.welcome ? "welcome email" : "invite"} sent to ${p.email}${p.invite.texted ? " and texted" : ""}`
+                        : p.invite?.reason === "already_has_login"
+                          ? `already has a SubSub login, so no password email was needed`
+                          : `not sent (${p.invite?.reason || "unknown"}) -- open the account and resend from Users`}
+                    </li>
+                  ))}
+                </ul>
+                <div className="form-actions">
+                  <button className="btn-ghost" onClick={() => setCreatedAccount(null)}>Done</button>
                 </div>
               </div>
             )}
@@ -49599,6 +49675,15 @@ iframe.dv-frame{display:block}
 }
 .pf-newform{border-color:var(--brand);background:#f9fbfa}
 .pf-newform h3{margin-bottom:12px}
+.pf-newusers{margin-top:16px;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--paper,#fff)}
+.pf-newuser{display:grid;grid-template-columns:1.2fr 1.4fr 1fr 1fr auto;gap:10px;align-items:end;margin-top:10px}
+.pf-newuser-x{width:40px;height:44px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--ink-soft);display:inline-flex;align-items:center;justify-content:center}
+.pf-adduser{margin-top:12px}
+@media (max-width:760px){.pf-newuser{grid-template-columns:1fr 1fr}.pf-newuser-x{justify-self:end}}
+.pf-created h3{display:flex;align-items:center;gap:8px;color:var(--brand)}
+.pf-created ul{margin:8px 0 0;padding-left:18px;line-height:1.7;font-size:14px}
+.pf-created li.no{color:var(--red,#b5442e)}
+.pf-newform .pf-err{margin:12px 0 0;color:var(--red);font-weight:600;font-size:14px}
 .pf-adduser-4{grid-template-columns:repeat(4,1fr)}
 .pf-adduser-grid{display:grid;gap:8px;margin-bottom:12px}
 .pf-row-actions{display:flex;gap:6px;white-space:nowrap}

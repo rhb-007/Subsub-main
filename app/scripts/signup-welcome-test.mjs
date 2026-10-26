@@ -225,6 +225,61 @@ try {
       && ev[0].source === "platform_admin", JSON.stringify(ev));
   }
 
+  console.log("\n-- console create: the owner is welcomed, the team is invited --");
+  {
+    const db = seed(); const env = ENV(db); mail.length = 0;
+    const post = (body) => worker.fetch(new Request("https://api.subsub.work/api/platform/accounts", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer staff" },
+      body: JSON.stringify(body) }), env);
+    const base = { name: "Rudd Development", subdomain: "rudddev", kind: "general_contractor", plan: "scale",
+      ownerName: "Marc Rudd", ownerEmail: "marc@rudd.test" };
+    // A bad row refuses the whole create, names the row, and writes nothing.
+    const bad = await post({ ...base, users: [{ name: "Sam Ortiz", email: "sam@rudd.test" }, { name: "No Mail", email: "nope" }] });
+    const badBody = await bad.json().catch(() => ({}));
+    t.ck("a bad team row is refused by row", bad.status === 400 && badBody.error === "invalid_email" && badBody.row === 1, JSON.stringify(badBody));
+    t.ck("and no account was written", !db.prepare(`SELECT 1 FROM accounts WHERE subdomain = 'rudddev'`).get());
+    const dup = await post({ ...base, users: [{ name: "Marc Again", email: "MARC@rudd.test" }] });
+    t.ck("the owner's own address again is refused", dup.status === 400 && (await dup.json()).error === "duplicate_email");
+
+    mail.length = 0;
+    const res = await post({ ...base, users: [
+      { name: "Sam Ortiz", email: "sam@rudd.test", role: "pm" },
+      { name: "", email: "", phone: "" },
+      { name: "Jo Lee", email: "jo@rudd.test", role: "admin" },
+      { name: "Odd Role", email: "odd@rudd.test", role: "tenant" }] });
+    const body = await res.json().catch(() => ({}));
+    t.ck("created with the team", res.status === 201, `${res.status} ${JSON.stringify(body)}`);
+    const seats = db.prepare(`SELECT u.email, m.role FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.account_id = ? ORDER BY u.email`).all(body.id);
+    t.ck("owner admin, pm, second admin, and an odd role becomes pm; the blank row is skipped",
+      JSON.stringify(seats.map((x) => `${x.email}:${x.role}`)) ===
+        JSON.stringify(["jo@rudd.test:admin", "marc@rudd.test:admin", "odd@rudd.test:pm", "sam@rudd.test:pm"]), JSON.stringify(seats));
+    const toOwner = mail.find((m) => [].concat(m.to).includes("marc@rudd.test"));
+    t.ck("the owner gets a welcome to SubSub", /Welcome to SubSub/.test(toOwner?.subject || "") && /Choose a password/.test(toOwner?.text || ""),
+      toOwner?.subject);
+    const toSam = mail.find((m) => [].concat(m.to).includes("sam@rudd.test"));
+    t.ck("each other person gets their own invite, from nobody in particular",
+      /You've been added to Rudd Development/.test(toSam?.subject || "") && /Choose a password/.test(toSam?.text || ""), toSam?.subject);
+    t.ck("and nobody else is welcomed", mail.filter((m) => /Welcome to SubSub/.test(m.subject)).length === 1);
+    t.ck("the reply says who was invited", body.ownerInvite?.invited && body.userInvites?.length === 3
+      && body.userInvites.every((u) => u.invite?.invited), JSON.stringify(body.userInvites));
+    const words = (toOwner?.text || "").split("-- The SubSub team")[0].split(/\s+/).filter(Boolean).length;
+    t.ck("the welcome is under 100 words", words <= 100, String(words));
+  }
+
+  console.log("\n-- console create with no owner: the first person runs it --");
+  {
+    const db = seed(); const env = ENV(db); mail.length = 0;
+    const res = await worker.fetch(new Request("https://api.subsub.work/api/platform/accounts", {
+      method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer staff" },
+      body: JSON.stringify({ name: "No Owner", subdomain: "noowner",
+        users: [{ name: "Pat Kim", email: "pat@x.test", role: "pm" }] }) }), env);
+    const body = await res.json().catch(() => ({}));
+    const seat = db.prepare(`SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id WHERE u.email = 'pat@x.test'`).get();
+    t.ck("forced to admin, so the account has one", res.status === 201 && seat?.role === "admin", JSON.stringify(seat));
+    t.ck("and they are the one welcomed", /Welcome to SubSub/.test(mail[0]?.subject || ""), mail[0]?.subject);
+  }
+
   console.log("\n-- 087 fills in the accounts that already exist --");
   {
     const db = seed();

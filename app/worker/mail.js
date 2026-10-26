@@ -664,8 +664,28 @@ ${NOREPLY}`;
 // silence. Whoever was added found out by being told, and got in by noticing
 // a link on the sign-in screen that did not say it was for them. This is the
 // third of the three invites and it completes the set.
-export function userInviteEmail({ name, account, role, invitedBy, link }) {
+export function userInviteEmail({ name, account, role, invitedBy, link, welcome = false }) {
   const who = account?.name || "your team";
+  // The owner of an account SubSub set up for them. "Somebody added you" is
+  // the wrong news for a company that has never heard of the product: this is
+  // their account arriving, so it says welcome and says what is waiting.
+  if (welcome) {
+    const text = `Hi ${name || "there"},
+
+Welcome to SubSub. We've set up ${who} for you, and you're its admin. Choose a password to get in:
+  ${link}
+
+From there you can bring in your subcontractors, keep their insurance current and schedule your jobs. The link works once and expires in 30 days.
+
+-- The SubSub team
+
+${NOREPLY}`;
+    return {
+      subject: `Welcome to SubSub: ${who} is ready`,
+      text,
+      html: textToHtml(text, link),
+    };
+  }
   const what = {
     admin: "an admin",
     pm: "a manager",

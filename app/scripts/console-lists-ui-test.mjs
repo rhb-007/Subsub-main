@@ -136,10 +136,17 @@ const web = serveApp({ dir: OUT, port: WEB });
 const impersonated = [];
 // Every resend and cancel the console posts, so a button is proved by what it sends.
 const INVITE_CALLS = [];
+const CREATED = [];
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/platform/impersonate/") && method === "POST") {
     impersonated.push({ path, body });
     return [403, { error: "stub" }];
+  }
+  if (path === "/api/platform/accounts" && method === "POST") {
+    CREATED.push(body);
+    return [201, { id: "acc_new", ownerInvite: { invited: true, to: body.ownerEmail, emailed: true, texted: false },
+      userInvites: (body.users || []).filter((u) => u.email).map((u) => ({ name: u.name, email: u.email,
+        role: u.role, invite: { invited: true, to: u.email, emailed: true } })) }];
   }
   if (path === "/api/platform/me") return [200, STAFF()];
   if (path === "/api/platform/bootstrap") return [200, BOOT];
@@ -413,6 +420,50 @@ try {
   await wait(300);
 
   if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT + "/console-accounts.png", clip: { x: 0, y: 0, width: 1280, height: 800 } });
+  console.log("\n-- New account: the owner is welcomed and the team can be added --");
+  {
+    const typeIn = (sel, v) => page.evaluate((sel, v) => {
+      const el = document.querySelector(sel);
+      if (!el) return false;
+      const proto = el.tagName === "SELECT" ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v);
+      el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
+      return true;
+    }, sel, v);
+    await page.evaluate(() => [...document.querySelectorAll(".pf-head button")].find((b) => /New account/.test(b.innerText))?.click());
+    await wait(300);
+    t.ck("the form opens", await page.evaluate(() => !!document.querySelector(".pf-newform")));
+    t.ck("it says the owner is emailed a welcome, not to send a reset link",
+      await page.evaluate(() => /emails them a welcome to SubSub/.test(document.querySelector(".pf-newform")?.innerText || "")
+        && !/send a reset link/.test(document.querySelector(".pf-newform")?.innerText || "")));
+    await typeIn('.pf-newform input[placeholder="Cascade Exteriors"]', "Rudd Development");
+    await typeIn('.pf-newform input[placeholder="cascadeexteriors"]', "rudddev");
+    await typeIn('.pf-newform input[placeholder="Dana Reyes"]', "Marc Rudd");
+    await typeIn('.pf-newform input[placeholder="dana@example.com"]', "marc@rudd.test");
+    for (let i = 0; i < 2; i++) {
+      await page.evaluate(() => document.querySelector(".pf-adduser")?.click());
+      await wait(150);
+    }
+    t.ck("Add a person adds a row each press", await page.evaluate(() => document.querySelectorAll(".pf-newuser").length) === 2);
+    await typeIn('.pf-newuser[data-row="0"] input[placeholder="Sam Ortiz"]', "Sam Ortiz");
+    await typeIn('.pf-newuser[data-row="0"] input[placeholder="sam@example.com"]', "sam@rudd.test");
+    await typeIn('.pf-newuser[data-row="1"] input[placeholder="Sam Ortiz"]', "Jo Lee");
+    await typeIn('.pf-newuser[data-row="1"] input[placeholder="sam@example.com"]', "jo@rudd.test");
+    await typeIn('.pf-newuser[data-row="1"] select', "admin");
+    await wait(150);
+    await page.evaluate(() => [...document.querySelectorAll(".pf-newform .form-actions button")].find((b) => /Create account/.test(b.innerText))?.click());
+    await wait(1200);
+    const sent = CREATED[0] || {};
+    t.ck("the create posts the team with their roles",
+      JSON.stringify((sent.users || []).map((u) => `${u.name}:${u.email}:${u.role}`)) ===
+        JSON.stringify(["Sam Ortiz:sam@rudd.test:pm", "Jo Lee:jo@rudd.test:admin"]), JSON.stringify(sent.users));
+    const done = await page.evaluate(() => document.querySelector(".pf-created")?.innerText || "");
+    t.ck("and says who was emailed", /welcome email sent to marc@rudd.test/.test(done)
+      && /invite sent to sam@rudd.test/.test(done) && /invite sent to jo@rudd.test/.test(done), done.replace(/\s+/g, " "));
+    await page.evaluate(() => [...document.querySelectorAll(".pf-created button")].find((b) => /Done/.test(b.innerText))?.click());
+    await wait(200);
+  }
+
   console.log("\n-- a row opens the account in a window, over the list --");
   await page.evaluate(() => [...document.querySelectorAll(".pf-rows .pf-row")]
     .find((r) => /Outerhome/.test(r.innerText))?.click());

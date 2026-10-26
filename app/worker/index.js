@@ -6297,7 +6297,7 @@ app.post("/api/user-invite/:token", async (c) => {
 // succeeded by the time this runs, and failing the whole request because an
 // email bounced would tell an admin their colleague was not added when they
 // were.
-async function inviteAccountUser(c, { accountId, user, role, invitedBy }) {
+async function inviteAccountUser(c, { accountId, user, role, invitedBy, welcome = false }) {
   const email = realEmail(user.email);
   if (!email) return { invited: false, reason: "no_email" };
   // Already has a login: there is nothing to set up, and a "choose a
@@ -6322,7 +6322,7 @@ async function inviteAccountUser(c, { accountId, user, role, invitedBy }) {
 
   const mail = userInviteEmail({
     name: user.name, account, role, invitedBy: invitedBy?.name || null,
-    link: userInviteUrl(account, token),
+    link: userInviteUrl(account, token), welcome,
   });
   const link = userInviteUrl(account, token);
   const result = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
@@ -26310,6 +26310,35 @@ app.post("/api/platform/accounts", async (c) => {
   const trades = b.trades === undefined ? null : validTrades(b.trades);
   if (trades === null && b.trades !== undefined) return c.json({ error: "invalid_trades" }, 400);
 
+  // The rest of the team, added in the same press: a project manager, a
+  // second admin. Every one is checked BEFORE the account is written, so a
+  // typo in the third row refuses the whole create and names the row,
+  // rather than leaving an account half set up with two of its four people.
+  // A team seat only (admin or pm): a contractor seat has a company behind
+  // it and is added from the roster, and an owner or tenant is a guest.
+  const extra = [];
+  const seen = new Set(ownerEmail ? [ownerEmail] : []);
+  const rawUsers = Array.isArray(b.users) ? b.users : [];
+  if (rawUsers.length > 20) return c.json({ error: "too_many_users" }, 400);
+  for (let i = 0; i < rawUsers.length; i++) {
+    const u = rawUsers[i] || {};
+    const uName = String(u.name || "").trim();
+    const uEmail = String(u.email || "").trim().toLowerCase();
+    const uPhoneRaw = String(u.phone || "").trim();
+    const uPhone = normalizePhone(uPhoneRaw);
+    if (!uName && !uEmail && !uPhoneRaw) continue; // an empty row nobody filled in
+    if (!uName) return c.json({ error: "name_required", row: i }, 400);
+    if (!EMAIL_RE.test(uEmail)) return c.json({ error: "invalid_email", row: i }, 400);
+    if (uPhoneRaw && !uPhone) return c.json({ error: "invalid_phone", row: i }, 400);
+    if (seen.has(uEmail)) return c.json({ error: "duplicate_email", row: i }, 400);
+    seen.add(uEmail);
+    extra.push({ name: uName, email: uEmail, phone: uPhone,
+      role: u.role === "admin" ? "admin" : "pm" });
+  }
+  // The first person on an account runs it, the rule the add-user route
+  // forces. With no owner named, the first person listed is the admin.
+  if (!ownerEmail && extra.length) extra[0].role = "admin";
+
   const id = uid();
   await c.env.DB.prepare(
     `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, trades, use_default_mark)
@@ -26352,7 +26381,29 @@ app.post("/api/platform/accounts", async (c) => {
     // talked them through "forgot password" for a login that did not exist.
     const owner = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(ownerId).first();
     ownerInvite = await inviteAccountUser(c, { accountId: id, user: owner, role: "admin",
-      invitedBy: { id: null, name: staff?.name || "SubSub" } });
+      invitedBy: { id: null, name: staff?.name || "SubSub" }, welcome: true });
+  }
+
+  // Each one gets their own invite to choose a password. Named by nobody --
+  // "You've been added to Rudd Development" -- because the staff member who
+  // pressed the button is not somebody they know, and the owner did not add
+  // them. The first person on an owner-less account gets the welcome.
+  const userInvites = [];
+  for (const [i, u] of extra.entries()) {
+    const known = await c.env.DB.prepare(
+      `SELECT id FROM users WHERE lower(email) = lower(?)`).bind(u.email).first();
+    const userId = known?.id || uid();
+    if (!known) {
+      await c.env.DB.prepare(`INSERT INTO users (id, name, email, phone) VALUES (?, ?, ?, ?)`)
+        .bind(userId, u.name, u.email, u.phone).run();
+    }
+    await c.env.DB.prepare(
+      `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, ?)`
+    ).bind(uid(), userId, id, u.role).run();
+    const full = await c.env.DB.prepare(`SELECT * FROM users WHERE id = ?`).bind(userId).first();
+    const invite = await inviteAccountUser(c, { accountId: id, user: full, role: u.role,
+      invitedBy: null, welcome: !ownerEmail && i === 0 });
+    userInvites.push({ name: u.name, email: u.email, role: u.role, invite });
   }
 
   if (plan === "scale") {
@@ -26361,10 +26412,11 @@ app.post("/api/platform/accounts", async (c) => {
 
   await recordAccountCreated(c.env, { accountId: id, plan, billing, source: "platform_admin" });
   await auditPlatform(c.env, staff, id, "account_created",
-    `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null });
+    `${staff.name} created this account`, { name, subdomain, plan, ownerEmail: ownerEmail || null,
+      users: extra.map((u) => ({ email: u.email, role: u.role })) });
 
   return c.json({ id, name, subdomain, kind, plan, billing, trades, ownerId,
-    ownerInvite }, 201);
+    ownerInvite, userInvites }, 201);
 });
 
 // Plan and account type, from the console. Deliberately does NOT touch
