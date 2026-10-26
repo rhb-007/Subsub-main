@@ -15602,8 +15602,8 @@ refactor.
   three; dropping the checkout coupon fails one. **Not verified here:** a live
   Stripe coupon and subscription update; both are the documented shapes
   (read from the `stripe` SDK's types) and the first real pair is the test.
-  **Pasting 099 is required.** Until then the panel names the file and nothing
-  is created. `test:switcher` has one failure that predates this change (a
+  **099 is pasted on the live database** (the column check read 7, confirmed
+  by the owner), so a second business can be added there. `test:switcher` has one failure that predates this change (a
   contractor seat's wording).
 
 ## Working here
