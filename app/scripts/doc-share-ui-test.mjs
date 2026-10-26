@@ -245,6 +245,10 @@ try {
         w9Link: document.querySelector(".pack-w9 a")?.getAttribute("href") || null,
         links: [...el.querySelectorAll("a")].map((a) => a.getAttribute("href")),
         lede: el.querySelector(".pack-lede")?.innerText || "",
+        place: el.querySelector(".pack-head .pack-place")?.innerText.trim() || "",
+        qr: !!el.querySelector(".pack-head .pp-head-side svg.qr"),
+        share: [...el.querySelectorAll(".pack-head .pp-head-side .pp-share a, .pack-head .pp-head-side .pp-share button")]
+          .map((x) => ({ t: x.getAttribute("aria-label") || "", href: x.getAttribute("href") || "", words: x.innerText.trim() })),
         trades: [...el.querySelectorAll(".pack-trade")].map((x) => x.innerText),
         seal: el.querySelector(".pack-badge")?.innerText.replace(/\s+/g, " ").trim() || "",
         headLogo: !!document.querySelector(".pack-page > .pack-top .pack-brand .ss-logo"),
@@ -333,6 +337,13 @@ try {
     t.ck("and links to their Passport", pack.links.includes(PACK.passportUrl), JSON.stringify(pack.links));
     t.ck("SubSub's own logo is at the top, outside the card", pack.headLogo);
     t.ck("and on the left, not the middle", pack.headLogoLeft);
+    // ONE DESIGN WITH THE PASSPORT: the city and state in the headline, and
+    // the Passport's QR code with its share icons top right.
+    t.ck("the city and state are part of the headline", pack.place === "Seattle, WA", pack.place);
+    t.ck("the Passport's QR code is in the header", pack.qr, JSON.stringify(pack.share));
+    t.ck("with share icons that send the Passport's address",
+      pack.share.some((x) => x.t === "Text" && decodeURIComponent(x.href).includes(PACK.passportUrl))
+      && pack.share.some((x) => x.t === "Copy link") && pack.share.every((x) => x.words === ""), JSON.stringify(pack.share));
     // Whoever opens a pack is often somebody with an account who is signed
     // out on this device; the link came by email.
     t.ck("signed out, the top line offers Sign in, to the sign-in page",
@@ -384,7 +395,7 @@ try {
         lic: !!el.querySelector(".pack-lic"), licBad: !!el.querySelector(".pack-lic.bad"),
         licBorder: el.querySelector(".pack-lic") ? getComputedStyle(el.querySelector(".pack-lic")).borderColor : "",
         licText: el.querySelector(".pack-lic")?.innerText || "", name: el.querySelector("h1")?.innerText || "",
-        pass: /Passport/.test(el.innerText), what: el.querySelector(".pack-what")?.innerText || "" } : null;
+        pass: /Passport/.test(el.innerText), qr: !!el.querySelector("svg.qr"), what: el.querySelector(".pack-what")?.innerText || "" } : null;
     });
     t.ck("the page still draws", !!v && v.name === "Ridge Roofing", JSON.stringify(v));
     t.ck("no seal is drawn when it is not earned", v && !v.seal, JSON.stringify(v));
@@ -393,6 +404,7 @@ try {
       && /License not verified/.test(v.licText), JSON.stringify(v));
     t.ck("and no empty contact line", v && !v.lede, JSON.stringify(v));
     t.ck("and no Passport link when none is published", v && !v.pass, JSON.stringify(v));
+    t.ck("and no QR code to a Passport that is not there", v && !v.qr, JSON.stringify(v));
     t.ck("with no agreement, the summary leaves it out and says when it comes",
       v && /find Ridge Roofing's surety bond, certificate of insurance and IRS Form W-9\./.test(v.what)
       && /added once you connect and sign one/.test(v.what), v && v.what);

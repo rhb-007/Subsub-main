@@ -30607,16 +30607,8 @@ function DocPack({ token, seat = null }) {
           pack, and the page around it is what carried it. */}
       <PackTop seat={seat} />
       <div className="pack-card">
-        <span className="pack-kicker">Subcontractor compliance pack</span>
-        <h1>{p.company}</h1>
-        {(p.contact || p.where) && (
-          <p className="pack-lede">{[p.contact, p.where].filter(Boolean).join(" · ")}</p>
-        )}
-        {p.trades?.length > 0 && (
-          <div className="pack-trades">
-            {p.trades.map((t) => <span key={t.id} className="pack-trade">{t.label}</span>)}
-          </div>
-        )}
+        <PackHeader kicker="Subcontractor compliance pack" name={p.company} place={p.where}
+          lede={p.contact} trades={p.trades || []} url={p.passportUrl} />
         {/* WHAT IS IN IT, NAMED. Only what is on file, in the order a GC
             asks for it. The note the sub wrote is NOT here: it is a message to
             this reader, so it goes in the email that carried the link. */}
@@ -31343,31 +31335,14 @@ function PassportPage({ slug, seat = null }) {
           left, with Sign in on the right. The card is the sub's. */}
       <PackTop seat={seat} />
       <div className="pack-card pp-card">
-        {/* The company first and largest, and under it whose page this is:
-            SubSub's mark and "Powered by SubSub | Passport". It used to open
-            with a small kicker reading "SubSub Passport" over the name, which
-            read as a heading about us rather than about them. */}
-        <header className="pp-head">
-          <div className="pp-head-who">
-            <span className="pack-kicker">Subcontractor Passport</span>
-            <h1>{p.name}</h1>
-            {(where || p.years) && <p className="pack-lede">{[where, p.years].filter(Boolean).join(" · ")}</p>}
-            {/* The one press the page exists for sits under the name it
-                connects to, on the left where the eye already is. Under the QR
-                code it made the right column the tallest thing in the header
-                and pushed everything below it down the page. */}
-            <PassportHeadCta cx={cx} name={p.name} onShow={() => setRing((n) => n + 1)} />
-          </div>
-          {/* Top right: the code itself, small, so a contractor standing at the
-              truck can hand it on, and the share tools as icons under it. */}
-          <div className="pp-head-side">
-            <QrCode value={url} size={104} label={`QR code for ${p.name}'s Passport`} />
-            <PassportShare url={url} name={p.name} icons />
-          </div>
-        </header>
-        {p.trades.length > 0 && (
-          <ul className="pp-trades">{p.trades.map((t) => <li key={t.id} className="pack-trade">{t.label}</li>)}</ul>
-        )}
+        {/* ONE DESIGN FOR BOTH. The compliance pack is the documents inside
+            the Passport, so the Passport opens the way the pack page does:
+            the shared headline, with its own QR code and share icons top
+            right, and the one press it exists for under the name. */}
+        <PackHeader kicker="Subcontractor Passport" name={p.name} place={where}
+          lede={p.years} trades={p.trades} url={url}>
+          <PassportHeadCta cx={cx} name={p.name} onShow={() => setRing((n) => n + 1)} />
+        </PackHeader>
         {p.about && <p className="pp-about">{p.about}</p>}
 
         {(p.contact || p.phone || p.email) && (
@@ -31380,45 +31355,52 @@ function PassportPage({ slug, seat = null }) {
           </div>
         )}
 
-        {/* Two columns: what is on file on the left, connecting on the right.
-            The badge leads the documents box because it is the verdict on
-            them; on a phone the columns stack in the same order. */}
-        <div className="pp-cols">
-          {/* Named what the rest of SubSub calls these four documents, and what
-              a GC says when they ask for them. */}
-          <div className="pp-left">
-          <section className="pp-docs" aria-label="Compliance pack">
-            <h3><FileText size={18} /> Compliance pack</h3>
-            <PassportBadge badge={p.badge} />
-            {/* The license at a glance, the compliance pack page's green or red
-                box. A state that licenses nobody earns the seal with no number,
-                so that one case draws no box. */}
-            {(p.license || !p.badge?.verified) && (
-              <div className={`pack-lic ${p.license?.ok ? "ok" : "bad"}`}>
-                {p.license?.ok ? <CheckCircle2 size={22} /> : <XCircle size={22} />}
-                <span className="pack-lic-text">
-                  <b>{p.license?.ok ? "License verified" : p.license ? "License not verified" : "No license number on file"}</b>
-                  <span>{p.license ? `#${p.license.number} · ${p.license.text}` : "Ask them for it before work starts"}</span>
+        {/* The compliance pack, drawn the way the pack page draws it: what is
+            in it named, the seal, the license box, and a row per document.
+            Nothing opens from here; connecting below is what opens them. */}
+        <section className="pp-docs" aria-label="Compliance pack">
+          <h3><FileText size={18} /> Compliance pack</h3>
+          <p className="pack-what">{packSummary({ company: p.name, docs: [
+            { kind: "insurance", onFile: !!p.insurance }, { kind: "bond", onFile: !!p.bond },
+            { kind: "w9", onFile: !!p.w9 }] })}</p>
+          <PassportBadge badge={p.badge} />
+          {(p.license || !p.badge?.verified) && (
+            <div className={`pack-lic ${p.license?.ok ? "ok" : "bad"}`}>
+              {p.license?.ok ? <CheckCircle2 size={22} /> : <XCircle size={22} />}
+              <span className="pack-lic-text">
+                <b>{p.license?.ok ? "License verified" : p.license ? "License not verified" : "No license number on file"}</b>
+                <span>{p.license ? `#${p.license.number} · ${p.license.text}` : "Ask them for it before work starts"}</span>
+              </span>
+            </div>
+          )}
+          <div className="pack-docs">
+            {[["insurance", p.insurance, p.insurance && <>
+                {p.insurance.carrier && <span>{p.insurance.carrier}</span>}
+                <span className="pack-good">{p.insurance.text}</span></>],
+              ["bond", p.bond, null], ["w9", p.w9, null]].map(([kind, on, facts]) => (
+              <div key={kind} className={`pack-doc ${on ? "" : "missing"}`}>
+                <div className="pack-doc-main">
+                  <b>{DOC_LABELS[kind] || kind}</b>
+                  {facts && <div className="pack-doc-facts">{facts}</div>}
+                </div>
+                <span className={`pack-gated ${on ? "on" : ""}`}>
+                  {on ? <><CheckCircle2 size={13} /> On file</> : "Not on file"}
                 </span>
               </div>
-            )}
+            ))}
+          </div>
+          {(where || p.zip || p.area || p.ubi) && (
             <dl className="claim-facts pp-facts">
               {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
               {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
-              <div><dt><Shield size={14} /> Insurance</dt>
-                <dd>{p.insurance ? <>{p.insurance.carrier || "Certificate on file"}<span className="pp-sub">{p.insurance.text}</span></>
-                  : <span className="pp-sub">No certificate on file</span>}</dd></div>
               {p.ubi && <div><dt><Award size={14} /> UBI</dt><dd>{p.ubi}</dd></div>}
-              <div><dt><Shield size={14} /> Surety bond</dt><dd>{p.bond ? "On file" : "Not on file"}</dd></div>
-              <div><dt><FileText size={14} /> W-9</dt><dd>{p.w9 ? "On file" : "Not on file"}</dd></div>
             </dl>
-          </section>
-          {/* Its own card under the pack, not a row of it: reputation is not
-              cover, and SubSub Verified reads nothing from it. */}
-          <PassportBbbCard bbb={p.bbb} />
-          </div>
-          <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
-        </div>
+          )}
+        </section>
+        {/* Its own card under the pack, not a row of it: reputation is not
+            cover, and SubSub Verified reads nothing from it. */}
+        <PassportBbbCard bbb={p.bbb} />
+        <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
 
         {/* Their work. The BBB rating moved into the Compliance pack box. */}
         {p.photos.length > 0 && (
@@ -31972,7 +31954,7 @@ function DocInbox({ token, seat = null }) {
 
 // The same frame the single pack page wears: SubSub's mark above the card,
 // Powered by SubSub at the foot.
-// THE PAGE'S TOP LINE: SubSub's mark in the middle and a way into an account
+// THE PAGE'S TOP LINE: SubSub's mark on the left and a way into an account
 // on the right. Whoever opens a pack is very often a general contractor or a
 // property manager who already has a SubSub account and is simply signed out
 // on this device -- the link came by email, and email opens in whatever
@@ -31990,6 +31972,34 @@ function PackTop({ seat = null }) {
         {seat ? <><span>Go to {seat.accountName || "your account"}</span> <ArrowRight size={14} /></> : <span>Sign in</span>}
       </a>
     </div>
+  );
+}
+
+// THE HEADLINE BOTH PAGES SHARE. The compliance pack and the Passport are one
+// company's public face: the pack is the documents inside the Passport. So
+// they open the same way -- a kicker, the name, the city and state as part of
+// the headline, the trades -- with the Passport's QR code and its share icons
+// top right, whenever there is a published Passport to point at.
+function PackHeader({ kicker, name, place, lede, trades = [], url = null, children = null }) {
+  return (
+    <header className="pp-head pack-head">
+      <div className="pp-head-who">
+        <span className="pack-kicker">{kicker}</span>
+        <h1>{name}</h1>
+        {place && <p className="pack-place"><MapPin size={16} /> {place}</p>}
+        {lede && <p className="pack-lede">{lede}</p>}
+        {trades.length > 0 && (
+          <ul className="pp-trades pack-trades">{trades.map((t) => <li key={t.id} className="pack-trade">{t.label}</li>)}</ul>
+        )}
+        {children}
+      </div>
+      {url && (
+        <div className="pp-head-side">
+          <QrCode value={url} size={104} label={`QR code for ${name}'s Passport`} />
+          <PassportShare url={url} name={name} icons />
+        </div>
+      )}
+    </header>
   );
 }
 
@@ -43419,7 +43429,6 @@ body{background:var(--paper)}
 }
 .pack-brand{display:inline-flex;color:#111;text-decoration:none}
 .pack-top{width:100%;max-width:620px;display:flex;justify-content:space-between;align-items:center;gap:12px}
-.pp-page .pack-top{max-width:980px}
 .pack-page.wide .pack-top{max-width:760px}
 .pack-signin{margin-left:auto;display:inline-flex;align-items:center;gap:5px;min-height:40px;padding:0 14px;
   border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);
@@ -43758,7 +43767,6 @@ body{background:var(--paper)}
 .pp-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .pp-head-who{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto}
 .pp-head .pack-lede{margin:2px 0 0}
-.pp-card{max-width:980px}
 .pp-head-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
 .pp-head-side .qr{border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff}
 .pp-head-cta{flex:none;align-self:flex-start;margin-top:6px;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px;
@@ -43770,14 +43778,14 @@ body{background:var(--paper)}
 .pp-ibtn:hover{border-color:var(--brand);color:var(--brand-dk)}
 /* Stretch, so the two boxes end on one line: a connect box shorter than the
    documents beside it read as a box that had not finished drawing. */
-.pp-cols{margin-top:18px;display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:stretch}
-.pp-cols > *,.pp-cols > .pp-access{min-width:0;margin-top:0}
-.pp-docs{border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--card)}
+.pp-docs{margin-top:18px}
+.pack-place{display:flex;align-items:center;gap:6px;margin:0;font-size:17px;font-weight:700;color:var(--ink)}
+.pack-place svg{flex:none;color:var(--brand-dk)}
+.pack-head .pp-trades{margin-top:6px}
+.pack-gated.on{color:var(--brand-dk)}
+.pack-doc.missing .pack-doc-main b{color:var(--ink-soft)}
 .pp-docs h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:8px}
 .pp-docs .pp-badge{margin-top:10px}
-@media (max-width:760px){
-  .pp-cols{grid-template-columns:1fr}
-}
 @media (max-width:560px){
   .pp-head{flex-wrap:wrap}
   .pp-head-side{width:100%;align-items:flex-start}
@@ -43823,9 +43831,7 @@ body{background:var(--paper)}
    own: a different surface, its own heading, and a line saying it is apart
    from the pack. It takes whatever height the Connect box leaves, so the two
    columns end level, and centers its content in it. */
-.pp-left{display:flex;flex-direction:column;gap:14px;min-width:0}
-.pp-left > .pp-docs{flex:none}
-.pp-bbb{flex:1 1 auto;border:1px dashed var(--line);border-radius:14px;padding:16px 18px;background:var(--paper);
+.pp-bbb{margin-top:18px;border:1px dashed var(--line);border-radius:14px;padding:16px 18px;background:var(--paper);
   display:flex;flex-direction:column;justify-content:center;gap:12px}
 .pp-bbb-head{display:flex;flex-direction:column;gap:2px}
 .pp-bbb-head h3{margin:0;font-size:16px;display:flex;align-items:center;gap:7px}
@@ -43853,9 +43859,8 @@ body{background:var(--paper)}
 .pp-access h3{font-size:18px;overflow-wrap:anywhere}
 .pp-access .claim-btn{min-height:50px;font-size:15.5px}
 .pp-access.ring{box-shadow:0 0 0 4px rgba(46,125,82,.35)}
-/* The box is stretched to the documents' height beside it, so the perks take
-   the middle and spread evenly, and the CTA sits at the foot. On a phone the
-   box is only as tall as its content and the same rules leave a plain gap. */
+/* The perks sit evenly spaced and the CTA at the foot. The box is as tall as
+   its content now that the page is one column. */
 .pp-perks{list-style:none;margin:0;padding:4px 0;flex:1 1 auto;display:flex;flex-direction:column;
   justify-content:space-evenly;gap:12px}
 .pp-perks li{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;line-height:1.45;color:var(--ink)}

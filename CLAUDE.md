@@ -15500,6 +15500,30 @@ refactor.
   `test:docshareui` (81) and `test:passportui` (87). Putting the centered grid
   back fails one assertion in each.
 
+- **THE PASSPORT AND THE COMPLIANCE PACK ARE ONE DESIGN, BECAUSE THE PACK IS
+  THE DOCUMENTS INSIDE THE PASSPORT.** Asked for as *"they need to be combined
+  ... use the design from the current compliance pack for both of them, but
+  add the QR code to it with the sharing functions and include the city and
+  state of the company headline title"*. They stay two pages for one reason:
+  the pack link is a private token sent to one address (signed in, a team seat
+  opens the files and the sender joins the roster), and the Passport is public
+  and opens nothing until somebody connects.
+  - **`PackHeader` is the one headline both draw**: the kicker, the name, the
+    city and state on a line of their own in the headline (`.pack-place`), the
+    lede (the contact on the pack, the years on the Passport), the trade chips,
+    and top right the Passport's QR code with icon-only share buttons. On the
+    pack page the code is drawn only when the Passport is published
+    (`passportUrl`), because a code onto a 404 is worse than none.
+  - **The Passport is the pack page's single column, at its width (620px)**:
+    the documents as `pack-doc` rows (insurance with its carrier and date, the
+    bond, the W-9, each On file or Not on file, nothing to open), with
+    `packSummary` naming what is in it, the seal and the license box, then the
+    BBB card, then the connect box. **This reverses the two-column layout**
+    and with it the "connect box level with the documents" rule; the connect
+    box is its content's height and ends on its CTA.
+  `test:passportui` (86) and `test:docshareui` (85) were moved to the new rule.
+  Dropping the place line and the QR from `PackHeader` fails three.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -13,9 +13,10 @@
 //   THE CTA SAYS THE WORDS ASKED FOR and carries the sub's own code with the
 //   passport channel, which is what credits the sub.
 //
-//   THE HEADER IS THE COMPANY, with the SubSub logo in black and "Powered by
-//   | Passport" under the name, a Connect button at its top right, and the
-//   connect box in the middle of the page. No QR code on the page itself.
+//   ONE DESIGN WITH THE COMPLIANCE PACK PAGE: SubSub's logo outside the card,
+//   top left; the headline with the city and state; the QR code and share
+//   icons top right; then one column -- the documents as rows, the BBB card,
+//   the connect box.
 //
 //   CONNECTING IS THE APPROVAL: signed out, the page offers sign-in and a free
 //   signup credited to the sub; a hiring admin connects and the POST goes;
@@ -160,43 +161,29 @@ const readPage = (page) => page.evaluate(() => {
           && (br.right < qr.left || qr.top >= br.bottom - 1),
         ctaUnderLede: br.top >= (hd.querySelector(".pack-lede")?.getBoundingClientRect().bottom ?? 0) - 1 };
     })(),
+    place: c?.querySelector(".pp-head .pack-place")?.innerText.trim() || "",
     cols: (() => {
-      // The left column is the Compliance pack with the BBB card under it.
-      const l = c?.querySelector(".pp-cols > .pp-left"), d = l?.querySelector(".pp-docs"), a = c?.querySelector(".pp-cols > .pp-access");
+      // One column, the compliance pack page's: the documents, then the BBB
+      // card, then the connect box, each the card's full width.
+      const d = c?.querySelector(".pp-docs"), a = c?.querySelector(".pp-access"), bb = c?.querySelector(".pp-bbb");
       if (!d || !a) return null;
-      const dr = l.getBoundingClientRect(), ar = a.getBoundingClientRect();
-      return { side: dr.right <= ar.left + 1 && Math.abs(dr.top - ar.top) < 2, stacked: dr.bottom <= ar.top + 1,
-        even: Math.abs(dr.height - ar.height) < 2, dh: Math.round(dr.height), ah: Math.round(ar.height),
+      const dr = d.getBoundingClientRect(), ar = a.getBoundingClientRect();
+      return { oneCol: Math.abs(dr.left - ar.left) < 4 && Math.abs(dr.width - ar.width) < 8 && dr.bottom <= ar.top + 1,
+        bbbBetween: !bb || (bb.getBoundingClientRect().top >= dr.bottom - 1 && bb.getBoundingClientRect().bottom <= ar.top + 1),
+        noCols: !c.querySelector(".pp-cols, .pp-left"),
+        rows: [...d.querySelectorAll(".pack-doc")].map((x) => x.innerText.replace(/\s+/g, " ").trim()),
+        what: d.querySelector(".pack-what")?.innerText || "",
         docsHold: !!d.querySelector(".pp-badge") && !!d.querySelector(".pp-facts"),
         docsTitle: d.querySelector("h3")?.textContent.trim() || "",
-        // The connect box is stretched to the documents' height. What it must
-        // not do is stack everything at the top over an empty half: the space
-        // under its last line, and the widest gap between two of its lines.
         emptyBottom: (() => {
           const kids = [...a.children].filter((k) => k.getBoundingClientRect().height > 0);
           const last = kids[kids.length - 1];
           return last ? Math.round(ar.bottom - last.getBoundingClientRect().bottom) : 999;
         })(),
-        widestGap: (() => {
-          const kids = [...a.children].filter((k) => k.getBoundingClientRect().height > 0);
-          let w = 0;
-          for (let i = 1; i < kids.length; i++)
-            w = Math.max(w, kids[i].getBoundingClientRect().top - kids[i - 1].getBoundingClientRect().bottom);
-          return Math.round(w);
-        })(),
         perkGaps: (() => {
           const li = [...a.querySelectorAll(".pp-perks li")].map((x) => x.getBoundingClientRect());
           const g = li.slice(1).map((r, i) => r.top - li[i].bottom);
           return g.length ? Math.round(Math.max(...g) - Math.min(...g)) : null;
-        })(),
-        // Spread means the room under the last perk is no bigger than the
-        // room between two of them, so the slack is not all left in one band.
-        perkSpread: (() => {
-          const li = [...a.querySelectorAll(".pp-perks li")].map((x) => x.getBoundingClientRect());
-          const cta = a.querySelector(".pp-acc-cta")?.getBoundingClientRect();
-          if (li.length < 2 || !cta) return null;
-          const between = li[1].top - li[0].bottom, head = li[0].top - a.querySelector(".pp-perks").getBoundingClientRect().top;
-          return { between: Math.round(between), tail: Math.round(cta.top - li[li.length - 1].bottom), head: Math.round(head) };
         })(),
         ctaLast: !!a.lastElementChild?.classList.contains("pp-acc-cta") };
     })(),
@@ -229,15 +216,12 @@ const readPage = (page) => page.evaluate(() => {
         // Its own card, NOT inside the Compliance pack box: under it, in the
         // same column, with a border of its own.
         inBox: !!box && box.contains(b), belowBox: !!xr && br.top >= xr.bottom - 1,
-        sameCol: !!b.closest(".pp-left") && !!box?.closest(".pp-left"),
-        // The card takes the column's slack, so the left column has no empty
-        // foot beside the Connect box.
-        colFoot: b.closest(".pp-left") ? Math.round(b.closest(".pp-left").getBoundingClientRect().bottom - br.bottom) : 999,
         ownBorder: parseFloat(getComputedStyle(b).borderTopWidth) >= 1 && parseFloat(getComputedStyle(b).borderBottomWidth) >= 1,
         sep: /Separate from the compliance pack/i.test(b.innerText),
         inCard: br.right <= c.getBoundingClientRect().right + 1,
         notInPhotos: !b.closest(".pp-photos") };
     })(),
+    width: Math.round(c?.getBoundingClientRect().width || 0),
     wide: document.documentElement.scrollWidth > window.innerWidth + 1,
     robots: document.querySelector('meta[name="robots"]')?.content || "",
     text: (c?.innerText || "").replace(/\s+/g, " "),
@@ -263,8 +247,12 @@ try {
     t.ck("the header's CTA names the sub", r.head?.t === "Connect with Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
     t.ck("a QR code of its own address in the header", !!r.qr && !!r.side, JSON.stringify(r.side));
     t.ck("the CTA is on the left, under the name and the lede", !!r.side?.ctaUnderLede && !!r.side.ctaLeft, JSON.stringify(r.side));
-    t.ck("on a phone the documents box and the connect box stack, documents first",
-      !!r.cols?.stacked && r.cols.docsHold, JSON.stringify(r.cols));
+    t.ck("one column: the documents, the BBB card, then the connect box",
+      !!r.cols?.oneCol && r.cols.bbbBetween && r.cols.noCols && r.cols.docsHold, JSON.stringify(r.cols));
+    t.ck("the city and state are part of the headline", r.place === "Tacoma, WA", r.place);
+    t.ck("a row per document, as on the pack page",
+      r.cols?.rows.length === 3 && /Acme Mutual/.test(r.cols.rows[0]) && r.cols.rows.every((x) => /On file/.test(x)), JSON.stringify(r.cols?.rows));
+    t.ck("and what is in the pack, named", /certificate of insurance/.test(r.cols?.what || ""), r.cols?.what);
     t.ck("the connect box is above the photos", r.order.box > r.order.contact && r.order.box < r.order.photos, JSON.stringify(r.order));
     t.ck("the main contact with their title", /Rae Bay, Owner/.test(r.contact), r.contact);
     t.ck("the business contact, with a number to call", /Rae Bay/.test(r.contact) && /rae@bay\.test/.test(r.contact)
@@ -286,7 +274,7 @@ try {
       /BBB rating/i.test(r.bbb?.t) && /A\+/.test(r.bbb.t) && /Accredited Business/.test(r.bbb.t) && /Rating from BBB/.test(r.bbb.t) && /checked Oct 15/.test(r.bbb.t), r.bbb?.t);
     t.ck("and links the sub's BBB profile in a new tab", /bbb\.org\/.*1296-1000123456$/.test(r.bbb?.href || "") && r.bbb.target === "_blank" && /noopener/.test(r.bbb.rel), JSON.stringify(r.bbb));
     t.ck("it is its own card under the Compliance pack, not part of it",
-      !!r.bbb && !r.bbb.inBox && r.bbb.belowBox && r.bbb.sameCol && r.bbb.ownBorder && r.bbb.notInPhotos && r.bbb.inCard, JSON.stringify(r.bbb));
+      !!r.bbb && !r.bbb.inBox && r.bbb.belowBox && r.bbb.ownBorder && r.bbb.notInPhotos && r.bbb.inCard, JSON.stringify(r.bbb));
     t.ck("and says it is separate from the pack", !!r.bbb?.sep, r.bbb?.t);
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
@@ -304,19 +292,13 @@ try {
     await wait(2000);
     const r = await readPage(page);
     t.ck("the code sits at the top right, level with the name", !!r.side?.qrRight && r.side.qrTop, JSON.stringify(r.side));
-    t.ck("the CTA is on the left under the name, not under the code", !!r.side?.ctaLeft && r.side.ctaUnderLede && !r.side.ctaBelowQr, JSON.stringify(r.side));
-    t.ck("two columns: documents on the left, connect on the right, level",
-      !!r.cols?.side && r.cols.docsHold, JSON.stringify(r.cols));
-    t.ck("the left box is called Compliance pack", r.cols?.docsTitle === "Compliance pack", r.cols?.docsTitle);
-    t.ck("and the two boxes are the same height", !!r.cols?.even, JSON.stringify(r.cols));
-    t.ck("the connect box's bottom is not empty: the CTA sits at its foot",
-      !!r.cols?.ctaLast && r.cols.emptyBottom <= 30, JSON.stringify(r.cols));
-    t.ck("and nothing in it is separated by a band of empty space", (r.cols?.widestGap ?? 999) <= 80, JSON.stringify(r.cols));
+    t.ck("the CTA is on the left under the name, not under the code", !!r.side?.ctaLeft && r.side.ctaUnderLede && !r.side.ctaRight, JSON.stringify(r.side));
+    t.ck("still one column on a wide screen, the pack page's width",
+      !!r.cols?.oneCol && r.cols.noCols && r.width <= 640, JSON.stringify({ ...r.cols, w: r.width }));
+    t.ck("the box is called Compliance pack", r.cols?.docsTitle === "Compliance pack", r.cols?.docsTitle);
+    t.ck("the connect box ends on its CTA", !!r.cols?.ctaLast && r.cols.emptyBottom <= 30, JSON.stringify(r.cols));
     t.ck("what connecting gives is listed, evenly spaced", r.cols?.perkGaps !== null && r.cols.perkGaps <= 2, JSON.stringify(r.cols));
-    t.ck("and the slack is spread through the list, not left under it",
-      !!r.cols?.perkSpread && r.cols.perkSpread.tail <= r.cols.perkSpread.between + 24, JSON.stringify(r.cols?.perkSpread));
-    t.ck("the BBB card sits under the Compliance pack, outside it", !!r.bbb && !r.bbb.inBox && r.bbb.belowBox && r.bbb.sameCol, JSON.stringify(r.bbb));
-    t.ck("and fills the column, so it ends level with the Connect box", !!r.bbb && r.bbb.colFoot <= 2, JSON.stringify(r.bbb));
+    t.ck("the BBB card sits under the Compliance pack, outside it", !!r.bbb && !r.bbb.inBox && r.bbb.belowBox, JSON.stringify(r.bbb));
     t.ck("no sideways scroll", !r.wide);
     // The photos open as a set: previous, next and a count, not one picture
     // with nothing to press but close.
