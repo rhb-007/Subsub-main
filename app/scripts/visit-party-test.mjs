@@ -477,8 +477,8 @@ try {
     // for ever -- a repair that stops moving because of a migration nobody
     // has run, which is strictly worse than the gap it reports.
     const base = SCHEMA.replace(
-      /  responded_at  TEXT,[\s\S]*?  manager_at      TEXT\n/,
-      "  responded_at  TEXT\n");
+      /  responded_at  TEXT,[\s\S]*?  company_id      TEXT\n/,
+      "  responded_at  TEXT\n").replace(/CREATE INDEX IF NOT EXISTS ix_visits_job_company[^\n]*\n/, "");
     ck("the fixture really is missing them",
       !/contractor_at/.test(base) && !/manager_at/.test(base));
     const { db, env } = seed(base);

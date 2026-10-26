@@ -330,6 +330,8 @@ WITH spec(j) AS (SELECT
   ',["m096_inspection_items","col","inspection_items",["id","room_id","item_key","label","grp","condition","note","cost_cents","movein_condition","movein_note","movein_from","updated_by","updated_at"]]' ||
   -- 097. A photo can belong to one checklist item.
   ',["m097_item_photos","col","inspection_photos",["item_key"]]' ||
+  -- 098. A visit can belong to one company on the job.
+  ',["m098_visit_company","col","visits",["company_id"]]' ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

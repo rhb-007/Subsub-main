@@ -95,6 +95,7 @@ import { normalizeHow, mayEditHow, visiblePeople, firstName } from "../shared/ac
 // two-party thing.
 import { visitParties, waitingOn as visitWaitingOn,
   nextToAnswer, visitSettled, mayConfirm, tenantProposed, windowParties, outcomeAsker } from "../shared/visitparty.js";
+import { latestPerCompany, pressingVisit } from "../shared/appointments.js";
 // How long a proposed window is, and whether a date change has anybody to be
 // put to. Both live beside `workWhen` because the browser's propose form uses
 // the first and two copies of that arithmetic is two records of one fact.
@@ -7352,10 +7353,18 @@ async function accessPlanFor(env, job, { viewer = "team", companyId = null } = {
     migration = missingSchema(err);
     if (!migration) throw err;
   }
-  const v = await env.DB.prepare(
+  // 098. For a crew, THEIR appointment (or the whole-job one); for anybody
+  // else the newest live one. Tried with the column first, so a database
+  // without 098 keeps the one-window shape.
+  const v = await (companyId ? env.DB.prepare(
     `SELECT date, start_time, end_time, status FROM visits
       WHERE job_id = ? AND status IN ('proposed','confirmed')
-      ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(job.id).first().catch(() => null);
+        AND (company_id IS NULL OR company_id = ?)
+      ORDER BY (company_id IS NULL), created_at DESC, rowid DESC LIMIT 1`).bind(job.id, companyId).first()
+    : Promise.reject(new Error("no company"))).catch(() => env.DB.prepare(
+    `SELECT date, start_time, end_time, status FROM visits
+      WHERE job_id = ? AND status IN ('proposed','confirmed')
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(job.id).first().catch(() => null));
   const live = !jobIsClosed(job);
   let tenant = null, manager = null, crews = [];
   if (live) {
@@ -7945,7 +7954,8 @@ async function threadJobContext(env, t, side, viewer) {
   let visit = null;
   const live = [...(vs || [])].reverse().find((r) => r.status === "proposed" || r.status === "confirmed");
   if (live) {
-    const parties = windowParties(await partiesFor(env, job), { byTenant: tenantProposed(live, job) });
+    const parties = windowParties(await partiesFor(env, job, live.company_id || null),
+      { byTenant: tenantProposed(live, job) });
     const v = visitRowToJs(live);
     visit = { ...v, parties, turn: nextToAnswer(v, parties), waitingOn: visitWaitingOn(v, parties) };
   }
@@ -11209,6 +11219,8 @@ const visitRowToJs = (v) => ({
   // 064. The hiring side's own leg, which is what makes the three parties a
   // chain. They agree to their own proposal by making it.
   managerAt: v.manager_at || null,
+  // 098. Whose appointment this is; null is one for the whole job.
+  companyId: v.company_id || null,
 });
 
 // WHO IS STILL OWED AN ANSWER ON THIS JOB. Both facts come off the database --
@@ -11216,7 +11228,7 @@ const visitRowToJs = (v) => ({
 // screen deriving either would be a second opinion about whose answer is
 // outstanding, and the two sides disagreeing is how both draw "waiting on
 // them" and nothing moves.
-async function partiesFor(env, job) {
+async function partiesFor(env, job, companyId = null) {
   // 062. WHICH tenant, which is not always the requester. A job raised from a
   // move-in inspection has nobody who asked for it and a named tenant who will
   // be standing in the unit, so the seat looked up here is theirs.
@@ -11228,10 +11240,13 @@ async function partiesFor(env, job) {
   // rather than any live work order: somebody who has not said yes to the JOB
   // cannot be waited on for the time, and treating a pending offer as a party
   // would leave every visit stuck behind a work order nobody has opened.
+  // 098. AN APPOINTMENT FOR ONE COMPANY IS AGREED BY THAT COMPANY, not by
+  // whichever crew on the job said yes first.
   const wo = await env.DB.prepare(
     `SELECT 1 AS yes FROM work_orders
-      WHERE job_id = ? AND voided_at IS NULL AND status = 'accepted' LIMIT 1`
-  ).bind(job.id).first().catch(() => null);
+      WHERE job_id = ? AND voided_at IS NULL AND status = 'accepted'
+        ${companyId ? "AND company_id = ?" : ""} LIMIT 1`
+  ).bind(job.id, ...(companyId ? [companyId] : [])).first().catch(() => null);
   return visitParties(job, { tenantReported: seat?.role === "tenant", hasContractor: !!wo?.yes,
     hasManagerLeg: await hasManagerLeg(env) });
 }
@@ -11257,6 +11272,52 @@ async function hasManagerLeg(env) {
       `SELECT COUNT(*) AS n FROM pragma_table_info('visits') WHERE name = 'manager_at'`).first();
     return !!r?.n;
   } catch { return false; }
+}
+// 098. Whether visits carry a company. Asked of the schema, like 064's leg:
+// until it is pasted, scheduling stays one window per job.
+async function hasVisitCompany(env) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM pragma_table_info('visits') WHERE name = 'company_id'`).first();
+    return !!r?.n;
+  } catch { return false; }
+}
+// The companies holding live work on a job: offered, accepted or
+// auto-scheduled, never declined or voided. One appointment each.
+async function jobWorkCompanies(env, jobId) {
+  const { results } = await env.DB.prepare(
+    `SELECT DISTINCT company_id FROM work_orders
+      WHERE job_id = ? AND voided_at IS NULL AND status <> 'declined'`
+  ).bind(jobId).all().catch(() => ({ results: [] }));
+  return (results || []).map((r) => r.company_id).filter(Boolean);
+}
+// IS THIS COMPANY ALREADY TIMED? Its own live appointment, or a whole-job one,
+// counts. A database without 098 asks the old question: any live window.
+async function hasLiveVisitFor(env, jobId, companyId) {
+  try {
+    if (companyId && await hasVisitCompany(env)) {
+      const r = await env.DB.prepare(
+        `SELECT 1 AS yes FROM visits WHERE job_id = ? AND status IN ('proposed','confirmed')
+           AND (company_id IS NULL OR company_id = ?) LIMIT 1`).bind(jobId, companyId).first();
+      return !!r?.yes;
+    }
+    const r = await env.DB.prepare(
+      `SELECT 1 AS yes FROM visits WHERE job_id = ? AND status IN ('proposed','confirmed') LIMIT 1`)
+      .bind(jobId).first();
+    return !!r?.yes;
+  } catch { return false; }
+}
+// THE JOB'S DATE IS THE NEXT TIME ANYBODY IS BOOKED. With one appointment per
+// company there is no single window to copy across, so it is the earliest
+// confirmed one. Nothing confirmed leaves the job's own date alone.
+async function syncJobDate(env, jobId) {
+  const v = await env.DB.prepare(
+    `SELECT date, start_time FROM visits WHERE job_id = ? AND status = 'confirmed'
+      ORDER BY date ASC, COALESCE(start_time, '') ASC LIMIT 1`).bind(jobId).first().catch(() => null);
+  if (v?.date) {
+    await env.DB.prepare(`UPDATE jobs SET date = ?, time = ? WHERE id = ?`)
+      .bind(v.date, v.start_time || "07:00", jobId).run();
+  }
 }
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/, TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -11287,9 +11348,13 @@ app.get("/api/visits", async (c) => {
   // By the WORK ORDER, never the job: holding one is the thing that says this
   // job was given to them.
   const asContractor = auth.role === "contractor" && auth.companyId;
+  const vco = await hasVisitCompany(c.env);
+  // 098. And only THEIR appointments on it, or the whole-job one. Another
+  // company's time on the same job is not theirs to see.
   const woScope = asContractor
     ? ` AND EXISTS (SELECT 1 FROM work_orders w
                       WHERE w.job_id = j.id AND w.company_id = ? AND w.voided_at IS NULL) `
+      + (vco ? " AND (v.company_id IS NULL OR v.company_id = ?) " : "")
     : "";
   try {
     const { results } = await c.env.DB.prepare(
@@ -11302,7 +11367,7 @@ app.get("/api/visits", async (c) => {
         ORDER BY v.created_at DESC, v.rowid DESC`
     ).bind(auth.accountId, ...scope.vals,
       ...(auth.role === "tenant" ? (au ? [auth.userId, auth.userId] : [auth.userId]) : []),
-      ...(asContractor ? [auth.companyId] : [])).all();
+      ...(asContractor ? (vco ? [auth.companyId, auth.companyId] : [auth.companyId]) : [])).all();
     // 064. WHOSE TURN EACH ONE IS, worked out here rather than on the screen.
     // The tenant is last in the chain and their screen holds no work orders,
     // so it cannot know whether the crew has agreed -- and a screen guessing
@@ -11312,20 +11377,33 @@ app.get("/api/visits", async (c) => {
     // Memoised per JOB rather than per visit: parties are a fact about the
     // job, and a list of forty appointments across eight jobs is eight
     // lookups.
+    // 098. Per job AND company now: one company's appointment is agreed by
+    // that company, so the parties differ between appointments on one job.
     const byJob = new Map();
+    const names = new Map();
     const rows = [];
     for (const r of results || []) {
-      if (!byJob.has(r.job_id)) {
+      const key = `${r.job_id}|${r.company_id || ""}`;
+      if (!byJob.has(key)) {
         const j = await c.env.DB.prepare(
           `SELECT id, account_id, requested_by${await hasAccessUser(c.env) ? ", access, access_user_id" : ""}
              FROM jobs WHERE id = ?`).bind(r.job_id).first().catch(() => null);
-        byJob.set(r.job_id, { job: j, parties: j ? await partiesFor(c.env, j) : [] });
+        byJob.set(key, { job: j, parties: j ? await partiesFor(c.env, j, r.company_id || null) : [] });
+      }
+      // Which company the appointment is for, by name: the tenant holds no
+      // roster, and "a time for Cascade Roofing" is the whole of telling two
+      // appointments on one job apart.
+      if (r.company_id && !names.has(r.company_id)) {
+        const co = await c.env.DB.prepare(`SELECT company FROM companies WHERE id = ?`)
+          .bind(r.company_id).first().catch(() => null);
+        names.set(r.company_id, co?.company || null);
       }
       // Narrowed per WINDOW, because who proposed it is a fact about the
       // window: one the tenant put forward is settled by the crew alone.
-      const { job: pj, parties: jp } = byJob.get(r.job_id);
+      const { job: pj, parties: jp } = byJob.get(key);
       const parties = windowParties(jp, { byTenant: !!pj && tenantProposed(r, pj) });
-      rows.push({ ...visitRowToJs(r), parties, turn: nextToAnswer(visitRowToJs(r), parties) });
+      rows.push({ ...visitRowToJs(r), companyName: r.company_id ? names.get(r.company_id) : null,
+        parties, turn: nextToAnswer(visitRowToJs(r), parties) });
     }
     return c.json(rows);
   } catch (err) {
@@ -11370,6 +11448,22 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
     ).bind(jobId, auth.companyId).first();
     if (!wo) return c.json({ error: "forbidden" }, 403);
   }
+  // 098. WHOSE APPOINTMENT THIS IS. A crew proposes its own. Anybody else names
+  // the company, or it is implied: the only company holding work, or nobody yet
+  // (a whole-job time). Two or more and no name is refused rather than guessed,
+  // because a time put on the wrong company's appointment is a crew told to
+  // come on a day nobody asked them for.
+  const vco = await hasVisitCompany(c.env);
+  const workCos = vco ? await jobWorkCompanies(c.env, jobId) : [];
+  let scopeCo = null;
+  if (vco) {
+    if (auth.role === "contractor") scopeCo = auth.companyId;
+    else if (b.companyId) {
+      if (!workCos.includes(b.companyId)) return c.json({ error: "bad_company" }, 400);
+      scopeCo = b.companyId;
+    } else if (workCos.length === 1) scopeCo = workCos[0];
+    else if (workCos.length > 1) return c.json({ error: "company_required", companies: workCos }, 409);
+  }
   // A tenant proposes only for the job they have to be in for. Somebody else's
   // report answers as missing, the same reply as a job that does not exist, so
   // a tenant cannot learn which ids are real.
@@ -11412,7 +11506,7 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   // to agree. A time the crew cannot make is not a time.
   // A tenant's own window is settled by the crew, not by the hiring side as
   // well -- see `windowParties`.
-  const parties = windowParties(await partiesFor(c.env, { ...job, account_id: auth.accountId }),
+  const parties = windowParties(await partiesFor(c.env, { ...job, account_id: auth.accountId }, scopeCo),
     { byTenant: auth.role === "tenant" });
   // PROPOSING IS AGREEING, for whoever proposed it. A contractor who offers
   // Tuesday has said they can come on Tuesday, and asking them to confirm
@@ -11433,12 +11527,12 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   // their calendar, and proposing is agreeing. Only a crew that has taken the
   // work, because only they are a party to the time.
   if (myLeg !== "contractor" && parties.includes("contractor")) {
-    const clash = await crewCalendarConflict(c.env, jobId, { date, start, end });
+    const clash = await crewCalendarConflict(c.env, jobId, { date, start, end }, scopeCo);
     if (clash) return c.json({ error: "crew_busy", company: clash.company, date: clash.date,
       firstDay: clash.date === date }, 409);
   }
   const crewGranted = myLeg === "manager" && parties.includes("contractor")
-    && await crewGrantedBooking(c.env, { jobId, accountId: auth.accountId, date });
+    && await crewGrantedBooking(c.env, { jobId, accountId: auth.accountId, date, companyId: scopeCo });
   const mineNow = myLeg === "contractor" || crewGranted ? nowIso : null;
   const id = uid();
   try {
@@ -11477,12 +11571,13 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
     let wrote = false;
     for (const sh of shapes) {
       try {
+        const coCol = vco ? ", company_id" : "";
         await c.env.DB.prepare(
           `INSERT INTO visits (id, account_id, job_id, proposed_by, date, start_time, end_time, note,
-             status${sh.cols})
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${sh.vals.map(() => ", ?").join("")})`
+             status${sh.cols}${coCol})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${sh.vals.map(() => ", ?").join("")}${vco ? ", ?" : ""})`
         ).bind(id, auth.accountId, jobId, auth.userId, date, start, end, note,
-          sh.status, ...sh.vals).run();
+          sh.status, ...sh.vals, ...(vco ? [scopeCo] : [])).run();
         wrote = true;
         break;
       } catch (err) {
@@ -11507,11 +11602,17 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
     // crew nobody told; a superseded row that did not get the word is
     // invisible. Including 'confirmed', because "propose a different time" is
     // exactly that -- the time that was agreed is no longer the time.
+    // 098. ONLY THIS COMPANY'S APPOINTMENT. Another company's time is theirs
+    // and stands. The whole-job time comes down too when this company is the
+    // only one on the job, because then it was this company's time all along;
+    // with others on the job it stays, as theirs until they get their own.
+    const alsoShared = !!scopeCo && workCos.filter((x) => x !== scopeCo).length === 0;
     await c.env.DB.prepare(
       `UPDATE visits SET status = 'superseded'
         WHERE job_id = ? AND id <> ?
-          AND status IN ('proposed', 'confirmed', 'declined', 'missed', 'happened')`
-    ).bind(jobId, id).run();
+          AND status IN ('proposed', 'confirmed', 'declined', 'missed', 'happened')
+          ${vco ? (alsoShared ? "AND (company_id = ? OR company_id IS NULL)" : "AND company_id IS ?") : ""}`
+    ).bind(jobId, id, ...(vco ? [scopeCo] : [])).run();
   } catch (err) {
     const migration = missingSchema(err);
     if (!migration) throw err;
@@ -11525,7 +11626,7 @@ app.post("/api/jobs/:id/visits", requireRole("admin", "pm", "contractor", "tenan
   // whole change exists to stop reading as settled.
   const made = await c.env.DB.prepare(`SELECT * FROM visits WHERE id = ?`).bind(id).first();
   if (made?.status === "confirmed") {
-    await c.env.DB.prepare(`UPDATE jobs SET date = ?, time = ? WHERE id = ?`).bind(date, start || "07:00", jobId).run();
+    await syncJobDate(c.env, jobId);
     await logActivity(c.env, auth.accountId, auth.userId, "visit_set", `Set a visit for "${job.title}": ${when}`);
   } else {
     await logActivity(c.env, auth.accountId, auth.userId, "visit_proposed",
@@ -11585,6 +11686,9 @@ app.post("/api/visits/:id/respond", async (c) => {
   // so this cannot disagree with the propose route about who may answer.
   if (isTenant && accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
   if (myLeg === "contractor") {
+    // 098. And only on their OWN appointment. Another company's time is not
+    // theirs to agree to, whatever work they hold on the job.
+    if (v.company_id && v.company_id !== auth.companyId) return c.json({ error: "forbidden" }, 403);
     const wo = await c.env.DB.prepare(
       `SELECT 1 AS yes FROM work_orders
         WHERE job_id = ? AND company_id = ? AND voided_at IS NULL AND status = 'accepted' LIMIT 1`
@@ -11606,7 +11710,8 @@ app.post("/api/visits/:id/respond", async (c) => {
 
   const vJob = { id: v.job_id, account_id: auth.accountId,
     requested_by: v.requested_by, access: v.access, access_user_id: v.access_user_id };
-  let parties = windowParties(await partiesFor(c.env, vJob), { byTenant: tenantProposed(v, vJob) });
+  let parties = windowParties(await partiesFor(c.env, vJob, v.company_id || null),
+    { byTenant: tenantProposed(v, vJob) });
   // A DATABASE WITHOUT 061 HAS NO CONTRACTOR LEG, and `SELECT v.*` is what
   // says so: the key is absent rather than null. Without this the tenant
   // confirms, the contractor is counted as a party who can never answer, and
@@ -11679,8 +11784,7 @@ app.post("/api/visits/:id/respond", async (c) => {
   const when = visitWhen(v);
   const who = isTenant ? "visit" : "visit by the contractor";
   if (nextStatus === "confirmed") {
-    await c.env.DB.prepare(`UPDATE jobs SET date = ?, time = ? WHERE id = ?`)
-      .bind(v.date, v.start_time || "07:00", v.job_id).run();
+    await syncJobDate(c.env, v.job_id);
     await logActivity(c.env, auth.accountId, auth.userId, "visit_confirmed",
       `Confirmed the visit for "${v.title}": ${when}`);
   } else if (nextStatus === "declined") {
@@ -11750,7 +11854,7 @@ app.post("/api/visits/:id/outcome", async (c) => {
   // tenant the chain never asked -- a move-out with an empty unit -- or skip
   // one it did.
   const asker = outcomeAsker(await partiesFor(c.env,
-    { ...v, id: v.job_id, account_id: v.job_account_id || v.account_id }));
+    { ...v, id: v.job_id, account_id: v.job_account_id || v.account_id }, v.company_id || null));
   if (asker === "tenant") {
     if (auth.role !== "tenant" || accessTenant(v) !== auth.userId) return c.json({ error: "forbidden" }, 403);
   } else if (!maySetAccess(auth.role)) {
@@ -11785,11 +11889,13 @@ app.post("/api/visits/:id/outcome", async (c) => {
   // "a vendor showed up" on a job at 0 of 1 trades. Accepted, or issued
   // already accepted by auto-schedule, is the same test the tenant's screen
   // uses (`someoneAccepted`), so the two cannot disagree about it.
+  // 098. On one company's appointment, THAT company has to have been sent.
   const sent = await c.env.DB.prepare(
     `SELECT 1 AS yes FROM work_orders
       WHERE job_id = ? AND voided_at IS NULL
-        AND (status = 'accepted' OR (auto_scheduled = 1 AND status != 'declined')) LIMIT 1`
-  ).bind(v.job_id).first();
+        AND (status = 'accepted' OR (auto_scheduled = 1 AND status != 'declined'))
+        ${v.company_id ? "AND company_id = ?" : ""} LIMIT 1`
+  ).bind(v.job_id, ...(v.company_id ? [v.company_id] : [])).first();
   if (!sent) return c.json({ error: "no_contractor" }, 409);
   const note = String(b.note || "").trim().slice(0, 500) || null;
   const status = b.happened ? "happened" : "missed";
@@ -12661,8 +12767,16 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
       || String(b.time ?? before?.time ?? "").trim() !== String(before?.time || ""));
   let rescheduled = null;
   if (moved && before) {
-    const parties = await partiesFor(c.env, before);
-    if (othersMustAgree(parties)) {
+    // 098. ONE PROPOSAL PER COMPANY ON THE JOB, because each has its own
+    // appointment now. Moving the job's date moves every one of them; a
+    // company whose own time is somewhere else is asked about the new one.
+    const cos = (await hasVisitCompany(c.env)) ? await jobWorkCompanies(c.env, id) : [];
+    const asked = new Set();
+    let firstErr = null, lastStatus = null, any = false;
+    for (const co of cos.length ? cos : [null]) {
+      const parties = await partiesFor(c.env, before, co);
+      if (!othersMustAgree(parties)) continue;
+      any = true;
       const date = String(b.date ?? before.date ?? "").trim();
       const start = String(b.time ?? before.time ?? "").trim() || null;
       // The window somebody already agreed to, so its LENGTH survives the
@@ -12674,18 +12788,23 @@ app.patch("/api/jobs/:id", requireRole("admin", "pm"), async (c) => {
           WHERE job_id = ? AND status IN ('proposed','confirmed')
           ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(id).first().catch(() => null);
       const got = await asSelf(c, `/api/jobs/${id}/visits`, {
-        date, startTime: start,
+        date, startTime: start, ...(co ? { companyId: co } : {}),
         endTime: start ? windowEnd(start, live?.start_time, live?.end_time) : null,
       });
-      // SAID ON THE REPLY RATHER THAN ASSUMED, the rule `engagedAsRecorded`
-      // already follows: a screen that cannot tell "nobody needed telling"
-      // from "the ask did not go" cannot offer the one of those worth a
-      // second press. The edit itself stands either way -- the job really was
-      // saved, and refusing it now would be a save that reports failure over
-      // a write that happened.
-      rescheduled = got.status < 300
-        ? { asked: parties.filter((pp) => pp !== "manager"), status: got.body?.visit?.status || null }
-        : { error: got.body?.error || "propose_failed" };
+      if (got.status < 300) {
+        parties.filter((pp) => pp !== "manager").forEach((pp) => asked.add(pp));
+        lastStatus = got.body?.status || got.body?.visit?.status || null;
+      } else if (!firstErr) firstErr = got.body?.error || "propose_failed";
+    }
+    // SAID ON THE REPLY RATHER THAN ASSUMED, the rule `engagedAsRecorded`
+    // already follows: a screen that cannot tell "nobody needed telling"
+    // from "the ask did not go" cannot offer the one of those worth a
+    // second press. The edit itself stands either way -- the job really was
+    // saved, and refusing it now would be a save that reports failure over
+    // a write that happened.
+    if (any) {
+      rescheduled = firstErr && !asked.size ? { error: firstErr }
+        : { asked: [...asked], status: lastStatus, ...(firstErr ? { error: firstErr } : {}) };
     }
   }
   // The estimates as stored, when any moved, so the screen draws the server's
@@ -15354,6 +15473,12 @@ app.get("/api/my-work", async (c) => {
   //   1  060 and 061 only, which is what this route carried before.
   //   0  neither, which is the shape /api/my-work has always answered on an
   //      older database rather than blanking the portal.
+  // 098. THIS COMPANY'S OWN APPOINTMENT, else the whole-job one. Their own is
+  // put first, so a time somebody proposed to them is not hidden behind a
+  // newer one for the whole job.
+  const vco = await hasVisitCompany(c.env);
+  const VC = vco ? " AND (v.company_id IS NULL OR v.company_id = w.company_id)" : "";
+  const VO = vco ? "(v.company_id IS NULL), " : "";
   const sql = (lv) => `SELECT w.id AS wo_id, w.wo_number, w.trade, w.status, w.auto_scheduled,
               w.response_window, w.respond_by, w.responded_at, w.crew_name,
               w.trade_scope, w.value_cents, w.pay_kind, w.rate_cents, w.cap_hours,
@@ -15393,40 +15518,40 @@ app.get("/api/my-work", async (c) => {
               -- (No backticks in here. This is a template literal, and a
               -- backtick in a SQL comment closes it -- the tenth time this
               -- repository has paid for that one.)
-              (SELECT v.id FROM visits v WHERE v.job_id = j.id
+              (SELECT v.id FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_id,
-              (SELECT v.date FROM visits v WHERE v.job_id = j.id
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_id,
+              (SELECT v.date FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_date,
-              (SELECT v.start_time FROM visits v WHERE v.job_id = j.id
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_date,
+              (SELECT v.start_time FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_start,
-              (SELECT v.end_time FROM visits v WHERE v.job_id = j.id
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_start,
+              (SELECT v.end_time FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_end,
-              (SELECT v.status FROM visits v WHERE v.job_id = j.id
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_end,
+              (SELECT v.status FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_status,
-              (SELECT v.note FROM visits v WHERE v.job_id = j.id
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_status,
+              (SELECT v.note FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_note,
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_note,
               -- 061. Whether THIS side has answered it yet, which is what
               -- decides whether their card offers a Confirm button or says
               -- who else it is waiting on.
-              ${lv >= 1 ? "(SELECT v.contractor_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_cat,
+              ${lv >= 1 ? `(SELECT v.contractor_at FROM visits v WHERE v.job_id = j.id${VC} AND v.status IN ('proposed','confirmed') ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)` : "NULL"} AS visit_cat,
               -- 019's own column and 064's, because WHOSE TURN IT IS cannot be
               -- worked out from the contractor's leg alone. Without them this
               -- card could say "Confirm this time" on a window it is not this
               -- side's turn to answer -- which the route refuses -- and could
               -- not name who it is waiting on once they had.
-              (SELECT v.responded_at FROM visits v WHERE v.job_id = j.id
+              (SELECT v.responded_at FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_tat,
-              ${lv >= 2 ? "(SELECT v.manager_at FROM visits v WHERE v.job_id = j.id AND v.status IN ('proposed','confirmed') ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)" : "NULL"} AS visit_mat,
-              (SELECT v.proposed_by FROM visits v WHERE v.job_id = j.id
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_tat,
+              ${lv >= 2 ? `(SELECT v.manager_at FROM visits v WHERE v.job_id = j.id${VC} AND v.status IN ('proposed','confirmed') ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)` : "NULL"} AS visit_mat,
+              (SELECT v.proposed_by FROM visits v WHERE v.job_id = j.id${VC}
                  AND v.status IN ('proposed','confirmed')
-                ORDER BY v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_by
+                ORDER BY ${VO}v.created_at DESC, v.rowid DESC LIMIT 1)      AS visit_by
          FROM work_orders w
          JOIN jobs j ON j.id = w.job_id
          JOIN accounts a ON a.id = j.account_id
@@ -18436,9 +18561,11 @@ async function withJobProgress(env, auth, rows) {
       `SELECT * FROM visits
         WHERE job_id IN (${marks}) AND status IN ('proposed','confirmed')
         ORDER BY created_at ASC, rowid ASC`).bind(...ids).all();
-    // Ascending, last-write-wins: the same answer as DESC + LIMIT 1 per job,
-    // in one statement.
-    for (const v of vs || []) if (byId[v.job_id]) byId[v.job_id].visit = visitRowToJs(v);
+    // 098. One appointment per company, so "scheduled" is every one of them
+    // booked: the newest per company group, and the one that most needs
+    // somebody stands for the job -- a proposal anywhere reads as waiting.
+    const groups = latestPerCompany((vs || []).map(visitRowToJs));
+    for (const [jid, list] of Object.entries(groups)) if (byId[jid]) byId[jid].visit = pressingVisit(list);
   } catch (err) { if (!missingSchema(err)) throw err; }
   try {
     const { results: es } = await env.DB.prepare(
@@ -20186,10 +20313,9 @@ async function autoTurnaround(c, { jobId, kind, trades, job }) {
 // say why, because the card now offers the crew a way to propose one.
 async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
   try {
-    const live = await c.env.DB.prepare(
-      `SELECT 1 AS yes FROM visits WHERE job_id = ? AND status IN ('proposed','confirmed') LIMIT 1`)
-      .bind(jobId).first().catch(() => null);
-    if (live?.yes) return { proposed: false, reason: "already_timed" };
+    // 098. THIS company's appointment, so a second company issued on a job
+    // that already has one crew booked gets a time of its own.
+    if (await hasLiveVisitFor(c.env, jobId, companyId)) return { proposed: false, reason: "already_timed" };
     const job = await c.env.DB.prepare(`SELECT date, time FROM jobs WHERE id = ?`)
       .bind(jobId).first().catch(() => null);
     const cands = await autoCandidates(c.env, accountId, null, null, { exceptJobId: jobId });
@@ -20231,7 +20357,7 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
     const endTime = keep ? windowEnd(keep) : AUTO_END;
     const auth = c.get("auth");
     const as = ["admin", "pm"].includes(auth?.role) ? null : await accountSeat(c.env, accountId);
-    const put = await asSelf(c, `/api/jobs/${jobId}/visits`, { date: day, startTime, endTime }, as);
+    const put = await asSelf(c, `/api/jobs/${jobId}/visits`, { date: day, startTime, endTime, companyId }, as);
     if (put.status >= 300) return { proposed: false, reason: put.body?.error || String(put.status) };
     return { proposed: true, date: day, startTime, endTime, status: put.body?.status || null };
   } catch (err) {
@@ -20249,15 +20375,16 @@ async function autoBookOnIssue(c, { jobId, companyId, accountId }) {
 // A day they marked unavailable is still asked, because the grant was never
 // for those. Read fresh from the engagement, so withdrawing the grant takes
 // effect on the very next window. Declining is still open to them either way.
-async function crewGrantedBooking(env, { jobId, accountId, date }) {
+async function crewGrantedBooking(env, { jobId, accountId, date, companyId = null }) {
   try {
     const { results } = await env.DB.prepare(
       `SELECT w.auto_scheduled, e.auto_schedule, co.unavailable_days, co.crews
          FROM work_orders w
          JOIN engagements e ON e.account_id = ? AND e.company_id = w.company_id
          JOIN companies co ON co.id = w.company_id
-        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'`
-    ).bind(accountId, jobId).all();
+        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'
+          ${companyId ? "AND w.company_id = ?" : ""}`
+    ).bind(accountId, jobId, ...(companyId ? [companyId] : [])).all();
     const rows = results || [];
     return rows.length > 0 && rows.every((r) => !!r.auto_scheduled && !!r.auto_schedule
       && !isOffOn({ unavailableDays: parseJson(r.unavailable_days, []),
@@ -20280,10 +20407,9 @@ async function autoProposeOnAccept(c, wo) {
   const insp = await c.env.DB.prepare(
     `SELECT kind FROM inspections WHERE job_id = ?`).bind(job.id).first().catch(() => null);
   if (!isTurnaroundKind(insp?.kind)) return null;
-  const already = await c.env.DB.prepare(
-    `SELECT 1 AS yes FROM visits WHERE job_id = ? AND status IN ('proposed','confirmed') LIMIT 1`)
-    .bind(job.id).first().catch(() => null);
-  if (already?.yes) return null;
+  // 098. Per company: a second trade accepting later gets its own window,
+  // where before it would have been made to share the first one's.
+  if (await hasLiveVisitFor(c.env, job.id, wo.company_id)) return null;
 
   const cands = await autoCandidates(c.env, job.account_id, null, null, { exceptJobId: job.id });
   const mine = cands.find((x) => x.companyId === wo.company_id);
@@ -20299,7 +20425,7 @@ async function autoProposeOnAccept(c, wo) {
   // leaving the hiring side outstanding on a time the machine chose for them,
   // which stalls every auto-scheduled job on a manual tick.
   const put = await asSelf(c, `/api/jobs/${job.id}/visits`,
-    { date: day, startTime: AUTO_START, endTime: AUTO_END },
+    { date: day, startTime: AUTO_START, endTime: AUTO_END, companyId: wo.company_id },
     await accountSeat(c.env, job.account_id));
   return { ok: put.status < 300, date: day };
 }
@@ -20336,8 +20462,12 @@ async function autoRepropose(c, visit) {
   // How many windows have already been put forward on this job. Counted from
   // the rows rather than held in a column: every proposal is one, which is
   // exactly what the budget is about.
+  // 098. Counted per appointment: one company's refusals do not use up
+  // another's tries.
+  const vco = visit.company_id && await hasVisitCompany(c.env);
   const seen = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM visits WHERE job_id = ?`).bind(job.id).first().catch(() => null);
+    `SELECT COUNT(*) AS n FROM visits WHERE job_id = ?${vco ? " AND company_id = ?" : ""}`)
+    .bind(job.id, ...(vco ? [visit.company_id] : [])).first().catch(() => null);
   const tries = Number(seen?.n || 0);
   if (tries >= AUTO_TRIES) {
     await logActivity(c.env, job.account_id, auth.userId, "auto_turnaround",
@@ -20345,8 +20475,9 @@ async function autoRepropose(c, visit) {
     return { stopped: "out_of_tries" };
   }
   const wo = await c.env.DB.prepare(
-    `SELECT company_id, trade FROM work_orders WHERE job_id = ? AND voided_at IS NULL LIMIT 1`)
-    .bind(job.id).first().catch(() => null);
+    `SELECT company_id, trade FROM work_orders WHERE job_id = ? AND voided_at IS NULL
+       ${visit.company_id ? "AND company_id = ?" : ""} LIMIT 1`)
+    .bind(job.id, ...(visit.company_id ? [visit.company_id] : [])).first().catch(() => null);
   if (!wo?.company_id) return null;
   const cands = await autoCandidates(c.env, job.account_id, null, null, { exceptJobId: job.id });
   const mine = cands.find((x) => x.companyId === wo.company_id);
@@ -20364,7 +20495,8 @@ async function autoRepropose(c, visit) {
   // their own agreement to a day they have not seen, and leave the hiring side
   // outstanding on every one of them.
   const put = await asSelf(c, `/api/jobs/${job.id}/visits`,
-    { date: day, startTime: AUTO_START, endTime: AUTO_END },
+    { date: day, startTime: AUTO_START, endTime: AUTO_END,
+      ...(visit.company_id ? { companyId: visit.company_id } : {}) },
     await accountSeat(c.env, job.account_id));
   await logActivity(c.env, job.account_id, auth.userId, "auto_turnaround",
     `That did not work, so ${day} has gone forward instead (try ${tries + 1} of ${AUTO_TRIES}).`);
@@ -22060,9 +22192,16 @@ async function actionReminderSweep(env, nowMs = Date.now()) {
       requested_by: r.requested_by, approved_at: r.approved_at, withdrawn_at: r.withdrawn_at,
       declined_at: r.declined_at, access: r.access ?? null, access_user_id: r.access_user_id ?? null }));
   }
-  const newestVisit = async (jobId) => env.DB.prepare(
+  // 098. THIS company's appointment, or the whole-job one: a reminder about a
+  // time is about the time this crew is asked to come.
+  const vco = await hasVisitCompany(env);
+  const newestVisit = async (jobId, companyId) => (vco && companyId ? env.DB.prepare(
     `SELECT * FROM visits WHERE job_id = ? AND status <> 'superseded'
-      ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(jobId).first().catch(() => null);
+       AND (company_id IS NULL OR company_id = ?)
+      ORDER BY (company_id IS NULL), created_at DESC, rowid DESC LIMIT 1`).bind(jobId, companyId)
+    : env.DB.prepare(
+    `SELECT * FROM visits WHERE job_id = ? AND status <> 'superseded'
+      ORDER BY created_at DESC, rowid DESC LIMIT 1`).bind(jobId)).first().catch(() => null);
 
   const items = [];
   const push = (it) => items.push(it);
@@ -22081,7 +22220,7 @@ async function actionReminderSweep(env, nowMs = Date.now()) {
       push({ ...base, party: "manager", reason: "chase", chaseOf: "reply", subject: r.wo_id, since, escalate: true });
       continue;
     }
-    const v = await newestVisit(r.job_id);
+    const v = await newestVisit(r.job_id, r.company_id);
     const live = v && (v.status === "proposed" || v.status === "confirmed") ? v : null;
     if (!live) {
       // Taken, and nobody is booked to go. The clock restarts from the last
@@ -22098,7 +22237,8 @@ async function actionReminderSweep(env, nowMs = Date.now()) {
       push({ ...base, party: "manager", reason: "repropose", subject: live.id, since: `${live.date}T23:59:59Z`, win });
       continue;
     }
-    let parties = windowParties(await partiesFor(env, job), { byTenant: tenantProposed(live, job) });
+    let parties = windowParties(await partiesFor(env, job, live.company_id || null),
+      { byTenant: tenantProposed(live, job) });
     if (!Object.prototype.hasOwnProperty.call(live, "contractor_at")) parties = parties.filter((pp) => pp !== "contractor");
     if (!Object.prototype.hasOwnProperty.call(live, "manager_at")) parties = parties.filter((pp) => pp !== "manager");
     const turn = nextToAnswer(live, parties);
@@ -27605,7 +27745,11 @@ async function gcalItemsFor(env, userId) {
     `SELECT m.account_id, m.role, m.company_id, a.company_id AS own_company
        FROM memberships m JOIN accounts a ON a.id = m.account_id WHERE m.user_id = ?`
   ).bind(userId).all();
+  // 098. Which company the appointment is for, so a crew's calendar carries
+  // their own times and not another company's on the same job.
+  const vco = await hasVisitCompany(env);
   const base = `SELECT v.id AS visit_id, v.date, v.start_time, v.end_time, v.status,
+                       ${vco ? "v.company_id AS visit_company" : "NULL AS visit_company"},
                        j.id AS job_id, j.title, j.address, j.property_id, j.trades,
                        a.name AS client
                   FROM visits v JOIN jobs j ON j.id = v.job_id JOIN accounts a ON a.id = j.account_id
@@ -27632,12 +27776,12 @@ async function gcalItemsFor(env, userId) {
     if (s.role === "contractor" && s.company_id) {
       const { results } = await env.DB.prepare(`${crewSql} AND j.account_id = ?`)
         .bind(s.company_id, lo, hi, s.company_id, s.account_id).all();
-      add(results, true);
+      add((results || []).filter((r) => !r.visit_company || r.visit_company === s.company_id), true);
     }
     if (["admin", "pm"].includes(s.role) && s.own_company) {
       const { results } = await env.DB.prepare(crewSql)
         .bind(s.own_company, lo, hi, s.own_company).all();
-      add(results, true);
+      add((results || []).filter((r) => !r.visit_company || r.visit_company === s.own_company), true);
     }
     if (["admin", "pm"].includes(s.role)) {
       const auth = await teamSeatAuth(env, userId, s.account_id);
@@ -27835,13 +27979,15 @@ async function tradeSpanLength(env, jobId, trade) {
 
 // Is any company that holds accepted work on this job shown busy for this
 // window, on any day of the work? Named, so the screen can say who and when.
-async function crewCalendarConflict(env, jobId, { date, start, end }) {
+async function crewCalendarConflict(env, jobId, { date, start, end }, companyId = null) {
   try {
+    // 098. On one company's appointment, only that company's calendar.
     const { results } = await env.DB.prepare(
       `SELECT DISTINCT w.company_id, co.company, co.crews, co.unavailable_days FROM work_orders w
          JOIN companies co ON co.id = w.company_id
-        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'`
-    ).bind(jobId).all();
+        WHERE w.job_id = ? AND w.voided_at IS NULL AND w.status = 'accepted'
+          ${companyId ? "AND w.company_id = ?" : ""}`
+    ).bind(jobId, ...(companyId ? [companyId] : [])).all();
     for (const r of results || []) {
       // EVERY DAY OF THEIR TRADE'S ESTIMATE, not only the first. Laid out by
       // the same rule the timeline draws it with -- working days, the days

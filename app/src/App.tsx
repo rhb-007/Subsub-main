@@ -113,6 +113,8 @@ import { ACCESS_HOW_PRESETS, ACCESS_HOW_MAX, accessHeadline } from "../shared/ac
 import { visitParties, waitingOn as visitWaitingOn, partyText as partyWords,
   mayAnswer as visitMayAnswer, partySaid as visitPartySaid, mayConfirm as visitMayConfirm,
   outcomeAsker, joinAnd } from "../shared/visitparty.js";
+import { visitCompany, appointmentFor, jobAppointments, jobFullyBooked, latestPerCompany,
+  pressingVisit, earliestBooked } from "../shared/appointments.js";
 import { ELIGIBILITY_TEXT, overflowSplit, feeText as overflowFeeText,
   postWindowHours } from "../shared/overflow.js";
 import { isOwnerKind, seatDescription, groupSeats, matchSeat, usePanel } from "../shared/handover.js";
@@ -4635,9 +4637,14 @@ export default function SubSub() {
     await refreshMyWork();
     return v;
   };
+  // 098. ONE APPOINTMENT PER COMPANY: the new time replaces that company's
+  // own (or the whole-job one), never another company's. Re-read after, so a
+  // whole-job time the server took down with it goes too.
   const proposeVisit = async (jobId, body) => {
     const v = await api.proposeVisit(jobId, body);
-    setVisits((vs) => [v, ...vs.filter((x) => x.jobId !== jobId)]);
+    setVisits((vs) => [v, ...vs.filter((x) => !(x.jobId === jobId
+      && (visitCompany(x) === visitCompany(v) || !visitCompany(x))))]);
+    api.listVisits().then((vs) => { if (Array.isArray(vs)) setVisits(vs); }).catch(() => {});
     if (v.status === "confirmed") {
       setJobs((js) => js.map((j) => j.id === jobId ? { ...j, date: v.date, time: v.startTime || j.time } : j));
     }
@@ -4677,9 +4684,12 @@ export default function SubSub() {
   // The tenant's answer. Confirming is what puts the date on the job.
   const respondVisit = async (id, body) => {
     const v = await api.respondVisit(id, body);
-    setVisits((vs) => vs.map((x) => x.id === id ? v : x));
+    // Kept the name the list carried: the reply is the bare row.
+    setVisits((vs) => vs.map((x) => x.id === id ? { ...x, ...v } : x));
     if (v.status === "confirmed") {
-      setJobs((js) => js.map((j) => j.id === v.jobId ? { ...j, date: v.date, time: v.startTime || j.time } : j));
+      // 098. The job's date is the earliest booked appointment on it.
+      const first = earliestBooked([v, ...visits.filter((x) => x.jobId === v.jobId && x.id !== id)]) || v;
+      setJobs((js) => js.map((j) => j.id === v.jobId ? { ...j, date: first.date, time: first.startTime || j.time } : j));
     }
     return v;
   };
@@ -7513,7 +7523,12 @@ export default function SubSub() {
                 // view is for reading many jobs at once and keeps it whole.
                 // The header and the footer stay on every tab, so the title
                 // and Mark complete are never a tab away.
-                const jv = visits.find((v) => v.jobId === j.id) || null;
+                // 098. ONE APPOINTMENT PER COMPANY. `jv` stands for the job
+                // where one line is drawn; the Schedule tab draws each.
+                const jCos = jobCompanies(j);
+                const jAppts = jobAppointments(visits, j.id, jCos.map((x) => x.companyId))
+                  .map((a) => ({ ...a, ...(jCos.find((x) => x.companyId === a.companyId) || {}) }));
+                const jv = pressingVisit(jAppts.map((a) => a.visit).filter(Boolean));
                 const schedulable = !!j.approvedAt && !isClosed(j);
                 const hasVisitBlock = schedulable && j.trades.length > 0;
                 const jobTabList = [
@@ -7524,9 +7539,10 @@ export default function SubSub() {
                 // A QUESTION BEHIND A TAB IS THE STALL, so the Schedule tab
                 // carries the dot when something there is waiting on this
                 // side, and the window opens on it.
-                const schedAsk = hasVisitBlock && (!jv || jv.status === "declined" || jv.status === "missed"
-                  || (jv.status === "proposed" && (visitPassed(jv) || jv.turn === "manager"))
-                  || (jv.status === "confirmed" && visitPassed(jv)));
+                const asks = (v) => !v || v.status === "declined" || v.status === "missed"
+                  || (v.status === "proposed" && (visitPassed(v) || v.turn === "manager"))
+                  || (v.status === "confirmed" && visitPassed(v));
+                const schedAsk = hasVisitBlock && jAppts.some((a) => asks(a.visit));
                 const jobTab = jobTabList.some((x) => x.id === jobTabs[j.id]) ? jobTabs[j.id]
                   : schedAsk ? "schedule" : "work";
                 const tabbed = !jobCards && jobTabList.length > 1;
@@ -8045,7 +8061,7 @@ export default function SubSub() {
                         setting a time — there is nobody to send yet.</p>
                     )}
                     {j.approvedAt && !isClosed(j) && j.trades.length > 0 && (
-                      <VisitBlock job={j} visit={jv}
+                      <VisitBlock job={j} visit={jv} appts={jAppts}
                         part={!tabbed ? "both" : jobTab === "schedule" ? "visit" : jobTab === "access" ? "access" : "none"}
                         /* 068. WHAT THIS ACCOUNT CALLS WHOEVER HOLDS THE WORK
                            on this job, which is not a constant. Reported as
@@ -13704,13 +13720,11 @@ function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJo
   const [note, setNote] = useState("");
   const office = tenantWhere(accountKind) === "office";
   const unitWord = office ? "Suite" : "Unit";
-  const latestVisit = useMemo(() => {
-    const m = {};
-    [...visits].filter((v) => v.status !== "superseded")
-      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-      .forEach((v) => { if (!m[v.jobId]) m[v.jobId] = v; });
-    return m;
-  }, [visits]);
+  // 098. Newest per COMPANY on each job, and the one that most needs somebody
+  // standing for the job where a single line is drawn.
+  const visitsPerJob = useMemo(() => latestPerCompany(visits), [visits]);
+  const latestVisit = useMemo(() => Object.fromEntries(Object.entries(visitsPerJob)
+    .map(([jid, list]) => [jid, pressingVisit(list)])), [visitsPerJob]);
   const workOf = (t) => tenantWork(t.userId, jobs, latestVisit, dayKey());
 
   const load = async () => {
@@ -14946,6 +14960,23 @@ function TenantSignup({ invite, error, onSubmit, onBackToLogin }) {
 const jobAssignments = (job) => Object.values(job?.assignments || {});
 const someoneAccepted = (job) => jobAssignments(job).some((a) => a.status === "accepted" || a.auto);
 const someoneAsked = (job) => jobAssignments(job).some((a) => a.status !== "declined");
+// 098. THE COMPANIES WITH WORK ON A JOB, one appointment each, in the order
+// their trades are on the job: offered, accepted or auto-scheduled, never one
+// that declined. Each carries its trades and whether it has said yes, which is
+// what decides whether it is a party to its own time.
+function jobCompanies(job) {
+  const by = new Map();
+  for (const t of job?.trades || []) {
+    const a = job?.assignments?.[t];
+    if (!a || a.status === "declined" || !a.subId) continue;
+    const cur = by.get(a.subId) || { companyId: a.subId, company: a.company || null, trades: [], accepted: false };
+    cur.trades.push(t);
+    if (a.status === "accepted" || a.auto) cur.accepted = true;
+    if (!cur.company && a.company) cur.company = a.company;
+    by.set(a.subId, cur);
+  }
+  return [...by.values()];
+}
 
 // Whether anybody showed up is the tenant's to say only when the tenant had to
 // be in. A row from an older reply carries no parties; it keeps asking.
@@ -15406,7 +15437,7 @@ function PhotoLightbox({ photos = [], urls = {}, at = 0, onAt, onClose }) {
 // So: one modal, read-only until they ask to change something, and the same
 // fields either way.
 function TenantReportModal({
-  job, stage, visit, brandName, where, unit, assignedTo,
+  job, stage, visit, appts = [], brandName, where, unit, assignedTo,
   onEdit, onWithdraw, onPhotosChanged, onRespondVisit, onProposeVisit, onClose,
 }) {
   const detail = job.reportDetail || null;
@@ -15588,10 +15619,9 @@ function TenantReportModal({
                 -- the reported dead end, at the one moment somebody was looking
                 at the report the time is for. The same panel as the row, so
                 the two cannot ask different questions. */}
-            {(stage.key === "confirm" || stage.key === "agreed" || stage.key === "lapsed") && visit && (
-              <TenantVisitAsk visit={visit} brandName={brandName}
-                onRespond={onRespondVisit} onPropose={onProposeVisit} />
-            )}
+            <TenantAppointments appts={appts} visit={visit} brandName={brandName}
+              show={(stage.key === "confirm" || stage.key === "agreed" || stage.key === "lapsed") && !!visit}
+              onRespond={onRespondVisit} onPropose={onProposeVisit} />
             {!isClosed(job) && assignedTo.length > 0 && <TenantAccess job={job} visit={visit} />}
 
             {confirmWithdraw ? (
@@ -15663,7 +15693,7 @@ function TenantAccess({ job, visit, compact = false }) {
   return <AccessPanel plan={plan} viewer="tenant" jobId={job.id} onSaved={setPlan} compact={compact} />;
 }
 
-function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onProposeVisit, onOpen }) {
+function TenantReportRow({ job, stage, visit, appts = [], brandName, meta, assignedTo, onRespondVisit, onVisitOutcome, onProposeVisit, onOpen }) {
   const photos = job.photos || [];
   const tenantAsked = tenantAsksOutcome(visit);
   const asks = stage.key === "confirm" || (stage.key === "passed" && tenantAsked);
@@ -15704,10 +15734,9 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
             The chain still decides whom we ASK and in what order; it no longer
             stops the person who has to be in from answering. See
             `mayConfirm` in shared/visitparty.js. */}
-        {(stage.key === "confirm" || stage.key === "agreed" || stage.key === "lapsed") && visit && (
-          <TenantVisitAsk visit={visit} brandName={brandName}
-            onRespond={onRespondVisit} onPropose={onProposeVisit} />
-        )}
+        <TenantAppointments appts={appts} visit={visit} brandName={brandName}
+          show={(stage.key === "confirm" || stage.key === "agreed" || stage.key === "lapsed") && !!visit}
+          onRespond={onRespondVisit} onPropose={onProposeVisit} />
         {/* 073. WHO LETS WHO IN, said to the person opening the door -- as
             ONE LINE on the row, because a dashboard holding three booked
             repairs cannot spend a screen on each. The other side's first
@@ -15742,6 +15771,41 @@ function TenantReportRow({ job, stage, visit, brandName, meta, assignedTo, onRes
 // agreed, it says so and still lets them answer -- an early yes is recorded
 // and they are not asked again for this window. Once they have said yes it
 // says who is left, and still offers another time, because plans change.
+// 098. EVERY COMPANY'S TIME ON THE REPORT, each answered on its own. With one
+// appointment it is the single panel it always was. With two or more, each
+// time still being agreed gets its own panel, headed by who is coming, and
+// each one already booked is one line -- so "Pacific on Tuesday, Cascade on
+// Thursday" reads as two arrivals rather than one muddled question.
+function TenantAppointments({ appts = [], visit, show, brandName, onRespond, onPropose }) {
+  const multi = (appts || []).length > 1;
+  if (!multi) {
+    return show && visit ? <TenantVisitAsk visit={visit} brandName={brandName}
+      onRespond={onRespond} onPropose={onPropose} /> : null;
+  }
+  const ordered = [...appts].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+  return (
+    <div className="tn-appts">
+      {ordered.map((v) => {
+        const who = v.companyName || "The contractor";
+        if (v.status === "confirmed" && !visitPassed(v)) {
+          return (
+            <p key={v.id} className="tn-appt-booked"><CheckCircle2 size={14} />
+              <span><b>{who}</b> is booked for <b>{visitWhen(v)}</b>.</span></p>
+          );
+        }
+        if (v.status !== "proposed") return null;
+        return (
+          <div key={v.id} className="tn-appt">
+            <p className="tn-appt-for">{who}</p>
+            <TenantVisitAsk visit={v} brandName={brandName} onRespond={onRespond}
+              onPropose={onPropose ? (jobId, f) => onPropose(jobId, v.companyId ? { ...f, companyId: v.companyId } : f) : null} />
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TenantVisitAsk({ visit, brandName, onRespond, onPropose }) {
   const [mode, setMode] = useState("");          // "" | "no" | "other"
   const [note, setNote] = useState("");
@@ -15783,7 +15847,8 @@ function TenantVisitAsk({ visit, brandName, onRespond, onPropose }) {
       {mode === "other" ? (
         <VisitForm jobId={visit.jobId} startDate={visit.date || ""} forWhom={brandName} replacing
           placeholder="e.g. Any weekday after 5 pm works too"
-          onPropose={onPropose} onDone={() => setMode("")} onCancel={() => setMode("")} cancelLabel="Back" />
+          onPropose={(jobId, f) => onPropose(jobId, visit.companyId && !f.companyId ? { ...f, companyId: visit.companyId } : f)}
+          onDone={() => setMode("")} onCancel={() => setMode("")} cancelLabel="Back" />
       ) : mode === "no" ? (
         <>
           <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)}
@@ -16440,26 +16505,15 @@ function AddJobTenant({ job, onAdd }) {
   );
 }
 
-function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswerVisit, onVisitOutcome = null,
-  canSetAccess = false, hiresWord = "contractor", part = "both", onAddTenant = null }) {
-  // 073. How the crew gets in, re-read whenever the answer or the window moves.
-  const [accPlan, setAccPlan] = useJobAccess(job.id,
-    `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}|${accessTenant(job) || ""}`);
-  // 15/16. NOBODY NAMED AS THE TENANT, ON A JOB WHERE ONE IS WANTED: the
-  // tenant has to be in, or the job came from a move-in walk. Adding them is
-  // done here, beside the time and the way in, rather than by sending
-  // somebody to another screen -- which is where "Add them under Account ->
-  // Tenants" sent them, to a tab that no longer exists.
-  const wantsTenant = !!onAddTenant && !accessTenant(job) && !!job.propertyId
-    && (needsTenantConfirm(job.accessEffective) || job.fromInspection?.kind === "move_in");
-  // Held here, not in the form: naming them takes the form away (the job now
-  // has a tenant), and the confirmation has to outlive it.
-  const [tenantAdded, setTenantAdded] = useState("");
-  const addTenant = async (j, f) => { const r = await onAddTenant(j, f); setTenantAdded(r?.name || f.firstName); return r; };
-  const addedLine = tenantAdded ? (
-    <p className="ajt-done"><CheckCircle2 size={14} /> {tenantAdded} is the tenant on this job now, and
-      was invited to SubSub. They confirm the next time proposed.</p>
-  ) : null;
+// 098. ONE COMPANY'S APPOINTMENT ON A JOB: its time, whose turn it is, and the
+// form to propose another. A job with two companies on it draws two of these,
+// each proposed, answered and confirmed on its own; a job with one or none
+// draws one, with no heading, exactly as it did before.
+function VisitSlot({ job, visit, who, crew, heading = null, companyId = null, hiresWord = "contractor",
+  onPropose, onAssign, onAnswerVisit, onVisitOutcome = null }) {
+  // A time put forward here is for THIS company, so the route does not have
+  // to guess which appointment it replaces.
+  const proposeHere = (jobId, f) => onPropose(jobId, companyId ? { ...f, companyId } : f);
   // Open by default whenever there is no live time to wait on: nothing
   // proposed, a time refused, or one that came and went with nobody there.
   // NOBODY ON THE JOB. A window can be agreed before anybody is hired -- that
@@ -16467,7 +16521,6 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   // nobody was sent to must not then read as a visit that happened, or one
   // that is about to. `crew` is the same test the tenant's screen and the
   // outcome route use.
-  const crew = someoneAccepted(job);
   const nobodySent = !crew && !!visit && (visit.status === "happened" || visit.status === "missed"
     || (visit.status === "confirmed" && visitPassed(visit)));
   const [open, setOpen] = useState(!visit || visit.status === "declined" || visit.status === "missed" || nobodySent);
@@ -16518,13 +16571,14 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
   const askUs = outcomeAsker(parties) === "manager";
   const myTurn = visit?.status === "proposed" && !lapsed
     && visitMayAnswer(visit, parties, "manager") && !!onAnswerVisit;
-  // PART, for the job window's tabs: the time and the way in are read on
-  // two tabs, but they stay ONE mounted block, so a half-typed time is not
-  // lost by looking at the access details and the access plan is fetched once.
   return (
-    <div className={`visit-block vb-${part}`}>
-      <div className={part === "access" || part === "none" ? "jt-off" : "jt-on"}>
-      <div className="form-sec">Visit</div>
+    <div className={`visit-slot ${heading ? "vs-multi" : ""}`} data-company={companyId || ""}>
+      {heading && (
+        <div className="vs-head">
+          <b>{heading.company}</b>
+          {heading.trades && <span>{heading.trades}</span>}
+        </div>
+      )}
       {/* The one thing this block never said. A visit and a contractor were
           unconnected facts, so a time could be agreed with a tenant for a
           job nobody had been hired for -- and withdrawing the only
@@ -16558,57 +16612,6 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
               <Plus size={13} /> Assign a contractor
             </button>
           )}
-        </div>
-      )}
-      {/* WHAT PRESSING SEND WILL DO, before it is pressed. With the tenant in
-          the loop a time is a proposal and the repair does not move until they
-          answer; without them it is booked outright. Those are different acts
-          and the screen said nothing about which one it was about to perform.
-
-          Said from the job's effective answer, so it cannot disagree with the
-          route that writes the row. */}
-      {ACCESS_KINDS[job.accessEffective] && (
-        <div className="visit-access">
-          <Key size={14} />
-          <div className="va-main">
-            <span><b>{ACCESS_KINDS[job.accessEffective].short}.</b> {ACCESS_KINDS[job.accessEffective].note(hiresWord)}</span>
-            {/* The note describes the rule; with nobody on the job yet it would
-                name a party that does not exist. Said, so "the tenant and the
-                subcontractor both confirm" is not read as somebody coming. */}
-            {!crew && (
-              <span className="va-nobody" data-nocrew><AlertTriangle size={12} /> No {hiresWord} has
-                accepted this job yet, so nobody is coming until one does.</span>
-            )}
-            {/* AND IT IS CHANGED HERE, which is what was actually asked for:
-                *"allow the property manager to adjust that when scheduling the
-                job"*. What a repair turns out to need is usually only clear
-                once somebody has looked at it, so the answer belongs beside
-                the time rather than only on the form that created the job. */}
-            {/* 062. AND WHETHER THERE IS ANYBODY TO ASK, which is not the
-                same question as whether to ask. A job raised from a move-in
-                inspection says the tenant has to be in -- because they do --
-                and the person moving in very often has no seat yet, which the
-                inspection schema says in so many words. `canAskTenant` is the
-                fact, so the route books the window outright; a screen that
-                drew the sentence and said nothing about that would promise a
-                confirmation step that is never going to happen. */}
-            {needsTenantConfirm(job.accessEffective) && !canAskTenant(job) && (
-              <span className="va-nobody"><AlertTriangle size={12} /> No tenant is named on this
-                job yet, so setting a time books it without asking anybody. Add them below and they
-                confirm the next one.</span>
-            )}
-            {wantsTenant && <AddJobTenant job={job} onAdd={addTenant} />}
-            {addedLine}
-            {canSetAccess && (
-              <div className="va-pick">
-                {accessChoices(job).map((k) => (
-                  <button key={k.id} type="button"
-                    className={`pick ${job.accessEffective === k.id ? "on" : ""}`}
-                    onClick={() => onSetAccess?.(job.id, k.id)}>{k.short}</button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       )}
       {/* 064. AND WHEN THE TURN IS OURS, A WAY TO TAKE IT. The hiring side
@@ -16711,7 +16714,7 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
         : <> Nobody has to confirm it, so setting a time books it outright.</>}</p>}
       {open ? (
         <VisitForm jobId={job.id} startDate={job.date || ""} forWhom={noteTo} replacing={!!visit}
-          onPropose={onPropose} onDone={() => setOpen(false)}
+          onPropose={proposeHere} onDone={() => setOpen(false)}
           onCancel={visit ? () => setOpen(false) : null} />
       ) : !myTurn && (
         /* WITHHELD WHILE THE ANSWER PANEL IS UP, because that panel carries
@@ -16733,6 +16736,107 @@ function VisitBlock({ job, visit, who, onPropose, onAssign, onSetAccess, onAnswe
             onClick: () => setOpen(true) },
         ]} />
       )}
+    </div>
+  );
+}
+
+function VisitBlock({ job, visit, appts = null, who, onPropose, onAssign, onSetAccess, onAnswerVisit, onVisitOutcome = null,
+  canSetAccess = false, hiresWord = "contractor", part = "both", onAddTenant = null }) {
+  // 073. How the crew gets in, re-read whenever the answer or the window moves.
+  const [accPlan, setAccPlan] = useJobAccess(job.id,
+    `${job.accessEffective || ""}|${visit?.id || ""}|${visit?.status || ""}|${accessTenant(job) || ""}`);
+  // 15/16. NOBODY NAMED AS THE TENANT, ON A JOB WHERE ONE IS WANTED: the
+  // tenant has to be in, or the job came from a move-in walk. Adding them is
+  // done here, beside the time and the way in, rather than by sending
+  // somebody to another screen -- which is where "Add them under Account ->
+  // Tenants" sent them, to a tab that no longer exists.
+  const wantsTenant = !!onAddTenant && !accessTenant(job) && !!job.propertyId
+    && (needsTenantConfirm(job.accessEffective) || job.fromInspection?.kind === "move_in");
+  // Held here, not in the form: naming them takes the form away (the job now
+  // has a tenant), and the confirmation has to outlive it.
+  const [tenantAdded, setTenantAdded] = useState("");
+  const addTenant = async (j, f) => { const r = await onAddTenant(j, f); setTenantAdded(r?.name || f.firstName); return r; };
+  const addedLine = tenantAdded ? (
+    <p className="ajt-done"><CheckCircle2 size={14} /> {tenantAdded} is the tenant on this job now, and
+      was invited to SubSub. They confirm the next time proposed.</p>
+  ) : null;
+  // Job-wide: anybody at all has said yes. Each appointment asks this of its
+  // own company below.
+  const crew = someoneAccepted(job);
+  // PART, for the job window's tabs: the time and the way in are read on
+  // two tabs, but they stay ONE mounted block, so a half-typed time is not
+  // lost by looking at the access details and the access plan is fetched once.
+  return (
+    <div className={`visit-block vb-${part}`}>
+      <div className={part === "access" || part === "none" ? "jt-off" : "jt-on"}>
+      <div className="form-sec">Visit</div>
+      {/* WHAT PRESSING SEND WILL DO, before it is pressed. With the tenant in
+          the loop a time is a proposal and the repair does not move until they
+          answer; without them it is booked outright. Those are different acts
+          and the screen said nothing about which one it was about to perform.
+
+          Said from the job's effective answer, so it cannot disagree with the
+          route that writes the row. */}
+      {ACCESS_KINDS[job.accessEffective] && (
+        <div className="visit-access">
+          <Key size={14} />
+          <div className="va-main">
+            <span><b>{ACCESS_KINDS[job.accessEffective].short}.</b> {ACCESS_KINDS[job.accessEffective].note(hiresWord)}</span>
+            {/* The note describes the rule; with nobody on the job yet it would
+                name a party that does not exist. Said, so "the tenant and the
+                subcontractor both confirm" is not read as somebody coming. */}
+            {!crew && (
+              <span className="va-nobody" data-nocrew><AlertTriangle size={12} /> No {hiresWord} has
+                accepted this job yet, so nobody is coming until one does.</span>
+            )}
+            {/* AND IT IS CHANGED HERE, which is what was actually asked for:
+                *"allow the property manager to adjust that when scheduling the
+                job"*. What a repair turns out to need is usually only clear
+                once somebody has looked at it, so the answer belongs beside
+                the time rather than only on the form that created the job. */}
+            {/* 062. AND WHETHER THERE IS ANYBODY TO ASK, which is not the
+                same question as whether to ask. A job raised from a move-in
+                inspection says the tenant has to be in -- because they do --
+                and the person moving in very often has no seat yet, which the
+                inspection schema says in so many words. `canAskTenant` is the
+                fact, so the route books the window outright; a screen that
+                drew the sentence and said nothing about that would promise a
+                confirmation step that is never going to happen. */}
+            {needsTenantConfirm(job.accessEffective) && !canAskTenant(job) && (
+              <span className="va-nobody"><AlertTriangle size={12} /> No tenant is named on this
+                job yet, so setting a time books it without asking anybody. Add them below and they
+                confirm the next one.</span>
+            )}
+            {wantsTenant && <AddJobTenant job={job} onAdd={addTenant} />}
+            {addedLine}
+            {canSetAccess && (
+              <div className="va-pick">
+                {accessChoices(job).map((k) => (
+                  <button key={k.id} type="button"
+                    className={`pick ${job.accessEffective === k.id ? "on" : ""}`}
+                    onClick={() => onSetAccess?.(job.id, k.id)}>{k.short}</button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {/* 098. ONE APPOINTMENT PER COMPANY. With two or more companies on
+          the job each gets its own time, headed by who it is and what they
+          are doing; with one (or nobody yet) there is a single one, as before. */}
+      {(appts && appts.length > 1 ? appts : [{
+        companyId: appts?.[0]?.companyId || null, visit,
+        accepted: appts?.[0]?.companyId ? !!appts[0].accepted : crew,
+      }]).map((ap) => (
+        <VisitSlot key={ap.companyId || "job"} job={job} visit={ap.visit || null} who={who}
+          crew={ap.companyId ? !!ap.accepted : crew} companyId={ap.companyId || null}
+          heading={appts && appts.length > 1 ? {
+            company: ap.company || `The ${hiresWord}`,
+            trades: (ap.trades || []).map((t) => catMeta(t)?.label || t).join(", "),
+          } : null}
+          hiresWord={hiresWord} onPropose={onPropose} onAssign={onAssign}
+          onAnswerVisit={onAnswerVisit} onVisitOutcome={onVisitOutcome} />
+      ))}
       </div>
       <div className={part === "visit" || part === "none" ? "jt-off" : "jt-on"}>
         <AccessPanel plan={accPlan} viewer="team" jobId={job.id} onSaved={setAccPlan} />
@@ -17475,7 +17579,11 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
   // The reader's own today, not the server's: a notice up "until Friday" is
   // still up on Friday evening in Seattle, when UTC has moved on.
   const liveNotices = sortNotices(notices.filter((n) => noticeLive(n, dayKey())));
-  const visitOf = (jobId) => visits.find((v) => v.jobId === jobId) || null;
+  // 098. One appointment per company: the one that most needs the tenant
+  // stands for the report, and every one is drawn and answered on its own.
+  const perJob = latestPerCompany(visits);
+  const visitOf = (jobId) => pressingVisit(perJob[jobId]) || null;
+  const apptsOf = (jobId) => perJob[jobId] || [];
   // Closed-out reports -- done, or taken back -- keep out of the way of the
   // live ones but stay reachable: "did they ever fix the fan" is a question
   // somebody asks months later.
@@ -17888,7 +17996,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
           const st = tenantStage(j, v);
           const who = assignedOn(j);
           return (
-            <TenantReportRow key={j.id} job={j} stage={st} visit={v} brandName={brand.name}
+            <TenantReportRow key={j.id} job={j} stage={st} visit={v} appts={apptsOf(j.id)} brandName={brand.name}
               assignedTo={who}
               meta={[
                 `Reported ${j.createdAt ? niceDay(j.createdAt) : "recently"}`,
@@ -17965,7 +18073,7 @@ function TenantPortal({ me, brand, jobs, properties, unit, accountKind, onReport
         const v = visitOf(open.id);
         return (
           <TenantReportModal
-            job={open} stage={tenantStage(open, v)} visit={v} brandName={brand.name}
+            job={open} stage={tenantStage(open, v)} visit={v} appts={apptsOf(open.id)} brandName={brand.name}
             where={where} unit={unit} assignedTo={assignedOn(open)}
             onEdit={onEdit} onWithdraw={onWithdraw} onPhotosChanged={onPhotosChanged}
             onRespondVisit={onRespondVisit} onProposeVisit={onProposeVisit}
@@ -26450,12 +26558,13 @@ const DashPage = React.createContext(null);
 // Not here, deliberately: work requests, expired and declined offers and
 // documents to review each already have a section on this page whose row
 // carries its own answer. One list for the things that had none.
-function yourTurnItems(jobs, latestVisit, today) {
+function yourTurnItems(jobs, latestVisit, today, perJob = null) {
   const out = [];
   for (const j of jobs || []) {
     if (j.readOnly || !jobIsLive(j, today)) continue;
     if (j.requestedBy && !j.approvedAt) continue;   // a request: its own section
-    const v = latestVisit[j.id];
+    // 098. Every appointment on the job, one per company, each asked on its own.
+    for (const v of (perJob ? perJob[j.id] : null) || (latestVisit[j.id] ? [latestVisit[j.id]] : [])) {
     // A PROPOSED TIME THAT HAS GONE BY is not waiting on anybody any more,
     // whoever's turn it was: nothing was booked and the morning is gone. So
     // it is never offered for approval -- it asks for a new time instead.
@@ -26466,6 +26575,7 @@ function yourTurnItems(jobs, latestVisit, today) {
     // whether anybody came is this side's to say, and nobody else will.
     if (v && v.status === "confirmed" && visitPassed(v) && someoneAccepted(j) && outcomeIsOurs(v, j)) {
       out.push({ kind: "outcome", job: j, v });
+    }
     }
     for (const t of j.trades || []) {
       const sp = j.spans?.[t];
@@ -26513,7 +26623,8 @@ function YourTurnRow({ item, users = [], props = [], hiresWord = "contractor",
   const where = props.find((p) => p.id === job.propertyId);
   const crew = jobAssignments(job).filter((a) => a.status === "accepted" || a.auto)
     .map((a) => a.company).filter(Boolean);
-  const crewName = crew[0] || `The ${hiresWord}`;
+  // 098. The company this appointment is for, where it is one company's.
+  const crewName = v?.companyName || crew[0] || `The ${hiresWord}`;
   const tenant = users.find((u) => u.id === accessTenant(job));
   const act = async (key, fn) => {
     setBusy(key); setErr("");
@@ -26664,8 +26775,8 @@ function JobPeek({ job, trade, inspection, visits = [], users = [], action, onOp
   const M = trade ? catMeta(trade) : null;
   const where = [job.address, job.area, job.zip].filter(Boolean).join(", ");
   const dir = directionsUrl(job.address, job.area, job.zip);
-  const visit = visits.filter((v) => v.jobId === job.id && ["proposed", "confirmed"].includes(v.status))
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  // 098. The appointment of the company on THIS trade, else the whole-job one.
+  const visit = appointmentFor(visits, job.id, trade ? job.assignments?.[trade]?.subId : null, { live: true });
   const asked = users.find((u) => u.id === job.requestedBy);
   const tradeScope = trade && scopes[trade];
   const photos = Array.isArray(job.photos) ? job.photos : [];
@@ -27038,13 +27149,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // windows behind the live one, and a declined window stops mattering the
   // moment somebody proposes the next -- so "is anything waiting on a time"
   // is a question about the newest row and no other.
-  const latestVisit = useMemo(() => {
-    const m = {};
-    [...visits].filter((v) => v.status !== "superseded")
-      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))
-      .forEach((v) => { if (!m[v.jobId]) m[v.jobId] = v; });
-    return m;
-  }, [visits]);
+  // 098. Newest per COMPANY on each job, and the one that most needs somebody
+  // standing for the job where a single line is drawn.
+  const visitsPerJob = useMemo(() => latestPerCompany(visits), [visits]);
+  const latestVisit = useMemo(() => Object.fromEntries(Object.entries(visitsPerJob)
+    .map(([jid, list]) => [jid, pressingVisit(list)])), [visitsPerJob]);
   // Only what is still to come. This counted every dated open job, past
   // ones included, under a tile reading "Work scheduled" -- so a building
   // owner was told three things were coming when two of them were last
@@ -27123,7 +27232,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   });
   // WAITING ON YOU: every place a workflow has stopped until this account
   // answers, named with the answer offered beside it. See yourTurnItems.
-  const yourTurn = role === "owner" ? [] : yourTurnItems(jobs, latestVisit, dayKey());
+  const yourTurn = role === "owner" ? [] : yourTurnItems(jobs, latestVisit, dayKey(), visitsPerJob);
 
   const first = me.name.split(" ")[0];
   const isOwner = role === "owner";
@@ -34766,14 +34875,20 @@ function jobLineFlag(j, { now, today, visits = [] }) {
   const waiting = slots.some((a) => a && a.status === "pending" && !isExpired(a, now));
   // ASSIGNED, NO TIME: a crew has taken it and nobody is booked to go. Its
   // own colour, never the scheduled one.
-  const lv = newestLiveVisit(visits, j.id);
-  const noTime = slots.some((a) => a && (a.status === "accepted" || a.auto))
-    && (!lv || (lv.status === "proposed" && visitPassed(lv)));
+  // 098. PER COMPANY: every company that has taken the work needs a time of
+  // its own, and the job is only scheduled once each of them is booked.
+  const taken = jobCompanies(j).filter((x) => x.accepted);
+  const appts = jobAppointments(visits, j.id, taken.map((x) => x.companyId), { live: true });
+  const lv = taken.length ? null : newestLiveVisit(visits, j.id);
+  const noTime = taken.length > 0
+    && appts.some((a) => !a.visit || (a.visit.status === "proposed" && visitPassed(a.visit)));
+  const proposed = taken.length ? !jobFullyBooked(appts) && appts.some((a) => a.visit?.status === "proposed")
+    : lv?.status === "proposed";
   return noReply ? { tone: "bad", text: "No reply" }
     : unfilled > 0 ? { tone: "warn", text: `${unfilled} unassigned` }
     : waiting ? { tone: "wait", text: "Waiting on a reply" }
     : noTime ? { tone: "arrange", text: "Time to be arranged" }
-    : lv?.status === "proposed" ? { tone: "wait", text: "Time proposed" }
+    : proposed ? { tone: "wait", text: "Time proposed" }
     : null;
 }
 
@@ -46004,6 +46119,18 @@ span.insp-cl-check{cursor:default}
 .ajt-acts{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
 .ajt-done{display:flex;gap:6px;align-items:flex-start;margin:10px 0 0;font-size:13.5px;color:var(--brand)}
 .ajt-done svg{flex:none;margin-top:2px}
+/* 098. One appointment per company: each in its own box, headed by who and
+   what, so two times on one job read as two arrivals rather than one muddle. */
+.tn-appts{display:flex;flex-direction:column;gap:10px;margin:8px 0}
+.tn-appt{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:var(--card)}
+.tn-appt-for{margin:0 0 6px;font-weight:800;font-size:14px}
+.tn-appt-booked{display:flex;gap:7px;align-items:flex-start;margin:0;font-size:13.5px}
+.tn-appt-booked svg{color:var(--brand);flex:none;margin-top:2px}
+.visit-slot.vs-multi{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0;
+  background:var(--card)}
+.vs-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px;margin:0 0 8px}
+.vs-head b{font-size:15px}
+.vs-head span{font-size:12.5px;color:var(--ink-soft)}
 .visit-access{display:flex;align-items:flex-start;gap:7px;margin:0 0 8px;padding:8px 10px;
   border-radius:10px;background:var(--paper);font-size:12.5px;line-height:1.45;color:var(--ink-soft)}
 .visit-access > svg{flex:none;margin-top:2px}

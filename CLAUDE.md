@@ -15428,6 +15428,57 @@ refactor.
   design leaves the document awaiting review. `test:docverdictui` (11);
   swallowing the refusal fails three.
 
+- **EACH COMPANY ON A JOB GETS ITS OWN APPOINTMENT.** Asked as *"if a job
+  has 5 different work orders with multiple vendors, we need to schedule each
+  of them individually, not one schedule for all work orders and all
+  vendors"*. A job had one visit, and every company with accepted work had to
+  agree to that one window, so a plumber and a painter had to come the same
+  morning. Migration 098 (`visits.company_id`), `app/shared/appointments.js`.
+
+  **Per company, not per trade.** One company holding three trades is one crew
+  arriving once, and asking the tenant three times about it would be three
+  confirmations for one van. **NULL is a time for the whole job**: every row
+  before 098, and one put forward before anybody was hired. A company with no
+  time of its own falls back to it, so nothing that existed changes meaning.
+
+  **The propose route needs to know whose time it is.** A crew proposes its
+  own. Anybody else names the company (`companyId`), or it is implied: the
+  only company on the job, or nobody yet (a whole-job time). Two or more and
+  no name is refused (`company_required`, listing them) rather than guessed,
+  and a company not on the job is `bad_company`. A new time replaces only that
+  company's appointment; the whole-job time comes down with it only when that
+  company is the only one on the job.
+
+  **Each appointment is agreed by its own company.** `partiesFor` takes the
+  company, so the contractor leg is that company's accepted work, and a crew
+  may answer only its own appointment (403 on another company's). The
+  outcome check, the calendar busy check, the auto-schedule grant, the
+  auto-schedulers (on issue, on accept, after a decline), the reminders,
+  Google Calendar and the crew's own work list all read the company's own
+  appointment, falling back to the whole-job one. A crew's `/api/visits` shows
+  its own and the whole-job ones, never another company's.
+
+  **The job's date is the earliest booked appointment** (`syncJobDate`), and
+  the job is scheduled only once **every** company on it is booked: the job
+  line reads *Time to be arranged* while any company that has taken the work
+  has no time. Moving the job's date on Edit proposes a new time for each
+  company.
+
+  **On screen:** the job's Schedule tab draws one box per company, headed by
+  the company and its trades, each with its own time and its own propose form
+  (`VisitSlot`). A job with one company, or none, draws one, with no heading, as
+  before. The tenant's report draws each company's time still being agreed as
+  its own panel headed by who is coming, and each booked one as a line
+  (`TenantAppointments`). The dashboard's *Waiting on you* lists each
+  appointment, naming its company.
+
+  `test:appointments` (30) and `test:appointmentsui` (13). Four mutations fire:
+  superseding across companies (nine assertions), a crew answering another
+  company's time (two), the screen not sending the company (one), and the
+  tenant's screen drawing one panel (two). **Pasting 098 is required** (two
+  pastes: the ALTER TABLE, then the index). Until then scheduling is one time
+  per job, exactly as before.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

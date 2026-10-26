@@ -838,10 +838,15 @@ CREATE TABLE IF NOT EXISTS visits (
   -- it, and have agreed to nothing when the contractor comes back with a
   -- different time -- so this is the middle link, and NULL on a row written
   -- before it means that row settles on exactly the parties it always did.
-  manager_at      TEXT
+  manager_at      TEXT,
+  company_id      TEXT
 );
+-- 098. visits.company_id: whose appointment this is. NULL is one for the whole
+-- job. (After the table, because a comment before the last column breaks
+-- SQLite's DROP COLUMN rewrite.)
 
 CREATE INDEX IF NOT EXISTS idx_visits_job ON visits(job_id);
+CREATE INDEX IF NOT EXISTS ix_visits_job_company ON visits(job_id, company_id);
 
 CREATE INDEX IF NOT EXISTS idx_visits_account ON visits(account_id);
 
