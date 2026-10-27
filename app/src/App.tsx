@@ -5008,6 +5008,19 @@ export default function SubSub() {
   // contractors and are on the roster already; revoked and expired ones are
   // not waiting on anything.
   const openInvites = useMemo(() => (invites || []).filter((i) => i.status === "open"), [invites]);
+  // What the roster lists: the open ones AND the expired ones nobody has
+  // replaced. Listing open alone is how invites vanished -- 30 days after
+  // being sent they dropped off the screen with nothing saying so, and the
+  // contractor was lost to the account until somebody retyped them. An
+  // expired one is still somebody this account asked and has not heard
+  // from, which is the whole reason the strip exists; Send again renews it.
+  // One superseded by a newer open invite to the same company or address is
+  // left off, because two rows for one person reads as two people.
+  const pendingInvites = useMemo(() => {
+    const live = new Set(openInvites.flatMap((i) => [i.companyId, (i.email || "").toLowerCase()].filter(Boolean)));
+    return (invites || []).filter((i) => i.status === "open" || (i.status === "expired"
+      && !(i.companyId && live.has(i.companyId)) && !(i.email && live.has(i.email.toLowerCase()))));
+  }, [invites, openInvites]);
 
   // The search box reaches them, because searching for a name and being told
   // nothing matches -- when an invite to that name went out on Tuesday -- is
@@ -5023,10 +5036,10 @@ export default function SubSub() {
 
   const invitedMatches = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return openInvites;
-    return openInvites.filter((i) =>
+    if (!q) return pendingInvites;
+    return pendingInvites.filter((i) =>
       [i.contact, i.companyName, i.label, i.email, i.phone].filter(Boolean).join(" ").toLowerCase().includes(q));
-  }, [openInvites, query]);
+  }, [pendingInvites, query]);
 
   // ---- persistence wiring ---------------------------------------------
   // Pulls this account's companies/engagements/jobs/members from the API and
@@ -6980,15 +6993,19 @@ export default function SubSub() {
               </h4>
               <div className="invited-row">
                 {invitedMatches.map((i) => (
-                  <button key={i.id} className="invited-card" onClick={() => setInvitedOpen(i)}>
-                    <span className="invited-chip">Invited</span>
+                  <button key={i.id} className={`invited-card ${i.status === "expired" ? "is-expired" : ""}`}
+                    onClick={() => setInvitedOpen(i)}>
+                    <span className="invited-chip">{i.status === "expired" ? "Expired" : "Invited"}</span>
                     <b>{inviteName(i)}</b>
                     <span className="invited-to">{[inviteContact(i), i.email, i.phone]
                       .filter(Boolean).join(" · ") || "Link for you to hand over"}</span>
                     {/* Sent and merely created are different facts, and one
-                        of them means nobody has been asked anything. */}
-                    <span className={`invited-when ${i.sentAt ? "" : "unsent"}`}>
-                      {i.sentAt ? `Sent ${relTime(i.sentAt)}` : "Not sent — nobody has it yet"}
+                        of them means nobody has been asked anything. An
+                        expired link is a third: it no longer opens, and the
+                        way on is the panel's Send again. */}
+                    <span className={`invited-when ${i.sentAt && i.status !== "expired" ? "" : "unsent"}`}>
+                      {i.status === "expired" ? `Link expired ${relTime(i.expiresAt)} — tap to send again`
+                        : i.sentAt ? `Sent ${relTime(i.sentAt)}` : "Not sent — nobody has it yet"}
                     </span>
                   </button>
                 ))}
@@ -8466,7 +8483,12 @@ export default function SubSub() {
             onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
             /* Continue setup passes the step it wants; Edit passes nothing
                and opens where it always did. */
-            onEdit={(step) => { setEditStep(Number(step) || 1); setEditing(selected); setSelected(null); }}
+            /* Whether this account may write the company row at all -- the
+               same two facts SubForm's lock reads, so the card does not offer
+               a license box the form will not draw. */
+            canEditCompany={!(allSubs.find((x) => x.id === selected.id) || selected).answersForItself
+              || staffMayWriteShared({ impersonatedBy: impersonating?.by, role })}
+            onEdit={(step) => { setEditStep(step === "license" ? "license" : (Number(step) || 1)); setEditing(selected); setSelected(null); }}
             onReviewDoc={(sb, kind) => { setSelected(null); setReviewing({ sub: sb, kind }); }}
             onVerifyLicense={(sb) => verifyLicense(sb.id)}
             onSchedule={() => { setAssignSub({ sub: selected }); setSelected(null); }} />
@@ -20025,6 +20047,10 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
   const [edit, setEdit] = useState(null);
 
   const sendable = !!(invite.email || invite.phone);
+  // An expired link no longer opens. It is renewed on the same token by Send
+  // again -- or, for a link made to hand over, by Renew link -- and until then
+  // Copy would hand somebody a link that answers "expired".
+  const expired = invite.status === "expired";
   // An invite raised from a contractor's CARD carries their company id, so
   // their name and address already live on a row this account edits from the
   // roster. Offering the form here would be offering a save the route
@@ -20091,7 +20117,8 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
       // Each route on its own, same as the first send. "Sent again" over a
       // text that could not go is the same lie the second time.
       const went = [after.emailed && invite.email, after.texted && invite.phone].filter(Boolean);
-      if (went.length) setNote(`Sent again to ${andList(went)}.`);
+      if (went.length) setNote(`Sent again to ${andList(went)}.${after.renewed ? " The link works for 30 more days." : ""}`);
+      else if (after.renewed && !sendable) setNote("Renewed. The link works for 30 more days — copy it and send it yourself.");
       const failed = [];
       if (invite.email && !after.emailed) failed.push("the email didn’t go");
       if (invite.phone && !after.texted) {
@@ -20106,7 +20133,6 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
       const code = e?.body?.error;
       setErr(code === "already_accepted" ? "They’ve already accepted — they’re on your contractor list now."
         : code === "revoked" ? "That invite was revoked."
-        : code === "expired" ? "That invite has expired. Send them a new one."
         : code === "no_contact" ? "There’s no address on this one — it was made as a link to hand over."
         : "Could not send it again. Try once more.");
     } finally { setBusy(""); }
@@ -20124,8 +20150,14 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
 
   return (
     <div className="invited-panel">
-      <span className="invited-chip">Invited</span>
+      <span className="invited-chip">{expired ? "Expired" : "Invited"}</span>
       <h2>{inviteName(invite)}</h2>
+      {expired && (
+        <p className="cov-hint" role="status">
+          This link expired {relTime(invite.expiresAt)} and no longer opens.{" "}
+          {sendable ? "Send again renews it for 30 days and sends it to them." : "Renew it for 30 days, then copy it and send it yourself."}
+        </p>
+      )}
       <p className="panel-note">
         Nothing else is known about them yet. Their trades, crews, documents and
         rating arrive when they finish setting up their account.
@@ -20205,7 +20237,7 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
         <dd>{invite.sentAt
           ? <>Sent {relTime(invite.sentAt)}</>
           : <span className="invited-when unsent">Not sent — copy the link and send it yourself</span>}</dd>
-        <dt>Expires</dt>
+        <dt>{expired ? "Expired" : "Expires"}</dt>
         <dd>{relTime(invite.expiresAt)}</dd>
       </dl>
 
@@ -20221,9 +20253,10 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
         {editable && <button className="pick" disabled={!!busy} onClick={startEdit}>
           <Pencil size={13} /> Edit details
         </button>}
-        <button className="pick" onClick={copy}><Copy size={13} /> {copied ? "Copied" : "Copy link"}</button>
-        {sendable && <button className="pick" disabled={!!busy} onClick={resend}>
-          <Send size={13} /> {busy === "resend" ? "Sending…" : "Send again"}
+        {!expired && <button className="pick" onClick={copy}><Copy size={13} /> {copied ? "Copied" : "Copy link"}</button>}
+        {(sendable || expired) && <button className={expired ? "btn-solid small" : "pick"} disabled={!!busy} onClick={resend}>
+          <Send size={13} /> {busy === "resend" ? (sendable ? "Sending…" : "Renewing…")
+            : sendable ? "Send again" : "Renew link"}
         </button>}
         {canRevoke && <button className="pick danger" disabled={!!busy} onClick={revoke}>
           <Trash2 size={13} /> {busy === "revoke" ? "Revoking…" : "Revoke"}
@@ -41938,7 +41971,7 @@ function EndEngagement({ sub, word, onEnd }) {
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -42116,7 +42149,14 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
                 <span className="lic-num">No license number on file</span>
                 <span className="lic-meta">Add their L&amp;I registration number to verify it against the state registry.</span>
               </div>
-              <button className="doc-add" onClick={onEdit}><Pencil size={13} /> Add</button>
+              {/* To the license box, not to the top of the form: the box is
+                  behind More details on step 1, so landing on the company name
+                  read as Add doing nothing. And not at all over a contractor
+                  who keeps their own record -- the form there cannot change
+                  the license, so the button would open a form that refuses. */}
+              {canEditCompany
+                ? <button className="doc-add" onClick={() => onEdit("license")}><Pencil size={13} /> Add</button>
+                : <span className="lic-own">They add it on their own account</span>}
             </div>
           );
           return (
@@ -42807,6 +42847,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
   // Editing an existing record opens on step 1 but can jump between steps.
   const [step, setStep] = useState(() => {
     if (locked) return 2;
+    if (openStep === "license") return 1;
     const want = Number(openStep);
     return want >= 1 && want <= 3 ? want : 1;
   });
@@ -42857,7 +42898,18 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     v.license || v.ubi || v.city || v.state || v.zip2
     || v.mailStreet || v.mailCity || v.mailState || v.mailZip
     || Number(v.rating) > 0 || v.available === false);
-  const [moreOpen, setMoreOpen] = useState(() => !!existing || hasExtras(init));
+  const [moreOpen, setMoreOpen] = useState(() => !!existing || hasExtras(init) || openStep === "license");
+  // Opened from a card's "No license number on file — Add": scroll to the
+  // box, ring it and put the cursor in it. Pointing, not just landing.
+  const licenseRef = useRef(null);
+  useEffect(() => {
+    if (openStep !== "license" || locked) return;
+    const el = licenseRef.current;
+    if (!el) return;
+    el.scrollIntoView?.({ block: "center" });
+    el.focus?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const askToConnect = async () => {
     setConnecting(true); setConnectErr("");
@@ -43117,8 +43169,8 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
       </button>
       {moreOpen && (<>
       <div className="fld-row">
-        <label className="fld">WA L&amp;I license # <span className="fld-note">verified against the state registry</span>
-          <input value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase().trim())} placeholder="CASCADR842KL" />
+        <label className={`fld ${openStep === "license" && !locked ? "fld-ring" : ""}`}>WA L&amp;I license # <span className="fld-note">verified against the state registry</span>
+          <input ref={licenseRef} value={f.license} onChange={(e) => set("license", e.target.value.toUpperCase().trim())} placeholder="CASCADR842KL" />
         </label>
         <label className="fld">UBI
           <input inputMode="numeric" value={f.ubi} onChange={(e) => set("ubi", e.target.value.trim())} placeholder="603221887" />
@@ -43679,6 +43731,10 @@ body{background:var(--paper)}
 /* An invite nobody has been sent is not the same as one they are sitting on,
    and the difference is the whole reason somebody is waiting. */
 .invited-when.unsent{color:var(--red);font-weight:600}
+/* Expired: still somebody this account asked, and the link no longer opens.
+   Amber, because it is waiting on this side to send it again. */
+.invited-card.is-expired{border-color:var(--amber)}
+.invited-card.is-expired .invited-chip{background:#fbf1de;border-color:var(--amber);color:#8a5a0f}
 
 .invited-panel{max-width:420px}
 .invited-panel h2{margin:4px 0 0}
@@ -48142,6 +48198,11 @@ iframe.dv-frame{display:block}
   background:#eaf0f6;border:1px solid #cdd9e6;padding:3px 8px;border-radius:20px;flex:none;cursor:help}
 
 /* WA license verification */
+/* "They add it on their own account": the card's answer where Add would open a
+   form that cannot change the license. */
+.lic-own{flex:none;font-size:12px;color:var(--ink-soft);align-self:center;max-width:150px;text-align:right}
+/* The box a card's Add pointed at. A box-shadow, so nothing beside it moves. */
+.fld.fld-ring input{box-shadow:0 0 0 3px rgba(227,155,50,.45);border-color:var(--amber)}
 .lic-card{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--line);border-radius:11px;
   padding:14px 16px;background:var(--card);flex-wrap:wrap}
 .lic-card.ok{background:#f2f8f4;border-color:#d4e7db}

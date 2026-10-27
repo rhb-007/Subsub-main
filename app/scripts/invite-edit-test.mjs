@@ -234,6 +234,27 @@ try {
     ck("somebody with no seat here cannot", s2 === 403, `${s2} ${b2.error}`);
   }
 
+  console.log("\n-- resending an expired one renews it --");
+  {
+    // An invite thirty days old dropped off the roster and its resend
+    // answered "expired", so the account lost the contractor. The console's
+    // resend has always renewed; this is the account's doing the same.
+    const { db, env } = seed();
+    db.exec(`UPDATE sub_invites SET expires_at = '${ahead(-5)}' WHERE id IN ('inv_open','inv_link')`);
+    const send = (id) => worker.fetch(new Request(`https://api.subsub.work/api/invites/${id}/resend`, {
+      method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": "u_admin", "X-Account-Id": "acc1" } }), env);
+    let [s, b] = await json(await send("inv_open"));
+    ck("it is not refused", s === 200, `${s} ${JSON.stringify(b)}`);
+    ck("it is open again, for about 30 days", b.status === "open" && b.renewed === true
+      && new Date(rowOf(db, "inv_open").expires_at) > new Date(Date.now() + 29 * 86400_000), JSON.stringify(b));
+    ck("on the same link", rowOf(db, "inv_open").token === tok(1));
+    [s, b] = await json(await send("inv_link"));
+    ck("a link to hand over is renewed too, with nothing sent", s === 200 && b.renewed === true
+      && b.status === "open" && !b.emailed, `${s} ${JSON.stringify(b)}`);
+    [s, b] = await json(await send("inv_link"));
+    ck("and once it is open again, there is still nothing to send it to", s === 400 && b.error === "no_contact", `${s} ${b.error}`);
+  }
+
 } finally { /* nothing to close */ }
 
 console.log(`\n${pass} passed, ${fail} failed`);

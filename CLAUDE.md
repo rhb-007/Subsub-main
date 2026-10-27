@@ -7972,6 +7972,33 @@ refactor.
   is now *Powered by* and `email-logo.png`, the same mark as its header.
   `test:sitetools` and `test:unclaimed` pin both; removing either fails it.
 
+- **AN EXPIRED INVITE STAYS ON THE ROSTER AND SEND AGAIN RENEWS IT; ADD A
+  LICENSE NUMBER LANDS IN THE LICENSE BOX.** Reported from Outerhome: *"where
+  have the subcontractors I've invited but haven't accepted yet gone?"* The
+  invited strip listed `status === "open"` only, so thirty days after an
+  invite was sent it dropped off the screen with nothing saying so, and
+  `POST /api/invites/:id/resend` answered `expired`. That left retyping the
+  contractor as the only way back. The resend now renews an expired invite
+  **on the same token** for `INVITE_TTL_DAYS`, the rule the console's resend
+  already had, and a link made to hand over is renewed with nothing sent.
+  `pendingInvites` lists open and expired invites, minus an expired one that a
+  newer open invite to the same company or address replaced, so one person is
+  one card. An expired card is amber and reads *Link expired ... tap to send
+  again*. Its panel says the link no longer opens, offers Send again (or Renew
+  link) as the primary button and no Copy link, and the note says the link
+  works for 30 more days.
+
+  **Add on "No license number on file" opened the edit form at its top**, with
+  the license box under More details and nothing pointing at it, so it read as
+  doing nothing. Over a contractor who keeps their own record it opened a form
+  that cannot change the license at all. It now sends `onEdit("license")`:
+  step 1, More details open, the box scrolled to, rung (`fld-ring`) and
+  focused. A contractor who answers for themselves (and no staff standing in)
+  gets *They add it on their own account* instead of the button, read off the
+  same two facts as `SubForm`'s lock. `test:inviteexpired` (16) and
+  `test:inviteedit` (39); putting the strip back on open only and Add back on
+  the plain edit fails nine.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

@@ -3436,12 +3436,29 @@ app.post("/api/invites/:id/resend", requireRole("admin", "pm"), async (c) => {
   if (!row) return c.json({ error: "not_found" }, 404);
   if (row.used_at) return c.json({ error: "already_accepted" }, 409);
   if (row.revoked_at) return c.json({ error: "revoked" }, 409);
-  if (new Date(row.expires_at) < new Date()) return c.json({ error: "expired" }, 409);
-  // A link made to hand over in person has nowhere to be sent. Saying so is
-  // better than reporting a send that had no recipient.
-  if (!row.email && !row.phone) return c.json({ error: "no_contact" }, 400);
-
+  // AN EXPIRED INVITE IS RENEWED ON THE SAME TOKEN, not refused. Refusing it
+  // is what made invites vanish: they dropped off the roster at 30 days and
+  // the one button that could chase them answered "expired", so the only way
+  // back was retyping the contractor. The console's resend has always renewed;
+  // this is the account getting the same rule. The same token, because a link
+  // still in somebody's inbox should start working again rather than be
+  // replaced by a second one.
+  const expired = new Date(row.expires_at) < new Date();
+  if (expired) {
+    const until = new Date(Date.now() + INVITE_TTL_DAYS * 86400_000).toISOString();
+    await c.env.DB.prepare(`UPDATE sub_invites SET expires_at = ? WHERE id = ?`).bind(until, row.id).run();
+    row.expires_at = until;
+  }
   const account = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
+  // A link made to hand over in person has nowhere to be sent. Saying so is
+  // better than reporting a send that had no recipient -- but a renewed one
+  // is still worth handing back, because the link works again.
+  if (!row.email && !row.phone) {
+    if (!expired) return c.json({ error: "no_contact" }, 400);
+    await logActivity(c.env, accountId, userId, "invite_renewed", "Invite link renewed for 30 more days");
+    return c.json({ ...inviteRowToJs(row, account), renewed: true, emailed: false, texted: false });
+  }
+
   const sent = await deliverSubInvite(c.env, { row, account, accountId, userId });
   // Same rule as the first send: sent_at moves only if something left.
   if (sent.emailed || sent.texted) {
@@ -3452,7 +3469,7 @@ app.post("/api/invites/:id/resend", requireRole("admin", "pm"), async (c) => {
 
   const after = await c.env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(row.id).first();
   return c.json({
-    ...inviteRowToJs(after, account),
+    ...inviteRowToJs(after, account), renewed: expired,
     emailed: sent.emailed, texted: sent.texted,
     emailError: sent.emailError, textError: sent.textError,
   });

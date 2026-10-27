@@ -136,6 +136,7 @@
     "test:workwhen": "node --no-warnings scripts/work-when-test.mjs",
     "test:inviteas": "node --no-warnings scripts/invite-engaged-test.mjs",
     "test:inviteasui": "node --no-warnings scripts/invite-engaged-ui-test.mjs",
+    "test:inviteexpired": "node --no-warnings scripts/invite-expired-ui-test.mjs",
     "test:inviteedit": "node --no-warnings scripts/invite-edit-test.mjs",
     "test:inviteeditui": "node --no-warnings scripts/invite-edit-ui-test.mjs",
     "test:inspection": "node --no-warnings scripts/inspection-test.mjs",
