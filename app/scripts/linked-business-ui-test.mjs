@@ -6,7 +6,8 @@
 //   It is offered on the Company tab, names the kinds that are the OTHER side
 //   only, and creating it posts what the form shows.
 //
-//   Once linked the panel names the other business and offers the way there,
+//   Once linked the panel names the other business, and the way there is the
+//   profile menu and the drawer, not a button inside Company,
 //   and the Subscription tab says which of the two is discounted.
 //
 //   node --no-warnings scripts/linked-business-ui-test.mjs
@@ -144,8 +145,16 @@ try {
   const l = await panel(page);
   t.ck("the panel names the other business", /Rudd Property Management/.test(l?.text || "")
     && /Property manager/.test(l?.text || ""), l?.text);
-  t.ck("with the way there", await page.evaluate(() => [...document.querySelectorAll(".sb-panel button")]
-    .some((b) => /Open Rudd Property Management/.test(b.innerText))));
+  t.ck("and no Open button of its own, because the way there is the menu", await page.evaluate(() =>
+    ![...document.querySelectorAll(".sb-panel button")].some((b) => /^Open /.test(b.innerText.trim()))));
+  t.ck("it says where it is opened from", /menu under your name/.test(l?.text || ""), l?.text);
+  await page.evaluate(() => { if (!document.querySelector(".user-menu")) document.querySelector(".user-btn")?.click(); });
+  await wait(500);
+  const m = await page.evaluate(() => [...document.querySelectorAll(".um-linked")].map((b) => b.innerText.replace(/\s+/g, " ")));
+  t.ck("the profile menu carries the other business, once", m.length === 1
+    && /Rudd Property Management/.test(m[0]) && /Your other business/.test(m[0]), JSON.stringify(m));
+  t.ck("the drawer carries it too", await page.evaluate(() =>
+    /Rudd Property Management/.test(document.querySelector(".drawer-linked")?.textContent || "")));
   await openTab(page, "Subscription");
   const sub = await page.evaluate(() => document.querySelector(".linked-discount")?.innerText.replace(/\s+/g, " ") || "");
   t.ck("the Subscription tab says this one is half off, and why",

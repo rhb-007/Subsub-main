@@ -15686,6 +15686,18 @@ refactor.
   the owner-only check, the earliest-admin ordering, the admin join and the
   trash gate. `test:firstadmin` and `test:seatgate` were moved to the new rule.
 
+- **THE OTHER BUSINESS IS OPENED FROM THE MENU, NOT FROM ACCOUNT -> COMPANY.**
+  Asked for as *"your other business link should be in main nav drop, not
+  within the company"*. A second business is somewhere you go, like a client's
+  dashboard, so it sits under My account in the profile menu and the drawer,
+  naming the business and its kind (*Your other business · Property
+  manager*). The app fetches it for an admin (the route is admin-only), and
+  its seat is left out of the switch list so one account is not offered
+  twice. It opens through `openSeat`, so a staff session is signed in again
+  rather than stuck. The Company panel keeps the form for adding one and the
+  discount line, and says *Open it from the menu under your name* in place of
+  its Open button. `test:linkedui` (20); dropping the menu entry fails one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

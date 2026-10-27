@@ -4141,7 +4141,27 @@ export default function SubSub() {
       .filter((c) => c.name && (impersonating || seats.has(c.accountId)))
       .sort((a, b) => (b.waiting - a.waiting) || a.name.localeCompare(b.name));
   }, [ownSub, role, myMemberships, account, elsewhere, now, accounts, impersonating]);
-  const clientIds = new Set(clientLinks.map((c) => c.accountId));
+  // THE OTHER BUSINESS (099) LIVES IN THE MENU, not inside Account -> Company:
+  // asked for in so many words. Fetched here for an admin, because the route is
+  // admin-only, and its seat is kept out of the switch list so the same account
+  // is not offered twice.
+  const [linkedBiz, setLinkedBiz] = useState(null);
+  const [linkedTick, setLinkedTick] = useState(0);
+  useEffect(() => {
+    if (role !== "admin" || !account?.id) { setLinkedBiz(null); return undefined; }
+    let live = true;
+    api.secondBusiness()
+      .then((d) => { if (live) setLinkedBiz(d?.linked?.other || null); })
+      .catch(() => { if (live) setLinkedBiz(null); });
+    return () => { live = false; };
+  }, [role, account?.id, linkedTick]);
+  const openLinked = async () => {
+    if (!linkedBiz) return;
+    setUserMenu(false); setMobileNav(false);
+    if (!(impersonating && !impersonating.expired)) await reloadAccounts();
+    await openSeat(linkedBiz.id, linkedBiz.name);
+  };
+  const clientIds = new Set([...clientLinks.map((c) => c.accountId), ...(linkedBiz ? [linkedBiz.id] : [])]);
   // What the profile menu's switch list draws (only past one seat), so the
   // staff "Back to your company" row is not drawn a second time beside it.
   const menuSeats = myMemberships.filter((m) => !clientIds.has(m.accountId));
@@ -6436,6 +6456,14 @@ export default function SubSub() {
                     <button className="um-account" onClick={() => { setUserMenu(false); setTab("account"); }}>
                       <UserCog size={14} /> {tt("My account")}
                     </button>
+                    {linkedBiz && (
+                      <button className="um-acct um-client um-linked" onClick={openLinked}>
+                        <span className="ua-text">
+                          <span className="ua-name">{linkedBiz.name}</span>
+                          <span className="ua-role">{tt("Your other business")} · {tt(ACCOUNT_KINDS[linkedBiz.kind]?.label || "")}</span>
+                        </span>
+                      </button>
+                    )}
                     {/* BELOW My account, asked for with an arrow: the companies this
                         one works for, each opening their side of the work under
                         their name. */}
@@ -6718,6 +6746,15 @@ export default function SubSub() {
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
+            {linkedBiz && (
+              <button className="switch-acct client-dash drawer-linked" onClick={openLinked}>
+                <Building2 size={15} />
+                <span className="sw-main">
+                  <span className="sw-name">{linkedBiz.name}</span>
+                  <span className="sw-what">{tt("Your other business")} · {tt(ACCOUNT_KINDS[linkedBiz.kind]?.label || "")}</span>
+                </span>
+              </button>
+            )}
             {/* THE CLIENT'S DASHBOARD, BELOW MY ACCOUNT (it was above, and an arrow moved it). Asked for in those
                 words: "a link down by my account to the company they are
                 working for". It opens their side under their name, which is
@@ -8229,7 +8266,7 @@ export default function SubSub() {
           the nudge email told them it existed. */}
       {tab === "account" && (
         <AccountView themeCtl={themeCtl} langCtl={langCtl} langEligible={langEligible}
-          onOpenLinked={async (id) => { await reloadAccounts(); await goToSeat(id); }}
+          onOpenLinked={async (id) => { setLinkedTick((n) => n + 1); await reloadAccounts(); await goToSeat(id); }}
           me={me} users={accountUsers} subs={subs} jobs={jobs} brand={brand} plan={plan} role={role}
           properties={accountProperties}
           seatCount={seatCount} atSeatLimit={atSeatLimit}
@@ -24107,9 +24144,8 @@ function SecondBusinessPanel({ accountName, subdomain, onOpen }) {
             <b>{o.name}</b>
             <span>{tt(ACCOUNT_KINDS[o.kind]?.label || "")} · {o.subdomain}.subsub.work</span>
           </div>
-          <button type="button" className="btn-ghost" onClick={() => onOpen?.(o.id)}>
-            {tt("Open")} {o.name}</button>
         </div>
+        <p className="cov-hint">{tt("Open it from the menu under your name.")}</p>
         <p className="cov-hint">
           {linked.discountOn === "this"
             ? `${tt("This account's Scale is")} ${pct}% ${tt("off, because")} ${o.name} ${tt("pays for SubSub too.")}`
