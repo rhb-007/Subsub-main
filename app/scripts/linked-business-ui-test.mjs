@@ -47,8 +47,10 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     allowed: ["property_manager", "portfolio_manager", "building_owner"], discountPercent: 50 }];
   if (path === "/api/billing") return [200, { plan: "scale", cycle: "monthly", status: "active", invoices: [],
     configured: true, linked: LINKED && { ...LINKED, discountOn: "this" } }];
+  if (path === "/api/account/owner" && method === "POST") { posted.push({ owner: body.userId }); return [200, { ok: true, ownerId: body.userId }]; }
   if (path === "/api/account-users") return [200, [{ id: "u_marc", name: "Marc Rudd", email: "marc@rudd.test",
-    role: "admin", propertyIds: [], hasLogin: true }]];
+    role: "admin", propertyIds: [], hasLogin: true, isOwner: true },
+    { id: "u_jo", name: "Jo Admin", email: "jo@rudd.test", role: "admin", propertyIds: [], hasLogin: true, isOwner: false }]];
   if (path === "/api/my-company") return [200, { companyId: "cmp_own_acc_gc", company: "Rudd Development",
     contact: "Marc Rudd", docs: {}, sharesSent: 0, openToHire: true }];
   if (["/api/subs", "/api/jobs", "/api/properties"].includes(path)) return [200, []];
@@ -89,6 +91,31 @@ try {
   const { page, crashes } = await visitApp(browser, { host: "rudddev", webPort: WEB,
     seat: { userId: "u_marc", accountId: "acc_gc" }, viewport: { width: 1180, height: 1600 } });
   await wait(2200);
+  console.log("\n-- 100: the account owner, on Users --");
+  await openTab(page, "Users");
+  const rows = await page.evaluate(() => [...document.querySelectorAll(".user-row")].map((r) => ({
+    name: r.querySelector("h4")?.innerText.trim(),
+    owner: !!r.querySelector(".owner-badge"),
+    make: [...r.querySelectorAll("button")].some((b) => /Make owner/.test(b.innerText)),
+    trash: !!r.querySelector(".icon-x"),
+  })));
+  const marc = rows.find((r) => r.name === "Marc Rudd"), jo = rows.find((r) => r.name === "Jo Admin");
+  t.ck("both admins are listed", !!marc && !!jo, JSON.stringify(rows));
+  t.ck("the owner carries the badge, and only the owner", marc?.owner && !jo?.owner, JSON.stringify(rows));
+  t.ck("the owner may hand it to the other admin", jo?.make && !marc?.make, JSON.stringify(rows));
+  t.ck("the note says who owns it", await page.evaluate(() => /You own this account/.test(document.querySelector(".owner-note")?.innerText || "")));
+  await page.evaluate(() => [...document.querySelectorAll(".user-row button")].find((b) => /Make owner/.test(b.innerText))?.click());
+  await wait(400);
+  t.ck("handing it on asks first", await page.evaluate(() => /Make Jo Admin the account owner/.test(document.body.innerText)));
+  await page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => b.innerText.trim() === "Make owner")?.click());
+  await wait(900);
+  t.ck("and posts who", posted.some((p) => p.owner === "u_jo"), JSON.stringify(posted));
+  const after = await page.evaluate(() => [...document.querySelectorAll(".user-row")].map((r) => ({
+    name: r.querySelector("h4")?.innerText.trim(), owner: !!r.querySelector(".owner-badge"),
+    trash: !!r.querySelector(".icon-x") })));
+  t.ck("after which Jo is the owner and cannot be removed by Marc",
+    after.find((r) => r.name === "Jo Admin")?.owner && !after.find((r) => r.name === "Jo Admin")?.trash, JSON.stringify(after));
+
   console.log("\n-- offered on the Company tab --");
   await openTab(page, "Company");
   const p = await panel(page);
@@ -109,7 +136,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll(".sb-panel button")]
     .find((b) => /Create the second business/.test(b.innerText))?.click());
   await wait(1500);
-  t.ck("it posts the name, address and kind", JSON.stringify(posted[0]) ===
+  t.ck("it posts the name, address and kind", JSON.stringify(posted.find((p) => p.kind)) ===
     JSON.stringify({ kind: "property_manager", name: "Rudd Property Management", subdomain: "rudddevpm" }), JSON.stringify(posted));
 
   console.log("\n-- once linked --");
@@ -123,6 +150,7 @@ try {
   const sub = await page.evaluate(() => document.querySelector(".linked-discount")?.innerText.replace(/\s+/g, " ") || "");
   t.ck("the Subscription tab says this one is half off, and why",
     /50% off/.test(sub) && /Rudd Property Management pays for SubSub too/.test(sub), sub);
+
   t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
 } finally {
   await browser.close().catch(() => {});

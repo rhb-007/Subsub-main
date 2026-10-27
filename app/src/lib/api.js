@@ -512,6 +512,7 @@ export const api = {
   listAccountUsers: () => request("/account-users"),
   addAccountUser: (u) => request("/account-users", { method: "POST", body: JSON.stringify(u) }),
   updateAccountUser: (userId, patch) => request(`/account-users/${userId}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  setAccountOwner: (userId) => request("/account/owner", { method: "POST", body: JSON.stringify({ userId }) }),
   removeAccountUser: (userId) => request(`/account-users/${userId}`, { method: "DELETE" }),
   // A face. Behind auth and scoped to a shared account, so it arrives the
   // same way a report photo does -- fetched like any other call and handed
@@ -1098,6 +1099,10 @@ export const api = {
     setUserRole: (accountId, userId, role) =>
       request(`/platform/accounts/${needId(accountId, "account_id")}/users/${needId(userId, "user_id")}`,
         { method: "PATCH", body: JSON.stringify({ role }) }),
+    // 100. Hand an account's ownership to another of its admins, with why.
+    setOwner: (accountId, userId, reason) =>
+      request(`/platform/accounts/${needId(accountId, "account_id")}/owner`,
+        { method: "PATCH", body: JSON.stringify({ userId, reason }) }),
     // Returns only the address it went to. The token lives in the email and
     // nowhere else, which is what makes this safe to do on someone's behalf.
     resetPassword: (userId, accountId) =>

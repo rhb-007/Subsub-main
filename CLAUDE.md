@@ -15627,6 +15627,38 @@ refactor.
   `rudd.subsub.work`, since Cloudflare and public DNS are unreachable from
   here.
 
+- **AN ACCOUNT HAS ANY NUMBER OF ADMINS AND ONE OWNER, AND BILLING STAYS WITH
+  EVERY ADMIN.** Asked as *"is it possible to have multiple admins and one
+  account owner / admin?"*, answered *"Admin can handle billing as well"* and
+  *"Yes"* (the owner of the first business owns the second). Before this, any
+  admin could remove or demote any other, including the person who started the
+  company. Migration 100 (`account_owners`).
+
+  **What only the owner may do:** remove or demote another admin, add a second
+  business, and hand ownership to another admin. **Nobody removes or demotes
+  the owner, themselves included**, so an account always keeps somebody who can
+  administer it. Every admin still manages project managers, billing and
+  everything else. `ownerRefusal` in the Worker is the one rule, read by the
+  account-users PATCH and DELETE; the console's role PATCH refuses
+  `owner_cannot_be_demoted` too.
+
+  **The owner is the stored row while that person is still an admin, otherwise
+  the earliest admin** (`accountOwnerId`). A database without 100 and an
+  account nobody recorded an owner for give the same answer, so there is always
+  one owner wherever there is an admin. 100 backfills each account's earliest
+  admin by that same rule. Signup, the console's create and a second business
+  record their owner. `m100_inv_owner_not_admin` counts an owner who is no
+  longer an admin.
+
+  **On screen:** an Owner badge on Users, a line saying who owns the account
+  and what only they can do, **Make owner** (asks first) on the other admins for
+  the owner, and no trash or role picker where the route would refuse. The
+  second-business panel tells a non-owner who can add one. **Staff hand
+  ownership on from the console's Team panel** (superadmin, reason required,
+  audited). `test:accountowner` (26) and `test:linkedui` (17); mutations fire on
+  the owner-only check, the earliest-admin ordering, the admin join and the
+  trash gate. `test:firstadmin` and `test:seatgate` were moved to the new rule.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

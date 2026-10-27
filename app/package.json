@@ -170,6 +170,7 @@
     "test:milestone": "node --no-warnings scripts/milestone-test.mjs",
     "test:docexpiry": "node --no-warnings scripts/doc-expiry-test.mjs",
     "test:firstadmin": "node --no-warnings scripts/first-admin-test.mjs",
+    "test:accountowner": "node --no-warnings scripts/account-owner-test.mjs",
     "test:impseat": "node --no-warnings scripts/impersonate-seat-test.mjs",
     "test:avatarkey": "node scripts/avatar-key-test.mjs",
     "test:avatarcrop": "node --no-warnings scripts/avatar-crop-ui-test.mjs",

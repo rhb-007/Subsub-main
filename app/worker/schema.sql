@@ -2688,3 +2688,16 @@ CREATE TABLE IF NOT EXISTS business_links (
 -- is discounting now. (After the table, for SQLite's DROP COLUMN rewrite.)
 CREATE UNIQUE INDEX IF NOT EXISTS ux_business_links_a ON business_links(account_a);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_business_links_b ON business_links(account_b);
+
+-- ---------------------------------------------------------------------------
+-- 100 — one owner per account
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS account_owners (
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  set_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  set_by      TEXT,
+  note        TEXT
+);
+-- 100. The owner is always an admin of the account; the admin nobody else
+-- can remove or demote. (After the table, for SQLite's DROP COLUMN rewrite.)

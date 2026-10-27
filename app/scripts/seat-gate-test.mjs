@@ -90,7 +90,9 @@ console.log("\n-- the edit user form is gated on the role the route requires --"
   ck("so the screen names the role rather than looking a capability up",
     /const canManageUsers = role === "admin";/.test(APPC));
   ck("the role picker unlocks for an admin editing somebody else",
-    /canChangeRole=\{canManageUsers && editUser\.id !== currentUserId\}/.test(APPC));
+    // 100: and not over the account's owner, or over another admin unless
+    // you are the owner -- which the route refuses too.
+    /canChangeRole=\{canManageUsers && editUser\.id !== currentUserId && editUser\.id !== accountOwner/.test(APPC));
   ck("and never for yourself, whatever the role",
     !/canChangeRole=\{canManageUsers\}/.test(APPC));
   ck("the avatar follows the same gate, or your own face",

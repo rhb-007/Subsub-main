@@ -51,7 +51,7 @@ const BASE = `
 CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT, kind TEXT, plan TEXT, subdomain TEXT);
 CREATE TABLE users (id TEXT PRIMARY KEY, name TEXT, email TEXT, phone TEXT, auth_id TEXT);
 CREATE TABLE companies (id TEXT PRIMARY KEY, company TEXT);
-CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT, account_id TEXT, role TEXT, company_id TEXT);
+CREATE TABLE memberships (id TEXT PRIMARY KEY, user_id TEXT, account_id TEXT, role TEXT, company_id TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 -- The role route clears the scopes a seat may no longer carry, so it reaches
 -- these. Both are real tables on every real database (014 and 053), which is
 -- what this hand-written base is for: it reported the reach rather than the
@@ -181,13 +181,21 @@ try {
     // the very state it exists to fix, in one press -- and this route is the
     // only thing that could undo it.
     const [s, b] = await json(await patch(env, "acc_has", "u_admin", { role: "pm" }));
-    ck("the only admin cannot be demoted", s === 409 && b.error === "last_admin", `${s} ${JSON.stringify(b)}`);
+    // 100. The only admin is also the account's owner, and the owner is
+    // refused by name before the last-admin check is reached: either way the
+    // account keeps somebody who can administer it.
+    ck("the only admin cannot be demoted", s === 409 && ["last_admin", "owner_cannot_be_demoted"].includes(b.error),
+      `${s} ${JSON.stringify(b)}`);
     ck("and they are still an admin",
       roleOf(db, "acc_has", "admin@cascade.test") === "admin");
-    // With a second admin there, it is an ordinary change.
+    // With a second admin there, demoting that one is an ordinary change; the
+    // owner still is not demoted until ownership is handed on.
     await json(await post(env, "acc_has", { name: "Second", email: "two@cascade.test", role: "admin" }));
-    ck("with somebody else holding it, the demotion goes through",
-      (await json(await patch(env, "acc_has", "u_admin", { role: "pm" })))[0] === 200);
+    const two = db.prepare(`SELECT id FROM users WHERE email = 'two@cascade.test'`).get()?.id;
+    ck("the owner still cannot be, with another admin there",
+      (await json(await patch(env, "acc_has", "u_admin", { role: "pm" })))[1].error === "owner_cannot_be_demoted");
+    ck("with somebody else holding it, demoting the other admin goes through",
+      (await json(await patch(env, "acc_has", two, { role: "pm" })))[0] === 200);
 
     const { env: e2 } = seed();
     // One rule for all three non-team seats rather than a special case per

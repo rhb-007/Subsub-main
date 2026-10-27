@@ -300,7 +300,7 @@ WITH spec(j) AS (SELECT
   ',["m084_account_setup_fees","col","account_setup_fees",["account_id","tier","units","amount_cents","status","stripe_ref","charged_at"]]') ||
   -- 085. Where an address is, for the Jobs and Properties maps. Until it is
   -- run the map says which file to paste and every other screen is unchanged.
-  ',["m085_geocodes","col","geocodes",["address_key","lat","lng","precision","source","checked_at"]]' ||
+  (',["m085_geocodes","col","geocodes",["address_key","lat","lng","precision","source","checked_at"]]' ||
   -- 086. The units an account gave at signup. Until it is run signup still
   -- works and those accounts are priced on their buildings, as before.
   ',["m086_portfolio_estimates","col","portfolio_estimates",["account_id","total_units","occupied_units","source","created_at"]]' ||
@@ -315,10 +315,10 @@ WITH spec(j) AS (SELECT
   ',["m090_account_integrations","col","account_integrations",["account_id","provider","enabled","updated_at","updated_by"]]' ||
   -- 091. An account's connection to an outside system (CompanyCam first).
   -- Until it is run connecting names the file and nothing else changes.
-  ',["m091_account_connections","col","account_connections",["account_id","provider","secret_enc","label","connected_at","connected_by","last_ok_at","last_error"]]' ||
+  ',["m091_account_connections","col","account_connections",["account_id","provider","secret_enc","label","connected_at","connected_by","last_ok_at","last_error"]]') ||
   -- 093. A job held for a contractor who is not on SubSub yet. Until it is
   -- run, assigning one is refused with the reason and nothing is held.
-  ',["m093_held_assignments","col","held_assignments",["id","account_id","job_id","trade","company_id","payload","created_by","created_at","released_at","work_order_id","release_error","cancelled_at"]]' ||
+  (',["m093_held_assignments","col","held_assignments",["id","account_id","job_id","trade","company_id","payload","created_by","created_at","released_at","work_order_id","release_error","cancelled_at"]]' ||
   -- 094. Google Calendar.
   ',["m094_gcal_connections","col","gcal_connections",["user_id","google_email","refresh_enc","calendar_id","time_zone","sync_on","block_on","connected_at","last_synced_at","last_error"]]' ||
   ',["m094_gcal_events","col","gcal_events",["user_id","visit_id","event_id","fingerprint","synced_at"]]' ||
@@ -334,6 +334,8 @@ WITH spec(j) AS (SELECT
   ',["m098_visit_company","col","visits",["company_id"]]' ||
   -- 099. A second business on one login, and its discount.
   ',["m099_business_links","col","business_links",["id","account_a","account_b","created_by","created_at","discount_on","discount_at"]]' ||
+  -- 100. One owner per account.
+  ',["m100_account_owners","col","account_owners",["account_id","user_id","set_at","set_by","note"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -877,6 +879,10 @@ WITH inv(j) AS (SELECT '['
        OR EXISTS (SELECT 1 FROM business_links o WHERE o.id <> l.id
                    AND (o.account_a IN (l.account_a, l.account_b) OR o.account_b IN (l.account_a, l.account_b)))
        OR (l.discount_on IS NOT NULL AND l.discount_on NOT IN (l.account_a, l.account_b)))))
+  -- 100. An owner who is not an admin of the account they own.
+  || (',' || json_array('m100_inv_owner_not_admin', (SELECT COUNT(*) FROM account_owners ao
+    WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.account_id = ao.account_id
+                        AND m.user_id = ao.user_id AND m.role = 'admin'))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

@@ -1380,6 +1380,8 @@ app.post("/api/signup", async (c) => {
         `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
       ).bind(membershipId, userId, accountId),
     ]);
+    // 100. Whoever signs up owns the account.
+    await setAccountOwner(c.env, accountId, userId, { note: "signed up" });
     // The company they are, for the kinds that can be hired. Written here
     // rather than left to ensureAccountCompany so a general contractor is
     // findable from the moment they finish signing up, with the licence and
@@ -6161,7 +6163,11 @@ app.get("/api/account-users", async (c) => {
     for (const r of inv || []) invites[r.user_id] = r.sent_at;
   } catch (err) { if (!missingSchema(err)) throw err; }
 
+  const ownerId = await accountOwnerId(c.env, accountId).catch(() => null);
   return c.json(results.map((r) => ({
+    // 100. The account's owner: drawn with a badge, and the one row nobody
+    // else may remove or demote.
+    isOwner: r.id === ownerId && r.role === "admin",
     // A tenant added by phone alone carries a placeholder address. It exists
     // so the row has a unique key, and it is nobody's address: handing it to
     // the browser gets it printed next to a mailto: link that goes nowhere.
@@ -6452,10 +6458,117 @@ app.post("/api/account-users/:userId/invite", requireRole("admin"), async (c) =>
   return c.json(invite, invite.invited ? 200 : 409);
 });
 
+// ---------------------------------------------------------------------------
+// 100. One owner per account
+// ---------------------------------------------------------------------------
+// Any number of admins, all equal except here: the owner is the admin nobody
+// else can remove or demote, and the one who may remove or demote other
+// admins and hand ownership on. Billing stays open to every admin.
+//
+// Read as the stored owner while they are still an admin, otherwise the
+// account's earliest admin. That fallback is what a database without 100 and
+// an account nobody has recorded an owner for both answer, so there is always
+// exactly one owner wherever there is an admin.
+async function accountOwnerId(env, accountId) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT ao.user_id FROM account_owners ao
+         JOIN memberships m ON m.account_id = ao.account_id AND m.user_id = ao.user_id AND m.role = 'admin'
+        WHERE ao.account_id = ?`).bind(accountId).first();
+    if (r) return r.user_id;
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  const first = await env.DB.prepare(
+    `SELECT user_id FROM memberships WHERE account_id = ? AND role = 'admin'
+      ORDER BY COALESCE(created_at, ''), rowid LIMIT 1`).bind(accountId).first();
+  return first?.user_id || null;
+}
+
+// Record the owner. False on a database without 100, where the earliest-admin
+// fallback keeps answering.
+async function setAccountOwner(env, accountId, userId, { setBy = null, note = null } = {}) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO account_owners (account_id, user_id, set_by, note, set_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(account_id) DO UPDATE SET user_id = excluded.user_id, set_by = excluded.set_by,
+         note = excluded.note, set_at = excluded.set_at`
+    ).bind(accountId, userId, setBy, note, new Date().toISOString()).run();
+    return true;
+  } catch (err) {
+    if (missingSchema(err)) return false;
+    throw err;
+  }
+}
+
+// Whether a role change or removal of `target` is the caller's to make.
+// Answers an error code or null.
+async function ownerRefusal(env, { accountId, callerId, targetId, targetRole, removing = false, toRole = null }) {
+  const owner = await accountOwnerId(env, accountId);
+  if (targetId === owner && (removing || (toRole && toRole !== "admin"))) {
+    return removing ? "cannot_remove_owner" : "owner_cannot_be_demoted";
+  }
+  const touchesAdmin = targetRole === "admin" && (removing || (toRole && toRole !== "admin"));
+  if (touchesAdmin && callerId !== owner && targetId !== callerId) return "owner_only";
+  return null;
+}
+
+app.post("/api/account/owner", requireRole("admin"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  if (await accountOwnerId(c.env, accountId) !== userId) return c.json({ error: "owner_only" }, 403);
+  const to = String(b.userId || "");
+  if (to === userId) return c.json({ ok: true, changed: false });
+  const seat = await c.env.DB.prepare(
+    `SELECT role FROM memberships WHERE account_id = ? AND user_id = ?`).bind(accountId, to).first();
+  if (!seat) return c.json({ error: "not_found" }, 404);
+  if (seat.role !== "admin") return c.json({ error: "not_an_admin" }, 409);
+  if (!(await setAccountOwner(c.env, accountId, to, { setBy: userId, note: "handed on by the owner" }))) {
+    return c.json({ error: "migration_needed", migration: "100_account_owners" }, 503);
+  }
+  const names = await c.env.DB.prepare(`SELECT id, name FROM users WHERE id IN (?, ?)`).bind(userId, to).all();
+  const nm = (id) => (names.results || []).find((r) => r.id === id)?.name || "Somebody";
+  await logActivity(c.env, accountId, userId, "owner_changed", `${nm(userId)} made ${nm(to)} the account owner`);
+  await logEvent(c.env, accountId, userId, "account.owner_changed", accountId, { from: userId, to });
+  return c.json({ ok: true, changed: true, ownerId: to });
+});
+
+app.patch("/api/platform/accounts/:id/owner", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  const accountId = c.req.param("id");
+  const b = await c.req.json().catch(() => ({}));
+  const reason = String(b.reason || "").trim().slice(0, 300);
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+  const to = String(b.userId || "");
+  const seat = await c.env.DB.prepare(
+    `SELECT role FROM memberships WHERE account_id = ? AND user_id = ?`).bind(accountId, to).first();
+  if (!seat) return c.json({ error: "not_on_this_account" }, 404);
+  if (seat.role !== "admin") return c.json({ error: "not_an_admin" }, 409);
+  const from = await accountOwnerId(c.env, accountId);
+  if (!(await setAccountOwner(c.env, accountId, to, { setBy: staff.userId, note: reason }))) {
+    return c.json({ error: "migration_needed", migration: "100_account_owners" }, 503);
+  }
+  const who = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(to).first();
+  await auditPlatform(c.env, staff, accountId, "owner_changed",
+    `${staff.name} made ${who?.name || "a user"} the account owner: ${reason}`, { from, to, reason });
+  return c.json({ ok: true, ownerId: to, from });
+});
+
 app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   const userId = c.req.param("userId");
   const b = await c.req.json(); // { name, email, phone, role, subId }
+  // 100. Only the owner demotes another admin, nobody demotes the owner, and
+  // with the owner always an admin the account can never reach zero admins
+  // through here -- which it could before.
+  if (b.role != null) {
+    const cur = await c.env.DB.prepare(
+      `SELECT role FROM memberships WHERE user_id = ? AND account_id = ?`).bind(userId, accountId).first();
+    const refused = cur && await ownerRefusal(c.env, { accountId, callerId: c.get("auth").userId,
+      targetId: userId, targetRole: cur.role, toRole: b.role });
+    if (refused) return c.json({ error: refused }, refused === "owner_only" ? 403 : 409);
+  }
   if (b.name != null || b.email != null || b.phone != null) {
     await c.env.DB.prepare(`UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), phone = COALESCE(?, phone) WHERE id = ?`)
       .bind(b.name ?? null, b.email ?? null, b.phone ?? null, userId).run();
@@ -6583,6 +6696,12 @@ app.delete("/api/account-users/:userId", async (c) => {
     `SELECT id, role FROM memberships WHERE user_id = ? AND account_id = ?`
   ).bind(target, accountId).first();
   if (!seat) return c.json({ error: "not_found" }, 404);
+  // 100. The owner cannot be removed, and only the owner removes an admin.
+  if (!leavingOwnSeat) {
+    const refused = await ownerRefusal(c.env, { accountId, callerId: auth.userId, targetId: target,
+      targetRole: seat.role, removing: true });
+    if (refused) return c.json({ error: refused }, refused === "owner_only" ? 403 : 409);
+  }
 
   await c.env.DB.prepare(`DELETE FROM memberships WHERE user_id = ? AND account_id = ?`)
     .bind(target, accountId).run();
@@ -6633,6 +6752,8 @@ app.get("/api/account", async (c) => {
     // raised. NULL and 0 are both off, read as one answer here so the screen
     // does not have to know there are two.
     autoTurnaround: !!a.auto_turnaround,
+    // 100. Who owns the account: the admin nobody else can remove or demote.
+    ownerId: await accountOwnerId(c.env, accountId).catch(() => null),
     user: user ? { id: user.id, name: user.name, email: user.email, phone: user.phone, notify: notifyOf(user) } : null,
   });
 });
@@ -9768,6 +9889,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\baccount_owners\b/i.test(m)) return "100_account_owners";
   if (/\bbusiness_links\b/i.test(m)) return "099_business_links";
   if (/\binspection_items\b/i.test(m)) return "096_inspection_items";
   if (/\bitem_key\b/i.test(m) && /inspection_photos|no such column|has no column/i.test(m)) return "097_item_photos";
@@ -26062,6 +26184,22 @@ app.get("/api/platform/bootstrap", async (c) => {
     return unitPricing(a.kind, pricingRows(portfolios[a.id] || [], estimates[a.id] || null).rows).monthlyCents;
   };
 
+  // 100. Each account's owner, by the same rule accountOwnerId answers with:
+  // the recorded owner while still an admin, else the earliest admin.
+  const ownerOf = {};
+  try {
+    const { results: or } = await c.env.DB.prepare(
+      `SELECT ao.account_id, ao.user_id FROM account_owners ao
+         JOIN memberships m ON m.account_id = ao.account_id AND m.user_id = ao.user_id AND m.role = 'admin'`).all();
+    for (const r of or || []) ownerOf[r.account_id] = r.user_id;
+  } catch (err) { if (!missingSchema(err)) console.warn("[platform] owners unavailable:", err?.message || err); }
+  try {
+    const { results: fa } = await c.env.DB.prepare(
+      `SELECT account_id, user_id FROM memberships WHERE role = 'admin'
+        ORDER BY account_id, COALESCE(created_at, ''), rowid`).all();
+    for (const r of fa || []) if (!ownerOf[r.account_id]) ownerOf[r.account_id] = r.user_id;
+  } catch (err) { console.warn("[platform] first admins unavailable:", err?.message || err); }
+
   // 099. Who is linked to whom, and which side Stripe is discounting.
   const linkOf = {};
   try {
@@ -26091,6 +26229,7 @@ app.get("/api/platform/bootstrap", async (c) => {
       subscriptionStatus: a.subscription_status, currentPeriodEnd: a.current_period_end,
       createdAt: (a.created_at || "").slice(0, 10),
       unitMonthlyCents: unitMonthly(a),
+      ownerUserId: ownerOf[a.id] || null,
       linkedAccountId: linkOf[a.id]?.otherId || null,
       linkedDiscountPct: linkOf[a.id]?.discounted ? LINKED_DISCOUNT_PERCENT : 0,
       status: "active",
@@ -26417,6 +26556,9 @@ async function createSecondBusiness(c, { from, ownerId, name, subdomain: rawSub,
   await env.DB.prepare(
     `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
   ).bind(uid(), ownerId, id).run();
+  // 100. The owner of the first business owns the second.
+  await setAccountOwner(env, id, ownerId, { setBy: staff ? staff.userId : ownerId,
+    note: `second business of ${from.name}` });
 
   const newCo = await ensureAccountCompany(env, id);
   if (newCo) {
@@ -26584,8 +26726,10 @@ async function linkedView(env, accountId) {
 app.get("/api/account/second-business", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   const a = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  const owner = await accountOwnerId(c.env, accountId);
+  const ownerName = owner ? (await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(owner).first())?.name : null;
   return c.json({ linked: await linkedView(c.env, accountId), allowed: secondKinds(a?.kind),
-    discountPercent: LINKED_DISCOUNT_PERCENT });
+    discountPercent: LINKED_DISCOUNT_PERCENT, isOwner: owner === c.get("auth").userId, ownerName: ownerName || null });
 });
 
 app.post("/api/account/second-business", requireRole("admin"), async (c) => {
@@ -26593,6 +26737,8 @@ app.post("/api/account/second-business", requireRole("admin"), async (c) => {
   const b = await c.req.json().catch(() => ({}));
   const from = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!from) return c.json({ error: "not_found" }, 404);
+  // 100. The owner's to make, because the owner of this business owns that one.
+  if (await accountOwnerId(c.env, accountId) !== userId) return c.json({ error: "owner_only" }, 403);
   const out = await createSecondBusiness(c, { from, ownerId: userId, name: b.name, subdomain: b.subdomain, kind: b.kind });
   return c.json(out.body, out.status);
 });
@@ -26605,12 +26751,11 @@ app.post("/api/platform/accounts/:id/second-business", async (c) => {
   if (denied) return denied;
   const from = await c.env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(c.req.param("id")).first();
   if (!from) return c.json({ error: "not_found" }, 404);
-  const admin = await c.env.DB.prepare(
-    `SELECT user_id FROM memberships WHERE account_id = ? AND role = 'admin' ORDER BY rowid LIMIT 1`
-  ).bind(from.id).first();
-  if (!admin) return c.json({ error: "no_admin_on_account" }, 409);
+  // 100. For the account's owner, who owns the second business too.
+  const ownerUser = await accountOwnerId(c.env, from.id);
+  if (!ownerUser) return c.json({ error: "no_admin_on_account" }, 409);
   const b = await c.req.json().catch(() => ({}));
-  const out = await createSecondBusiness(c, { from, ownerId: admin.user_id, name: b.name,
+  const out = await createSecondBusiness(c, { from, ownerId: ownerUser, name: b.name,
     subdomain: b.subdomain, kind: b.kind, staff });
   return c.json(out.body, out.status);
 });
@@ -26712,6 +26857,7 @@ app.post("/api/platform/accounts", async (c) => {
     await c.env.DB.prepare(
       `INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`
     ).bind(uid(), ownerId, id).run();
+    await setAccountOwner(c.env, id, ownerId, { setBy: staff.userId, note: "created in the console" });
 
     // And tell them, because this is the front door. An account set up for
     // a customer by SubSub used to arrive as nothing at all: a row, a
@@ -26743,6 +26889,10 @@ app.post("/api/platform/accounts", async (c) => {
     const invite = await inviteAccountUser(c, { accountId: id, user: full, role: u.role,
       invitedBy: null, welcome: !ownerEmail && i === 0 });
     userInvites.push({ name: u.name, email: u.email, role: u.role, invite });
+    // With no owner named, the first person listed runs the account and owns it.
+    if (!ownerEmail && i === 0) {
+      await setAccountOwner(c.env, id, userId, { setBy: staff.userId, note: "created in the console" });
+    }
   }
 
   if (plan === "scale") {
@@ -27515,6 +27665,10 @@ app.patch("/api/platform/accounts/:id/users/:userId", async (c) => {
   // refuses on the customer side: an account with nobody who can administer
   // it cannot get itself back, and this route is the only thing that could
   // undo it. Refusing here is what keeps that true.
+  // 100. The owner is not demoted here either: hand ownership on first.
+  if (m.role === "admin" && role !== "admin" && await accountOwnerId(c.env, accountId) === userId) {
+    return c.json({ error: "owner_cannot_be_demoted" }, 409);
+  }
   if (m.role === "admin" && role !== "admin") {
     const others = await c.env.DB.prepare(
       `SELECT COUNT(*) AS n FROM memberships

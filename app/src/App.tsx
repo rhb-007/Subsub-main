@@ -39,6 +39,7 @@ import {
   Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, Circle, Minus,
   // Aliased: Map is the JavaScript built-in, which this file uses constantly.
   Map as MapIcon,
+  Crown,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -4217,10 +4218,29 @@ export default function SubSub() {
     return r;
   };
 
+  // 100. Who owns this account: one admin, who alone removes or demotes the
+  // other admins and hands ownership on. Read off the users route, which
+  // already works it out, so the screen and the server cannot disagree. Null
+  // until it answers, and the server refuses whatever the screen offers wrongly.
+  const [accountOwner, setAccountOwner] = useState(null);
+  const reloadOwner = () => api.listAccountUsers()
+    .then((rs) => setAccountOwner((rs || []).find((r) => r.isOwner)?.id || null))
+    .catch(() => {});
+  useEffect(() => {
+    setAccountOwner(null);
+    if (canManageUsers && account?.id) reloadOwner();
+  }, [account?.id, canManageUsers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const handOwnership = async (userId) => {
+    await api.setAccountOwner(userId);
+    setAccountOwner(userId);
+  };
+
   // Removing someone from an account drops the membership, not the person —
-  // they may still be a contractor or admin elsewhere.
-  const removeUser = (id) => {
-    persist("removeAccountUser", api.removeAccountUser(id));
+  // they may still be a contractor or admin elsewhere. Awaited, so a refusal
+  // (the owner, or an admin only the owner may remove) stays on the screen
+  // instead of the row vanishing until the next reload.
+  const removeUser = async (id) => {
+    await api.removeAccountUser(id);
     setMemberships((ms) => ms.filter((m) => !(m.userId === id && m.accountId === account.id)));
   };
   const updateUser = (u) => {
@@ -6030,6 +6050,10 @@ export default function SubSub() {
           onSetUserRole={async (accountId, userId, role) => {
             await platformWrite(() => api.platform.setUserRole(accountId, userId, role),
               "Could not change that role.");
+          }}
+          onSetOwner={async (accountId, userId, reason) => {
+            await platformWrite(() => api.platform.setOwner(accountId, userId, reason),
+              "Could not change the owner.");
           }}
           onPatchAccount={async (id, patch) => {
             await platformWrite(() => api.platform.patchAccount(id, patch),
@@ -8224,6 +8248,7 @@ export default function SubSub() {
           cancelBusy={cancelBusy}
           billingBusy={billingBusy} billingErr={billingErr}
           onAddUser={addUser} onRemoveUser={removeUser} onEditUser={setEditUser}
+          ownerId={accountOwner} onHandOwnership={handOwnership}
           onSetMyAvatar={setMyAvatar} added={addedUser} onDismissAdded={() => setAddedUser(null)}
           openPane={openPane}
           payoutsLanded={payoutsLanded} onPayoutsHandled={() => setPayoutsLanded(false)}
@@ -8800,7 +8825,10 @@ export default function SubSub() {
       {editUser && <Modal onClose={() => setEditUser(null)}>
         <UserForm subs={subs} properties={accountProperties} jobs={jobs} accountKind={kindOf(account)}
           existing={editUser} isSelf={editUser.id === currentUserId}
-          canChangeRole={canManageUsers && editUser.id !== currentUserId}
+          canChangeRole={canManageUsers && editUser.id !== currentUserId && editUser.id !== accountOwner
+            && !(editUser.role === "admin" && accountOwner && accountOwner !== currentUserId)}
+          lockedWhy={editUser.id === accountOwner ? "owner"
+            : editUser.role === "admin" && accountOwner && accountOwner !== currentUserId ? "admin" : null}
           onSetAvatar={canManageUsers || editUser.id === currentUserId ? setUserAvatar : null}
           onSubmit={updateUser} onCancel={() => setEditUser(null)} /></Modal>}
       {recruitQr && (
@@ -10041,7 +10069,7 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 
 function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   accounts, users, memberships, companies, engagements,
-  jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onImpersonate, onSignOut,
+  jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onSetOwner, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
   onSetEngagedAs, onAddSecondBusiness,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth, onIntegrationHealth }) {
@@ -10054,6 +10082,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   // console-wide banner is at the top of the page, nowhere near it -- the same
   // thing the password reset already records about itself.
   const [roleErr, setRoleErr] = useState("");
+  // 100. Handing an account's ownership on from the console: who, and why.
+  const [ownerFor, setOwnerFor] = useState(null);
   const [newAccount, setNewAccount] = useState(null);   // form data while open
   // What creating it sent, and to whom. Closing the form on success said
   // nothing, so "did the owner get an email" was a trip to the mail log.
@@ -11162,7 +11192,9 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                 return u ? (
                   <div key={m.userId} className="pf-line">
                     <span className="user-avatar">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
-                    <span className="pf-line-main"><b>{u.name}</b><span className="pf-sub">{u.email}</span></span>
+                    <span className="pf-line-main"><b>{u.name}</b>
+                      {open.a.ownerUserId === u.id && <span className="owner-badge">Owner</span>}
+                      <span className="pf-sub">{u.email}</span></span>
                     {/* THE ROLE IS A CONTROL, not a badge. There was no way
                         to change one anywhere -- not here, and not in the
                         customer's own app without already being an admin --
@@ -11193,12 +11225,19 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                         catch (err) {
                           setRoleErr(err?.body?.error === "last_admin"
                             ? `${u.name} is the only Admin on this account. Make somebody else an Admin first.`
-                            : "Could not change that role.");
+                            : err?.body?.error === "owner_cannot_be_demoted"
+                              ? `${u.name} owns this account. Make another admin the owner first.`
+                              : "Could not change that role.");
                         }
                       }}>
                       <option value="admin">Admin</option>
                       <option value="pm">{roleLabelIn(kindOf(open.a), "pm")}</option>
                     </select>
+                    )}
+                    {isSuper && onSetOwner && m.role === "admin" && open.a.ownerUserId !== u.id && (
+                      <button className="pf-mini" onClick={() => { setRoleErr(""); setOwnerFor({ userId: u.id, name: u.name, accountId: open.a.id, reason: "" }); }}>
+                        <Crown size={12} /> Make owner
+                      </button>
                     )}
                     <button className="pf-mini" onClick={() => { setResetErr(""); setResetLink(null); setResetFor({ userId: u.id, name: u.name, email: u.email, accountId: open.a.id }); }}>
                       <Key size={12} /> Reset password
@@ -11206,6 +11245,23 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                   </div>
                 ) : null;
               })}
+              {ownerFor && ownerFor.accountId === open.a.id && (
+                <div className="pf-adduser">
+                  <span className="pf-forced">Make {ownerFor.name} the owner. Both stay admins; the owner is the one who removes or demotes admins.</span>
+                  <input placeholder="Why (recorded)" value={ownerFor.reason}
+                    onChange={(e) => setOwnerFor({ ...ownerFor, reason: e.target.value })} />
+                  <button className="btn-solid small" disabled={!ownerFor.reason.trim()}
+                    onClick={async () => {
+                      setRoleErr("");
+                      try { await onSetOwner(ownerFor.accountId, ownerFor.userId, ownerFor.reason.trim()); setOwnerFor(null); }
+                      catch (err) {
+                        setRoleErr(err?.body?.error === "migration_needed"
+                          ? "Paste 100_account_owners first." : "Could not change the owner.");
+                      }
+                    }}>Make owner</button>
+                  <button className="pf-mini" onClick={() => setOwnerFor(null)}>Cancel</button>
+                </div>
+              )}
               {roleErr && <p className="pf-host-err">{roleErr}</p>}
             </div>
 
@@ -13397,6 +13453,38 @@ function CompanyEditFields({ co, onSave, onCancel }) {
 // confirmation is for what cannot be undone. What this owes them instead is
 // naming who, and saying what actually goes -- because "remove user" does not
 // say whether their reports, their buildings or their history go with them.
+// 100. Handing ownership on. Not ConfirmRemove: nothing is taken away from
+// anybody's access, and both stay admins -- what moves is who may remove or
+// demote the others, which is worth saying before the press because it
+// cannot be taken back by the person pressing it.
+function HandOwnership({ person, onConfirm, onCancel }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  return (
+    <Modal onClose={onCancel}>
+      <div className="form">
+        <h2><Crown size={18} style={{ verticalAlign: -3, marginRight: 8 }} />{tt("Make {name} the account owner?", { name: person.name })}</h2>
+        <p className="form-sub">{tt("You both stay admins. {name} will be the one who can remove or demote other admins, add a second business, and hand ownership on. You can't take it back yourself: they would have to hand it back.", { name: person.name })}</p>
+        {err && <div className="form-err">{err}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost" type="button" onClick={onCancel}>{tt("Cancel")}</button>
+          <button className="btn-solid" type="button" disabled={busy} onClick={async () => {
+            setBusy(true); setErr("");
+            try { await onConfirm(); }
+            catch (e) {
+              setErr(e?.body?.error === "migration_needed"
+                ? tt("This needs a database update first (100_account_owners).")
+                : e?.body?.error === "not_an_admin" ? tt("Only an admin can be the owner. Make them an admin first.")
+                : tt("That did not go through. Try again in a moment."));
+              setBusy(false);
+            }
+          }}>{busy ? tt("Saving...") : tt("Make owner")}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, onCancel, explain = null }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -24034,7 +24122,13 @@ function SecondBusinessPanel({ accountName, subdomain, onOpen }) {
         {!buildsForHire(allowed[0]) && <> {accountName}{tt(", so you can send its repairs your own way.")}</>}
         {" "}{tt("You sign in once and switch between them. The cheaper of the two is")} {pct}% {tt("off while both are on Scale.")}
       </p>
-      {!form ? (
+      {data.isOwner === false ? (
+        // 100. The owner of this business owns the second one, so adding it
+        // is theirs. Said rather than offered as a press the route refuses.
+        <p className="cov-hint">{data.ownerName
+          ? tt("Only the account owner, {name}, can add a second business.", { name: data.ownerName })
+          : tt("Only the account owner can add a second business.")}</p>
+      ) : !form ? (
         <button type="button" className="btn-solid" onClick={open}><Plus size={14} /> {tt("Add a second business")}</button>
       ) : (
         <div className="sb-form">
@@ -24043,7 +24137,7 @@ function SecondBusinessPanel({ accountName, subdomain, onOpen }) {
               {allowed.map((k) => <option key={k} value={k}>{tt(ACCOUNT_KINDS[k]?.label || k)}</option>)}
             </select></label>
           <label className="fld"><span>{tt("Business name")}</span>
-            <input value={form.name} placeholder={tt("Rudd Property Management")}
+            <input value={form.name} placeholder="Rudd Property Management"
               onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           <label className="fld"><span>{tt("Address")}</span>
             <input value={form.subdomain}
@@ -24116,7 +24210,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
   added = null, onDismissAdded, openPane = null,
   payoutsLanded = false, onPayoutsHandled, gcalLanded = null,
-  themeCtl = null, langCtl = null, langEligible = false, onOpenLinked = null }) {
+  themeCtl = null, langCtl = null, langEligible = false, onOpenLinked = null,
+  ownerId = null, onHandOwnership = null }) {
   // Only set when the in-app card form could not be drawn at all.
   const [billingFellBack, setBillingFellBack] = useState(false);
   // accountKind is already a prop; the user form needs it to know which
@@ -24163,6 +24258,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // Who is about to be removed, so the row does not vanish before anybody
   // has agreed to it.
   const [removing, setRemoving] = useState(null);
+  // 100. The admin about to be made the account owner, asked first.
+  const [handing, setHanding] = useState(null);
+  const iOwn = !!ownerId && ownerId === currentUserId;
+  const ownerName = users.find((u) => u.id === ownerId)?.name || null;
   const brandingOn = PLANS[plan].branding;
   const [pane, setPane] = useState("profile");
   // Somewhere else asked for a particular pane -- the set-up checklist
@@ -24873,8 +24972,15 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             + "erased. You can invite them back at any time."
           }
           onConfirm={async () => { await onRemoveUser(removing.id); setRemoving(null); }}
+          explain={(e) => ({
+            owner_only: "Only the account owner can remove another admin.",
+            cannot_remove_owner: "This is the account owner. Hand ownership to another admin first.",
+          })[e?.body?.error] || null}
           onCancel={() => setRemoving(null)} />
       )}
+      {handing && <HandOwnership person={handing}
+        onConfirm={async () => { await onHandOwnership(handing.id); setHanding(null); }}
+        onCancel={() => setHanding(null)} />}
 
       {/* Integrations: everything that runs on the account's own credentials,
           each with a switch the receivers enforce, and the wiring for them
@@ -24958,6 +25064,13 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 }} onCancel={() => setAdding(false)} />
             </div>
           )}
+          {ownerName && (
+            <p className="owner-note">
+              <Crown size={13} />{" "}
+              {iOwn ? tt("You own this account.") : tt("{name} owns this account.", { name: ownerName })}{" "}
+              {tt("Every admin can manage billing and users. Only the owner can remove or demote another admin, add a second business, or hand ownership on.")}
+            </p>
+          )}
           <div className="user-list">
             {staffSeats.map((u) => {
               const linked = u.subId && subs.find((x) => x.id === u.subId);
@@ -24968,6 +25081,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     <div className="user-row-head">
                       <h4>{u.name}</h4>
                       <span className={`role-badge r-${u.role}`}>{roleLabelIn(accountKind, u.role)}</span>
+                      {u.id === ownerId && <span className="owner-badge">{tt("Owner")}</span>}
                       {u.id === currentUserId && <span className="you-badge">{tt("you")}</span>}
                     </div>
                     <p className="user-row-sub">{u.email}{linked ? ` · ${linked.company}` : ""}
@@ -24996,7 +25110,14 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                         onClick={() => onLoginAs(u.id)}><Eye size={13} />{" "}{tt("View as")}</button>
                     )}
                     <button className="edit-btn" onClick={() => onEditUser(u)}><Pencil size={13} />{" "}{tt("Edit")}</button>
-                    {u.id !== currentUserId && (
+                    {iOwn && u.role === "admin" && u.id !== currentUserId && onHandOwnership && (
+                      <button className="edit-btn" onClick={() => setHanding(u)}><Crown size={13} />{" "}{tt("Make owner")}</button>
+                    )}
+                    {/* 100. The owner is never removed, and only the owner
+                        removes another admin -- so the trash is not drawn
+                        where the server would refuse it. */}
+                    {u.id !== currentUserId && u.id !== ownerId
+                      && !(u.role === "admin" && ownerId && !iOwn) && (
                       <button className="icon-x" onClick={() => setRemoving(u)} title={tt("Remove user")}><Trash2 size={13} /></button>
                     )}
                   </div>
@@ -35949,7 +36070,7 @@ function MyAvailability({ sub, jobs, onToggleCrewDay, onToggleCrewAvailable, onG
 }
 
 // ---- Create / edit user -------------------------------------------------
-function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, properties = [], jobs = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar, preset = null }) {
+function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = true, lockedWhy = null, properties = [], jobs = [], accountKind = DEFAULT_ACCOUNT_KIND, onSetAvatar, preset = null }) {
   // `preset` is how "Add an owner" on a building arrives here: the role and
   // that one building, already chosen, so the form opens on the person's name
   // rather than on two answers they have already given by pressing the button.
@@ -36010,7 +36131,10 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
       <div className="fld">{tt("Role")}{roleLocked ? (
           <div className="role-locked">
             <span className={`role-badge r-${f.role}`}>{roleLabelIn(accountKind, f.role)}</span>
-            <span className="rl-note">{isSelf ? tt("You can't change your own role.") : tt("Only an admin can change roles.")}</span>
+            <span className="rl-note">{isSelf ? tt("You can't change your own role.")
+              : lockedWhy === "owner" ? tt("This is the account owner. Hand ownership to another admin first.")
+              : lockedWhy === "admin" ? tt("Only the account owner can change another admin's role.")
+              : tt("Only an admin can change roles.")}</span>
           </div>
         ) : (
           <div className="role-pick">
@@ -44765,6 +44889,8 @@ p.fld-note{margin:6px 0 0}
 .r-admin{background:#eae4f2;color:#5b3f7a}
 .r-pm{background:#e9f0f6;color:#2b5c85}
 .r-contractor{background:#eaf3ee;color:#1f6b4a}
+.owner-badge{font-size:10px;font-weight:700;background:var(--brand);color:#fff;padding:2px 7px;border-radius:20px}
+.owner-note{font-size:13px;color:var(--ink-soft);margin:0 0 12px;line-height:1.45}
 .you-badge{font-size:10px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);padding:2px 7px;border-radius:20px}
 .role-pick{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .role-pick button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:11px 13px;cursor:pointer;text-align:left}
