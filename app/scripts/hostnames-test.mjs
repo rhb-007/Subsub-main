@@ -62,6 +62,7 @@ globalThis.fetch = async (url, init = {}) => {
       return json({ success: true, result: null });
     }
     if (!world.domains[name]) return json({ success: false, errors: [{ message: "not found" }] }, 404);
+    if (m === "PATCH" && world.refusePatch) return json({ success: false, errors: [{ message: "nope" }] }, 400);
     if (m === "PATCH") {
       world.retried = (world.retried || 0) + 1;
       // Pages looks again and finds the CNAME this time.
@@ -240,6 +241,13 @@ console.log("a stuck validation and a wrong record");
   let r2 = await provisionHostname(env, "rudd");
   eq("Pages is asked to look again", world.retried, 1);
   eq("and the stale error is gone", { status: r2.status, error: r2.error }, { status: "pending", error: null });
+
+  // A refused re-validation is said rather than swallowed.
+  world = { dns: [], domains: {}, refusePatch: true };
+  world.domains["rudd.subsub.work"] = { name: "rudd.subsub.work", status: "pending",
+    validation_data: { error_message: "CNAME record not set" } };
+  r2 = await provisionHostname(env, "rudd");
+  eq("a refused retry is named", /CNAME record not set \(asking Pages to check again was refused: nope\)/.test(r2.error || ""), true);
 
   world = { dns: [{ id: "recours", name: "rudd.subsub.work", type: "CNAME", content: "subsub-unclaimed.workers.dev",
     proxied: true, comment: "SubSub branded hostname — managed automatically, do not edit" }], domains: {} };

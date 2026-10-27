@@ -44,6 +44,8 @@ console.log("\n-- the question it asks --");
   const routeWith = (api) => ({ API: { fetch: async (req) => { asked.push(req.url); return api(req); } } });
   ck("a live address passes through to the app", await decide(new Request("https://outerhome.subsub.work/"), routeEnv) === "pass");
   ck("a Basic one gets the page", await decide(new Request("https://cascadeexteriors.subsub.work/"), routeEnv) === "page");
+  ck("a validation path on an unclaimed name passes through",
+    await decide(new Request("https://cascadeexteriors.subsub.work/.well-known/acme-challenge/abc"), routeEnv) === "pass");
   ck("so does a name nobody has", await decide(new Request("https://nobody-here.subsub.work/x"), routeEnv) === "page");
   asked.length = 0;
   ck("app passes without asking anybody",

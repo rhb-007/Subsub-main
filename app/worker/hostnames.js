@@ -294,6 +294,9 @@ export async function provisionHostname(env, subdomain) {
       `/accounts/${cfg.accountId}/pages/projects/${cfg.project}/domains/${encodeURIComponent(host)}`,
       { method: "PATCH", body: "{}" });
     if (retried.ok) return checkHostname(env, subdomain);
+    // A refused retry is said, not swallowed: otherwise the panel shows the
+    // stale "CNAME record not set" and nothing says the re-check never ran.
+    return { ...now, error: `${now.error || "Not active yet"} (asking Pages to check again was refused: ${errText(retried)})` };
   }
   return now;
 }

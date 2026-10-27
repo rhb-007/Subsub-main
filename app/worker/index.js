@@ -21635,7 +21635,7 @@ async function hostnameSweep(env) {
   if (!hostnameConfig(env)) return { skipped: "cloudflare_not_configured" };
 
   const { results } = await env.DB.prepare(
-    `SELECT id, subdomain, plan, hostname_status FROM accounts
+    `SELECT id, subdomain, plan, hostname_status, hostname_error FROM accounts
       WHERE (plan = 'scale' AND (hostname_status IS NULL OR hostname_status IN ('pending','failed')))
          OR (plan != 'scale' AND hostname_status IN ('active','pending','failed'))`
   ).all();
@@ -21643,7 +21643,12 @@ async function hostnameSweep(env) {
   const changed = [];
   for (const a of results) {
     let res;
-    if (a.plan === "scale" && a.hostname_status === "pending") {
+    // PENDING WITH AN ERROR ON IT IS NOT WAITING, IT IS STUCK. Pages checks
+    // the CNAME when the domain is added and does not always look again, so
+    // a domain registered before its record sat on "CNAME record not set"
+    // for ever while this only asked. Those go through provisioning, which
+    // makes sure the record is right and asks Pages to re-validate.
+    if (a.plan === "scale" && a.hostname_status === "pending" && !a.hostname_error) {
       // Already registered and merely waiting on a certificate: ask, do not
       // re-register. Re-posting a pending hostname every few minutes is how
       // you find Cloudflare's rate limit.

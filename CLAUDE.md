@@ -15698,6 +15698,24 @@ refactor.
   discount line, and says *Open it from the menu under your name* in place of
   its Open button. `test:linkedui` (20); dropping the menu entry fails one.
 
+- **A BRANDED ADDRESS STUCK ON "CNAME RECORD NOT SET" IS RETRIED EVERY TEN
+  MINUTES, NOT ONLY WHEN SOMEBODY PRESSES THE BUTTON.** Reported a second
+  time, on `ruddproperties.subsub.work`. The earlier fix made *Set it up now*
+  check the record and ask Pages to re-validate. But re-validation runs in the
+  background, so the check straight after it often still reads the old error,
+  and the account is stored as pending with that error. The sweep only ever
+  **asked** about a pending address, so it stayed stuck.
+  - **A pending address with an error on it goes through provisioning in the
+    sweep** (record checked, Pages asked to re-validate). One with no error is
+    only asked, as before, so Cloudflare's rate limit is untouched.
+  - **A refused re-validation is said** after the error, rather than leaving
+    the stale one on the panel.
+  - **The unclaimed Worker passes `/.well-known/` through**, so certificate and
+    domain validation never meet the "under construction" page.
+  `test:hostnamesweep` (4), `test:hostnames`, `test:unclaimed`; each change has
+  a mutation that fails. **Not verified:** the live record, which this
+  environment cannot reach.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

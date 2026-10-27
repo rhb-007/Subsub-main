@@ -23,6 +23,10 @@ import { hostDecision, unclaimedPage } from "./shared/unclaimed.js";
 
 export async function decide(request, env) {
   const url = new URL(request.url);
+  // Certificate and domain validation fetch these paths. They are never a
+  // page for a person, and answering one with the unclaimed page could stop
+  // a branded address from ever validating.
+  if (url.pathname.startsWith("/.well-known/")) return "pass";
   const d = hostDecision(url.hostname, env.APP_DOMAIN || "subsub.work", NEVER_PROVISION);
   if (d.pass) return "pass";
   try {
