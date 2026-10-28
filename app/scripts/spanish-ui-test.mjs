@@ -140,9 +140,9 @@ try {
     tabs: [...document.querySelectorAll(".ss-main .seg-tabs button")].map((b) => b.innerText.trim()),
   }));
   t.ck("My account is headed in Spanish", /Mi cuenta/.test(acct.h1 || ""), JSON.stringify(acct));
-  t.ck("its tabs are Spanish", ["Perfil", "Configuración", "Empresa", "Pasaporte", "Usuarios", "Suscripción"]
-    .every((x) => acct.tabs.includes(x)) && acct.tabs.includes("Paquete de cumplimiento"), JSON.stringify(acct.tabs));
-  t.ck("and no English tab is left", !acct.tabs.some((x) => /^(Profile|Settings|Company|Branding|Compliance pack|Passport|Users|Subscription)$/.test(x)),
+  t.ck("its tabs are Spanish", ["Perfil", "Configuración", "Empresa", "Paquete y Pasaporte", "Usuarios", "Suscripción"]
+    .every((x) => acct.tabs.includes(x)), JSON.stringify(acct.tabs));
+  t.ck("and no English tab is left", !acct.tabs.some((x) => /^(Profile|Settings|Company|Branding|Pack & Passport|Compliance pack|Passport|Users|Subscription)$/.test(x)),
     JSON.stringify(acct.tabs));
   const tabText = async (label) => {
     await page.evaluate((l) => [...document.querySelectorAll(".ss-main .seg-tabs button")]

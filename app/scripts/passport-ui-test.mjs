@@ -499,8 +499,12 @@ try {
     await page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^(My account|Account)$/.test(b.innerText.trim()))?.click());
     await wait(900);
     const tabs = await page.evaluate(() => [...document.querySelectorAll(".pane-tabs button, .acc-tabs button, .tabs button")].map((b) => b.innerText.trim()));
+    // The Passport is the second half of the Pack & Passport tab.
+    await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")]
+      .find((x) => x.innerText.trim() === "Pack & Passport")?.click());
+    await wait(500);
     const hasTab = await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button")].find((x) => x.innerText.trim() === "Passport");
+      const b = [...document.querySelectorAll(".acct-subtabs button")].find((x) => x.innerText.trim() === "Passport");
       if (b) b.click();
       return !!b;
     });

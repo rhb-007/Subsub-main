@@ -24334,9 +24334,11 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     .concat(canManage ? [["company", "Company"]] : [])
     .concat(canManage ? [["branding", "Branding"]] : [])
     // Only an account that can be hired has paperwork of its own to keep.
-    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "Compliance pack"]] : [])
-    // 077. The page they hand out, beside the paperwork it is made from.
-    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["passport", "Passport"]] : [])
+    // The compliance pack and the Passport are ONE tab with two halves: the
+    // pack is the documents inside the Passport, and nine tabs ran off the
+    // right edge of an iPad. The pane ids stay "docs" and "passport", so every
+    // link that opens either half still lands on it.
+    .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "Pack & Passport"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
     // What runs on the account's own credentials: its API key, its CRM and
     // inspection-app webhooks. The hiring side only, which is who can mint a key.
@@ -24474,10 +24476,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         sub={[me.name, canManage ? brand.name : null, roleLabel]
           .filter(Boolean).join(" \u00b7 ")} />
       {panes.length > 1 && (
-        <div className="seg-tabs">
-          {panes.map(([id, l]) => (
-            <button key={id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>{tt(l)}</button>
-          ))}
+        <div className="seg-tabs acct-tabs">
+          {panes.map(([id, l]) => {
+            const on = pane === id || (id === "docs" && pane === "passport");
+            return <button key={id} className={on ? "on" : ""} onClick={() => setPane(id)}>{tt(l)}</button>;
+          })}
+        </div>
+      )}
+      {(pane === "docs" || pane === "passport") && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
+        <div className="seg-tabs sm acct-subtabs">
+          <button className={pane === "docs" ? "on" : ""} onClick={() => setPane("docs")}>{tt("Compliance pack")}</button>
+          <button className={pane === "passport" ? "on" : ""} onClick={() => setPane("passport")}>{tt("Passport")}</button>
         </div>
       )}
 
@@ -47949,6 +47958,10 @@ a.meas-dl{text-decoration:none}
 .uo-note{font-size:11.5px;color:var(--ink-soft);font-style:italic}
 .uo-date{font-size:11px;color:var(--ink-soft)}
 .seg-tabs.sm button{padding:7px 12px;font-size:12.5px}
+/* My account's tab row WRAPS rather than running off the right edge: a tab
+   cut off at the screen's edge is a tab nobody knows is there. */
+.seg-tabs.acct-tabs{flex-wrap:wrap;max-width:100%}
+.seg-tabs.acct-subtabs{margin-top:-6px}
 .seg-n{font-size:10.5px;font-weight:800;opacity:.6;margin-left:3px}
 
 /* filter bar: collapse/expand + sort */
@@ -49751,6 +49764,7 @@ iframe.dv-frame{display:block}
   /* job settings / docs on phones */
   .seg-tabs{width:100%}
   .seg-tabs button{flex:1;padding:9px 6px;font-size:12.5px}
+  .seg-tabs.acct-tabs button{flex:1 1 auto}
   .cov-preview{font-size:12px}
 
   /* contractor dashboard on phones */

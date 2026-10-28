@@ -15804,6 +15804,28 @@ refactor.
   `test:passportui` (93) pins the words; putting "Sign in to connect" back
   fails two assertions.
 
+- **MY ACCOUNT'S TABS WRAP INSIDE THE PAGE, AND THE COMPLIANCE PACK AND THE
+  PASSPORT ARE ONE TAB.** Reported from an iPad with the tab row boxed: *"UI
+  nav bleeds out to the right ... maybe combine compliance / passport"*. A
+  hireable admin had ten tabs in a `.seg-tabs` row that is `width:fit-content`
+  and never wraps, so *Subscription* was cut off at the screen's edge.
+  - **One tab, Pack & Passport, with two halves** (`.acct-subtabs`):
+    Compliance pack first, Passport one press away. The pack is the documents
+    inside the Passport, so they are one object to find. **The pane ids stay
+    `docs` and `passport`**, so the nav's Compliance pack entry, Manage on the
+    pack card and every `openPane` focus still land on the right half, and the
+    merged tab is lit for either.
+  - **The row wraps** (`.acct-tabs`, `flex-wrap:wrap`), so a tab that does not
+    fit goes to a second line instead of off the screen. Wrapping rather than
+    scrolling sideways, because a tab scrolled out of view is a tab nobody knows
+    is there.
+
+  `test:accttabs` (36) measures every tab's edges at 820, 1024, 1180 and 390px
+  and drives both halves. Removing the wrap fails four assertions, and splitting
+  the tab back into two fails six. `test:passportui`, `test:subhome` and
+  `test:spanishui` now open the halves through the merged tab. `test:subhome`
+  still has 3 failures and `test:spanishui` 1, all from before this change.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -292,6 +292,7 @@ export default {
   "Passport": "Pasaporte",
   "The page you hand to a GC": "La página que le muestra a un GC",
   "Compliance pack": "Paquete de cumplimiento",
+  "Pack & Passport": "Paquete y Pasaporte",
   "document": "documento",
   "outstanding.": "pendiente.",
   "reviews each one — you'll be cleared for work once all": "revisa cada uno; podrá trabajar cuando los",

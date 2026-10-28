@@ -909,8 +909,9 @@ try {
     // would pass whatever the tab said. test:embedplace covers the branding
     // tab on a Scale account, where the assertion can actually fail.
 
-    await page.evaluate(() => [...document.querySelectorAll("button")]
-      .find((b) => b.innerText.trim() === "Compliance pack")?.click());
+    // The documents are the first half of the Pack & Passport tab.
+    await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")]
+      .find((b) => b.innerText.trim() === "Pack & Passport")?.click());
     await wait(700);
     const dp = await page.evaluate(() => ({
       docs: !!document.querySelector(".mydocs"),
