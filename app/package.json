@@ -318,6 +318,7 @@
     "test:i18n": "node --no-warnings scripts/i18n-test.mjs",
     "test:spanishui": "node --no-warnings scripts/spanish-ui-test.mjs",
     "test:accttabs": "node --no-warnings scripts/acct-tabs-ui-test.mjs",
+    "test:ownlicense": "node --no-warnings scripts/own-license-test.mjs",
     "test:consent": "node --no-warnings scripts/consent-test.mjs",
     "test:unclaimed": "node scripts/unclaimed-test.mjs",
     "test:hostnamesweep": "node --no-warnings scripts/hostname-sweep-test.mjs"

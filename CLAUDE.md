@@ -15826,6 +15826,32 @@ refactor.
   `test:spanishui` now open the halves through the merged tab. `test:subhome`
   still has 3 failures and `test:spanishui` 1, all from before this change.
 
+- **AN ACCOUNT'S OWN LICENSE IS CHECKED WITH THE STATE WHEN IT IS SAVED, AND
+  THE ACCOUNT AND STAFF CAN CHECK IT AGAIN.** Asked for with a general
+  contractor's *Working as a subcontractor* form on screen: *"should verify this
+  online as it's added ... and let admin re check as well"*. The roster's Verify
+  button asked the state's register about a contractor somebody hires; the
+  account's own number was stored and never asked about.
+  - **`checkCompanyLicense`** is the one path: the company's own state (never
+    assumed, `state_required` without one, because a Washington lookup of an
+    Oregon number reads as a bad license), the same `verifyLicenseForState` and
+    `storeLicenseCheck` the roster uses, and no number clears the stored check.
+  - **`PATCH /api/my-company` checks when the license or the state changes**,
+    after the save and never failing it; `licenseVerify` on the reply says
+    whether it ran. **A changed number clears the old answer first**, or a
+    register that is down would leave the previous number's ACTIVE standing
+    under the new one, which is what `nextStoredCheck` keeps on a failure.
+    `myCompanyToJs` carries `licenseCheck`.
+  - **`POST /api/my-company/verify-license`** (admin or pm, 10 per 10 minutes)
+    is *Check now* under the field, which says what the register answered and
+    is disabled with *Save to check the new number* while an edit is unsaved.
+  - **The console**: `POST /api/platform/companies/:id/verify-license` (any
+    staff, audited) is *Re-check* beside State status in a company's window, and
+    a license or state edited from the console is checked the same way.
+
+  `test:ownlicense` (26) and `test:accttabs` (40). Dropping the clear-first
+  fails two assertions; dropping the check on save fails ten.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

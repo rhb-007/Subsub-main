@@ -1468,6 +1468,54 @@ function licenseTone(check) {
   return (check.status === "CHECK_FAILED" || check.status === "UNSUPPORTED_STATE") ? "s-unknown" : "s-bad";
 }
 
+// The account's OWN license, read against the state's register: the line
+// under License number on the Company tab. Saving a new number checks it
+// (PATCH /api/my-company does), and Re-check asks again. What it says comes
+// off the stored check, never off what was typed, so a number edited and not
+// yet saved says the check is about the saved one.
+function ownLicenseLine(check, savedLicense) {
+  if (!savedLicense) return null;
+  if (!check) return { tone: "s-unknown", text: tt("Not checked with the state yet. Save, or press Check now.") };
+  const when = check.checkedAt ? ` · ${tt("checked")} ${formatExpiry(String(check.checkedAt).slice(0, 10))}` : "";
+  if (check.found) {
+    const exp = check.expirationDate ? ` · ${tt("expires")} ${formatExpiry(String(check.expirationDate).slice(0, 10))}` : "";
+    return { tone: licenseTone(check), text: `${tt("State register")}: ${licenseBadge(check)}${exp}${when}` };
+  }
+  if (check.status === "UNSUPPORTED_STATE") return { tone: "s-unknown", text: tt("SubSub can't check licenses in this state yet.") };
+  if (check.status === "CHECK_FAILED") return { tone: "s-unknown", text: tt("The state register didn't answer. Try Check now in a few minutes.") };
+  return { tone: "s-bad", text: `${tt("Not found in the state register. Check the number and the state.")}${when}` };
+}
+
+function OwnLicenseCheck({ loaded, editing, onChecked }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const line = ownLicenseLine(loaded?.licenseCheck || null, loaded?.license);
+  if (!line) return null;
+  const press = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r = await api.verifyMyLicense();
+      onChecked(r);
+      if (r?.checkFailed) setMsg(tt("The state register didn't answer, so the earlier result is kept."));
+    } catch (e) {
+      const code = e?.body?.error;
+      setMsg(code === "state_required" ? tt("Pick the state your license is from, save, then check.")
+        : code === "slow_down" ? tt("That's a lot of checks. Try again in a few minutes.")
+        : licenseVerifyErrText(e));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="own-lic" role="status">
+      <span className={`lic-chip ${line.tone}`}><Shield size={12} /> {line.text}</span>
+      <button type="button" className="doc-review" onClick={press} disabled={busy || editing}
+        title={editing ? tt("Save the new number first") : undefined}>
+        {busy ? tt("Checking…") : tt("Check now")}</button>
+      {editing && <span className="fld-note">{tt("Save to check the new number.")}</span>}
+      {msg && <span className="lic-verify-msg warn">{msg}</span>}
+    </div>
+  );
+}
+
 // What an admin/PM must confirm, per document. From shared/doccheck.js, which
 // is the one list -- it was here and copied again in worker/mail.js, agreeing by
 // luck, and the copy stopped being survivable the moment the email had to name
@@ -6144,6 +6192,13 @@ export default function SubSub() {
             await platformWrite(() => api.platform.patchCompany(id, patch),
               "Could not save those changes.");
           }}
+          // Throws, unlike platformWrite: the button under State status names
+          // why a check did not run, beside the status it is about.
+          onVerifyCompanyLicense={async (id) => {
+            const r = await api.platform.verifyCompanyLicense(id);
+            try { setPlatform(await api.platform.bootstrap()); setPlatformAt(Date.now()); } catch { /* the check stands */ }
+            return r;
+          }}
           onDeleteCompany={async (id, confirmName) => {
             await platformWrite(() => api.platform.deleteCompany(id, confirmName),
               "Could not delete that company.");
@@ -10152,7 +10207,7 @@ const monthKey = (iso) => (iso || "").slice(0, 7);
 function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onSetOwner, onImpersonate, onSignOut,
-  onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany,
+  onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany, onVerifyCompanyLicense,
   onSetEngagedAs, onAddSecondBusiness,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth, onIntegrationHealth }) {
   const [screen, setScreen] = useState("dashboard");
@@ -11769,7 +11824,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                           <span>State status</span>
                           <span>{r.lic
                             ? <span className={`pf-status ${String(r.lic.status).toLowerCase() === "active" ? "active" : "suspended"}`}>{r.lic.status}</span>
-                            : <span className="pf-sub">not checked</span>}</span>
+                            : <span className="pf-sub">not checked</span>}
+                            {r.c.license && <ConsoleLicenseRecheck id={r.c.id} onVerify={onVerifyCompanyLicense} />}</span>
                         </div>
                         <div className="pfc-row">
                           <span>Engaged by</span>
@@ -13470,6 +13526,35 @@ function FeeTermsPanel({ accountId, canEdit }) {
         </>
       )}
     </div>
+  );
+}
+
+// Staff asking the state's register about a company's license again, from
+// the console's company window. The answer replaces State status when the
+// console reloads; a check that did not run says why beside the button.
+function ConsoleLicenseRecheck({ id, onVerify }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const press = async () => {
+    setBusy(true); setMsg("");
+    try {
+      const r = await onVerify(id);
+      setMsg(r?.checkFailed ? "The state register didn't answer; the earlier result is kept."
+        : r?.status === "UNSUPPORTED_STATE" ? "SubSub can't check licenses in this state yet."
+        : r?.found ? `Checked just now: ${licenseBadge(r)}.` : "Checked just now: not found in the state register.");
+    } catch (e) {
+      const code = e?.body?.error;
+      setMsg(code === "state_required" ? "No state on this company, so there is no register to ask. Add one with Edit details."
+        : code === "no_license_on_file" ? "No license number on file."
+        : code === "403" || e?.status === 403 ? "You do not have permission to do that."
+        : `The check didn't run (${code || e?.status || "no connection"}).`);
+    } finally { setBusy(false); }
+  };
+  return (
+    <span className="pf-recheck">
+      {" "}<button className="pf-mini" onClick={press} disabled={busy}>{busy ? "Checking…" : "Re-check"}</button>
+      {msg && <span className="pf-sub pf-recheck-msg" role="status">{" "}{msg}</span>}
+    </span>
   );
 }
 
@@ -23986,6 +24071,9 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
             <label className={`fld ${isLit("ubi") ? "lit" : ""}`}>{tt("UBI")}{" "}<span className="fld-note">{tt("optional")}</span>
               <input value={f.ubi} onChange={(e) => set("ubi", e.target.value)} placeholder="601 234 567" /></label>
           </div>
+          <OwnLicenseCheck loaded={loaded}
+            editing={(f.license || "") !== (loaded?.license || "") || (f.state || "") !== (loaded?.state || "")}
+            onChecked={(ck) => setLoaded((l) => ({ ...l, licenseCheck: ck }))} />
           <div className="fld-row">
             <label className="fld">{tt("City")}<input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
             <StateSelect value={f.state} onChange={(v) => set("state", v)} />
@@ -47962,6 +48050,11 @@ a.meas-dl{text-decoration:none}
    cut off at the screen's edge is a tab nobody knows is there. */
 .seg-tabs.acct-tabs{flex-wrap:wrap;max-width:100%}
 .seg-tabs.acct-subtabs{margin-top:-6px}
+/* The account's own license, as the state's register last answered. */
+.own-lic{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:-4px 0 14px}
+.own-lic .lic-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12.5px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
+.own-lic .lic-chip.s-active{background:#e6f2ea;border-color:#b7d6c1;color:#22573a}
+.own-lic .lic-chip.s-bad{background:#fbe9e6;border-color:#efc2ba;color:#9a3423}
 .seg-n{font-size:10.5px;font-weight:800;opacity:.6;margin-left:3px}
 
 /* filter bar: collapse/expand + sort */

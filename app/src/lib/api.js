@@ -617,6 +617,7 @@ export const api = {
   // crews are joined on the screen from what it holds.
   mapPoints: (of) => request(`/map/points?of=${of === "buildings" ? "buildings" : "jobs"}`),
   myCompany: () => request("/my-company"),
+  verifyMyLicense: () => request("/my-company/verify-license", { method: "POST" }),
   // 075. This seat's referral code, link, who it brought in and what that
   // earned; and sending the pre-written invite. Texts are only COUNTED here --
   // the browser opens the sender's own messages app, SubSub never texts.
@@ -1062,6 +1063,8 @@ export const api = {
     createCompany: (data) => request("/platform/companies", { method: "POST", body: JSON.stringify(data) }),
     patchCompany: (id, patch) =>
       request(`/platform/companies/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    verifyCompanyLicense: (id) =>
+      request(`/platform/companies/${encodeURIComponent(id)}/verify-license`, { method: "POST" }),
     deleteCompany: (id, confirmName) =>
       request(`/platform/companies/${encodeURIComponent(id)}`,
         { method: "DELETE", body: JSON.stringify({ confirmName }) }),

@@ -32,10 +32,16 @@ const MY_COMPANY = {
   docs: { insurance: true, bond: true, contract: true, w9: true },
   findable: true, code: "cmp_own_acc_gc", openToHire: true, openAnswered: true,
   url: null, sharesSent: 0,
+  licenseCheck: { found: true, status: "ACTIVE", expirationDate: "2027-12-31", checkedAt: "2026-10-20", licenseNumber: "OUTERHR881QT" },
 };
+let checks = 0;
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path) => {
+const api = serveApi({ port: API, routes: (path, method) => {
+  if (method === "POST" && path === "/api/my-company/verify-license") {
+    checks++;
+    return [200, { found: true, status: "ACTIVE", expirationDate: "2028-06-30", checkedAt: "2026-10-28", licenseNumber: "OUTERHR881QT" }];
+  }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
   if (path === "/api/account") return [200, acct()];
   if (path === "/api/my-company") return [200, MY_COMPANY];
@@ -121,6 +127,35 @@ try {
   }));
   t.ck("the Passport half replaces the documents", !s2.docs && s2.subOn.join() === "Passport", JSON.stringify(s2));
   t.ck("and the merged tab stays lit", s2.tabOn.join() === "Pack & Passport", JSON.stringify(s2));
+
+  console.log("\n-- the account's own license, on Company --");
+  await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "Company")?.click());
+  await wait(900);
+  const lic = await page.evaluate(() => ({
+    text: document.querySelector(".own-lic")?.innerText || "",
+    active: !!document.querySelector(".own-lic .lic-chip.s-active"),
+    under: (() => { const a = document.querySelector(".fld-nums"), b = document.querySelector(".own-lic");
+      return !!a && !!b && b.getBoundingClientRect().top >= a.getBoundingClientRect().bottom - 6; })(),
+  }));
+  t.ck("the state register's answer is under License number", lic.active && /State register: Active/.test(lic.text) && lic.under, JSON.stringify(lic));
+  await page.evaluate(() => [...document.querySelectorAll(".own-lic button")].find((b) => /Check now/.test(b.innerText))?.click());
+  await wait(800);
+  const after = await page.evaluate(() => document.querySelector(".own-lic")?.innerText || "");
+  t.ck("Check now asks the server", checks === 1, String(checks));
+  t.ck("and draws the new answer", /Jun 30, 2028|2028/.test(after), after);
+  // An edited number is not the one the answer is about.
+  await page.evaluate(() => {
+    const inp = [...document.querySelectorAll(".fld-nums input")][0];
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    set.call(inp, "NEWNUMBER1"); inp.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await wait(300);
+  const edited = await page.evaluate(() => ({
+    disabled: [...document.querySelectorAll(".own-lic button")].find((b) => /Check now/.test(b.innerText))?.disabled,
+    note: document.querySelector(".own-lic")?.innerText || "",
+  }));
+  t.ck("an unsaved new number says to save first", edited.disabled === true && /Save to check/.test(edited.note), JSON.stringify(edited));
+
   t.ck("no page error", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
 } finally {

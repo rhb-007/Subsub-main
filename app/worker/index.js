@@ -5748,6 +5748,9 @@ const myCompanyToJs = (co) => ({
   // reason coverage is: a row written before validCrews existed must not hand
   // the availability grid a crew with no members array.
   crews: validCrews(parseJson(co.crews, [])) || [],
+  // What the state's register said about the license, the last time it was
+  // asked. Null until it has been.
+  licenseCheck: checkView(parseJson(co.license_check, null), co.license || null),
 });
 
 app.get("/api/my-company", requireRole("admin", "pm"), async (c) => {
@@ -5871,16 +5874,46 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   // A company row with no name is not a thing anybody can be shown.
   if (fields.company === null) return c.json({ error: "name_required" }, 400);
 
+  const before = await c.env.DB.prepare(`SELECT license, state FROM companies WHERE id = ?`).bind(companyId).first();
   await c.env.DB.prepare(
     `UPDATE companies SET ${set.map(([k]) => `${k} = ?`).join(", ")} WHERE id = ?`
   ).bind(...set.map(([, v]) => v), companyId).run();
   await logActivity(c.env, accountId, userId, "company_profile",
     "Updated the company profile other contractors see");
 
+  // A new or changed license, or the state it is read in, is checked against
+  // the state's register now, rather than waiting for the nightly sweep. Best
+  // effort: the save already happened, and a register being down must not
+  // report it as failed. `licenseVerify` says what the check came to.
+  let licenseVerify = null;
+  const licChanged = fields.license !== undefined && (fields.license || null) !== (before?.license || null);
+  const stateChanged = fields.state !== undefined && (fields.state || null) !== (before?.state || null);
+  if (licChanged || (stateChanged && (fields.license ?? before?.license))) {
+    try {
+      const r = await checkCompanyLicense(c.env, companyId, { fresh: true });
+      licenseVerify = r.error ? { skipped: r.error } : { checked: true };
+    } catch (err) {
+      console.error("my-company license check failed", err);
+      licenseVerify = { skipped: "check_failed" };
+    }
+  }
+
   const co = await c.env.DB.prepare(`SELECT * FROM companies WHERE id = ?`).bind(companyId).first();
   const code = await ensureConnectCode(c.env, companyId);
-  return c.json({ ...myCompanyToJs(co),
+  return c.json({ ...myCompanyToJs(co), licenseVerify,
     findable: !!(co.email || co.phone || co.license), code, url: code ? connectUrl(code) : null });
+});
+
+// Ask the state's register about the account's own license again.
+app.post("/api/my-company/verify-license", requireRole("admin", "pm"), async (c) => {
+  const { accountId } = c.get("auth");
+  const companyId = await seatCompany(c);
+  if (!companyId) return c.json({ error: await noCompanyReason(c) }, 403);
+  const rl = await rateLimit(c.env, "own-license-check", accountId, { limit: 10, windowMinutes: 10 });
+  if (!rl.ok) return c.json({ error: "slow_down" }, 429);
+  const r = await checkCompanyLicense(c.env, companyId);
+  if (r.error) return c.json({ error: r.error }, r.error === "not_found" ? 404 : 400);
+  return c.json(r.check);
 });
 
 // Their code, and the URL a QR of it should carry.
@@ -9416,6 +9449,34 @@ async function storeLicenseCheck(db, companyId, state, result) {
   await db.prepare(`UPDATE companies SET license_check = ? WHERE id = ?`)
     .bind(JSON.stringify(view), companyId).run();
   return { stored: view, kept };
+}
+
+// A company's OWN license, checked against the state's register the moment it
+// is typed in -- the "working as a subcontractor" profile on a general
+// contractor's Company tab, and the console's company form. The roster's
+// Verify button already did this for a contractor somebody hires; the account's
+// own number was stored and never asked about.
+//
+// The state is the company's own and is REQUIRED: no state is assumed here,
+// because a Washington lookup of an Oregon number answers "not found" and that
+// would read as a bad license. With no number the stored check is cleared,
+// because a check about a number nobody holds any more is about nothing.
+// `fresh` clears the old answer first: when the NUMBER changed, a failed
+// lookup must not leave the previous number's ACTIVE standing under the new
+// one, which is exactly what nextStoredCheck keeps on a failure.
+async function checkCompanyLicense(env, companyId, { fresh = false } = {}) {
+  const co = await env.DB.prepare(`SELECT license, state FROM companies WHERE id = ?`).bind(companyId).first();
+  if (!co) return { error: "not_found" };
+  if (!co.license) {
+    await env.DB.prepare(`UPDATE companies SET license_check = NULL WHERE id = ?`).bind(companyId).run();
+    return { error: "no_license_on_file" };
+  }
+  const state = (co.state || "").trim().toUpperCase();
+  if (!state) return { error: "state_required" };
+  if (fresh) await env.DB.prepare(`UPDATE companies SET license_check = NULL WHERE id = ?`).bind(companyId).run();
+  const result = await verifyLicenseForState(env, state, co.license);
+  const { stored, kept } = await storeLicenseCheck(env.DB, companyId, state, result);
+  return { check: kept ? { ...stored, checkFailed: true, failure: result.status || "CHECK_FAILED" } : stored };
 }
 
 // ===========================================================================
@@ -27187,10 +27248,39 @@ app.patch("/api/platform/companies/:id", async (c) => {
   if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
 
   vals.push(id);
+  const before = await c.env.DB.prepare(`SELECT license, state FROM companies WHERE id = ?`).bind(id).first();
   await c.env.DB.prepare(`UPDATE companies SET ${sets.join(", ")} WHERE id = ?`).bind(...vals).run();
   await auditPlatform(c.env, staff, null, "company_edited",
     `${staff.name} edited ${co.company}`, { companyId: id, fields: Object.keys(b) });
-  return c.json({ ok: true });
+  // The same check the account's own form runs: a changed license (or the
+  // state it is read in) is asked about now. Never fails the edit.
+  const after = await c.env.DB.prepare(`SELECT license, state FROM companies WHERE id = ?`).bind(id).first();
+  let licenseCheck;
+  if ((after?.license || null) !== (before?.license || null)
+    || ((after?.state || null) !== (before?.state || null) && after?.license)) {
+    try {
+      const r = await checkCompanyLicense(c.env, id, { fresh: true });
+      licenseCheck = r.check || null;
+    } catch (err) { console.error("platform license check failed", err); }
+  }
+  return c.json({ ok: true, ...(licenseCheck !== undefined ? { licenseCheck } : {}) });
+});
+
+// Staff re-checking a company's license against the state's register. Any
+// staff: it changes nothing anybody typed, only what the register is recorded
+// as having said. Audited, because it can move a company on or off every
+// roster that reads the answer.
+app.post("/api/platform/companies/:id/verify-license", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const id = c.req.param("id");
+  const co = await c.env.DB.prepare(`SELECT id, company FROM companies WHERE id = ?`).bind(id).first();
+  if (!co) return c.json({ error: "not_found" }, 404);
+  const r = await checkCompanyLicense(c.env, id);
+  if (r.error) return c.json({ error: r.error }, 400);
+  await auditPlatform(c.env, staff, null, "company_license_checked",
+    `${staff.name} re-checked ${co.company}'s license`, { companyId: id, status: r.check?.status || null });
+  return c.json(r.check);
 });
 
 // WHAT A COMPANY IS TO ONE ACCOUNT, changed from the console.
