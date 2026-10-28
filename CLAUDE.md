@@ -15716,6 +15716,33 @@ refactor.
   a mutation that fails. **Not verified:** the live record, which this
   environment cannot reach.
 
+- **THE PASSPORT CARRIES NO WAY TO REACH THE SUB, THE QR CODE SITS TOP LEFT
+  BESIDE THE NAME, AND THE HEADLINE SAYS WHERE THEY ARE.** Asked for as *"remove
+  personal contact information, we want users to signup, not contact subs
+  directly"*, *"move QR code to upper left"* and *"add City, state on the
+  header"*. **This reverses the earlier decision that the Passport carries the
+  business contact**, at the owner's word: the way on from a Passport is
+  signing up and connecting, and a phone number on the page is a way round it.
+  - **`publicPassport` no longer returns `contact`, `contactTitle`, `phone` or
+    `email`**, so the public route, the sub's own preview and the Wallet card
+    (which reads the same shape, and drops them too) cannot carry them. The
+    stored title stays in `passports.contact_title`; the tab's title box is
+    gone, because it no longer prints anywhere. `passportGaps` stopped asking
+    for a contact, phone or email. **The compliance pack page still names
+    them**, because the sub sends it to one address.
+  - **`place` is the headline's location** (`passportPlace`): *Tacoma, WA*, or
+    with no town on file the state and a ZIP (the company's own, else the first
+    radius coverage ZIP), so a sub with only *Within 60 mi of 98105* still has a
+    place in the header.
+  - **`PackHeader` draws the QR code and share icons FIRST**, top left beside
+    the name, at every width (78px on a phone), on the Passport and the pack
+    page alike. `.pp-head` is `flex-wrap:nowrap`, because `.pack-head` wraps and
+    put the name under the code on a phone, which the test caught. The
+    screenshot's arrow pointed right while the words said left; the words won.
+  `test:passport` (150), `test:passportui` (86), `test:walletpass` (44).
+  Putting the contact back in the shape fails one assertion; dropping the
+  nowrap fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -20959,10 +20959,11 @@ async function passportPublicShape(env, passport, { today = new Date().toISOStri
   catch (err) { if (!missingSchema(err)) console.warn("[passport] no referral code:", err?.message || err); }
   const shape = publicPassport({
     passport: { slug: passport.slug, trades: await passportTrades(env, passport, co.id),
-      foundedYear: passport.founded_year, about: passport.about,
-      contactTitle: passport.contact_title ?? null },
+      foundedYear: passport.founded_year, about: passport.about },
+    // No contact, phone or email: the Passport sends people to sign up and
+    // connect, not to ring the sub (see shared/passport.js).
     company: { company: co.company, city: co.city, state: co.state, zip: co.zip, license: co.license,
-      contact: co.contact, phone: co.phone, email: co.email, ubi: co.ubi, bond: co.bond,
+      ubi: co.ubi, bond: co.bond,
       licenseCheck: checkView(parseJson(co.license_check, null), co.license),
       coverage: validCoverage(parseJson(co.coverage, null)) || {},
       insurance: co.insurance, w9: co.w9 },

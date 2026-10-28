@@ -154,6 +154,14 @@ export function areaText(coverage) {
   return cities.length ? cities.join(", ") : null;
 }
 
+// The first ZIP a radius coverage names, for a company with no ZIP of its own.
+function firstZip(coverage) {
+  const c = coverage && typeof coverage === "object" ? coverage : {};
+  const radii = Array.isArray(c.radii) ? c.radii : c.radius ? [c.radius] : [];
+  const z = radii.map((r) => String(r?.zip || "").trim()).find((v) => /^\d{5}$/.test(v));
+  return z || null;
+}
+
 // ---- the badge -----------------------------------------------------------------
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -278,13 +286,25 @@ export function accessMove(status, action) {
 
 // ---- what the public page carries -----------------------------------------------
 
-// Everything here is something the sub chose to publish. It carries the
-// business contact -- the name, phone and email on their company profile --
-// because a Passport replaced the QR code they hand over on site and is read
-// like a business card: somebody holding it needs a way to ring them. It does
-// not carry the clients they work for, their crews' names or a document.
-// (The first version left the contact off; asked for back in so many words:
-// "make sure all of the other company information is fully filled out".)
+// Everything here is something the sub chose to publish. It carries NO way to
+// reach them -- no contact name, phone or email. The Passport is how a GC
+// meets a sub, and the way on from it is signing up and connecting, which is
+// what opens the documents too; a phone number on the page is a way round
+// that. Reversed at the owner's word ("we want users to signup, not contact
+// subs directly"), after an earlier version had put the contact on. The
+// compliance pack page, which a sub sends to one address, still names them.
+// It does not carry the clients they work for or their crews' names either.
+
+// Where they are, for the headline: "Tacoma, WA", or the state and ZIP when no
+// town is on file, so the header always says a place if there is one to say.
+export function passportPlace({ city, state, zip } = {}) {
+  const st = normalizeState(state);
+  const c = String(city || "").trim();
+  if (c) return [c, st].filter(Boolean).join(", ");
+  const z = String(zip || "").trim();
+  return [st, z].filter(Boolean).join(" ") || null;
+}
+
 export function publicPassport({ passport, company, photos = [], docs = {}, refCode = null,
   today = new Date().toISOString().slice(0, 10) }) {
   const trades = (passport.trades || []).filter((t) => TRADE_IDS.has(t));
@@ -304,11 +324,7 @@ export function publicPassport({ passport, company, photos = [], docs = {}, refC
     foundedYear: passport.foundedYear ?? null,
     years: yearsText(passport.foundedYear, today),
     about: passport.about || null,
-    contact: company.contact ? String(company.contact) : null,
-    // A title with no name beside it says nothing, so it rides only with one.
-    contactTitle: company.contact && passport.contactTitle ? String(passport.contactTitle) : null,
-    phone: company.phone ? String(company.phone) : null,
-    email: company.email ? String(company.email) : null,
+    place: passportPlace({ city: company.city, state: company.state, zip: company.zip || firstZip(company.coverage) }),
     zip: company.zip ? String(company.zip) : null,
     // A UBI is Washington's, so it is shown only for a Washington company.
     ubi: company.ubi && normalizeState(company.state) === "WA" ? String(company.ubi) : null,
@@ -331,9 +347,6 @@ export const PASSPORT_CTA = "Manage your whole sub network like this";
 // nothing reads as a company that has not answered.
 export function passportGaps(p = {}) {
   const out = [];
-  if (!p.contact) out.push({ key: "contact", label: "A contact name", where: "company" });
-  if (!p.phone) out.push({ key: "phone", label: "A phone number", where: "company" });
-  if (!p.email) out.push({ key: "email", label: "An email address", where: "company" });
   if (!p.city || !p.state) out.push({ key: "city", label: "Your city and state", where: "company" });
   if (!(p.trades || []).length) out.push({ key: "trades", label: "The trades you do", where: "passport" });
   if (!p.area) out.push({ key: "area", label: "Where you work", where: "company" });

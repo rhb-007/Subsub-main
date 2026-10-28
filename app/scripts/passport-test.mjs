@@ -8,7 +8,7 @@
 //   failed check, and a certificate with no date or a past one never earn it.
 //
 //   THE PUBLIC PAGE CARRIES WHAT THE SUB CHOSE TO PUBLISH, the business
-//   contact included (it is their QR code now, read like a business card). Unpublished, unknown and malformed slugs
+//   no contact (the way on is signing up and connecting). Unpublished, unknown and malformed slugs
 //   are one 404, and every reply says noindex.
 //
 //   CONNECTING IS THE APPROVAL. A connected account opens all four documents
@@ -92,22 +92,27 @@ const pub = publicPassport({ passport: { slug, trades: ["roofing", "nope"] },
     licenseCheck: waActive, coverage: { mode: "cities", cities: ["Tacoma"] } },
   docs: { insurance: { fileName: "coi.pdf", expiresOn: day(200), issuer: "Acme Mutual" }, w9: { fileName: "w9.pdf" } } });
 const pubText = JSON.stringify(pub);
-ck("the public shape carries the business contact", pub.contact === "Rae Bay" && pub.email === "rae@bay.test" && pub.phone === "2065550100", pubText);
+ck("the public shape carries NO contact, phone or email", !("contact" in pub) && !("phone" in pub) && !("email" in pub)
+  && !/Rae Bay|rae@bay\.test|2065550100/.test(pubText), pubText);
+ck("the place is town and state", publicPassport({ passport: { slug }, company: { company: "T", city: "Tacoma", state: "WA" } }).place === "Tacoma, WA");
+ck("no town: the state and the coverage ZIP", publicPassport({ passport: { slug },
+  company: { company: "T", state: "WA", coverage: { mode: "radius", radii: [{ miles: 60, zip: "98105" }] } } }).place === "WA 98105");
+ck("no town, the company's own ZIP first", publicPassport({ passport: { slug },
+  company: { company: "T", state: "WA", zip: "98407", coverage: { mode: "radius", radii: [{ miles: 60, zip: "98105" }] } } }).place === "WA 98407");
 v = validPassportEdit({ contactTitle: "  Owner   and   estimator " }, 2026);
 ck("a title is tidied and kept", v.ok && v.value.contactTitle === "Owner and estimator", JSON.stringify(v));
 ck("a blank title is cleared, not stored as empty", validPassportEdit({ contactTitle: "  " }).value.contactTitle === null);
 ck("a title past 60 characters is refused by name", validPassportEdit({ contactTitle: "x".repeat(61) }).error === "title_too_long");
-ck("the title rides after the contact's name", publicPassport({ passport: { slug, contactTitle: "Owner" },
-  company: { company: "T", contact: "Rae Bay" } }).contactTitle === "Owner");
-ck("and with no name it is not printed alone", publicPassport({ passport: { slug, contactTitle: "Owner" },
-  company: { company: "T" } }).contactTitle === null);
+ck("a stored title is not published either", !("contactTitle" in publicPassport({ passport: { slug, contactTitle: "Owner" },
+  company: { company: "T", contact: "Rae Bay" } })));
 ck("a UBI only for a Washington company", publicPassport({ passport: { slug }, company: { company: "T", state: "TX", ubi: "123" } }).ubi === null
   && publicPassport({ passport: { slug }, company: { company: "W", state: "WA", ubi: "604" } }).ubi === "604");
 ck("connecting opens all four; an approved request two; nothing otherwise",
   openableKinds({ connected: true }).join() === "insurance,bond,w9,contract"
   && openableKinds({ approved: true }).join() === "insurance,w9" && openableKinds({}).length === 0);
 const gapKeys = passportGaps({ name: "X" }).map((g) => g.key);
-ck("an empty Passport names every gap", ["contact", "phone", "email", "trades", "license", "insurance", "w9", "photos"].every((k) => gapKeys.includes(k)), gapKeys.join());
+ck("and no longer asks for a contact the page does not show", !gapKeys.some((k) => ["contact", "phone", "email"].includes(k)), gapKeys.join());
+ck("an empty Passport names every gap", ["city", "trades", "license", "insurance", "w9", "photos"].every((k) => gapKeys.includes(k)), gapKeys.join());
 ck("and a full one names none", passportGaps({ ...pub, city: "Tacoma", foundedYear: 2012, about: "x", photos: [{ id: 1 }] }).length === 0,
   passportGaps({ ...pub, city: "Tacoma", foundedYear: 2012, about: "x", photos: [{ id: 1 }] }).map((g) => g.key).join());
 ck("and says a W-9 is on file without carrying it", pub.w9 === true && !/w9\.pdf/.test(pubText));
@@ -222,7 +227,7 @@ ck("and does not wipe the trades", JSON.stringify(mine.passport.trades) === '["r
 ck("a trade that is not one is refused", s === 400);
 ck("no title set reads as none", mine.passport.contactTitle === null);
 [s, mine] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { contactTitle: "Owner" } }));
-ck("the sub sets their title", s === 200 && mine.passport.contactTitle === "Owner" && mine.preview.contactTitle === "Owner", JSON.stringify(mine?.passport));
+ck("the title is still stored, and the preview does not print it", s === 200 && mine.passport.contactTitle === "Owner" && !mine.preview.contactTitle, JSON.stringify(mine?.passport));
 [s] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { contactTitle: "x".repeat(61) } }));
 ck("a long title is refused", s === 400);
 [s, mine] = await json(await call(env, "/api/my-passport", { method: "PUT", body: { published: true, foundedYear: 2012 } }));
@@ -231,8 +236,8 @@ r = await call(env, `/api/public/passport/${SLUG}`, { who: null });
 const page = await r.json();
 ck("published, anybody holding the link reads it", r.status === 200 && page.name === "Bay Roofing");
 ck("and the reply says noindex", r.headers.get("X-Robots-Tag") === "noindex");
-ck("it carries the business contact", page.contact === "Rae Bay" && page.email === "rae@bay.test" && page.phone === "2065550100");
-ck("and the public page prints the title", page.contactTitle === "Owner");
+ck("it carries no way to reach them directly", !/Rae Bay|rae@bay\.test|2065550100/.test(JSON.stringify(page)) && !page.contactTitle);
+ck("it names where they are", !!page.place, page.place);
 ck("and says whether a bond is on file", page.bond === true);
 ck("it carries the current certificate's insurer, not the superseded one", page.insurance?.carrier === "Acme Mutual");
 ck("it says a W-9 is on file and nothing more", page.w9 === true && !/w9\.pdf/.test(JSON.stringify(page)));

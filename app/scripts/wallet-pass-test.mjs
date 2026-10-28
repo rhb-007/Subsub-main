@@ -75,14 +75,15 @@ const pj = walletPassJson({ view, companyId: "cmp_bay", memberSince: "2024-02-10
 const front = JSON.stringify([pj.generic.headerFields, pj.generic.primaryFields, pj.generic.secondaryFields,
   pj.generic.auxiliaryFields]);
 const all = JSON.stringify(pj);
-ck("the card says who and since when", /Bay Roofing/.test(front) && /Feb 2024/.test(front) && /Rae Bay, Owner/.test(front));
+ck("the card says who and since when", /Bay Roofing/.test(front) && /Feb 2024/.test(front) && /Tacoma, WA/.test(front));
 ck("and carries no verdict anywhere on it", !/Verified|active|through|ACTIVE|expire/i.test(front), front);
 ck("the back carries no license status either, only the number",
   /BAYROR\*123/.test(all) && !/registration active|Insurance on file/.test(all));
 ck("the QR code is the live Passport", pj.barcodes[0].message === "https://app.subsub.work/p/bay-roofing-abcde"
   && pj.barcodes[0].format === "PKBarcodeFormatQR");
 ck("the serial is the company, so adding it twice replaces it", pj.serialNumber === "passport-cmp_bay");
-ck("an empty field is left off rather than drawn blank", !pj.generic.backFields.some((f) => f.key === "email"));
+ck("an empty field is left off rather than drawn blank", !pj.generic.backFields.some((f) => f.key === "ubi"));
+ck("the card carries no contact, phone or email, even when the view does", !/Rae Bay|2065550100/.test(JSON.stringify(pj)));
 ck("colors are Apple's rgb() form", /^rgb\(\d+, \d+, \d+\)$/.test(pj.backgroundColor));
 ck("a PEM pasted with \\n pairs is put back",
   normalizePem(KEYS.APPLE_PASS_CERT.replace(/\n/g, "\\n")) === KEYS.APPLE_PASS_CERT.trim());

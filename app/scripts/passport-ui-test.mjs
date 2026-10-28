@@ -41,7 +41,7 @@ const S = { verified: true, wallet: true, access: NOT_CONNECTED(), kind: "genera
   published: false, posts: [], pendingReq: true, bbb: true,
   myBbb: { linked: false, live: true } };
 const PAGE = () => ({
-  slug: SLUG, name: "Bay Roofing", city: "Tacoma", state: "WA",
+  slug: SLUG, name: "Bay Roofing", city: "Tacoma", state: "WA", place: "Tacoma, WA",
   trades: [{ id: "roofing", label: "Roofing" }, { id: "gutters", label: "Gutters" }],
   area: "Tacoma, Seattle", foundedYear: 2012, years: "In business since 2012 · 14 years",
   about: "Residential re-roofs, two crews.",
@@ -154,11 +154,12 @@ const readPage = (page) => page.evaluate(() => {
         b = hd?.querySelector(".pp-head-cta, .pp-head-chip"), h = hd?.querySelector("h1");
       if (!hd || !q || !b || !h) return null;
       const qr = q.getBoundingClientRect(), br = b.getBoundingClientRect(), hr = hd.getBoundingClientRect();
-      return { qrRight: hr.right - qr.right < 8, qrTop: qr.top < h.getBoundingClientRect().bottom,
+      return { qrLeft: qr.left - hr.left < 8, qrRight: hr.right - qr.right < 8, qrTop: qr.top < h.getBoundingClientRect().bottom,
+        nameRightOfQr: h.getBoundingClientRect().left >= qr.right - 1,
         ctaBelowQr: br.top >= qr.bottom - 1, ctaRight: hr.right - br.right < 8,
         // On the left under the name and the lede, inside the who column.
         ctaLeft: !!b.closest(".pp-head-who") && Math.abs(br.left - h.getBoundingClientRect().left) < 2
-          && (br.right < qr.left || qr.top >= br.bottom - 1),
+          && br.left >= qr.right - 1,
         ctaUnderLede: br.top >= (hd.querySelector(".pack-lede")?.getBoundingClientRect().bottom ?? 0) - 1 };
     })(),
     place: c?.querySelector(".pp-head .pack-place")?.innerText.trim() || "",
@@ -253,10 +254,10 @@ try {
     t.ck("a row per document, as on the pack page",
       r.cols?.rows.length === 3 && /Acme Mutual/.test(r.cols.rows[0]) && r.cols.rows.every((x) => /On file/.test(x)), JSON.stringify(r.cols?.rows));
     t.ck("and what is in the pack, named", /certificate of insurance/.test(r.cols?.what || ""), r.cols?.what);
-    t.ck("the connect box is above the photos", r.order.box > r.order.contact && r.order.box < r.order.photos, JSON.stringify(r.order));
-    t.ck("the main contact with their title", /Rae Bay, Owner/.test(r.contact), r.contact);
-    t.ck("the business contact, with a number to call", /Rae Bay/.test(r.contact) && /rae@bay\.test/.test(r.contact)
-      && r.tel === "tel:2065550100", r.contact);
+    t.ck("the connect box is above the photos", r.order.box < r.order.photos, JSON.stringify(r.order));
+    t.ck("no contact block, and no name, phone or email anywhere on the page, even when the reply carries them",
+      r.order.contact === null && !r.tel && !/Rae Bay|rae@bay\.test|2065550100/.test(r.text), r.contact);
+    t.ck("the code sits top LEFT, beside the name, on a phone too", !!r.side?.qrLeft && r.side.qrTop && r.side.nameRightOfQr, JSON.stringify(r.side));
     t.ck("the bond, the UBI and where they are based",
       /Surety bond On file/.test(r.facts) && /UBI 604123456/.test(r.facts) && /98407/.test(r.facts), r.facts);
     t.ck("never a file name", !/\.pdf/.test(r.text), r.text);
@@ -291,7 +292,7 @@ try {
     const { ctx, page } = await visitApp(browser, { host: "app", webPort: WEB, viewport: { width: 1180, height: 900 }, path: `/p/${SLUG}` });
     await wait(2000);
     const r = await readPage(page);
-    t.ck("the code sits at the top right, level with the name", !!r.side?.qrRight && r.side.qrTop, JSON.stringify(r.side));
+    t.ck("the code sits at the top left, level with the name", !!r.side?.qrLeft && r.side.qrTop && r.side.nameRightOfQr && !r.side.qrRight, JSON.stringify(r.side));
     t.ck("the CTA is on the left under the name, not under the code", !!r.side?.ctaLeft && r.side.ctaUnderLede && !r.side.ctaRight, JSON.stringify(r.side));
     t.ck("still one column on a wide screen, the pack page's width",
       !!r.cols?.oneCol && r.cols.noCols && r.width <= 640, JSON.stringify({ ...r.cols, w: r.width }));

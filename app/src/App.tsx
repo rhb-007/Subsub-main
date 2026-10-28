@@ -31830,7 +31830,7 @@ function PassportPage({ slug, seat = null }) {
   if (!p) return <div className="pack-page pp-page"><div className="pack-card">Loading…</div></div>;
 
   const url = `${window.location.origin}/p/${p.slug}`;
-  const where = [p.city, p.state].filter(Boolean).join(", ");
+  const where = p.place || [p.city, p.state].filter(Boolean).join(", ");
   return (
     <div className="pack-page pp-page">
       {/* The compliance pack page's frame: SubSub's mark outside the card, top
@@ -31847,15 +31847,8 @@ function PassportPage({ slug, seat = null }) {
         </PackHeader>
         {p.about && <p className="pp-about">{p.about}</p>}
 
-        {(p.contact || p.phone || p.email) && (
-          <div className="pp-contact">
-            {p.contact && <b>{p.contact}{p.contactTitle && <span className="pp-ctitle">, {p.contactTitle}</span>}</b>}
-            <div className="pp-files">
-              {p.phone && <a className="btn-ghost pp-sbtn" href={`tel:${p.phone}`}><Phone size={16} /> {p.phone}</a>}
-              {p.email && <a className="btn-ghost pp-sbtn" href={`mailto:${p.email}`}><Mail size={16} /> {p.email}</a>}
-            </div>
-          </div>
-        )}
+        {/* No contact name, phone or email: a GC who wants this sub signs up
+            and connects, which is what opens the documents too. */}
 
         {/* The compliance pack, drawn the way the pack page draws it: what is
             in it named, the seal, the license box, and a row per document.
@@ -32095,11 +32088,6 @@ function PassportPanel() {
         <label className="fld"><span>{tt("Year you started")}</span>
           <input inputMode="numeric" maxLength={4} value={f.foundedYear}
             onChange={(e) => setF({ ...f, foundedYear: e.target.value.replace(/\D/g, "") })} placeholder="2014" />
-        </label>
-        <label className="fld"><span>{tt("Your title (optional)")}</span>
-          <input maxLength={60} value={f.contactTitle} onChange={(e) => setF({ ...f, contactTitle: e.target.value })}
-            placeholder={tt("Owner")} />
-          <small className="fld-note">{tt("Printed after")}{" "}{d.preview?.contact || tt("the contact name on your company profile")}{" "}{tt("on the page.")}</small>
         </label>
         <label className="fld"><span>{tt("About your company (optional)")}</span>
           <textarea rows={3} maxLength={600} value={f.about} onChange={(e) => setF({ ...f, about: e.target.value })}
@@ -32485,6 +32473,13 @@ function PackTop({ seat = null }) {
 function PackHeader({ kicker, name, place, lede, trades = [], url = null, children = null }) {
   return (
     <header className="pp-head pack-head">
+      {/* The code first: top left, beside the name, at every width. */}
+      {url && (
+        <div className="pp-head-side">
+          <QrCode value={url} size={104} label={`QR code for ${name}'s Passport`} />
+          <PassportShare url={url} name={name} icons />
+        </div>
+      )}
       <div className="pp-head-who">
         <span className="pack-kicker">{kicker}</span>
         <h1>{name}</h1>
@@ -32495,12 +32490,6 @@ function PackHeader({ kicker, name, place, lede, trades = [], url = null, childr
         )}
         {children}
       </div>
-      {url && (
-        <div className="pp-head-side">
-          <QrCode value={url} size={104} label={`QR code for ${name}'s Passport`} />
-          <PassportShare url={url} name={name} icons />
-        </div>
-      )}
     </header>
   );
 }
@@ -44292,15 +44281,15 @@ body{background:var(--paper)}
    one column, 48px controls, and the badge's own line under it in words. */
 .pp-page{justify-content:flex-start;padding-top:12px}
 .pp-card h1{font-size:36px;font-weight:800;line-height:1.1;letter-spacing:-.025em;overflow-wrap:anywhere;margin:4px 0 0}
-.pp-head{display:flex;align-items:flex-start;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--line)}
+.pp-head{display:flex;flex-wrap:nowrap;align-items:flex-start;gap:16px;padding-bottom:14px;border-bottom:1px solid var(--line)}
 .pp-head-who{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1 1 auto}
 .pp-head .pack-lede{margin:2px 0 0}
-.pp-head-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.pp-head-side{flex:none;display:flex;flex-direction:column;align-items:flex-start;gap:8px;width:118px}
 .pp-head-side .qr{border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff}
 .pp-head-cta{flex:none;align-self:flex-start;margin-top:6px;min-height:44px;display:inline-flex;align-items:center;gap:6px;padding:0 16px;
   max-width:100%;white-space:normal;text-align:left;line-height:1.2}
 .pp-head-who > .pp-head-chip{align-self:flex-start;margin-top:6px}
-.pp-share-icons{gap:6px;justify-content:flex-end}
+.pp-share-icons{gap:6px;justify-content:flex-start}
 .pp-ibtn{width:36px;height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);
   color:var(--ink);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
 .pp-ibtn:hover{border-color:var(--brand);color:var(--brand-dk)}
@@ -44315,9 +44304,9 @@ body{background:var(--paper)}
 .pp-docs h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:8px}
 .pp-docs .pp-badge{margin-top:10px}
 @media (max-width:560px){
-  .pp-head{flex-wrap:wrap}
-  .pp-head-side{width:100%;align-items:flex-start}
-  .pp-share-icons{justify-content:flex-start}
+  .pp-head{gap:12px}
+  .pp-head-side{width:92px}
+  .pp-head-side .qr{width:78px;height:78px}
   .pp-head-cta{width:100%;justify-content:center}
 }
 .pp-head-chip{flex:none;display:inline-flex;align-items:center;gap:5px;padding:7px 11px;border-radius:999px;

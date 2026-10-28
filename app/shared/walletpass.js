@@ -68,9 +68,9 @@ const field = (key, label, value) => (value ? [{ key, label, value: String(value
 // can only ever say what the public page says. A field with nothing in it is
 // left off rather than drawn empty.
 export function walletPassJson({ view, companyId, memberSince, passTypeId, teamId }) {
-  const place = [view.city, view.state].filter(Boolean).join(", ");
-  const contact = view.contact
-    ? (view.contactTitle ? `${view.contact}, ${view.contactTitle}` : view.contact) : null;
+  // No contact on the card, for the reason the public page has none: the way
+  // on from a Passport is connecting on SubSub, not ringing them.
+  const place = view.place || [view.city, view.state].filter(Boolean).join(", ");
   const url = passportUrl(view.slug);
   return {
     formatVersion: 1,
@@ -91,12 +91,9 @@ export function walletPassJson({ view, companyId, memberSince, passTypeId, teamI
         ...field("place", "BASED IN", place),
       ],
       auxiliaryFields: [
-        ...field("contact", "CONTACT", contact),
         ...field("years", "IN BUSINESS", view.years),
       ],
       backFields: [
-        ...field("phone", "Phone", view.phone),
-        ...field("email", "Email", view.email),
         ...field("license", "License number", view.license?.number),
         ...field("ubi", "UBI", view.ubi),
         { key: "link", label: "Passport", value: url },
