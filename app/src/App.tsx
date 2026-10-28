@@ -2236,6 +2236,12 @@ export default function SubSub() {
   // second round trip.
   const [chooser, setChooser] = useState(null);
   const [superadminView, setSuperadminView] = useState(false);   // SubSub staff console
+  // The account staff are being signed in to, while it loads. Between the
+  // token and the account's own data, state still holds the account being
+  // left (or the demo seed's first one), so the header said Outerhome and
+  // the body said "this contractor login isn't linked" for a second. A
+  // neutral screen naming where they are going is drawn instead.
+  const [switchingTo, setSwitchingTo] = useState(null);
   // What the SERVER says this staff user may do. Never derived in the browser:
   // the same flags are re-checked on every platform request.
   const [staff, setStaff] = useState(null);
@@ -5246,6 +5252,10 @@ export default function SubSub() {
     let r;
     try { r = await api.platform.impersonate(acct.id, null, asUserId); }
     catch (e) { if (prior) setAuth(prior); throw e; }
+    // Only once the server has said yes: a refusal leaves the console (or the
+    // account being viewed) exactly as it was, with its modal still open.
+    setSwitchingTo(acct.name || tt("the account"));
+    try {
     // The session being left is handed back rather than left to
     // run out, so the log shows one seat at a time.
     if (prior?.impersonation) api.platform.endImpersonation(prior.impersonation);
@@ -5302,6 +5312,7 @@ export default function SubSub() {
     setPane("jobs");
     setTab(r.actAsRole === "contractor" && !r.standingIn ? ROLES.contractor.can[0] : ROLES.admin.can[0]);
     setLoggedIn(true);
+    } finally { setSwitchingTo(null); }
   };
 
   // Into a client's side of the work, from the account's own menu. Staff are
@@ -6040,6 +6051,18 @@ export default function SubSub() {
         <style>{CSS}</style>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "var(--muted)" }}>
           Loading…
+        </div>
+      </div>
+    );
+  }
+
+  if (switchingTo) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <div className="switching-screen" role="status">
+          <SubSubLogo height={26} />
+          <p>{tt("Signing in to {name}…", { name: switchingTo })}</p>
         </div>
       </div>
     );
@@ -49991,6 +50014,7 @@ iframe.dv-frame{display:block}
 .pf-line b.up,.pf-table .up{color:var(--brand)}
 .pf-line b.down,.pf-table .down{color:var(--red)}
 /* superadmin sign-in */
+.switching-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:var(--paper);color:var(--muted);font-size:15px}
 .sa-page{min-height:100vh;background:#0f1a15;color:#fff;display:flex;flex-direction:column;align-items:center;
   justify-content:center;padding:40px 20px}
 .sa-card{width:100%;max-width:440px;background:#16241d;border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:30px}

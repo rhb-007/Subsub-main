@@ -1108,4 +1108,7 @@ export default {
   "Only the account owner can change another admin's role.": "Solo el propietario de la cuenta puede cambiar el rol de otro administrador.",
   "Only the account owner, {name}, can add a second business.": "Solo el propietario de la cuenta, {name}, puede agregar un segundo negocio.",
   "Only the account owner can add a second business.": "Solo el propietario de la cuenta puede agregar un segundo negocio.",
+  "the account": "la cuenta",
+  "Signing in to {name}…": "Iniciando sesión en {name}…",
+  "Open it from the menu under your name.": "Ábrala desde el menú bajo su nombre.",
 };

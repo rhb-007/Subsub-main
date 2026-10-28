@@ -134,14 +134,19 @@ const STUCK = {
 
 const web = serveApp({ dir: OUT, port: WEB });
 const impersonated = [];
+let HOLD = null;
 // Every resend and cancel the console posts, so a button is proved by what it sends.
 const INVITE_CALLS = [];
 const CREATED = [];
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/platform/impersonate/") && method === "POST") {
     impersonated.push({ path, body });
+    if (HOLD) return [200, { token: "imp_t", accountId: "acc_gc", actAsUserId: "u_a1", actAsRole: "admin" }];
     return [403, { error: "stub" }];
   }
+  // Held open, so the test can read what the screen draws while the account
+  // being signed in to is still loading.
+  if (path === "/api/account" && HOLD) return HOLD.promise;
   if (path === "/api/platform/accounts" && method === "POST") {
     CREATED.push(body);
     return [201, { id: "acc_new", ownerInvite: { invited: true, to: body.ownerEmail, emailed: true, texted: false },
@@ -772,6 +777,28 @@ try {
     .map((x) => x.innerText.trim()));
   t.ck("the chart offers Users, Subscribers and Cancellations only",
     JSON.stringify(noFin) === JSON.stringify(["Users", "Subscribers", "Cancellations"]), JSON.stringify(noFin));
+
+  console.log("\n-- signing in as an account draws where you are going, not the account being left --");
+  await page.setViewport({ width: 1280, height: 900 });
+  let release; HOLD = { promise: new Promise((r) => { release = r; }) };
+  await nav("Companies"); await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll(".pf-row")]
+    .find((r) => /Outerhome/.test(r.innerText))?.click());
+  await wait(500);
+  await page.evaluate(() => document.querySelector(".modal-co .pfc-seat-own button")?.click());
+  await wait(700);
+  const mid = await page.evaluate(() => ({
+    screen: document.querySelector(".switching-screen")?.innerText.replace(/\s+/g, " ").trim() || null,
+    header: !!document.querySelector(".header-top"),
+    stale: /isn't linked to a contractor record/.test(document.body.innerText),
+  }));
+  t.ck("while it loads, a neutral screen names the account", /Signing in to Outerhome/.test(mid.screen || ""),
+    JSON.stringify(mid));
+  t.ck("and no app header or stale empty state is drawn meanwhile", !mid.header && !mid.stale, JSON.stringify(mid));
+  release([500, { error: "stub" }]); HOLD = null;
+  await wait(800);
+  const after = await page.evaluate(() => !!document.querySelector(".switching-screen"));
+  t.ck("and it goes away when the switch ends, even a failed one", !after);
 
   t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
   await ctx.close();

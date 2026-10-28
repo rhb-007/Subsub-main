@@ -15773,6 +15773,23 @@ refactor.
   `test:passportui` (93) and `test:consolelists` (128); each of the three
   mutations fails its own assertion.
 
+- **SIGNING IN AS ANOTHER ACCOUNT DRAWS "SIGNING IN TO X" UNTIL IT HAS
+  LOADED, NOT THE ACCOUNT BEING LEFT.** Reported as *"it flashes Outerhome
+  between"*, with the impersonation banner over an Outerhome header and
+  *"This contractor login isn't linked to a contractor record yet."*
+  `impersonateInto` set the account id and left the console before the
+  account's own data arrived. Meanwhile `account` fell back to `accounts[0]`
+  (the seed's Outerhome), and `mySub` read the old `subs`. That is this file's
+  "check what account the data in state belongs to" lesson, seen for a second.
+  `switchingTo` holds the account's name from the server's yes until
+  hydration ends (`finally`), and the app draws a neutral
+  `.switching-screen` instead. **It is set only after the server says yes**, so
+  a refused sign-in leaves the console, and its open window, as they were. The
+  first version set it before the call, and the console lost its place on a
+  refusal. `test:consolelists` (131) holds `/api/account` open and reads the
+  screen mid-switch. Removing the screen reproduces the report: the header and
+  the stale empty state are both drawn.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
