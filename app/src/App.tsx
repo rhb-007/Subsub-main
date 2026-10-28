@@ -31642,7 +31642,7 @@ function PassportHeadCta({ cx, onShow, name }) {
   const { st, team, busy, connect, signIn, blocked } = cx;
   if (st?.status === "own") return null;
   if (st?.status === "connected") {
-    return <span className="pp-head-chip ok"><CheckCircle2 size={15} /> Connected</span>;
+    return <span className="pp-head-chip ok"><CheckCircle2 size={15} /> On your roster</span>;
   }
   if (st?.connectPending) {
     return <span className="pp-head-chip"><Clock size={15} /> Requested</span>;
@@ -31655,7 +31655,7 @@ function PassportHeadCta({ cx, onShow, name }) {
   return (
     <button className="btn-solid pp-head-cta" disabled={!!blocked || busy || (team && !st)}
       title={blocked || undefined} onClick={press}>
-      <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
+      <UserPlus size={16} /> {busy ? "Sending…" : !cx.seat ? `Sign in to add ${name}` : `Add ${name} to your roster`}
     </button>
   );
 }
@@ -31728,7 +31728,7 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
         <input value="" disabled placeholder="For the Pine St job" readOnly />
       </label>
       <button className="btn-solid claim-btn" disabled title={blocked || undefined}>
-        <Link2 size={16} /> Connect
+        <UserPlus size={16} /> Add to your roster
       </button>
       <p className="pp-why">{blocked}</p>
     </div>
@@ -31737,16 +31737,16 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
   let body;
   if (!seat) {
     body = (<>
-      <p>Hiring {name}? Connect on SubSub and their paperwork stays current on your roster.</p>
+      <p>Hiring {name}? Add them to your SubSub roster and their paperwork stays current there.</p>
       {perks}
       <div className="pp-files pp-acc-cta">
-        <button className="btn-solid pp-sbtn" onClick={signIn}><Link2 size={16} /> Sign in to connect</button>
+        <button className="btn-solid pp-sbtn" onClick={signIn}><UserPlus size={16} /> Sign in to add {name}</button>
         <a className="btn-ghost pp-sbtn" href={passportCtaHref(refCode)}>New to SubSub? Sign up free</a>
       </div>
     </>);
   } else if (!team) {
     body = (<>
-      <p>Connect with {name} and their paperwork stays current on your roster.</p>
+      <p>Add {name} to your roster and their paperwork stays current there.</p>
       {perks}
       {blockedCta}
     </>);
@@ -31758,7 +31758,7 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
     const files = st.files || [];
     const agr = st.agreement;
     body = (<>
-      <p className="pp-ok"><CheckCircle2 size={15} /> You're connected. Every document is yours to open.</p>
+      <p className="pp-ok"><CheckCircle2 size={15} /> {name} is on your roster. Every document is yours to open.</p>
       {files.length === 0 && !agr?.document && <p>Nothing is on file to open right now.</p>}
       {fileButtons(files)}
       {agr?.document && (
@@ -31784,10 +31784,10 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
         {fileButtons(st.files || [])}
       </>)}
       {st.connectPending ? (<>
-        <p className="pp-wait"><Clock size={15} /> You asked to connect. Once they accept, every document opens here.</p>
+        <p className="pp-wait"><Clock size={15} /> You asked to add {name} to your roster. Once they accept, every document opens here.</p>
         {st.status !== "approved" && perks}
       </>) : st.mayConnect ? (<>
-        <p>Connect with {name} and their paperwork stays current on your roster.</p>
+        <p>Add {name} to your roster and their paperwork stays current there.</p>
         {st.status !== "approved" && perks}
         <div className="pp-acc-cta">
           <label className="claim-fld">
@@ -31795,11 +31795,11 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
             <input value={msg} maxLength={300} placeholder="For the Pine St job" onChange={(e) => setMsg(e.target.value)} />
           </label>
           <button className="btn-solid claim-btn" disabled={busy} onClick={connect}>
-            <Link2 size={16} /> {busy ? "Sending…" : "Connect"}
+            <UserPlus size={16} /> {busy ? "Sending…" : "Add to your roster"}
           </button>
         </div>
       </>) : (<>
-        <p>Connect with {name} and their paperwork stays current on your roster.</p>
+        <p>Add {name} to your roster and their paperwork stays current there.</p>
         {st.status !== "approved" && perks}
         {blockedCta}
       </>)}
@@ -31807,9 +31807,10 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
   }
   return (
     <div className="claim-box pp-access" id="pp-connect" ref={boxRef}>
-      <h3>{st?.status === "connected"
-        ? <><CheckCircle2 size={20} /> Connected with {name}</>
-        : <><Link2 size={20} /> Connect with {name}</>}</h3>
+      <h3>{st?.status === "own" ? <><Link2 size={20} /> Your Passport</>
+        : st?.status === "connected"
+        ? <><CheckCircle2 size={20} /> {name} is on your roster</>
+        : <><UserPlus size={20} /> Add {name} to your roster</>}</h3>
       {body}
       {err && <p className="claim-err" role="alert">{err}</p>}
     </div>
@@ -31825,30 +31826,30 @@ function PassportDocGate({ gate, name, refCode, cx, onClose, onShow }) {
   const connected = st?.status === "connected";
   const title = !gate.on ? `${label} isn't on file yet`
     : !seat ? `Sign in to open ${label}`
-    : connected ? `${label} opens below` : `Connect to open ${label}`;
+    : connected ? `${label} opens below` : `Add ${name} to open ${label}`;
   let text, actions;
   if (!seat) {
     text = gate.on
-      ? `Opening ${name}'s documents takes a free SubSub account. Connect with them and every document on file stays current on your roster.`
-      : `Create a free SubSub account and connect with ${name}. You'll see it the moment they add it.`;
+      ? `Opening ${name}'s documents takes a free SubSub account. Add them to your roster and every document on file stays current there.`
+      : `Create a free SubSub account and add ${name} to your roster. You'll see it the moment they add it.`;
     actions = (<>
       <a className="pack-cta-solid" href={passportCtaHref(refCode)}>Create account</a>
       <button type="button" className="pack-cta-ghost" onClick={signIn}>Sign in</button>
     </>);
   } else if (connected) {
-    text = `You're connected with ${name}, so their documents open in the box below.`;
+    text = `${name} is on your roster, so their documents open in the box below.`;
     actions = <button type="button" className="pack-cta-solid" onClick={onShow}>See their documents</button>;
   } else if (st?.connectPending) {
-    text = `You've asked to connect. Their documents open here once ${name} accepts.`;
+    text = `You've asked to add them to your roster. Their documents open here once ${name} accepts.`;
     actions = <button type="button" className="pack-cta-ghost" onClick={onClose}>Close</button>;
   } else {
     text = gate.on
-      ? `${name}'s documents open here once you connect and they accept.`
-      : `Connect with ${name} and you'll see it the moment they add it.`;
+      ? `${name}'s documents open here once you add them to your roster and they accept.`
+      : `Add ${name} to your roster and you'll see it the moment they add it.`;
     actions = blocked ? <p className="pp-why">{blocked}</p> : (
       <button type="button" className="pack-cta-solid" disabled={busy || (team && !st)}
         onClick={async () => { await connect(); onShow(); }}>
-        <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
+        <UserPlus size={16} /> {busy ? "Sending…" : `Add ${name} to your roster`}
       </button>
     );
   }

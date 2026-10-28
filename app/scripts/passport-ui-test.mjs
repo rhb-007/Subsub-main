@@ -246,7 +246,7 @@ try {
       !!r.powered?.mark && r.powered.outside && r.powered.left && r.powered.above && !r.powered.inCardLockup, JSON.stringify(r.powered));
     t.ck("the card opens on a kicker and a big headline", /^subcontractor$/i.test(r.powered?.kicker || "") && r.powered.h1px >= 28, JSON.stringify(r.powered));
     t.ck("the license is the green box at a glance", r.lic?.ok && /License verified/.test(r.lic.t) && /BAYROR\*123/.test(r.lic.t), JSON.stringify(r.lic));
-    t.ck("the header's CTA names the sub", r.head?.t === "Connect with Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
+    t.ck("the header's CTA names the sub", r.head?.t === "Sign in to add Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
     t.ck("a QR code of its own address in the header", !!r.qr && !!r.side, JSON.stringify(r.side));
     t.ck("the CTA is on the left, under the name and the lede", !!r.side?.ctaUnderLede && !!r.side.ctaLeft, JSON.stringify(r.side));
     t.ck("one column: the documents, the BBB card, then the connect box",
@@ -271,7 +271,7 @@ try {
     t.ck("icons only, each with its word as a tooltip",
       r.share.length >= 3 && r.share.every((s) => s.words === "" && s.tip === s.t), JSON.stringify(r.share));
     t.ck("no Hire subcontractors box at the foot", r.cta === null && !/Hire subcontractors\?/.test(r.text), r.cta?.t);
-    t.ck("signed out, connecting is offered behind a sign-in", /Sign in to connect/.test(r.access) && !/Certificate of insurance/.test(r.access), r.access);
+    t.ck("signed out, connecting is offered behind a sign-in", /Sign in to add Bay Roofing/.test(r.access) && /Add Bay Roofing to your roster/.test(r.access) && !/Certificate of insurance/.test(r.access), r.access);
     t.ck("and a free signup credited to this sub", r.signup === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", r.signup);
     t.ck("photos of their work", r.photos === 3);
     t.ck("the BBB rating is drawn with the grade, accreditation and where it came from",
@@ -395,20 +395,20 @@ try {
       seat: { userId: "u_rb", accountId: "acc_x" }, path: `/p/${SLUG}` });
     await wait(2400);
     let r = await readPage(page);
-    t.ck("signed in, the page offers to connect", /Connect with Bay Roofing/.test(r.access) && !/Ask to see/.test(r.access), r.access);
+    t.ck("signed in, the page offers to add them to the roster", /Add Bay Roofing to your roster/.test(r.access) && !/Ask to see/.test(r.access), r.access);
     await page.evaluate(() => {
       const i = document.querySelector(".pp-access input");
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, "For the Pine St job");
       i.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const before = S.posts.length;
-    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => b.innerText.trim() === "Connect")?.click());
+    await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => b.innerText.trim() === "Add to your roster")?.click());
     await wait(900);
     const sent = S.posts.slice(before);
     t.ck("connecting posts to the connect route with the note",
       sent.length === 1 && sent[0].path.endsWith("/connect") && sent[0].body.message === "For the Pine St job", JSON.stringify(sent));
     r = await readPage(page);
-    t.ck("and then says it is waiting", /You asked to connect/.test(r.access), r.access);
+    t.ck("and then says it is waiting", /You asked to add Bay Roofing to your roster/.test(r.access), r.access);
     t.ck("and the header says Requested rather than Connect", r.head?.chip && r.head.t === "Requested", JSON.stringify(r.head));
     S.access = NOT_CONNECTED();
     await page.reload({ waitUntil: "domcontentloaded" });
@@ -429,8 +429,8 @@ try {
       const m = document.querySelector(".pp-doc-gate");
       return m ? { h: m.querySelector("h3")?.innerText, acts: [...m.querySelectorAll(".pgm-actions button")].map((x) => x.innerText.trim()) } : null;
     });
-    t.ck("signed in, a document row says connecting opens it, with Connect", g2?.h === "Connect to open Certificate of insurance"
-      && g2.acts.join() === "Connect with Bay Roofing", JSON.stringify(g2));
+    t.ck("signed in, a document row says connecting opens it, with Connect", g2?.h === "Add Bay Roofing to open Certificate of insurance"
+      && g2.acts.join() === "Add Bay Roofing to your roster", JSON.stringify(g2));
     await page.evaluate(() => document.querySelector(".pp-doc-gate .modal-close, .pp-doc-gate [aria-label=Close]")?.click());
     // A reader who cannot connect sees the same offer, greyed out, with the
     // reason under it -- not a bare sentence where the offer was.
@@ -439,19 +439,19 @@ try {
     await wait(2200);
     const bl = await page.evaluate(() => {
       const box = document.querySelector(".pp-access"), head = document.querySelector(".pp-head-cta");
-      const btn = [...(box?.querySelectorAll("button") || [])].find((b) => b.innerText.trim() === "Connect");
+      const btn = [...(box?.querySelectorAll("button") || [])].find((b) => b.innerText.trim() === "Add to your roster");
       return { t: (box?.innerText || "").replace(/\s+/g, " "), perks: box?.querySelectorAll(".pp-perks li").length || 0,
         btn: !!btn, btnOff: !!btn?.disabled, inputOff: !!box?.querySelector(".pp-blocked input")?.disabled,
         btnBg: btn ? getComputedStyle(btn).backgroundColor : null,
         head: !!head, headOff: !!head?.disabled, headT: head?.innerText.trim() || "",
         headBg: head ? getComputedStyle(head).backgroundColor : null };
     });
-    t.ck("a reader who cannot connect still sees the whole offer", bl.perks === 4 && /Connect with Bay Roofing/.test(bl.t) && bl.btn, JSON.stringify(bl));
+    t.ck("a reader who cannot connect still sees the whole offer", bl.perks === 4 && /Add Bay Roofing to your roster/.test(bl.t) && bl.btn, JSON.stringify(bl));
     t.ck("with the box's Connect and note greyed out", bl.btnOff && bl.inputOff && /211, 214, 209/.test(bl.btnBg || ""), JSON.stringify(bl));
     t.ck("and the reason under it", /Only an account that hires can connect/.test(bl.t), bl.t);
-    t.ck("the header's Connect is there and greyed out too", bl.head && bl.headOff && /Connect with Bay Roofing/.test(bl.headT) && /211, 214, 209/.test(bl.headBg || ""), JSON.stringify(bl));
+    t.ck("the header's Connect is there and greyed out too", bl.head && bl.headOff && /Add Bay Roofing to your roster/.test(bl.headT) && /211, 214, 209/.test(bl.headBg || ""), JSON.stringify(bl));
     const before3 = S.posts.length;
-    await page.evaluate(() => { document.querySelector(".pp-head-cta")?.click(); [...document.querySelectorAll(".pp-access button")].find((b) => b.innerText.trim() === "Connect")?.click(); });
+    await page.evaluate(() => { document.querySelector(".pp-head-cta")?.click(); [...document.querySelectorAll(".pp-access button")].find((b) => b.innerText.trim() === "Add to your roster")?.click(); });
     await wait(800);
     t.ck("and pressing either sends nothing", S.posts.length === before3, JSON.stringify(S.posts.slice(before3)));
     // The reported case: signed in, but not a seat that can connect at all.
@@ -460,7 +460,7 @@ try {
     await wait(2400);
     const nt = await page.evaluate(() => {
       const box = document.querySelector(".pp-access"), head = document.querySelector(".pp-head-cta");
-      const btn = [...(box?.querySelectorAll("button") || [])].find((b) => b.innerText.trim() === "Connect");
+      const btn = [...(box?.querySelectorAll("button") || [])].find((b) => b.innerText.trim() === "Add to your roster");
       return { t: (box?.innerText || "").replace(/\s+/g, " "), perks: box?.querySelectorAll(".pp-perks li").length || 0,
         btnOff: !!btn?.disabled, headOff: !!head?.disabled };
     });
@@ -477,9 +477,9 @@ try {
     r = await readPage(page);
     t.ck("connected, every document opens with nothing asked",
       ["Certificate of insurance", "Surety bond", "W-9", "Signed agreement"].every((w) => r.access.includes(w))
-      && /You're connected/.test(r.access) && !/Connect with/.test(r.access)
+      && /Bay Roofing is on your roster/.test(r.access) && !/Add Bay Roofing to/.test(r.access)
       && !/\bConnect\b(?! ?ed)/.test(r.access.replace(/Connected/g, "")), r.access);
-    t.ck("connected, the header says so instead of offering Connect", r.head?.chip && r.head.t === "Connected", JSON.stringify(r.head));
+    t.ck("connected, the header says so instead of offering Connect", r.head?.chip && r.head.t === "On your roster", JSON.stringify(r.head));
     t.ck("and the SubSub agreement is there to read and download",
       /SubSub Standard Subcontractor Agreement/.test(r.access) && /Read the agreement/.test(r.access) && /Download/.test(r.access), r.access);
     await page.evaluate(() => [...document.querySelectorAll(".pp-access button")].find((b) => /Read the agreement/.test(b.innerText))?.click());

@@ -15790,6 +15790,20 @@ refactor.
   screen mid-switch. Removing the screen reproduces the report: the header and
   the stale empty state are both drawn.
 
+- **THE PASSPORT'S CALLS TO ACTION SAY WHAT THEY DO: ADD THE SUB TO YOUR
+  ROSTER.** Asked as *"is the whole point to add subcontractors from the
+  passport... say sign in to add Rudd"*. "Connect" told a hiring reader
+  nothing about what they would get. The signed-out buttons in the header and
+  the box now read **Sign in to add <name>**. Signed in, they read **Add <name>
+  to your roster** (and **Add to your roster** beside the note). The box is
+  headed *Add <name> to your roster*, and once accepted it reads *<name> is on
+  your roster*, with the header chip *On your roster*. The document-row window
+  uses the same words. That claim is true: accepting a connect request is what
+  writes the engagement on the hiring account's roster, and nothing changed
+  about the flow. *New to SubSub? Sign up free* stays beside it.
+  `test:passportui` (93) pins the words; putting "Sign in to connect" back
+  fails two assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
