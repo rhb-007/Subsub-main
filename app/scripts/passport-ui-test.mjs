@@ -279,6 +279,27 @@ try {
     t.ck("and says it is separate from the pack", !!r.bbb?.sep, r.bbb?.t);
     t.ck("no sideways scroll at 390px", !r.wide);
     t.ck("noindex on the page", r.robots === "noindex");
+    // Every document row asks, as the compliance pack page's Open does.
+    const btns = await page.evaluate(() => [...document.querySelectorAll(".pp-docs .pack-doc")].map((d) => d.querySelector(".pp-doc-open")?.innerText.trim() || null));
+    t.ck("every document row has a button", btns.length === 3 && btns.every((b) => b === "Open"), JSON.stringify(btns));
+    await page.evaluate(() => document.querySelectorAll(".pp-docs .pp-doc-open")[1]?.click());
+    await wait(500);
+    const g = await page.evaluate(() => {
+      const m = document.querySelector(".pp-doc-gate");
+      if (!m) return null;
+      const a = [...m.querySelectorAll(".pgm-actions a, .pgm-actions button")];
+      return { h: m.querySelector("h3")?.innerText, acts: a.map((x) => x.innerText.trim()), href: a[0]?.getAttribute("href") };
+    });
+    t.ck("pressing one opens a modal to sign in or create an account",
+      g?.h === "Sign in to open Surety bond" && g.acts.join() === "Create account,Sign in", JSON.stringify(g));
+    t.ck("and Create account is the signup credited to this sub", g?.href === "https://subsub.work/gc?ref=K7Q2MXRB&via=passport", g?.href);
+    await page.evaluate(() => [...document.querySelectorAll(".pp-doc-gate button")].find((b) => b.innerText.trim() === "Sign in")?.click());
+    await wait(600);
+    t.ck("its Sign in remembers to come back here",
+      await page.evaluate(() => sessionStorage.getItem("ss_after_login")) === `/p/${"bay-roofing-k7q2m"}`);
+    await page.evaluate(() => sessionStorage.removeItem("ss_after_login"));
+    await page.goto(new URL(`/p/${SLUG}`, page.url()).href, { waitUntil: "domcontentloaded" }).catch(() => {});
+    await wait(2000);
     await page.evaluate(() => document.querySelector(".pp-head-cta")?.click());
     await wait(800);
     t.ck("the header's Connect signs in and remembers where to come back to",
@@ -396,6 +417,18 @@ try {
     t.ck("the header's Connect connects in one press", sent2.length === 1 && sent2[0].path.endsWith("/connect"), JSON.stringify(sent2));
     r = await readPage(page);
     t.ck("and rings the box it sends you to", await page.evaluate(() => document.querySelector(".pp-access")?.classList.contains("ring")));
+    S.access = NOT_CONNECTED();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await wait(2200);
+    await page.evaluate(() => document.querySelector(".pp-docs .pp-doc-open")?.click());
+    await wait(500);
+    const g2 = await page.evaluate(() => {
+      const m = document.querySelector(".pp-doc-gate");
+      return m ? { h: m.querySelector("h3")?.innerText, acts: [...m.querySelectorAll(".pgm-actions button")].map((x) => x.innerText.trim()) } : null;
+    });
+    t.ck("signed in, a document row says connecting opens it, with Connect", g2?.h === "Connect to open Certificate of insurance"
+      && g2.acts.join() === "Connect with Bay Roofing", JSON.stringify(g2));
+    await page.evaluate(() => document.querySelector(".pp-doc-gate .modal-close, .pp-doc-gate [aria-label=Close]")?.click());
     // A reader who cannot connect sees the same offer, greyed out, with the
     // reason under it -- not a bare sentence where the offer was.
     S.access = { status: "none", reason: "not_a_hiring_account", mayRequest: false, mayConnect: false, connectPending: false, files: [] };

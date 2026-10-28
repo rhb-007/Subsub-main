@@ -31793,6 +31793,54 @@ function PassportConnectBox({ slug, seat, refCode, name, cx, ring = 0 }) {
   );
 }
 
+// A Passport document row's press. Signed out it is the compliance pack
+// page's gate, word for word in shape: Create account or Sign in. Signed in it
+// says that connecting is what opens them, with Connect where this seat can.
+function PassportDocGate({ gate, name, refCode, cx, onClose, onShow }) {
+  const label = DOC_LABELS[gate.kind] || "this document";
+  const { st, seat, team, busy, connect, signIn, blocked, err } = cx;
+  const connected = st?.status === "connected";
+  const title = !gate.on ? `${label} isn't on file yet`
+    : !seat ? `Sign in to open ${label}`
+    : connected ? `${label} opens below` : `Connect to open ${label}`;
+  let text, actions;
+  if (!seat) {
+    text = gate.on
+      ? `Opening ${name}'s documents takes a free SubSub account. Connect with them and every document on file stays current on your roster.`
+      : `Create a free SubSub account and connect with ${name}. You'll see it the moment they add it.`;
+    actions = (<>
+      <a className="pack-cta-solid" href={passportCtaHref(refCode)}>Create account</a>
+      <button type="button" className="pack-cta-ghost" onClick={signIn}>Sign in</button>
+    </>);
+  } else if (connected) {
+    text = `You're connected with ${name}, so their documents open in the box below.`;
+    actions = <button type="button" className="pack-cta-solid" onClick={onShow}>See their documents</button>;
+  } else if (st?.connectPending) {
+    text = `You've asked to connect. Their documents open here once ${name} accepts.`;
+    actions = <button type="button" className="pack-cta-ghost" onClick={onClose}>Close</button>;
+  } else {
+    text = gate.on
+      ? `${name}'s documents open here once you connect and they accept.`
+      : `Connect with ${name} and you'll see it the moment they add it.`;
+    actions = blocked ? <p className="pp-why">{blocked}</p> : (
+      <button type="button" className="pack-cta-solid" disabled={busy || (team && !st)}
+        onClick={async () => { await connect(); onShow(); }}>
+        <Link2 size={16} /> {busy ? "Sending…" : `Connect with ${name}`}
+      </button>
+    );
+  }
+  return (
+    <Modal onClose={onClose} className="pack-gate-modal pp-doc-gate">
+      <Lock size={22} className="pgm-icon" />
+      <h3>{title}</h3>
+      <p>{text}</p>
+      <div className="pgm-actions">{actions}</div>
+      {err && <p className="err-note">{err}</p>}
+      {!seat && <span className="pgm-fine">Free to start. No card needed.</span>}
+    </Modal>
+  );
+}
+
 function PassportPage({ slug, seat = null }) {
   const [p, setP] = useState(null);
   const [gone, setGone] = useState("");
@@ -31800,6 +31848,7 @@ function PassportPage({ slug, seat = null }) {
   // through them rather than showing one picture with no way to the next.
   const [big, setBig] = useState(null);
   const [ring, setRing] = useState(0);
+  const [docGate, setDocGate] = useState(null);
   const cx = usePassportConnect(slug, seat);
   useEffect(() => {
     let live = true;
@@ -31878,9 +31927,18 @@ function PassportPage({ slug, seat = null }) {
                   <b>{DOC_LABELS[kind] || kind}</b>
                   {facts && <div className="pack-doc-facts">{facts}</div>}
                 </div>
-                <span className={`pack-gated ${on ? "on" : ""}`}>
-                  {on ? <><CheckCircle2 size={13} /> On file</> : "Not on file"}
-                </span>
+                <div className="pack-doc-cta">
+                  <span className={`pack-gated ${on ? "on" : ""}`}>
+                    {on ? <><CheckCircle2 size={13} /> On file</> : "Not on file"}
+                  </span>
+                  {/* Every row asks, the way the compliance pack page's Open
+                      does: nothing opens from a Passport, so the press says
+                      what does (signing in, or signing up, and connecting). */}
+                  <button type="button" className="btn-ghost small pack-open pp-doc-open"
+                    onClick={() => setDocGate({ kind, on: !!on })}>
+                    {on ? <><Download size={13} /> Open</> : <><Lock size={13} /> Request</>}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -31896,6 +31954,11 @@ function PassportPage({ slug, seat = null }) {
             cover, and SubSub Verified reads nothing from it. */}
         <PassportBbbCard bbb={p.bbb} />
         <PassportConnectBox slug={p.slug} seat={seat} refCode={p.refCode} name={p.name} cx={cx} ring={ring} />
+        {docGate && (
+          <PassportDocGate gate={docGate} name={p.name} refCode={p.refCode} cx={cx}
+            onClose={() => setDocGate(null)}
+            onShow={() => { setDocGate(null); setRing((n) => n + 1); }} />
+        )}
 
         {/* Their work. The BBB rating moved into the Compliance pack box. */}
         {p.photos.length > 0 && (
@@ -43931,7 +43994,7 @@ body{background:var(--paper)}
 .pack-gate-modal h3{margin:10px 0 6px;font-size:20px}
 .pack-gate-modal p{margin:0 0 18px;color:var(--ink-soft);font-size:14.5px;line-height:1.5}
 .pgm-actions{display:flex;flex-direction:column;gap:10px}
-.pgm-actions a{min-height:46px;font-size:15px}
+.pgm-actions a,.pgm-actions button{min-height:46px;font-size:15px;width:100%;justify-content:center}
 .pgm-fine{display:block;margin-top:12px;font-size:12.5px;color:var(--ink-soft)}
 .pack-add{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
   margin-top:16px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--paper);

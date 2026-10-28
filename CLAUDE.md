@@ -15743,6 +15743,23 @@ refactor.
   Putting the contact back in the shape fails one assertion; dropping the
   nowrap fails two.
 
+- **EVERY PASSPORT DOCUMENT ROW HAS A BUTTON, AND PRESSING IT ASKS THEM TO
+  SIGN IN OR CREATE AN ACCOUNT, LIKE THE COMPLIANCE PACK PAGE.** Reported with
+  the signed-out Passport's *Not on file* column circled: *"These should all
+  prompt a modal to pop up, to either sign in or create an account like on
+  compliance pack"*. Each row keeps its On file / Not on file chip and gains
+  **Open** (on file) or **Request** (not on file). `PassportDocGate` is the
+  modal, in the pack page's `pack-gate-modal` shape:
+  - **signed out**: Create account (the sub's referral signup,
+    `passportCtaHref`) and Sign in (back to this Passport after signing in);
+  - **signed in, not connected**: says connecting opens it, with Connect, or
+    the reason this seat cannot connect;
+  - **already asked**: says it opens once they accept;
+  - **connected**: points at the documents in the connect box below.
+  Nothing is fetched from the row: the Passport still opens no file to anybody
+  who has not connected. `test:passportui` (91); a row button that does nothing
+  fails four assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
