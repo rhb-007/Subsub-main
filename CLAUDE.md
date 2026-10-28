@@ -15760,6 +15760,19 @@ refactor.
   who has not connected. `test:passportui` (91); a row button that does nothing
   fails four assertions.
 
+- **THE PASSPORT'S LOGO READS "SUBSUB | PASSPORT", THE ZIP IS SAID ONCE, AND
+  THE OWNER BADGE HUGS ITS WORD.** Asked for with the Rudd Development Passport
+  and the console's Team panel on screen. `PackTop` takes a `suffix`, drawn
+  after the mark and a rule, and only the Passport passes one, so the pack page
+  keeps the plain logo. The kicker under it is now *Subcontractor*, because the
+  word Passport moved up. *Based in* read *WA 98112 98112*: `passportPlace`
+  already ends in the ZIP when there is no town, so the row appends `p.zip` only
+  when the place does not already carry it. The console's `.pf-line-main` is a
+  column flex, which stretched the Owner badge across the row (579px);
+  `.owner-badge` is `align-self:flex-start` and `width:fit-content` now.
+  `test:passportui` (93) and `test:consolelists` (128); each of the three
+  mutations fails its own assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

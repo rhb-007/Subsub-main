@@ -41,7 +41,7 @@ const S = { verified: true, wallet: true, access: NOT_CONNECTED(), kind: "genera
   published: false, posts: [], pendingReq: true, bbb: true,
   myBbb: { linked: false, live: true } };
 const PAGE = () => ({
-  slug: SLUG, name: "Bay Roofing", city: "Tacoma", state: "WA", place: "Tacoma, WA",
+  slug: SLUG, name: "Bay Roofing", city: "Tacoma", state: "WA", place: "Tacoma, WA 98407",
   trades: [{ id: "roofing", label: "Roofing" }, { id: "gutters", label: "Gutters" }],
   area: "Tacoma, Seattle", foundedYear: 2012, years: "In business since 2012 · 14 years",
   about: "Residential re-roofs, two crews.",
@@ -200,6 +200,7 @@ const readPage = (page) => page.evaluate(() => {
       return { mark: logo.querySelectorAll("path").length > 3, outside: !c.contains(logo),
         left: Math.abs(lr.left - cr.left) < 4, above: lr.bottom <= cr.top + 1,
         kicker: c.querySelector(".pp-head .pack-kicker")?.innerText.trim() || "",
+        suffix: top.querySelector(".pack-brand .pack-brand-suffix")?.innerText.trim() || "",
         inCardLockup: !!c.querySelector(".pp-powered"),
         h1px: parseFloat(getComputedStyle(c.querySelector("h1")).fontSize) };
     })(),
@@ -243,14 +244,14 @@ try {
       /BAYROR\*123/.test(r.facts) && /Acme Mutual/.test(r.facts) && /W-9 On file/.test(r.facts), r.facts);
     t.ck("SubSub's logo sits outside the card, top left, like the compliance pack page",
       !!r.powered?.mark && r.powered.outside && r.powered.left && r.powered.above && !r.powered.inCardLockup, JSON.stringify(r.powered));
-    t.ck("the card opens on a kicker and a big headline", /passport/i.test(r.powered?.kicker || "") && r.powered.h1px >= 28, JSON.stringify(r.powered));
+    t.ck("the card opens on a kicker and a big headline", /^subcontractor$/i.test(r.powered?.kicker || "") && r.powered.h1px >= 28, JSON.stringify(r.powered));
     t.ck("the license is the green box at a glance", r.lic?.ok && /License verified/.test(r.lic.t) && /BAYROR\*123/.test(r.lic.t), JSON.stringify(r.lic));
     t.ck("the header's CTA names the sub", r.head?.t === "Connect with Bay Roofing" && !r.head.chip, JSON.stringify(r.head));
     t.ck("a QR code of its own address in the header", !!r.qr && !!r.side, JSON.stringify(r.side));
     t.ck("the CTA is on the left, under the name and the lede", !!r.side?.ctaUnderLede && !!r.side.ctaLeft, JSON.stringify(r.side));
     t.ck("one column: the documents, the BBB card, then the connect box",
       !!r.cols?.oneCol && r.cols.bbbBetween && r.cols.noCols && r.cols.docsHold, JSON.stringify(r.cols));
-    t.ck("the city and state are part of the headline", r.place === "Tacoma, WA", r.place);
+    t.ck("the city and state are part of the headline", r.place === "Tacoma, WA 98407", r.place);
     t.ck("a row per document, as on the pack page",
       r.cols?.rows.length === 3 && /Acme Mutual/.test(r.cols.rows[0]) && r.cols.rows.every((x) => /On file/.test(x)), JSON.stringify(r.cols?.rows));
     t.ck("and what is in the pack, named", /certificate of insurance/.test(r.cols?.what || ""), r.cols?.what);
@@ -260,6 +261,8 @@ try {
     t.ck("the code sits top LEFT, beside the name, on a phone too", !!r.side?.qrLeft && r.side.qrTop && r.side.nameRightOfQr, JSON.stringify(r.side));
     t.ck("the bond, the UBI and where they are based",
       /Surety bond On file/.test(r.facts) && /UBI 604123456/.test(r.facts) && /98407/.test(r.facts), r.facts);
+    t.ck("the logo reads SubSub | Passport", r.powered?.suffix === "Passport", JSON.stringify(r.powered));
+    t.ck("the ZIP is said once, not twice", (r.facts.match(/98407/g) || []).length === 1, r.facts);
     t.ck("never a file name", !/\.pdf/.test(r.text), r.text);
     t.ck("share by text, email and copy, as icons under the code",
       r.share.some((s) => s.t === "Text" && s.href?.startsWith("sms:?&body=") && decodeURIComponent(s.href).includes(`/p/${SLUG}`))

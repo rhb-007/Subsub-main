@@ -43,7 +43,7 @@ const BOOT = {
     // tell "paying" from "on Scale".
     acct("acc_gc2", "Northline Builders", "general_contractor", "scale", { comped: true, compNote: "Design partner",
       trades: ["roofing", "siding"] }),
-    acct("acc_pm", "Sound Property Management", "property_manager", "scale", { trades: ["roofing"] }),
+    acct("acc_pm", "Sound Property Management", "property_manager", "scale", { trades: ["roofing"], ownerUserId: "u_a3" }),
     acct("acc_port", "Harbor Portfolio", "portfolio_manager", "basic"),
     acct("acc_own", "Ruston Owner LLC", "building_owner", "basic"),
     // Canceled: off every live count, still in the list.
@@ -511,10 +511,14 @@ try {
     const guests = ps.find((p) => p.querySelector("h3")?.innerText.trim() === "Tenants and owners");
     return { team: names(team), guests: names(guests),
       guestRole: guests?.querySelector(".role-badge")?.innerText.trim() || null,
-      guestUnit: /unit 53/.test(guests?.innerText || "") };
+      guestUnit: /unit 53/.test(guests?.innerText || ""),
+      badge: (() => { const b = team?.querySelector(".owner-badge"), l = b?.closest(".pf-line-main");
+        return b ? { w: Math.round(b.getBoundingClientRect().width), line: Math.round(l.getBoundingClientRect().width) } : null; })() };
   });
   t.ck("Sound opened, with a Team panel", !!panels?.team, JSON.stringify(panels));
   t.ck("the Team is the admin alone", JSON.stringify(panels?.team) === '["Sam Sound"]', JSON.stringify(panels?.team));
+  t.ck("the Owner badge hugs the word, not the whole line",
+    !!panels?.badge && panels.badge.w < 70 && panels.badge.w < panels.badge.line / 2, JSON.stringify(panels?.badge));
   t.ck("the tenant is in Tenants and owners", JSON.stringify(panels?.guests) === '["Ruth Owner"]', JSON.stringify(panels?.guests));
   t.ck("labelled as a tenant, with their unit", /tenant/i.test(panels?.guestRole || "") && panels?.guestUnit,
     JSON.stringify(panels));

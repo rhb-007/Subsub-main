@@ -31884,13 +31884,13 @@ function PassportPage({ slug, seat = null }) {
     <div className="pack-page pp-page">
       {/* The compliance pack page's frame: SubSub's mark outside the card, top
           left, with Sign in on the right. The card is the sub's. */}
-      <PackTop seat={seat} />
+      <PackTop seat={seat} suffix="Passport" />
       <div className="pack-card pp-card">
         {/* ONE DESIGN FOR BOTH. The compliance pack is the documents inside
             the Passport, so the Passport opens the way the pack page does:
             the shared headline, with its own QR code and share icons top
             right, and the one press it exists for under the name. */}
-        <PackHeader kicker="Subcontractor Passport" name={p.name} place={where}
+        <PackHeader kicker="Subcontractor" name={p.name} place={where}
           lede={p.years} trades={p.trades} url={url}>
           <PassportHeadCta cx={cx} name={p.name} onShow={() => setRing((n) => n + 1)} />
         </PackHeader>
@@ -31944,7 +31944,7 @@ function PassportPage({ slug, seat = null }) {
           </div>
           {(where || p.zip || p.area || p.ubi) && (
             <dl className="claim-facts pp-facts">
-              {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip].filter(Boolean).join(" ")}</dd></div>}
+              {(where || p.zip) && <div><dt><MapPin size={14} /> Based in</dt><dd>{[where, p.zip && !String(where || "").includes(p.zip) ? p.zip : ""].filter(Boolean).join(" ")}</dd></div>}
               {p.area && <div><dt><MapPin size={14} /> Works in</dt><dd>{p.area}</dd></div>}
               {p.ubi && <div><dt><Award size={14} /> UBI</dt><dd>{p.ubi}</dd></div>}
             </dl>
@@ -32514,12 +32514,13 @@ function DocInbox({ token, seat = null }) {
 // browser is handy. So signed out it says Sign in, and signed in it says which
 // account and goes there. Both go to this origin's front door, which is the
 // sign-in form when nobody is signed in and the account when somebody is.
-function PackTop({ seat = null }) {
+function PackTop({ seat = null, suffix = "" }) {
   return (
     <div className="pack-top">
       <a className="pack-brand" href="https://subsub.work/" target="_blank" rel="noopener"
-        aria-label="SubSub, visit subsub.work">
+        aria-label={suffix ? `SubSub ${suffix}, visit subsub.work` : "SubSub, visit subsub.work"}>
         <SubSubLogo height={22} />
+        {suffix && <><span className="pack-brand-rule" aria-hidden="true" /><span className="pack-brand-suffix">{suffix}</span></>}
       </a>
       <a className="pack-signin" href="/">
         {seat ? <><span>Go to {seat.accountName || "your account"}</span> <ArrowRight size={14} /></> : <span>Sign in</span>}
@@ -44007,7 +44008,9 @@ body{background:var(--paper)}
   .pack-doc{flex-wrap:wrap}
   .pack-doc-cta{width:100%;justify-content:flex-start}
 }
-.pack-brand{display:inline-flex;color:#111;text-decoration:none}
+.pack-brand{display:inline-flex;align-items:center;gap:10px;color:#111;text-decoration:none}
+.pack-brand-rule{width:1px;height:20px;background:#111;opacity:.35}
+.pack-brand-suffix{font-size:17px;font-weight:700;letter-spacing:-.01em;color:#111}
 .pack-top{width:100%;max-width:620px;display:flex;justify-content:space-between;align-items:center;gap:12px}
 .pack-page.wide .pack-top{max-width:760px}
 .pack-signin{margin-left:auto;display:inline-flex;align-items:center;gap:5px;min-height:40px;padding:0 14px;
@@ -45033,7 +45036,7 @@ p.fld-note{margin:6px 0 0}
 .r-admin{background:#eae4f2;color:#5b3f7a}
 .r-pm{background:#e9f0f6;color:#2b5c85}
 .r-contractor{background:#eaf3ee;color:#1f6b4a}
-.owner-badge{font-size:10px;font-weight:700;background:var(--brand);color:#fff;padding:2px 7px;border-radius:20px}
+.owner-badge{display:inline-block;align-self:flex-start;flex:none;width:fit-content;line-height:1.4;font-size:10px;font-weight:700;background:var(--brand);color:#fff;padding:2px 7px;border-radius:20px}
 .owner-note{font-size:13px;color:var(--ink-soft);margin:0 0 12px;line-height:1.45}
 .you-badge{font-size:10px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft);padding:2px 7px;border-radius:20px}
 .role-pick{display:flex;flex-direction:column;gap:8px;margin-top:8px}
