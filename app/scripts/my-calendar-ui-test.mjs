@@ -41,7 +41,14 @@ const day = (n) => {
   const d = new Date(); d.setDate(d.getDate() + n);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
-const SOON = day(2), LATER = day(5), FAR = day(62), GONE = day(-20);
+// Clamped to the last day of this month, which the comment above always said
+// and the code did not: on the 28th, five days out is next month, and the
+// suite then reported a calendar with no proposed day in it as a bug.
+const inMonth = (n) => {
+  const t = new Date(), last = new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate();
+  return day(Math.min(n, last - t.getDate()));
+};
+const SOON = inMonth(2), LATER = inMonth(5), FAR = day(62), GONE = day(-20);
 // A day in THIS month that is strictly in the past, floored at the 1st. It is
 // the only fixture that can tell "stay on a month with work in it" from
 // "always follow the work": both rules agree whenever the nearest future job

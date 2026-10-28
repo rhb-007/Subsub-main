@@ -33176,7 +33176,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
           <div className="jcal-month">
             <strong>{monthLabel}</strong>
             <span>{inMonth === 0 ? tt("nothing booked")
-              : `${inMonth} ${inMonth === 1 ? "job" : "jobs"}`}</span>
+              : inMonth === 1 ? tt("1 job") : tt("{n} jobs", { n: inMonth })}</span>
           </div>
           <button className="jcal-nav" onClick={() => step(1)} aria-label={tt("Next month")}>
             <ChevronRight size={16} />
@@ -33186,7 +33186,10 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
           }}>{tt("Today")}</button>
         </div>
         <div className="jcal-dows">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => <span key={d}>{d}</span>)}
+          {/* In the reader's language: a Spanish month over Sun..Sat is
+              half a translation. 2026-01-04 is a Sunday. */}
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => <span key={i}>
+            {new Date(2026, 0, 4 + i, 12).toLocaleDateString(uiLocale() || "en-US", { weekday: "short" }).replace(".", "")}</span>)}
         </div>
         <div className="jcal-grid">
           {cells.map((k, i) => {
@@ -33199,7 +33202,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                 className={`jcal-cell ${list.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}${off ? ` crew-${off}` : ""}${site.length ? " on-site" : ""}`}
                 onClick={() => setSelected(k === selected ? "" : k)}
                 aria-pressed={k === selected}
-                title={list.length ? `${list.length} job${list.length === 1 ? "" : "s"} on ${niceDay(k)}` : niceDay(k)}>
+                title={list.length ? `${list.length === 1 ? tt("1 job") : tt("{n} jobs", { n: list.length })} · ${niceDay(k)}` : niceDay(k)}>
                 <span className="jc-dom">{dayFromKey(k).getDate()}</span>
                 {list.length > 0 && (
                   <span className="jc-marks">
@@ -33216,7 +33219,7 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
                 {off && <span className={`jc-off ${off}`} aria-hidden="true">{off === "off" ? tt("Off") : tt("Part")}</span>}
                 {site.length > 0 && <span className="jc-site" aria-hidden="true" />}
                 <span className="sr-only">{list.length
-                  ? `${list.length} job${list.length === 1 ? "" : "s"}, ${tone(list) === "open" ? "not all confirmed" : "confirmed"}`
+                  ? `${list.length === 1 ? tt("1 job") : tt("{n} jobs", { n: list.length })}, ${tone(list) === "open" ? tt("not all confirmed") : tt("confirmed")}`
                   : tt("nothing booked")}{off === "off" ? tt(", every crew off") : off === "part" ? tt(", some crews off") : ""}</span>
               </button>
             );
@@ -33330,8 +33333,9 @@ function MyCalendar({ rows, onOpen, crews = [], onToggleCrewDay = null, onToggle
             to report to somebody trying to fill a week. */}
         {undated > 0 && (
           <p className="jcal-undated">
-            {undated === 1 ? tt("1 job has no date on it yet") : `${undated} jobs have no date on them yet`},
-            {" "}{tt("so nothing here can show")}{" "}{undated === 1 ? "it" : "them"}{tt(". Ask the office when they want you.")}
+            {undated === 1
+              ? tt("1 job has no date on it yet, so it can't be shown here. Ask the office when they want you.")
+              : tt("{n} jobs have no date on them yet, so they can't be shown here. Ask the office when they want you.", { n: undated })}
           </p>
         )}
       </div>
@@ -33454,7 +33458,7 @@ function MySchedule({ rows, onOpen, onOpenCalendar }) {
       </div>
       {undated > 0 && (
         <p className="sh-undated">
-          {undated === 1 ? tt("1 job has no date on it yet") : `${undated} jobs have no date on them yet`}
+          {undated === 1 ? tt("1 job has no date on it yet") : tt("{n} jobs have no date on them yet", { n: undated })}
           {tt(" — ask the office when they want you.")}
         </p>
       )}

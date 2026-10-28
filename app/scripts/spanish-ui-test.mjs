@@ -172,17 +172,28 @@ try {
   const cw = await page.evaluate(() => document.querySelector(".sec-cw")?.innerText || "");
   t.ck("and no English heading is left on the client work",
     cw.length > 0 && !/Work from your clients|waiting on you|Good (morning|afternoon|evening)/i.test(cw), (body.match(/Waiting on you|Job requests|Current & upcoming|Accept\b/g) || []).join(","));
-  const day = DAY(6);
-  const esMonth = new Date(`${day}T12:00:00`).toLocaleDateString("es-US", { month: "short" }).replace(".", "");
   // The crews' month, which sits on the roster page's My crews tab now.
   await goJobs(page, "^Subcontratistas");
   await wait(700);
   await page.evaluate(() => document.querySelectorAll(".net-view button")[1]?.click());
   await wait(700);
-  const calTxt = await page.evaluate(() => document.querySelector(".crew-cal")?.innerText || "");
-  const esLong = new Date().toLocaleDateString("es-US", { month: "long" });
-  t.ck("dates follow the language", calTxt.toLowerCase().includes(esLong.toLowerCase()) && esMonth.length > 0,
-    `${esLong} in ${calTxt.slice(0, 120)}`);
+  // The calendar opens where the work is, not on today's month (an empty
+  // month moves forward to the next job), so the month it shows depends on
+  // the date the suite runs. What is asserted is the LANGUAGE of what it
+  // shows: the month heading, the weekdays and the counts.
+  const cal = await page.evaluate(() => ({
+    month: document.querySelector(".crew-cal .jcal-month strong")?.innerText.trim() || "",
+    count: document.querySelector(".crew-cal .jcal-month span")?.innerText.trim() || "",
+    dows: [...document.querySelectorAll(".crew-cal .jcal-dows span")].map((x) => x.innerText.trim()),
+    text: document.querySelector(".crew-cal")?.innerText || "",
+  }));
+  const ES_MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
+    "septiembre", "octubre", "noviembre", "diciembre"];
+  t.ck("dates follow the language", ES_MONTHS.some((m) => cal.month.toLowerCase().startsWith(m)), JSON.stringify(cal.month));
+  t.ck("and so do the weekdays", cal.dows.length === 7 && !cal.dows.some((d) => /^(sun|mon|tue|wed|thu|fri|sat)$/i.test(d)),
+    JSON.stringify(cal.dows));
+  t.ck("and the count of jobs", !/\bjobs?\b/i.test(cal.count) && !/\bjobs?\b|\bconfirmed\b|aparecer it/i.test(cal.text),
+    JSON.stringify(cal.count) + " " + (cal.text.match(/.{0,30}\b(jobs?|confirmed)\b.{0,30}/i) || [""])[0]);
   await goJobs(page, "^Inicio");
   await wait(700);
 

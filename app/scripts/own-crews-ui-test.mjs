@@ -161,12 +161,25 @@ try {
   const today = await page.evaluate(() => {
     const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
-  const pickDay = (skip) => page.evaluate(({ today, skip }) => {
-    const cells = [...document.querySelectorAll(".jcal-cell[data-day]")].filter((c) => c.dataset.day > today);
-    const c = cells[skip];
-    c?.click();
-    return c?.dataset.day || null;
-  }, { today, skip });
+  // The (skip+1)th day after today. Near the end of a month there are not
+  // enough left, so it pages forward rather than clicking nothing -- which
+  // is what it did on the 28th, and reported a refusal that never happened
+  // as a refusal with no reason.
+  const pickDay = async (skip) => {
+    for (let pageN = 0; pageN < 2; pageN++) {
+      const got = await page.evaluate(({ today, skip }) => {
+        const cells = [...document.querySelectorAll(".jcal-cell[data-day]")].filter((c) => c.dataset.day > today);
+        const c = cells[skip];
+        if (c) { c.click(); return { day: c.dataset.day }; }
+        return { short: cells.length };
+      }, { today, skip });
+      if (got.day) return got.day;
+      skip -= got.short;
+      await page.evaluate(() => document.querySelector('.jcal-nav[aria-label="Next month"]')?.click());
+      await wait(400);
+    }
+    return null;
+  };
   const day = await pickDay(1);
   await wait(500);
   const row = await page.evaluate(() => document.querySelector(".jcd-crew")?.innerText.replace(/\s+/g, " ").trim() || "");
@@ -191,6 +204,11 @@ try {
   t.ck("a refused day is put back", !/crew-off/.test(drawn2), drawn2);
   const err = await page.evaluate(() => document.querySelector(".ss-main .fld-err")?.innerText || "");
   t.ck("and it says why", /Each crew needs a name/.test(err), err);
+  // The earlier day may be on the month before, if pickDay paged forward.
+  if (!(await page.$(`.jcal-cell[data-day="${day}"]`))) {
+    await page.evaluate(() => document.querySelector('.jcal-nav[aria-label="Previous month"]')?.click());
+    await wait(400);
+  }
   t.ck("and the earlier day is still off", /crew-off/.test(
     await page.evaluate((k) => document.querySelector(`.jcal-cell[data-day="${k}"]`)?.className || "", day)));
 

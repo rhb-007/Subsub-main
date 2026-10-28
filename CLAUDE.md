@@ -15852,6 +15852,27 @@ refactor.
   `test:ownlicense` (26) and `test:accttabs` (40). Dropping the clear-first
   fails two assertions; dropping the check on save fails ten.
 
+- **FOUR SUITES WERE RED FOR A STALE REASON, THREE OF THEM BECAUSE OF THE
+  DATE.** None was a product bug, and one turned up real untranslated text.
+  - **`test:subhome` pinned the QR panel's old words** ("My QR code",
+    "quickest", "schedule"). The panel has said *My Passport QR* and what
+    scanning it opens since the code became the Passport. The assertions now
+    read the current rule: the menu's name, the Passport, the compliance pack,
+    jobs, and who to show it to.
+  - **`test:spanishui`, `test:mycal` and `test:owncrewsui` broke near the end
+    of a month.** Each assumed a few days ahead were still in this month: the
+    Spanish suite expected today's month, while the calendar correctly opens
+    on the month the next job is in; the calendar suite's proposed visit fell
+    in November on Oct 28 (its own comment said "in this month wherever
+    possible" and the code never clamped); the crews suite clicked a fourth
+    future day that did not exist. Clamped, paged and asserted on the language
+    instead of the month.
+  - **And the Spanish calendar was half translated**: "1 job", "1 job,
+    confirmed", SUN to SAT, and a sentence ending "aparecer it". The counts go
+    through `tt` with `{n}`, the weekdays come from `toLocaleDateString` in the
+    reader's language, and the undated line is one whole sentence per count.
+    Putting the English weekdays and counts back fails two assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

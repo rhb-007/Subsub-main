@@ -944,14 +944,14 @@ try {
     t.ck("the QR code is on Profile", pr.there === true, JSON.stringify(pr));
     // Named the way the header menu names it. Two names for one object is how
     // somebody concludes there are two of them.
-    t.ck("under the name the menu already uses", /^my qr code$/i.test(pr.heading), pr.heading);
-    // It is not "here is a code". It is the reason to hold it up: the whole
-    // send-your-pack loop in one gesture, on somebody else's job site.
+    t.ck("under the name the menu already uses", /^my passport qr$/i.test(pr.heading), pr.heading);
+    // It is not "here is a code". It is what scanning it does: it opens the
+    // Passport, and accepting the connection hands over the compliance pack
+    // and lets them assign jobs.
     t.ck("and it says what scanning it does",
-      /compliance pack/i.test(pr.note) && /schedule/i.test(pr.note) && /jobs/i.test(pr.note),
+      /passport/i.test(pr.note) && /compliance pack/i.test(pr.note) && /jobs/i.test(pr.note),
       pr.note);
-    t.ck("told as the quickest way, not as a feature",
-      /quickest/i.test(pr.note), pr.note);
+    t.ck("and who to show it to", /general contractor/i.test(pr.note), pr.note);
     t.ck("and only once", pr.copies === 1, String(pr.copies));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
