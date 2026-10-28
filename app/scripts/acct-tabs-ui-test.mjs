@@ -47,7 +47,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (method === "POST" && path === "/api/my-company/verify-license") {
     checks++;
-    return [200, { found: true, status: "ACTIVE", expirationDate: "2028-06-30", checkedAt: "2026-10-28", licenseNumber: "OUTERHR881QT" }];
+    return new Promise((res) => setTimeout(() => res([200, { found: true, status: "ACTIVE", expirationDate: "2028-06-30", checkedAt: "2026-10-28", licenseNumber: "OUTERHR881QT" }]), 700));
   }
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
   if (path === "/api/account") return [200, acct()];
@@ -146,7 +146,19 @@ try {
   }));
   t.ck("the state register's answer is under License number", lic.active && /State register: Active/.test(lic.text) && lic.under, JSON.stringify(lic));
   await page.evaluate(() => [...document.querySelectorAll(".own-lic button")].find((b) => /Check now/.test(b.innerText))?.click());
-  await wait(800);
+  await wait(250);
+  // Held open by the stub, so the screen can be read while it checks.
+  const mid = await page.evaluate(() => ({
+    chip: document.querySelector(".own-lic .lic-chip")?.innerText || "",
+    spin: !!document.querySelector(".own-lic .own-lic-spin"),
+    turning: getComputedStyle(document.querySelector(".own-lic .own-lic-spin") || document.body).animationName,
+    btn: document.querySelector(".own-lic button")?.innerText.trim(),
+  }));
+  t.ck("while it checks, the line says who it is asking", /Checking with Washington L&I/.test(mid.chip), JSON.stringify(mid));
+  t.ck("with a turning spinner", mid.spin && mid.turning !== "none", JSON.stringify(mid));
+  t.ck("and the button says Checking", /Checking/.test(mid.btn || ""), JSON.stringify(mid));
+  await wait(900);
+  t.ck("once it answers, it says it just checked", /Checked just now/.test(await page.evaluate(() => document.querySelector(".own-lic")?.innerText || "")));
   const after = await page.evaluate(() => document.querySelector(".own-lic")?.innerText || "");
   t.ck("Check now asks the server", checks === 1, String(checks));
   t.ck("and draws the new answer", /Jun 30, 2028|2028/.test(after), after);

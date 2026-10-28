@@ -1489,6 +1489,24 @@ function ownLicenseLine(check, savedLicense) {
 function OwnLicenseCheck({ loaded, editing, onChecked, onSave, saving }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  // "Checked just now", for a few seconds after an answer comes back, so a
+  // check that lands on the same answer still reads as having happened.
+  const [justNow, setJustNow] = useState(false);
+  const was = useRef(false);
+  // Only this button's own press: Save profile on a change that does not
+  // touch the license is not a license check.
+  const checking = busy;
+  useEffect(() => {
+    if (was.current && !checking) {
+      setJustNow(true);
+      const t = setTimeout(() => setJustNow(false), 6000);
+      was.current = false;
+      return () => clearTimeout(t);
+    }
+    if (checking) was.current = true;
+    return undefined;
+  }, [checking]);
+  const register = String(loaded?.state || "").toUpperCase() === "WA" ? "Washington L&I" : tt("the state register");
   const line = ownLicenseLine(loaded?.licenseCheck || null, loaded?.license);
   // With nothing saved yet there is no line, but a typed number can still be
   // saved and checked in one press.
@@ -1498,7 +1516,11 @@ function OwnLicenseCheck({ loaded, editing, onChecked, onSave, saving }) {
     // runs the check when the license or state changes). This button was
     // greyed out with a note drawn under the line saying so, which read as a
     // button that did nothing.
-    if (editing) { setMsg(""); await onSave?.(); return; }
+    if (editing) {
+      setMsg(""); setBusy(true);
+      try { await onSave?.(); } finally { setBusy(false); }
+      return;
+    }
     setBusy(true); setMsg("");
     try {
       const r = await api.verifyMyLicense();
@@ -1512,12 +1534,15 @@ function OwnLicenseCheck({ loaded, editing, onChecked, onSave, saving }) {
     } finally { setBusy(false); }
   };
   return (
-    <div className="own-lic" role="status">
-      {editing
+    <div className="own-lic" role="status" aria-busy={checking}>
+      {checking
+        ? <span className="lic-chip s-checking"><span className="own-lic-spin" aria-hidden="true" /> {tt("Checking with {who}…", { who: register })}</span>
+        : editing
         ? <span className="lic-chip s-unknown"><Shield size={12} /> {tt("Not checked yet: this number isn't saved.")}</span>
         : <span className={`lic-chip ${line.tone}`}><Shield size={12} /> {line.text}</span>}
       <button type="button" className="doc-review" onClick={press} disabled={busy || saving}>
-        {busy || saving ? tt("Checking…") : editing ? tt("Save and check") : tt("Check now")}</button>
+        {checking ? tt("Checking…") : editing ? tt("Save and check") : tt("Check now")}</button>
+      {justNow && !checking && !msg && <span className="lic-verify-msg ok"><Check size={12} /> {tt("Checked just now")}</span>}
       {msg && <span className="lic-verify-msg warn">{msg}</span>}
     </div>
   );
@@ -48066,6 +48091,9 @@ a.meas-dl{text-decoration:none}
 .own-lic{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:-4px 0 14px}
 .own-lic .lic-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12.5px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}
 .own-lic .lic-chip.s-active{background:#e6f2ea;border-color:#b7d6c1;color:#22573a}
+.own-lic .lic-chip.s-checking{background:#fff8e8;border-color:#ecd49a;color:#7a5410}
+.own-lic-spin{width:12px;height:12px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:pf-spin .8s linear infinite;flex:none}
+@media (prefers-reduced-motion: reduce){.own-lic-spin{animation-duration:2.4s}}
 .own-lic .lic-chip.s-bad{background:#fbe9e6;border-color:#efc2ba;color:#9a3423}
 .seg-n{font-size:10.5px;font-weight:800;opacity:.6;margin-left:3px}
 

@@ -15861,6 +15861,15 @@ refactor.
   yet: this number isn't saved* rather than the old number's answer. Disabling
   it again fails three assertions.
 
+  **And a check you cannot see running reads as no check.** *"Can't currently
+  tell if it's actually checking."* While the press is out the line becomes an
+  amber chip with a turning ring, *Checking with Washington L&I…* (*the state
+  register* elsewhere), and for six seconds after the answer *Checked just
+  now* sits beside it, because a re-check that lands on the same answer looks
+  exactly like nothing happening. Tied to this button's own press, never the
+  panel's Save, which is not a license check when the number is unchanged. The
+  stub holds the check open so the suite reads the screen mid-check.
+
 - **FOUR SUITES WERE RED FOR A STALE REASON, THREE OF THEM BECAUSE OF THE
   DATE.** None was a product bug, and one turned up real untranslated text.
   - **`test:subhome` pinned the QR panel's old words** ("My QR code",
