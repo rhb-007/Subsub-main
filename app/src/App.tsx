@@ -1483,15 +1483,22 @@ function ownLicenseLine(check, savedLicense) {
   }
   if (check.status === "UNSUPPORTED_STATE") return { tone: "s-unknown", text: tt("SubSub can't check licenses in this state yet.") };
   if (check.status === "CHECK_FAILED") return { tone: "s-unknown", text: tt("The state register didn't answer. Try Check now in a few minutes.") };
-  return { tone: "s-bad", text: `${tt("Not found in the state register. Check the number and the state.")}${when}` };
+  return { tone: "s-bad", text: `${tt("Not found in the state register")}${when}. ${tt("Check the number and the state.")}` };
 }
 
-function OwnLicenseCheck({ loaded, editing, onChecked }) {
+function OwnLicenseCheck({ loaded, editing, onChecked, onSave, saving }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const line = ownLicenseLine(loaded?.licenseCheck || null, loaded?.license);
-  if (!line) return null;
+  // With nothing saved yet there is no line, but a typed number can still be
+  // saved and checked in one press.
+  if (!line && !editing) return null;
   const press = async () => {
+    // A number typed and not saved: SAVING it is what checks it (the PATCH
+    // runs the check when the license or state changes). This button was
+    // greyed out with a note drawn under the line saying so, which read as a
+    // button that did nothing.
+    if (editing) { setMsg(""); await onSave?.(); return; }
     setBusy(true); setMsg("");
     try {
       const r = await api.verifyMyLicense();
@@ -1506,11 +1513,11 @@ function OwnLicenseCheck({ loaded, editing, onChecked }) {
   };
   return (
     <div className="own-lic" role="status">
-      <span className={`lic-chip ${line.tone}`}><Shield size={12} /> {line.text}</span>
-      <button type="button" className="doc-review" onClick={press} disabled={busy || editing}
-        title={editing ? tt("Save the new number first") : undefined}>
-        {busy ? tt("Checking…") : tt("Check now")}</button>
-      {editing && <span className="fld-note">{tt("Save to check the new number.")}</span>}
+      {editing
+        ? <span className="lic-chip s-unknown"><Shield size={12} /> {tt("Not checked yet: this number isn't saved.")}</span>
+        : <span className={`lic-chip ${line.tone}`}><Shield size={12} /> {line.text}</span>}
+      <button type="button" className="doc-review" onClick={press} disabled={busy || saving}>
+        {busy || saving ? tt("Checking…") : editing ? tt("Save and check") : tt("Check now")}</button>
       {msg && <span className="lic-verify-msg warn">{msg}</span>}
     </div>
   );
@@ -24073,7 +24080,8 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
           </div>
           <OwnLicenseCheck loaded={loaded}
             editing={(f.license || "") !== (loaded?.license || "") || (f.state || "") !== (loaded?.state || "")}
-            onChecked={(ck) => setLoaded((l) => ({ ...l, licenseCheck: ck }))} />
+            onChecked={(ck) => setLoaded((l) => ({ ...l, licenseCheck: ck }))}
+            onSave={save} saving={busy} />
           <div className="fld-row">
             <label className="fld">{tt("City")}<input value={f.city} onChange={(e) => set("city", e.target.value)} placeholder="Seattle" /></label>
             <StateSelect value={f.state} onChange={(v) => set("state", v)} />

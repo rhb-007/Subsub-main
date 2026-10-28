@@ -15852,6 +15852,15 @@ refactor.
   `test:ownlicense` (26) and `test:accttabs` (40). Dropping the clear-first
   fails two assertions; dropping the check on save fails ten.
 
+  **And Check now was greyed out over an unsaved number, with the reason drawn
+  under the line.** Reported as *"not rechecking license when I select
+  recheck"*: the box read RUDDDC1044LF and the saved number was RUDDDCI044LF,
+  so the button was disabled and nothing said why where anybody could read
+  it. Over an unsaved number it is now **Save and check**, which runs the
+  panel's own save (the PATCH runs the check), and the line says *Not checked
+  yet: this number isn't saved* rather than the old number's answer. Disabling
+  it again fails three assertions.
+
 - **FOUR SUITES WERE RED FOR A STALE REASON, THREE OF THEM BECAUSE OF THE
   DATE.** None was a product bug, and one turned up real untranslated text.
   - **`test:subhome` pinned the QR panel's old words** ("My QR code",

@@ -35,9 +35,16 @@ const MY_COMPANY = {
   licenseCheck: { found: true, status: "ACTIVE", expirationDate: "2027-12-31", checkedAt: "2026-10-20", licenseNumber: "OUTERHR881QT" },
 };
 let checks = 0;
+const saves = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path, method) => {
+const api = serveApi({ port: API, routes: (path, method, body) => {
+  if (method === "PATCH" && path === "/api/my-company") {
+    const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
+    saves.push(b);
+    return [200, { ...MY_COMPANY, ...b, licenseVerify: { checked: true },
+      licenseCheck: { found: false, status: "NOT_FOUND", checkedAt: "2026-10-28", licenseNumber: b.license } }];
+  }
   if (method === "POST" && path === "/api/my-company/verify-license") {
     checks++;
     return [200, { found: true, status: "ACTIVE", expirationDate: "2028-06-30", checkedAt: "2026-10-28", licenseNumber: "OUTERHR881QT" }];
@@ -150,11 +157,19 @@ try {
     set.call(inp, "NEWNUMBER1"); inp.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await wait(300);
-  const edited = await page.evaluate(() => ({
-    disabled: [...document.querySelectorAll(".own-lic button")].find((b) => /Check now/.test(b.innerText))?.disabled,
-    note: document.querySelector(".own-lic")?.innerText || "",
-  }));
-  t.ck("an unsaved new number says to save first", edited.disabled === true && /Save to check/.test(edited.note), JSON.stringify(edited));
+  const edited = await page.evaluate(() => {
+    const b = [...document.querySelectorAll(".own-lic button")][0];
+    return { label: b?.innerText.trim(), disabled: b?.disabled, line: document.querySelector(".own-lic .lic-chip")?.innerText || "" };
+  });
+  // Reported: the button was greyed out over an unsaved number, with the
+  // reason drawn under the line, and read as a button that did nothing.
+  t.ck("an unsaved new number offers Save and check, pressable", edited.label === "Save and check" && edited.disabled === false, JSON.stringify(edited));
+  t.ck("and the line says it is not checked yet, not the old answer", /isn't saved/.test(edited.line) && !/Active/.test(edited.line), JSON.stringify(edited));
+  await page.evaluate(() => [...document.querySelectorAll(".own-lic button")][0]?.click());
+  await wait(900);
+  t.ck("pressing it saves the new number", saves.at(-1)?.license === "NEWNUMBER1", JSON.stringify(saves.at(-1)));
+  const done = await page.evaluate(() => document.querySelector(".own-lic")?.innerText || "");
+  t.ck("and draws the check the save came back with", /Not found in the state register/.test(done), done);
 
   t.ck("no page error", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
