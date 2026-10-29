@@ -24,7 +24,7 @@ const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const src = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8").split("\n");
-const start = src.findIndex((l) => l === "const CSS = `");
+const start = src.findIndex((l) => l === "const BASE_CSS = `" || l === "const CSS = `");
 const end = src.findIndex((l, i) => i > start && l === "`;");
 
 console.log("\n-- the block itself --");
