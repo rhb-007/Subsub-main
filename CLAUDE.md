@@ -15941,9 +15941,25 @@ refactor.
   form's *add them under Tenants*, because leaving a half-filled form to follow
   it would lose the form.
 
-  `test:deadend` (24) drives an admin and a pm through both empty states to the
+  `test:deadend` drives an admin and a pm through both empty states to the
   New property form, and pins the rest statically. Making `addBuilding` null
   fails eight assertions.
+
+  **And Properties itself was the third, reported the next message as "all
+  dead ends".** Its empty state said *No properties yet* with the only button
+  in the header two inches up, on the reasoning that two buttons for one thing
+  is one too many. Reported anyway: an empty list is where the eye lands. It
+  carries **Add a building** now, which reverses that comment.
+
+  **A seat that cannot add one is told WHO can, by name, with an email link**
+  (`AskAdmins`), not "ask an admin". That is a pm narrowed to named buildings:
+  the route would take a new building from them, and their scope would then
+  hide it, so the screen offers them the admins rather than the form. So
+  `addBuilding` follows `runsTheAccount`, not the role alone. An owner's
+  Properties keeps its own sentence, because their buildings are granted by
+  the manager. `test:deadend` (42) drives the narrowed pm on all three
+  screens; dropping the Properties button fails four, and dropping the admins
+  fails three.
 
 ## Working here
 

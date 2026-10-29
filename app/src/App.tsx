@@ -6349,10 +6349,18 @@ export default function SubSub() {
       }} />
   ) : null;
 
-  // POST /api/properties is admin or pm; every pane of My account these
-  // notes point at is admin-only (canManage).
+  // POST /api/properties is admin or pm, and the screen offers it to a seat
+  // that runs the account -- a pm narrowed to named buildings would add one
+  // they then cannot see. That seat is told who can, by name, with an email
+  // link, rather than "ask an admin": a sentence naming nobody is the dead end.
+  // Every pane of My account these notes point at is admin-only (canManage).
+  const canAddBuilding = can("properties") && runsTheAccount(role, membership);
   const appNav = {
-    addBuilding: can("properties") && (role === "admin" || role === "pm") ? tryAddProperty : null,
+    addBuilding: canAddBuilding ? tryAddProperty : null,
+    askAdmins: !canAddBuilding && isStaffRole(role)
+      ? accountUsers.filter((u) => u.role === "admin" && u.id !== me?.id && u.email)
+        .map((u) => ({ name: u.name || u.email, email: u.email }))
+      : [],
     goProperties: can("properties") ? () => setTab("properties") : null,
     goAccount: can("account") && role === "admin"
       ? (pane, focus) => { setTab("account"); setOpenPane({ pane, focus, n: Date.now() }); }
@@ -18938,16 +18946,19 @@ function PropertiesView({ properties, subs, jobs, onAdd, onPatch, onRemove, onOp
       )}
 
       {properties.length === 0 ? (
-        <div className="dash-empty"><Building2 size={24} />
+        <div className="dash-empty no-building"><Building2 size={24} />
           <p>{canManage
             ? "No properties yet. Add one and you can give it its own vendor list."
             : asOwner
             ? "No buildings have been shared with you. Whoever manages them can grant access."
             : "No buildings have been assigned to you. Whoever owns them can grant access."}</p>
-          {/* "New property" is already in the header, a couple of inches
-              above this and on screen whether or not the list is empty.
-              Two buttons doing one thing, one of them only sometimes, is
-              two things to read before deciding there is only one. */}
+          {/* The header's New property was meant to cover this, and was
+              reported as a dead end anyway: an empty list is where the eye
+              lands, and a button two inches up is not beside the sentence.
+              A seat that cannot add one is told who can. */}
+          {canManage
+            ? <button className="btn-solid dash-empty-btn" onClick={() => setForm({})}><Plus size={14} />{" "}{tt("Add a building")}</button>
+            : !asOwner && <AskAdmins what="a building" />}
         </div>
       ) : (() => {
         const openAt = (pid) => jobsFor(pid).filter((j) => j.status !== "completed").length;
@@ -26844,7 +26855,26 @@ function NoBuildingYet({ why }) {
       <p>{why}</p>
       {nav?.addBuilding
         ? <button className="btn-solid dash-empty-btn" onClick={nav.addBuilding}><Plus size={14} />{" "}{tt("Add a building")}</button>
-        : <p className="fine">{tt("Ask an admin on this account to add one.")}</p>}
+        : <AskAdmins what="a building" />}
+    </div>
+  );
+}
+
+// The seat that cannot do a thing is given the people who can, by name, with
+// a link that opens a message to them. "Ask an admin" with no admin named is
+// the dead end it replaces.
+function AskAdmins({ what }) {
+  const nav = React.useContext(AppNav);
+  const admins = nav?.askAdmins || [];
+  if (!admins.length) return <p className="fine ask-admins">{tt("Only an admin on this account can add one.")}</p>;
+  return (
+    <div className="ask-admins">
+      <p className="fine">{tt("Only an admin on this account can add one. Ask:")}</p>
+      {admins.slice(0, 3).map((a) => (
+        <a key={a.email} className="btn-ghost dash-empty-btn"
+          href={`mailto:${a.email}?subject=${encodeURIComponent(`Please add ${what} on SubSub`)}`}>
+          <Mail size={14} />{" "}{a.name}</a>
+      ))}
     </div>
   );
 }
@@ -47711,6 +47741,9 @@ button.mc-title:hover{text-decoration:underline}
 .dash-empty > svg{opacity:.5;margin-bottom:8px}   /* same trap, 8px and the New job button */
 .dash-empty p{margin:0;font-size:13.5px}
 .dash-empty-btn{display:inline-flex;align-items:center;gap:7px;margin-top:13px}
+.ask-admins{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:10px}
+.ask-admins p{flex-basis:100%;margin:0}
+.ask-admins .dash-empty-btn{margin-top:0;text-decoration:none}
 
 /* assign: choose existing vs new */
 .assign-choice{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}

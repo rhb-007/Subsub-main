@@ -35,6 +35,10 @@ const USERS = [
     subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
   { id: "u_pm", name: "Pat Lee", email: "pat@rudd.test", phone: null, role: "pm",
     subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
+  // A manager narrowed to a building the account no longer has: the server
+  // would take a new building from them, and they could not see it after.
+  { id: "u_npm", name: "Nora Quinn", email: "nora@rudd.test", phone: null, role: "pm",
+    subId: null, propertyIds: ["prop_gone"], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
 ];
 
 const web = serveApp({ dir: OUT, port: WEB });
@@ -81,7 +85,7 @@ try {
     const { ctx, page, crashes } = await visitApp(browser, { host: "ruddprops", webPort: WEB, seat: SEAT });
     for (let n = 0; n < 30; n++) { await wait(200); if ((await navLabels(page)).includes("Inspections")) break; }
 
-    for (const [screen, word] of [["Inspections", /inspection/i], ["Tenants", /tenant/i]]) {
+    for (const [screen, word] of [["Properties", /propert/i], ["Inspections", /inspection/i], ["Tenants", /tenant/i]]) {
       await go(page, screen);
       const e = await empty(page);
       t.ck(`${role}: ${screen} says why there is nothing`, e && word.test(e.text), JSON.stringify(e));
@@ -91,6 +95,28 @@ try {
       t.ck(`${role}: pressing it from ${screen} opens the New property form`, await formUp(page));
     }
     t.ck(`${role}: nothing crashed`, crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- a pm narrowed to named buildings --");
+  {
+    SEAT = { userId: "u_npm", accountId: "acc_pm", role: "pm" };
+    const { ctx, page, crashes } = await visitApp(browser, { host: "ruddprops", webPort: WEB, seat: SEAT });
+    for (let n = 0; n < 30; n++) { await wait(200); if ((await navLabels(page)).includes("Inspections")) break; }
+    for (const screen of ["Properties", "Inspections", "Tenants"]) {
+      await go(page, screen);
+      const e = await page.evaluate(() => {
+        const x = document.querySelector(".ss-main .no-building");
+        return x && { text: x.innerText, btn: [...x.querySelectorAll("button")].map((b) => b.innerText.trim()),
+          ask: [...x.querySelectorAll("a[href^='mailto:']")].map((a) => ({ text: a.innerText.trim(), href: a.getAttribute("href") })) };
+      });
+      t.ck(`narrowed: ${screen} has an empty state`, !!e, String(e));
+      t.ck(`narrowed: ${screen} offers no Add a building it cannot use`, e && !e.btn.some((b) => /Add a building/.test(b)), JSON.stringify(e));
+      t.ck(`narrowed: ${screen} names the admin with an email link`,
+        e?.ask?.length === 1 && e.ask[0].text === "Richard Braun" && /^mailto:rb@rudd\.test\?subject=/.test(e.ask[0].href),
+        JSON.stringify(e?.ask));
+    }
+    t.ck("narrowed: nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
 
