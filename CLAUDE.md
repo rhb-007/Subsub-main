@@ -15891,6 +15891,18 @@ refactor.
     reader's language, and the undated line is one whole sentence per count.
     Putting the English weekdays and counts back fails two assertions.
 
+- **THE COVERAGE FORM'S ZIP, MILES AND CITY BOXES ARE FULL-SIZE FIELDS.**
+  Reported from Where you'll work, opened through the console: *"Any form
+  within the console should be normal size, not this small version of a
+  form"*. `.radius-row input` set a width and nothing else, so the ZIP and
+  miles boxes fell back to the browser's own small black-bordered inputs
+  beside fields drawn at 44px. Both now take the field treatment (44px tall,
+  15px text, 16px on a phone so iPhone does not zoom, padding, the card
+  background and the line border), the miles box is 96px so three digits fit,
+  and the add-a-city box got the same height and size. The roster's Edit form
+  uses the same class, so it is fixed there too. `test:accttabs` measures all
+  three at 1024px and 390px; the old CSS fails four assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

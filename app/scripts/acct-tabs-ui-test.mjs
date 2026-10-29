@@ -183,6 +183,29 @@ try {
   const done = await page.evaluate(() => document.querySelector(".own-lic")?.innerText || "");
   t.ck("and draws the check the save came back with", /Not found in the state register/.test(done), done);
 
+  console.log("\n-- the coverage form's boxes are full-size fields --");
+  const fieldSize = () => page.evaluate(() => {
+    const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+      return { h: Math.round(r.height), w: Math.round(r.width), font: parseFloat(cs.fontSize), pad: parseFloat(cs.paddingLeft),
+        border: cs.borderTopStyle, bw: parseFloat(cs.borderTopWidth) }; };
+    const row = document.querySelector(".radius-row");
+    return { city: box(document.querySelector(".add-city-row input")),
+      zip: box(row?.querySelector("input:not([type=number])")), miles: box(row?.querySelector("input[type=number]")) };
+  });
+  const sized = (b, minFont) => !!b && b.h >= 44 && b.font >= minFont && b.pad >= 10 && b.border === "solid" && b.bw >= 1;
+  for (const [vw, vh, minFont] of [[1024, 768, 15], [390, 844, 16]]) {
+    await page.setViewport({ width: vw, height: vh }); await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".cov-toggle button")].find((b) => /Specific cities/.test(b.innerText))?.click());
+    await wait(200);
+    const c = await fieldSize();
+    t.ck(`${vw}px: the add-a-city box is a full-size field`, sized(c.city, minFont), JSON.stringify(c.city));
+    await page.evaluate(() => [...document.querySelectorAll(".cov-toggle button")].find((b) => /ZIP radius/.test(b.innerText))?.click());
+    await wait(200);
+    const r = await fieldSize();
+    t.ck(`${vw}px: the radius ZIP box is a full-size field`, sized(r.zip, minFont), JSON.stringify(r.zip));
+    t.ck(`${vw}px: the miles box is a full-size field, wide enough for three digits`, sized(r.miles, minFont) && r.miles.w >= 90, JSON.stringify(r.miles));
+  }
+
   t.ck("no page error", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
 } finally {

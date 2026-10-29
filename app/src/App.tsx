@@ -44993,7 +44993,11 @@ p.fld-note{margin:6px 0 0}
 .cov-toggle button{flex:1;border:1px solid var(--line);background:var(--card);padding:8px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--ink-soft);cursor:pointer}
 .cov-toggle button.on{background:var(--brand);color:#fff;border-color:var(--brand)}
 .radius-row{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:13px;color:var(--ink-soft)}
-.radius-row input{width:auto;flex:1;margin-top:0}.radius-row input[type=number]{max-width:80px;flex:none}
+.radius-row{font-size:14px}
+.radius-row input{width:auto;flex:1;margin-top:0;min-width:0;min-height:44px;border:1px solid var(--line);border-radius:9px;
+  padding:10px 12px;font-size:15px;font-family:inherit;color:var(--ink);background:var(--card)}
+.radius-row input[type=number]{width:96px;max-width:96px;flex:none}
+.radius-row input:focus{outline:2px solid var(--brand);outline-offset:-1px;border-color:var(--brand)}
 .doc-manage{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .doc-manage-row{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;border:1px solid var(--line)}
 .doc-manage-row.has{background:#f2f8f4;border-color:#d4e7db}
@@ -47787,7 +47791,7 @@ button.mc-title:hover{text-decoration:underline}
 
 /* coverage: custom cities + multiple radii */
 .add-city-row{display:flex;gap:8px;margin-top:12px}
-.add-city-row input{flex:1;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:14px;
+.add-city-row input{flex:1;min-height:44px;border:1px solid var(--line);border-radius:9px;padding:10px 12px;font-size:15px;
   font-family:inherit;color:var(--ink);background:var(--card);min-width:0}
 .add-city-row .btn-solid{flex:none;padding:10px 14px}
 .radii-edit{display:flex;flex-direction:column;gap:4px}
@@ -49892,7 +49896,8 @@ iframe.dv-frame{display:block}
   .add-city-row .btn-solid{width:100%;justify-content:center}
   .radius-row{flex-wrap:wrap}
   .radius-row input{flex:1 1 100%}
-  .radius-row input[type=number]{max-width:90px;flex:none}
+  .radius-row input[type=number]{width:96px;max-width:96px;flex:none}
+  .radius-row input,.add-city-row input{font-size:16px}
 
   /* job settings / docs on phones */
   .seg-tabs{width:100%}
