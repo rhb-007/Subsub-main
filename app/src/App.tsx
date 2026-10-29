@@ -6349,6 +6349,16 @@ export default function SubSub() {
       }} />
   ) : null;
 
+  // POST /api/properties is admin or pm; every pane of My account these
+  // notes point at is admin-only (canManage).
+  const appNav = {
+    addBuilding: can("properties") && (role === "admin" || role === "pm") ? tryAddProperty : null,
+    goProperties: can("properties") ? () => setTab("properties") : null,
+    goAccount: can("account") && role === "admin"
+      ? (pane, focus) => { setTab("account"); setOpenPane({ pane, focus, n: Date.now() }); }
+      : null,
+  };
+
   return (
     <InboxCtx.Provider value={{ inbox, openInbox, refreshInbox, me, threadNonce,
       // 082. A time answered or proposed from a conversation is the same
@@ -6368,6 +6378,7 @@ export default function SubSub() {
         setReportPreset({ scope: seed?.scope || "", fromThread: { id: thread.id, photos: seed?.photos || [] } });
         setTab("tenant"); setReportKey((k) => k + 1);
       } : null }}>
+    <AppNav.Provider value={appNav}>
     <div className="ss-root">
       <style>{CSS}</style>
       {/* Above everything, because it changes what the rest of the page means. */}
@@ -9120,6 +9131,7 @@ export default function SubSub() {
         <PoweredBy className="ss-foot-by" height={13} />
       </footer>
     </div>
+    </AppNav.Provider>
     </InboxCtx.Provider>
   );
 }
@@ -14253,11 +14265,7 @@ function TenantsPane({ properties, accountKind, jobs = [], visits = [], onOpenJo
   };
 
   if (properties.length === 0) {
-    return (
-      <div className="dash-empty"><Building2 size={24} />
-        <p>Add a building first — a tenant has to be a tenant of something.</p>
-      </div>
-    );
+    return <NoBuildingYet why="A tenant lives in one of your buildings, so add the building first." />;
   }
 
   // Adding one is a short form, so it opens over the roster rather than
@@ -21508,7 +21516,7 @@ function InspectionIngest({ isScale }) {
       {!isScale ? (
         /* Named plainly rather than hidden. Somebody whose inspection app could
            feed this needs to know it exists before they can decide to pay. */
-        <p className="cov-hint">The API is part of Scale. Your plan is on the Billing tab.</p>
+        <ScaleHint>The API is part of Scale.</ScaleHint>
       ) : (
         <>
           <code className="tok-val">{hookUrl}</code>
@@ -21830,7 +21838,7 @@ function ApiTokens({ isScale, canInspect }) {
       {!isScale ? (
         /* Named plainly rather than hidden. Somebody whose CRM could feed
            this needs to know it exists before they can decide to pay for it. */
-        <p className="cov-hint">The API is part of Scale. Your plan is on the Billing tab.</p>
+        <ScaleHint>The API is part of Scale.</ScaleHint>
       ) : (
         <>
           {/* Shown once, and said while it is on screen rather than
@@ -23590,6 +23598,7 @@ function LinkedDiscountNote() {
 }
 
 function UnitPrice({ onLoad }) {
+  const nav = React.useContext(AppNav);
   const [u, setU] = useState(null);
   useEffect(() => {
     let live = true;
@@ -23628,11 +23637,13 @@ function UnitPrice({ onLoad }) {
                 : <>{unitUsd(u.setupCents)} <em>· {u.setupLabel}</em></>}</strong></div>
           </div>
           {u.fromEstimate && (
-            <p className="up-estimate">{tt("Priced on the units you gave when you signed up, because no building here has a unit count yet. Once you add your buildings in Properties, the price follows them instead.")}</p>
+            <p className="up-estimate">{tt("Priced on the units you gave when you signed up, because no building here has a unit count yet. Once you add your buildings in Properties, the price follows them instead.")}
+              {nav?.goProperties && <>{" "}<button className="link-btn" onClick={nav.goProperties}>{tt("Open Properties")}</button></>}</p>
           )}
           {u.unknown > 0 && !u.fromEstimate && (
             <p className="up-unknown">
-              {u.unknown === 1 ? tt("One building has") : `${n(u.unknown)} buildings have`}{" "}{tt("no occupied count, so every unit there is counted as occupied. Add it on the building in Properties to bill only what is lived in.")}</p>
+              {u.unknown === 1 ? tt("One building has") : `${n(u.unknown)} buildings have`}{" "}{tt("no occupied count, so every unit there is counted as occupied. Add it on the building in Properties to bill only what is lived in.")}
+              {nav?.goProperties && <>{" "}<button className="link-btn" onClick={nav.goProperties}>{tt("Open Properties")}</button></>}</p>
           )}
           <p className="up-rule">{tt("Billed monthly. A change in occupancy shows on the next bill. The setup fee is charged once")}{u.setupCharged ? tt(" and has been.") : tt(", on the first bill at this price.")}
           </p>
@@ -26801,9 +26812,41 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
 // company row (a managing agent) has no office address anywhere in SubSub,
 // so it says nothing rather than pointing at a field that does not exist.
 function MapHqNote({ state }) {
-  if (state === "no_address") return <p className="fine map-hq-note">Your HQ isn't on the map: add your company's city and ZIP in Account → Company.</p>;
-  if (state === "not_found") return <p className="fine map-hq-note">Your HQ address couldn't be found on the map. Check it in Account → Company.</p>;
+  const nav = React.useContext(AppNav);
+  const go = nav?.goAccount
+    ? <>{" "}<button className="link-btn" onClick={() => nav.goAccount("company")}>Open Company</button></>
+    : null;
+  if (state === "no_address") return <p className="fine map-hq-note">Your HQ isn't on the map: add your company's city and ZIP in Account → Company.{go}</p>;
+  if (state === "not_found") return <p className="fine map-hq-note">Your HQ address couldn't be found on the map. Check it in Account → Company.{go}</p>;
   return null;
+}
+
+// A Scale-only feature on Basic: says so, and opens the Subscription tab
+// rather than naming it. A seat that cannot open it is told who can.
+function ScaleHint({ children, className = "" }) {
+  const nav = React.useContext(AppNav);
+  return (
+    <p className={`cov-hint ${className}`.trim()}>
+      {children}{" "}
+      {nav?.goAccount
+        ? <button className="link-btn" onClick={() => nav.goAccount("billing")}>See plans</button>
+        : "An admin can move the account to Scale."}
+    </p>
+  );
+}
+
+// No building yet: the reason, and the one press that fixes it. The press
+// opens the same property form the Properties screen and the Add menu do.
+function NoBuildingYet({ why }) {
+  const nav = React.useContext(AppNav);
+  return (
+    <div className="dash-empty no-building"><Building2 size={24} />
+      <p>{why}</p>
+      {nav?.addBuilding
+        ? <button className="btn-solid dash-empty-btn" onClick={nav.addBuilding}><Plus size={14} />{" "}{tt("Add a building")}</button>
+        : <p className="fine">{tt("Ask an admin on this account to add one.")}</p>}
+    </div>
+  );
 }
 
 // What could not be placed, said rather than left as pins quietly missing.
@@ -32154,6 +32197,7 @@ function PassportPhotoThumb({ id }) {
 }
 
 function PassportPanel() {
+  const nav = React.useContext(AppNav);
   const [d, setD] = useState(null);
   const [err, setErr] = useState("");
   const [f, setF] = useState(null);
@@ -32266,10 +32310,14 @@ function PassportPanel() {
             photos: d.photos });
           if (!gaps.length) return null;
           const where = { company: "Account → Company", docs: "Compliance pack", passport: "below" };
+          const go = { company: "Open Company", docs: "Open Compliance pack" };
           return (
             <div className="pp-gaps">
               <b>{tt("Fill these in so your Passport says everything")}</b>
-              <ul>{gaps.map((g) => <li key={g.key}>{g.label} <span className="pp-sub">({where[g.where]})</span></li>)}</ul>
+              <ul>{gaps.map((g) => <li key={g.key}>{g.label}{" "}
+                {nav?.goAccount && go[g.where]
+                  ? <button className="link-btn pp-gap-go" onClick={() => nav.goAccount(g.where)}>{tt(go[g.where])}</button>
+                  : <span className="pp-sub">({tt(where[g.where])})</span>}</li>)}</ul>
             </div>
           );
         })()}
@@ -35152,10 +35200,9 @@ function ReleaseWaivers({ release, onChanged }) {
   return (
     <div className="wv-release">
       {!onScale && (
-        <p className="cov-hint wv-plan">
+        <ScaleHint className="wv-plan">
           Lien waivers come with Scale, alongside paying your subcontractors through SubSub.
-          You can move to Scale in Account → Subscription.
-        </p>
+        </ScaleHint>
       )}
       {onScale && d.waivers.length === 0 && !asking && (
         <p className="cov-hint">No lien waiver asked for on this payment yet.</p>
@@ -38913,6 +38960,13 @@ const msgTime = (iso) => {
 // threaded through every component between the app and a job card.
 const InboxCtx = React.createContext(null);
 
+// WHERE A NOTE POINTS, ONE PRESS AWAY. A sentence naming another screen
+// ("add a building first", "it is in Account -> Company") with nothing
+// beside it is a dead end wearing instructions. These are the doors such a
+// note offers, each null for a seat the screen behind it would refuse, so
+// a note never offers a press the route turns down.
+const AppNav = React.createContext(null);
+
 // 082. One line of the job's own history, between the messages. Read from the
 // records, so the chat and the job cannot disagree about what happened.
 function threadEventText(e) {
@@ -41683,9 +41737,7 @@ function InspectionsView({ inspections, properties, subs, onReload, onGoJobs,
       </div>
 
       {canEdit && properties.length === 0 && (
-        <div className="dash-empty"><Building2 size={24} />
-          <p>Add a building first — an inspection is of a unit in one.</p>
-        </div>
+        <NoBuildingYet why="An inspection is of a unit in a building, so add the building first." />
       )}
 
       {err && <p className="billing-err" role="alert">{err}</p>}

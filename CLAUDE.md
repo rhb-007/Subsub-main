@@ -15903,6 +15903,48 @@ refactor.
   uses the same class, so it is fixed there too. `test:accttabs` measures all
   three at 1024px and 390px; the old CSS fails four assertions.
 
+- **A NOTE THAT NAMES ANOTHER SCREEN CARRIES THE PRESS THAT GETS THERE.**
+  Reported from Inspections on an account with no buildings: *"Add a building
+  first — an inspection is of a unit in one."* and nothing to press. Asked for
+  as *"add a prompt to add a building here instead of having it be a dead end,
+  scan all other pages"*.
+
+  **`AppNav` is one context with the doors such a note offers**, provided at
+  the app's root, so a deeply nested panel needs no props threaded to it.
+  Each door is null for a seat its route would refuse, so a note never offers
+  a press that answers 403:
+  - `addBuilding` opens the same property form the Add menu and the Properties
+    screen open (`tryAddProperty`), for admin or pm, which is what
+    `POST /api/properties` takes;
+  - `goProperties` for any seat with the Properties screen;
+  - `goAccount(pane, focus)` for an admin, because every My account pane these
+    notes point at is admin-only (`canManage`).
+
+  **What the scan found and fixed:**
+  - Inspections and Tenants with no building: `NoBuildingYet`, the reason and
+    **Add a building**, or *Ask an admin on this account to add one* for a
+    seat that cannot.
+  - The map's *add your company's city and ZIP in Account → Company*: **Open
+    Company**.
+  - *The API is part of Scale. Your plan is on the Billing tab* (twice), which
+    named a tab that has been called Subscription for months, and the lien
+    waiver's *move to Scale in Account → Subscription*: `ScaleHint`, with **See
+    plans**.
+  - The Passport's gap list, which named *Account → Company* and *Compliance
+    pack* beside each blank: **Open Company** / **Open Compliance pack**.
+  - The billing panel's *add your buildings in Properties* and *Add it on the
+    building in Properties*: **Open Properties**.
+
+  **Left as they are, deliberately:** a refusal telling somebody to do a thing
+  first on the same screen (void the work order, add an admin below), notes
+  addressed to another party (*ask them to open Getting paid*), and the job
+  form's *add them under Tenants*, because leaving a half-filled form to follow
+  it would lose the form.
+
+  `test:deadend` (24) drives an admin and a pm through both empty states to the
+  New property form, and pins the rest statically. Making `addBuilding` null
+  fails eight assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

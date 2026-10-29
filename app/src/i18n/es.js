@@ -1136,4 +1136,11 @@ export default {
   "the account": "la cuenta",
   "Signing in to {name}…": "Iniciando sesión en {name}…",
   "Open it from the menu under your name.": "Ábrala desde el menú bajo su nombre.",
+  "Add a building": "Agregar un edificio",
+  "Ask an admin on this account to add one.": "Pida a un administrador de esta cuenta que agregue uno.",
+  "Open Company": "Abrir Empresa",
+  "Open Compliance pack": "Abrir Paquete de cumplimiento",
+  "Open Properties": "Abrir Propiedades",
+  "below": "abajo",
+  "Account → Company": "Cuenta → Empresa",
 };
