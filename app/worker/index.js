@@ -27189,10 +27189,28 @@ app.delete("/api/platform/accounts/:id", async (c) => {
 
   const id = c.req.param("id");
   const b = await c.req.json().catch(() => ({}));
-  const account = await c.env.DB.prepare(`SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(id).first();
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, subdomain, company_id, stripe_subscription_id FROM accounts WHERE id = ?`).bind(id).first();
   if (!account) return c.json({ error: "not_found" }, 404);
   if (!typedNameMatches(b.confirmName, account.name)) {
     return c.json({ error: "confirm_name_mismatch" }, 400);
+  }
+
+  // A DELETED ACCOUNT MUST NOT GO ON BEING BILLED. Nothing here cancelled the
+  // Stripe subscription, so a customer removed from the console was charged
+  // next month for an account that no longer exists, with no row left to
+  // explain the charge. Cancelled first, and a cancel Stripe refuses stops
+  // the delete: an account still billing is better left in place, where it
+  // can be seen and tried again, than deleted from under its subscription.
+  // Already gone at Stripe (404) is the end state, so it carries on.
+  if (account.stripe_subscription_id && c.env.STRIPE_SECRET_KEY) {
+    try {
+      await stripeCall(c.env, `/subscriptions/${account.stripe_subscription_id}`, { method: "DELETE" });
+    } catch (err) {
+      if (err?.status !== 404) {
+        return c.json({ error: "stripe_cancel_failed", detail: String(err?.message || err) }, 502);
+      }
+    }
   }
 
   // Audited before the row goes, because the audit references it.
@@ -27228,7 +27246,32 @@ app.delete("/api/platform/accounts/:id", async (c) => {
     c.env.DB.prepare(`UPDATE events SET account_id = NULL WHERE account_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM accounts WHERE id = ?`).bind(id),
   ]);
-  return c.json({ ok: true });
+
+  // AND ITS OWN COMPANY ROW, which nothing cascaded. Since 031 a hireable
+  // account IS a company, and that row went on existing after the account:
+  // on the console's Companies list, and with a public Passport still
+  // answering at its address. It goes too -- unless another account still
+  // engages it, because then it is on somebody else's roster and deleting it
+  // would take a contractor off a roster nobody here was asked about. A row
+  // other records still point at (a work order, a document share) is kept for
+  // the same reason a company delete would refuse: the reply says which.
+  let company = null;
+  if (account.company_id) {
+    const others = await c.env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM engagements WHERE company_id = ? AND status <> 'ended'`)
+      .bind(account.company_id).first().catch(() => null);
+    if (others?.n) company = { kept: "engaged_by_others", accounts: others.n };
+    else {
+      try {
+        await c.env.DB.prepare(`DELETE FROM companies WHERE id = ?`).bind(account.company_id).run();
+        company = { deleted: true };
+      } catch (err) {
+        if (!/FOREIGN KEY/i.test(String(err?.message || err))) throw err;
+        company = { kept: "referenced" };
+      }
+    }
+  }
+  return c.json({ ok: true, company });
 });
 
 app.post("/api/platform/companies", async (c) => {

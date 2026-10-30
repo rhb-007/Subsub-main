@@ -2397,6 +2397,8 @@ export default function SubSub() {
       setPlatformErr(
         err?.status === 403 ? "You do not have permission to do that."
           : err?.body?.error === "confirm_name_mismatch" ? "That name did not match, so nothing was deleted."
+          : err?.body?.error === "stripe_cancel_failed"
+            ? `Stripe would not cancel the subscription, so nothing was deleted: ${err.body.detail || "no reason given"}.`
           : err?.body?.error === "subdomain_taken" ? "That sign-in address is already taken."
           : err?.body?.error === "already_a_member" ? "That person is already on this account."
           : failure

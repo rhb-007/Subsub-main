@@ -16028,6 +16028,21 @@ refactor.
   account. `test:linked` (50) and `test:linkedui` (22); ignoring `mySeat`
   fails one assertion.
 
+- **DELETING AN ACCOUNT CANCELS ITS STRIPE SUBSCRIPTION AND TAKES ITS OWN
+  COMPANY ROW WITH IT.** Asked to remove four accounts from the console's
+  list. Reading `DELETE /api/platform/accounts/:id` first found two gaps.
+  **It cancelled nothing at Stripe**, so a deleted account went on being
+  billed, with no row left to explain the charge. It now cancels the
+  subscription first, and a cancel Stripe refuses (other than an already-gone
+  404) stops the delete with `stripe_cancel_failed`, named on the console:
+  an account still billing is better left in place than deleted from under
+  its subscription. **And it left the account's own company row**, the one
+  031 mints for a hireable account, on the Companies list with a public
+  Passport still answering. That row now goes too, unless another account
+  still engages it (`kept: "engaged_by_others"`, because it is on somebody
+  else's roster) or other records point at it (`kept: "referenced"`). The
+  reply says which. `test:consoledelete` (40); three mutations fire.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

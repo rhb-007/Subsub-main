@@ -180,6 +180,61 @@ try {
       s === 400 && out.error === "confirm_name_mismatch", `${s} ${out.error}`);
   }
 
+  console.log("\n-- deleting an account cancels its billing and takes its own company --");
+  {
+    // A deleted account was still billed by Stripe, and its own company row
+    // (and public Passport) outlived it. A tiny Stripe stands in, because
+    // whether the cancel is ASKED is the property, and a refused cancel has
+    // to stop the delete.
+    const { createServer } = await import("node:http");
+    const asked = []; let refuse = false;
+    const stripe = createServer((req, res) => {
+      asked.push(`${req.method} ${req.url}`);
+      res.writeHead(refuse ? 400 : 200, { "content-type": "application/json" });
+      res.end(JSON.stringify(refuse ? { error: { message: "No such subscription" } } : { id: "sub_1", status: "canceled" }));
+    }).listen(8971);
+    try {
+      const mk = () => {
+        const { db, env } = seed();
+        db.exec(`
+          INSERT INTO companies(id,company) VALUES ('cmp_own_acc1','Cascade Management'),('cmp_own_acc2','Hired Co');
+          UPDATE accounts SET stripe_subscription_id = 'sub_1', company_id = 'cmp_own_acc1' WHERE id = 'acc1';
+          INSERT INTO passports(company_id, slug) VALUES ('cmp_own_acc1','cascade-x7k2m');`);
+        return { db, env: { ...env, STRIPE_SECRET_KEY: "sk_test", STRIPE_API_BASE: "http://127.0.0.1:8971/v1" } };
+      };
+      {
+        const { db, env } = mk();
+        const [s, out] = await json(await call(env, "/api/platform/accounts/acc1",
+          { method: "DELETE", body: { confirmName: "Cascade Management" } }));
+        ck("the delete goes through", s === 200, `${s} ${JSON.stringify(out)}`);
+        ck("and Stripe was asked to cancel the subscription", asked.includes("DELETE /v1/subscriptions/sub_1"), asked.join(" | "));
+        ck("its own company row went with it", !db.prepare(`SELECT 1 FROM companies WHERE id='cmp_own_acc1'`).get()
+          && out.company?.deleted === true, JSON.stringify(out.company));
+        ck("and so did its public Passport", !db.prepare(`SELECT 1 FROM passports WHERE company_id='cmp_own_acc1'`).get());
+      }
+      {
+        // Engaged by somebody else: it is on their roster, so it stays.
+        const { db, env } = mk();
+        db.exec(`INSERT INTO accounts(id,name,subdomain,kind,plan,billing) VALUES ('acc2','Other GC','othergc','general_contractor','basic','monthly');
+          INSERT INTO engagements(id,account_id,company_id,status) VALUES ('en_x','acc2','cmp_own_acc1','active');`);
+        const [s, out] = await json(await call(env, "/api/platform/accounts/acc1",
+          { method: "DELETE", body: { confirmName: "Cascade Management" } }));
+        ck("a company another account hires is kept, and the reply says why", s === 200
+          && out.company?.kept === "engaged_by_others"
+          && !!db.prepare(`SELECT 1 FROM companies WHERE id='cmp_own_acc1'`).get(), JSON.stringify(out));
+      }
+      {
+        const { db, env } = mk();
+        refuse = true;
+        const [s, out] = await json(await call(env, "/api/platform/accounts/acc1",
+          { method: "DELETE", body: { confirmName: "Cascade Management" } }));
+        refuse = false;
+        ck("a cancel Stripe refuses stops the delete", s === 502 && out.error === "stripe_cancel_failed"
+          && !!db.prepare(`SELECT 1 FROM accounts WHERE id='acc1'`).get(), `${s} ${JSON.stringify(out)}`);
+      }
+    } finally { stripe.close(); }
+  }
+
   console.log("\n-- the write that produced the untrimmed row --");
   {
     const { db, env } = seed();
