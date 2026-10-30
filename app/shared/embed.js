@@ -355,3 +355,41 @@ export function applyUrl(subdomain, { liveHost = false, origin = null } = {}) {
   if (liveHost) return `https://${sub}.subsub.work/?apply=1`;
   return `${origin || `https://${APP_HOST}`}/?apply=${encodeURIComponent(sub)}`;
 }
+
+// THE SIGN-IN BUTTON, the other half of a company's website. The sign-up
+// form can be pasted whole because it posts to a public route; a sign-in form
+// cannot, and must not: a password typed into a box on somebody else's page is
+// a password that page can read, and a box that looks like ours on a site we
+// do not run is how a phishing page looks too. So what is pasted is a button
+// that opens the account's own SubSub sign-in page, where the password is
+// typed on our origin and nowhere else.
+//
+// It goes to <sub>.subsub.work while that resolves (Scale, address live), and
+// to app.subsub.work otherwise -- which signs anybody in by email whatever
+// address they started from, so the button works on every plan.
+export function signInUrl(subdomain, { liveHost = false } = {}) {
+  const sub = String(subdomain || "").trim().toLowerCase();
+  if (liveHost && applyTargetOk(sub)) return `https://${sub}.subsub.work/`;
+  return `https://${APP_HOST}/`;
+}
+
+export function signInButtonHtml({ subdomain, accountName, theme = null, liveHost = false } = {}) {
+  const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
+  const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
+  const href = esc(signInUrl(subdomain, { liveHost }));
+  const label = accountName ? `Sign in to ${esc(accountName)}` : "Sign in";
+  return `<!-- ${esc(accountName || "SubSub").replace(/-{2,}/g, "-")} sign-in button, from SubSub. Opens your own SubSub sign-in page. -->
+<div id="subsub-signin">
+<style>
+#subsub-signin{font:inherit}
+#subsub-signin .ss-signin{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:9px;
+  background:${accent};color:${btnText};font-weight:700;font-size:15px;line-height:1.2;text-decoration:none;
+  border:0;min-height:44px;box-sizing:border-box}
+#subsub-signin .ss-signin:hover{background:${darken(accent)};color:${btnText}}
+#subsub-signin .ss-signin:focus-visible{outline:3px solid ${accent};outline-offset:3px}
+#subsub-signin .ss-signin-note{display:block;margin-top:6px;font-size:12px;opacity:.75}
+</style>
+<a class="ss-signin" href="${href}" target="_blank" rel="noopener">${label}</a>
+<span class="ss-signin-note">For your team and the subcontractors who work with you.</span>
+</div>`;
+}

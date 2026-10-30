@@ -15961,6 +15961,61 @@ refactor.
   screens; dropping the Properties button fails four, and dropping the admins
   fails three.
 
+- **THREE FIXES ON BRANDING: A SECOND BUSINESS NO LONGER WEARS THE FIRST
+  ONE'S PAGE TITLES, A BRANDED ADDRESS THE SWEEP HAD STOPPED LOOKING AT IS
+  PICKED UP, AND THE WEBSITE FORMS ARE A HALF OF BRANDING WITH A SIGN-IN
+  BUTTON BESIDE THE SIGN-UP FORM.** Reported from Sound Maintenance (`soundm`),
+  a second business: its tabs read *Sound-Property-Management-Sign-in*, its
+  address had read *being prepared* for a day, and the paste-it form sat at
+  the foot of the Branding page.
+
+  **The titles were copied.** `createSecondBusiness` copied the first
+  account's whole `theme`, and the two page titles live in it, so the second
+  business's sign-in and sign-up tabs named the other company.
+  `themeWithoutTitles` copies the colors and leaves the titles off, so the
+  pages fall back to titles built from the account's own name. **Migration
+  101** takes the copied titles off accounts already made: only on the second
+  account of a pair, only where the title is still exactly the first
+  account's, so one typed since stays. `m101_inv_linked_titles_copied` reads
+  non-zero until it is pasted. `test:linked` (48).
+
+  **The sweep named the states it would retry, and left two out.** It looked
+  at a Scale account only when its status was NULL, `pending` or `failed`, and
+  `checkHostname` can also answer `absent` (Pages has no such domain), which
+  the sweep then wrote and never looked at again, while the Branding tab drew
+  any status it did not know as *being prepared*. And it read `plan = 'scale'`
+  alone, while a comp is Scale everywhere else (`accountOnScale`), so the
+  promise could be made to an account the sweep never considered. Now:
+  - the sweep takes **every Scale or comped account that is not `active`**,
+    and a live comped address is never taken down;
+  - a pending address Pages answers `absent` for is registered again at once;
+  - `syncHostname` and the console's *Set it up now* read the comp too;
+  - **Check now** on the Branding tab (`POST /api/account/hostname`, admin,
+    Scale, 6 per 10 minutes) runs the setup and draws the server's answer;
+  - the panel draws `absent` as setting up and `unconfigured` as failed,
+    rather than as *being prepared*.
+  `test:hostnamesweep` (11); three mutations fire. **Not verified:** which of
+  these held `soundm`, since Cloudflare and the live database are unreachable
+  from here.
+
+  **Branding is two halves, Look and address and Website forms**, the
+  Pack & Passport shape (pane `forms`, Branding stays lit). Website forms holds
+  the sign-up form as a card, always open, the **Sign-in button** beside it
+  (side by side on a tablet), and the recruiting code (Scale) under them. The
+  Contractors pointer and the embed nudge email point at it.
+
+  **The sign-in half is a button, not a form**, deliberately: a password typed
+  into a box on somebody else's page is one that page can read, and a box that
+  looks like ours on a site we do not run is what a phishing page looks like.
+  `signInButtonHtml` in `shared/embed.js` opens the account's own sign-in page
+  (`signInUrl`): `<sub>.subsub.work` while it is live, app.subsub.work
+  otherwise, which signs anybody in by email, so it works on every plan. Its
+  colors go through the same `hex()` check as the sign-up form, and the
+  account name is escaped. `test:embedplace` (42) and `test:recruitqr` (27).
+  Three UI mutations fire. And `test:embedplace` had been red for a stale
+  reason: its *Contractors* match found the profile menu's *Recruiting QR for
+  subcontractors* before the nav entry.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

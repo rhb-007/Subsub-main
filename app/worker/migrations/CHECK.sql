@@ -866,6 +866,16 @@ WITH inv(j) AS (SELECT '['
   -- or the reason the assign route refused it, never neither.
   || (',' || json_array('m093_inv_held_released_nothing', (SELECT COUNT(*) FROM held_assignments
     WHERE released_at IS NOT NULL AND work_order_id IS NULL AND release_error IS NULL)))
+  -- 101. A second business still wearing the first one's page titles. Reads
+  -- non-zero until 101 is pasted and zero after, because making a second
+  -- business no longer copies them.
+  || (',' || json_array('m101_inv_linked_titles_copied', (SELECT COUNT(*) FROM business_links l
+    JOIN accounts a ON a.id = l.account_a JOIN accounts b ON b.id = l.account_b
+    WHERE json_valid(a.theme) AND json_valid(b.theme)
+      AND ((json_extract(b.theme, '$.signInTitle') IS NOT NULL
+            AND json_extract(b.theme, '$.signInTitle') = json_extract(a.theme, '$.signInTitle'))
+        OR (json_extract(b.theme, '$.applyTitle') IS NOT NULL
+            AND json_extract(b.theme, '$.applyTitle') = json_extract(a.theme, '$.applyTitle'))))))
   -- 096. A checklist item with a condition the screen cannot draw, or a
   -- negative cost.
   || (',' || json_array('m096_inv_bad_item', (SELECT COUNT(*) FROM inspection_items

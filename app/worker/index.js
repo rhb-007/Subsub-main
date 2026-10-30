@@ -7263,7 +7263,10 @@ async function syncHostname(env, account, { reason } = {}) {
   if (!sub) return null;
   if (!hostnameConfig(env)) return null;      // not wired up; nothing to record
 
-  const wanted = account.plan === "scale";
+  // A comp is Scale everywhere else (accountOnScale), so it is here too: the
+  // Branding tab tells a comped account its address is being prepared, and
+  // reading only the plan column would leave that promise to nobody.
+  const wanted = account.plan === "scale" || !!account.comped;
   try {
     const res = wanted
       ? await provisionHostname(env, sub)
@@ -21696,31 +21699,46 @@ async function licenseSweep(env) {
 async function hostnameSweep(env) {
   if (!hostnameConfig(env)) return { skipped: "cloudflare_not_configured" };
 
+  // EVERY SCALE ACCOUNT THAT IS NOT LIVE, NOT A LIST OF STATES. The old WHERE
+  // named NULL, pending and failed -- so an account whose last answer was
+  // "absent" (the Pages domain gone) or "unconfigured" fell out of it and was
+  // never looked at again, while the Branding tab told them their address was
+  // being prepared. A comp counts as Scale, as it does everywhere else.
   const { results } = await env.DB.prepare(
-    `SELECT id, subdomain, plan, hostname_status, hostname_error FROM accounts
-      WHERE (plan = 'scale' AND (hostname_status IS NULL OR hostname_status IN ('pending','failed')))
-         OR (plan != 'scale' AND hostname_status IN ('active','pending','failed'))`
+    `SELECT id, subdomain, plan, comped, hostname_status, hostname_error FROM accounts
+      WHERE subdomain IS NOT NULL AND (
+            ((plan = 'scale' OR comped = 1) AND (hostname_status IS NULL OR hostname_status <> 'active'))
+         OR (plan != 'scale' AND COALESCE(comped, 0) = 0
+             AND hostname_status IN ('active','pending','failed','absent')))`
   ).all();
 
   const changed = [];
   for (const a of results) {
     let res;
+    const onScale = a.plan === "scale" || !!a.comped;
     // PENDING WITH AN ERROR ON IT IS NOT WAITING, IT IS STUCK. Pages checks
     // the CNAME when the domain is added and does not always look again, so
     // a domain registered before its record sat on "CNAME record not set"
     // for ever while this only asked. Those go through provisioning, which
     // makes sure the record is right and asks Pages to re-validate.
-    if (a.plan === "scale" && a.hostname_status === "pending" && !a.hostname_error) {
+    if (onScale && a.hostname_status === "pending" && !a.hostname_error) {
       // Already registered and merely waiting on a certificate: ask, do not
       // re-register. Re-posting a pending hostname every few minutes is how
       // you find Cloudflare's rate limit.
       res = await checkHostname(env, a.subdomain);
-      await env.DB.prepare(
-        `UPDATE accounts SET hostname_status = ?, hostname_error = ?, hostname_checked_at = ? WHERE id = ?`
-      ).bind(res.status, res.error || null, new Date().toISOString(), a.id).run();
+      // Asked about and not there: Pages has no such domain, so there is
+      // nothing to wait for. Register it now rather than writing "absent"
+      // and waiting on a sweep that used to skip that word.
+      if (res.status === "absent") {
+        res = await syncHostname(env, a, { reason: "sweep_absent" });
+      } else {
+        await env.DB.prepare(
+          `UPDATE accounts SET hostname_status = ?, hostname_error = ?, hostname_checked_at = ? WHERE id = ?`
+        ).bind(res.status, res.error || null, new Date().toISOString(), a.id).run();
+      }
     } else {
-      // Never attempted, failed, or on the wrong side of a plan change.
-      // syncHostname records its own outcome.
+      // Never attempted, failed, absent, or on the wrong side of a plan
+      // change. syncHostname records its own outcome.
       res = await syncHostname(env, a, { reason: "sweep" });
     }
     if (res && res.status !== a.hostname_status) {
@@ -26597,6 +26615,17 @@ async function connectLinkedBusiness(env, { hiringAccountId, companyId, trades, 
   return engagementId;
 }
 
+// A stored theme with the two page titles taken off. Answers the JSON text to
+// store, or null for no theme at all.
+function themeWithoutTitles(raw) {
+  if (!raw) return null;
+  let t;
+  try { t = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return null; }
+  if (!t || typeof t !== "object") return null;
+  const { signInTitle: _s, applyTitle: _a, ...rest } = t;
+  return JSON.stringify(rest);
+}
+
 // Make the second business. `from` is the first account's row; `owner` is the
 // user who becomes admin of the new one. Answers { status, body }.
 async function createSecondBusiness(c, { from, ownerId, name, subdomain: rawSub, kind, staff = null }) {
@@ -26616,12 +26645,16 @@ async function createSecondBusiness(c, { from, ownerId, name, subdomain: rawSub,
 
   // What carries over is what is the same business: its trades, its colors and
   // its mark. Not the plan -- the new one starts on Basic and is subscribed on
-  // its own, which is what the discount is measured against.
+  // its own, which is what the discount is measured against. And not the
+  // page titles: those name the first business, so copied they put its name
+  // in the tab of the second one's sign-in and sign-up pages. Left out, the
+  // second business gets the defaults, which are built from its own name.
   const id = uid();
+  const theme = themeWithoutTitles(from.theme);
   await env.DB.prepare(
     `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, trades, theme, use_default_mark)
      VALUES (?, ?, ?, ?, 'basic', 'monthly', ?, ?, ?)`
-  ).bind(id, name, subdomain, kind, from.trades || null, from.theme || null,
+  ).bind(id, name, subdomain, kind, from.trades || null, theme,
     from.use_default_mark == null ? 1 : from.use_default_mark).run();
 
   // The logo is copied, never shared: an object two accounts point at is one
@@ -27638,6 +27671,25 @@ app.get("/api/platform/hostname-check", async (c) => {
   return c.json(await diagnose(c.env));
 });
 
+// The account's own "Check now" on the Branding tab. The sweep gets there
+// within ten minutes, but somebody watching "being prepared" for a day has
+// no way to tell a slow certificate from a stuck one, and no press to make.
+// Admin only, Scale (or comped) only, and rate-limited per account because
+// every press is a Cloudflare call. It answers the status and nothing of
+// Cloudflare's own words, which are about our configuration, not theirs.
+app.post("/api/account/hostname", requireRole("admin"), async (c) => {
+  const { accountId } = c.get("auth");
+  const account = await c.env.DB.prepare(
+    `SELECT id, subdomain, plan, comped FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!account) return c.json({ error: "not_found" }, 404);
+  if (!accountOnScale(account)) return c.json({ error: "not_on_scale" }, 409);
+  if (!hostnameConfig(c.env)) return c.json({ error: "cloudflare_not_configured" }, 501);
+  const rl = await rateLimit(c.env, "hostname-check", accountId, { limit: 6, windowMinutes: 10 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  const res = await syncHostname(c.env, account, { reason: "account_check" });
+  return c.json({ hostnameStatus: res?.status || null, checkedAt: new Date().toISOString() });
+});
+
 // Re-run provisioning for one account, now. The sweep gets there on its own
 // within ten minutes; this is for the support call where that is ten minutes
 // too long, and for reading back exactly what Cloudflare said.
@@ -27649,7 +27701,7 @@ app.post("/api/platform/accounts/:id/hostname", async (c) => {
   if (!hostnameConfig(c.env)) return c.json({ error: "cloudflare_not_configured" }, 501);
 
   const account = await c.env.DB.prepare(
-    `SELECT id, name, subdomain, plan FROM accounts WHERE id = ?`).bind(c.req.param("id")).first();
+    `SELECT id, name, subdomain, plan, comped FROM accounts WHERE id = ?`).bind(c.req.param("id")).first();
   if (!account) return c.json({ error: "not_found" }, 404);
 
   const res = await syncHostname(c.env, account, { reason: "platform_retry" });

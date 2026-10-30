@@ -172,9 +172,13 @@ console.log("\n-- both ways in reach the same code --");
   await page.evaluate(() => [...document.querySelectorAll("button")]
     .find((b) => b.innerText.trim() === "Branding")?.click());
   await wait(900);
+  // Branding is two halves; the code sits with the website forms.
+  await page.evaluate(() => [...document.querySelectorAll(".acct-subtabs button")]
+    .find((b) => b.innerText.trim() === "Website forms")?.click());
+  await wait(700);
 
   const onBranding = await page.evaluate(() => {
-    const panel = [...document.querySelectorAll(".rq-panel")][0];
+    const panel = document.querySelector(".forms-tab .rq-panel");
     return panel ? {
       heading: (panel.querySelector("h4")?.innerText || "").trim(),
       url: (panel.querySelector(".rq-url")?.innerText || "").trim(),
@@ -249,13 +253,18 @@ console.log("\n-- on Basic the code is withheld, and the snippet is not --");
     .find((b) => b.innerText.trim() === "Branding")?.click());
   await wait(900);
 
+  const branding = await page.evaluate(() => /Branding comes with Scale/i.test(document.body.innerText));
+  await page.evaluate(() => [...document.querySelectorAll(".acct-subtabs button")]
+    .find((b) => b.innerText.trim() === "Website forms")?.click());
+  await wait(700);
   const seen = await page.evaluate(() => ({
     // Read through `?.` so a missing panel reports as a missing panel rather
     // than throwing and hiding every assertion after it.
-    qr: !!document.querySelector(".rq-panel"),
-    snippet: !!document.querySelector(".embed-strip"),
-    branding: /Branding comes with Scale/i.test(document.body.innerText),
+    qr: !!document.querySelector(".forms-tab .rq-panel"),
+    snippet: !!document.querySelector(".forms-tab .embed-strip"),
+    forms: !!document.querySelector(".forms-tab"),
   }));
+  seen.branding = branding && seen.forms;
   t.ck("the Branding tab really did open, so the next two can fail",
     seen.branding, JSON.stringify(seen));
   t.ck("the code is withheld on Basic", seen.qr === false, JSON.stringify(seen));

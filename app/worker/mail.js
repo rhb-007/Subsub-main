@@ -1136,7 +1136,7 @@ export function embedNudgeEmail({ name, accountName, subdomain, subs }) {
 
 You have ${subs} contractors on ${accountName}. To get the next ones without chasing, let them apply from your website: they fill in a form and land on your Contractors screen for you to approve.
 
-Copy the code from "Let contractors apply from your own website" on your Contractors screen, or share the hosted form:
+Copy the code from My account > Branding > Website forms, or share the hosted form:
   https://${subdomain}.subsub.work/?apply=1
 
 -- SubSub`;

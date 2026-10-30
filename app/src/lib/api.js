@@ -541,6 +541,8 @@ export const api = {
   resumeSubscription: () => request("/billing/resume", { method: "POST" }),
 
   getAccount: () => request("/account"),
+  // The Branding tab's "Check now": runs the branded-address setup again.
+  checkHostname: () => request("/account/hostname", { method: "POST" }),
   // One's own notification choices.
   patchMe: (body) => request("/me", { method: "PATCH", body: JSON.stringify(body) }),
   // Public — no auth required, used to brand a login screen before signin.

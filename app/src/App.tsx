@@ -124,7 +124,7 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -7216,7 +7216,7 @@ export default function SubSub() {
               {/* The same mechanism the set-up checklist uses to send somebody
                   to a pane: a counter, so asking twice opens it twice. */}
               <button className="lnk" onClick={() => {
-                setTab("account"); setOpenPane({ pane: "branding", n: Date.now() });
+                setTab("account"); setOpenPane({ pane: "forms", n: Date.now() });
               }}>
                 Get the form
               </button>
@@ -8466,6 +8466,12 @@ export default function SubSub() {
               ? { ...a, hostnameStatus: fresh.hostnameStatus, hostnameCheckedAt: fresh.hostnameCheckedAt }
               : a));
             return fresh.hostnameStatus;
+          }}
+          onCheckHostname={async () => {
+            const r = await api.checkHostname();
+            setAccounts((prev) => prev.map((a) => a.id === account.id
+              ? { ...a, hostnameStatus: r.hostnameStatus, hostnameCheckedAt: r.checkedAt } : a));
+            return r;
           }} />
       )}
 
@@ -20921,10 +20927,42 @@ const ADDRESS_STATE = {
   failed:  { tone: "bad",  title: "We're sorting out your address",
              say: "Something went wrong setting it up and we've been notified. Everyone can keep signing in at app.subsub.work in the meantime." },
 };
+// Two words the server can store that are not one of the three above. Drawn
+// as the state they really are rather than as "being prepared", which was the
+// screen promising progress on an address nothing was working on.
+const ADDRESS_ALIAS = { absent: "pending", unconfigured: "failed" };
 
-function AddressStatus({ subdomain, status, onRefresh }) {
-  const [live, setLive] = useState(status);
+function AddressStatus({ subdomain, status, onRefresh, onCheckNow }) {
+  const [raw, setLive] = useState(status);
   useEffect(() => { setLive(status); }, [status]);
+  const live = ADDRESS_ALIAS[raw] || raw;
+  // "Check now": runs the setup again. A day of "being prepared" with nothing
+  // to press is a stuck address with no way out; the answer it draws is the
+  // server's, never one this panel invents.
+  const [checking, setChecking] = useState(false);
+  const [checkMsg, setCheckMsg] = useState("");
+  const checkNow = async () => {
+    setChecking(true); setCheckMsg("");
+    try {
+      const r = await onCheckNow();
+      const next = r?.hostnameStatus || null;
+      setLive(next);
+      setCheckMsg(next === "active" ? "" : tt("Checked just now. We'll keep at it, and it switches on by itself."));
+    } catch (e) {
+      setCheckMsg(e?.body?.error === "rate_limited"
+        ? tt("Checked a few times already. Give it ten minutes.")
+        : tt("Couldn't check just now. Try again in a minute."));
+    } finally { setChecking(false); }
+  };
+  const checkRow = onCheckNow && live !== "active" ? (
+    <div className="addr-check">
+      <button type="button" className="btn-ghost addr-check-btn" onClick={checkNow} disabled={checking}>
+        {checking ? <span className="addr-spin" aria-hidden="true" /> : <RefreshCw size={14} />}
+        {checking ? tt("Checking…") : tt("Check now")}
+      </button>
+      {checkMsg && <span className="addr-check-msg">{checkMsg}</span>}
+    </div>
+  ) : null;
 
   // Poll only while there is something to wait for, and stop the moment
   // there isn't. A timer that outlives its reason is a battery complaint.
@@ -20965,6 +21003,7 @@ function AddressStatus({ subdomain, status, onRefresh }) {
         <div className="addr-head"><Globe size={15} /><b>{tt("Your address is being prepared")}</b>
           <span className="addr-spin" aria-hidden="true" /></div>
         <p>{host}{" "}{tt("will be yours shortly. Until it is, everyone signs in at app.subsub.work.")}</p>
+        {checkRow}
       </div>
     );
   }
@@ -20982,6 +21021,7 @@ function AddressStatus({ subdomain, status, onRefresh }) {
           : host}
       </p>
       <p>{state.say}</p>
+      {checkRow}
     </div>
   );
 }
@@ -24439,7 +24479,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   onCancelSubscription, onResumeSubscription, cancelBusy,
   onAddUser, onRemoveUser, onEditUser, onLoginAs, onResendInvite, currentUserId,
   onPatchSub, onRequestDocs, onSeatLimit, onSaveNotify,
-  hostnameStatus, onRefreshHostname, properties = [], roleLabel,
+  hostnameStatus, onRefreshHostname, onCheckHostname, properties = [], roleLabel,
   emergencyCompanyId = null, onSetEmergencyContractor,
   autoTurnaround = false, onSetAutoTurnaround,
   incomingConnects = [], onRespondConnect, onReloadConnects, onSetMyAvatar,
@@ -24621,7 +24661,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
       {panes.length > 1 && (
         <div className="seg-tabs acct-tabs">
           {panes.map(([id, l]) => {
-            const on = pane === id || (id === "docs" && pane === "passport");
+            const on = pane === id || (id === "docs" && pane === "passport")
+              || (id === "branding" && pane === "forms");
             return <button key={id} className={on ? "on" : ""} onClick={() => setPane(id)}>{tt(l)}</button>;
           })}
         </div>
@@ -24630,6 +24671,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
         <div className="seg-tabs sm acct-subtabs">
           <button className={pane === "docs" ? "on" : ""} onClick={() => setPane("docs")}>{tt("Compliance pack")}</button>
           <button className={pane === "passport" ? "on" : ""} onClick={() => setPane("passport")}>{tt("Passport")}</button>
+        </div>
+      )}
+      {/* Branding is two halves, the way Pack & Passport is. The forms for a
+          company's own website sat at the very foot of a long branding page,
+          under the logo, the colors and two previews, which is why nobody
+          found them -- and they are a different job: what the account looks
+          like versus what it puts on somebody else's page. */}
+      {(pane === "branding" || pane === "forms") && canManage && (
+        <div className="seg-tabs sm acct-subtabs">
+          <button className={pane === "branding" ? "on" : ""} onClick={() => setPane("branding")}>{tt("Look and address")}</button>
+          <button className={pane === "forms" ? "on" : ""} onClick={() => setPane("forms")}>{tt("Website forms")}</button>
         </div>
       )}
 
@@ -25016,7 +25068,8 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               <p className="cov-hint">{tt("Not saved yet. Saving moves everyone to")}{" "}<b>{slug}{".subsub.work"}</b>{" "}{tt("— the old address stops working, so tell your team and your contractors before you do.")}</p>
             )}
 
-          <AddressStatus subdomain={brand.subdomain} status={hostnameStatus} onRefresh={onRefreshHostname} />
+          <AddressStatus subdomain={brand.subdomain} status={hostnameStatus} onRefresh={onRefreshHostname}
+            onCheckNow={onCheckHostname} />
 
           <div className="fld">{tt("Logo mark")}<div className="mark-row">
               <div className="mark-preview"><BrandMark brand={b} height={30} /></div>
@@ -25193,18 +25246,34 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           inside. The CODE is Scale, by decision: it is the in-person gesture
           that goes with a branded address, and `<sub>.subsub.work` is itself
           Scale. Same form behind both, different reach. */}
-      {pane === "branding" && canManage && canBrand && applySubdomain && applySubdomain !== "app"
-        && ACCOUNT_KINDS[accountKind]?.hires !== false && (
-        <RecruitQr subdomain={applySubdomain} accountName={brand.name}
-          words={rosterWords({ kind: accountKind })}
-          liveHost={hostnameStatus === "active"} />
-      )}
-
-      {pane === "branding" && canManage && applySubdomain && applySubdomain !== "app" && (
-        <EmbedApply subdomain={applySubdomain} accountName={brand.name} words={rosterWords({ kind: accountKind })}
-          trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
-          theme={brand?.theme || null}
-          liveHost={hostnameStatus === "active"} />
+      {pane === "forms" && canManage && (
+        <div className="forms-tab">
+          <p className="panel-note forms-intro">{tt("Put SubSub on your own website. The sign-up form lands new subcontractors in your account to review; the sign-in button takes your team and your subcontractors to your sign-in page.")}</p>
+          {/* Not plan-gated: POST /api/apply/:subdomain checks no plan, so the
+              sign-up form is on Basic too (test:embedplace). The sign-in
+              button points at app.subsub.work until the branded address is
+              live, so it works on every plan. */}
+          {applySubdomain && applySubdomain !== "app" ? (
+            <div className="forms-grid">
+              <EmbedApply card subdomain={applySubdomain} accountName={brand.name} words={rosterWords({ kind: accountKind })}
+                trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
+                theme={brand?.theme || null}
+                liveHost={hostnameStatus === "active"} />
+              <EmbedSignIn subdomain={applySubdomain} accountName={brand.name}
+                theme={brand?.theme || null} liveHost={hostnameStatus === "active"} />
+            </div>
+          ) : (
+            <p className="embed-note">{tt("Choose your subdomain under Look and address, and both forms will be here to copy.")}</p>
+          )}
+          {/* The code is Scale, by decision: it is the in-person gesture that
+              goes with a branded address (test:recruitqr). */}
+          {canBrand && applySubdomain && applySubdomain !== "app"
+            && ACCOUNT_KINDS[accountKind]?.hires !== false && (
+            <RecruitQr subdomain={applySubdomain} accountName={brand.name}
+              words={rosterWords({ kind: accountKind })}
+              liveHost={hostnameStatus === "active"} />
+          )}
+        </div>
       )}
 
       {removing && (
@@ -38647,9 +38716,12 @@ function EmbedCodeModal({ html, copied, onCopy, onClose }) {
   );
 }
 
-function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = true,
+function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = true, card = false,
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" } }) {
-  const [open, setOpen] = useState(false);
+  // On the Website forms tab it is a card, always open: the tab is the
+  // disclosure, and a second one inside it is a press for nothing.
+  const [opened, setOpen] = useState(false);
+  const open = card || opened;
   const [copied, setCopied] = useState("");
   const [preview, setPreview] = useState(false);
   // Read off `brand`, not `account`, and that is the right way round here: the
@@ -38671,15 +38743,25 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
   };
 
   return (
-    <section className="embed-strip">
-      <button className="embed-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        <Globe size={14} />
-        <span className="embed-h">
-          <b>{tt("Let contractors apply from your own website")}</b>
-          <em>{tt("A form you paste into your site. They land straight on your roster.")}</em>
-        </span>
-        <ChevronDown size={14} className={`um-caret ${open ? "up" : ""}`} />
-      </button>
+    <section className={`embed-strip ${card ? "embed-card" : ""}`}>
+      {card ? (
+        <div className="embed-card-h">
+          <UserPlus size={16} />
+          <span className="embed-h">
+            <b>{tt("Sign-up form")}</b>
+            <em>{tt("For subcontractors who want to work with you. They land in your account to review.")}</em>
+          </span>
+        </div>
+      ) : (
+        <button className="embed-head" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+          <Globe size={14} />
+          <span className="embed-h">
+            <b>{tt("Let contractors apply from your own website")}</b>
+            <em>{tt("A form you paste into your site. They land straight on your roster.")}</em>
+          </span>
+          <ChevronDown size={14} className={`um-caret ${open ? "up" : ""}`} />
+        </button>
+      )}
 
       {open && (
         <div className="embed-body">
@@ -38743,6 +38825,73 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
           <p className="embed-note">{tt("Applications arrive under")}{" "}<b>{tt("Asked to connect")}</b>{" "}{tt("on the")}{" "}{words.Many}{" "}{tt("screen. Nobody is added to your roster until you say so, and the form never asks for a password — whoever applies sets that themselves from the email.")}</p>
         </div>
       )}
+    </section>
+  );
+}
+
+// The sign-in half of the Website forms tab. A button, not a form: a password
+// typed into a box on somebody else's page is a password that page can read,
+// so the button opens the account's own SubSub sign-in page instead
+// (shared/embed.js, signInButtonHtml).
+function EmbedSignIn({ subdomain, accountName, theme = null, liveHost = false }) {
+  const [copied, setCopied] = useState("");
+  const link = signInUrl(subdomain, { liveHost });
+  const html = useMemo(() => signInButtonHtml({ subdomain, accountName, theme, liveHost }),
+    [subdomain, accountName, theme, liveHost]);
+  const accent = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.accent || "")) ? theme.accent : "#1f6b4a";
+  const btnText = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.btnText || "")) ? theme.btnText : "#ffffff";
+  const copy = async (what, text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(what); setTimeout(() => setCopied(""), 2200);
+    } catch { setCopied("no"); setTimeout(() => setCopied(""), 3000); }
+  };
+  return (
+    <section className="embed-strip embed-card embed-signin">
+      <div className="embed-card-h">
+        <LogIn size={16} />
+        <span className="embed-h">
+          <b>{tt("Sign-in button")}</b>
+          <em>{tt("For your team and the subcontractors who already work with you.")}</em>
+        </span>
+      </div>
+      <div className="embed-body">
+        <div className="signin-sample" aria-hidden="true">
+          <span className="signin-sample-btn" style={{ background: accent, color: btnText }}>
+            {accountName ? `${tt("Sign in to")} ${accountName}` : tt("Sign in")}</span>
+        </div>
+        <div className="embed-opt">
+          <div className="embed-opt-h">
+            <span className="embed-n">1</span>
+            <div>
+              <b>{tt("Just a link")}</b>
+              <em>{tt("For a menu item or an email signature.")}</em>
+            </div>
+            <button className="btn-ghost sm" onClick={() => copy("link", link)}>
+              {copied === "link" ? tt("Copied") : tt("Copy link")}
+            </button>
+          </div>
+          <code className="embed-link">{link}</code>
+        </div>
+        <div className="embed-opt">
+          <div className="embed-opt-h">
+            <span className="embed-n">2</span>
+            <div>
+              <b>{tt("The button")}</b>
+              <em>{tt("Paste it where you want it. It wears your branding colors.")}</em>
+            </div>
+            <button className="btn-solid sm" onClick={() => copy("html", html)}>
+              {copied === "html" ? tt("Copied") : tt("Copy the code")}
+            </button>
+          </div>
+          {copied === "no" && (
+            <p className="embed-note">{tt("Your browser wouldn’t let us copy that. Copy the link above by hand.")}</p>
+          )}
+        </div>
+        <p className="embed-note">{tt("Passwords are only ever typed on your SubSub sign-in page, never on your website.")}{" "}
+          {liveHost ? null : <>{tt("Until")}{" "}<b>{subdomain}{".subsub.work"}</b>{" "}{tt("is live, the button opens app.subsub.work, where everyone signs in with their email.")}</>}
+        </p>
+      </div>
     </section>
   );
 }
@@ -50585,6 +50734,17 @@ iframe.dv-frame{display:block}
 .addr-host a{color:var(--brand);text-decoration:none}
 .addr-host a:hover{text-decoration:underline}
 .addr-state p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0}
+.forms-intro{margin:4px 0 14px}
+.forms-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start;margin-bottom:18px}
+.embed-strip.embed-card{margin:0;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:0;overflow:hidden}
+.embed-card-h{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.embed-card-h svg{color:var(--brand);flex:none;margin-top:2px}
+.embed-card .embed-body{padding:14px 16px}
+.signin-sample{padding:14px;border:1px dashed var(--line);border-radius:10px;margin-bottom:12px;background:var(--paper)}
+.signin-sample-btn{display:inline-flex;align-items:center;min-height:44px;padding:0 20px;border-radius:9px;font-weight:700;font-size:15px}
+.addr-check{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
+.addr-check-btn{display:inline-flex;align-items:center;gap:6px;min-height:36px}
+.addr-check-msg{font-size:12.5px;color:var(--ink-soft)}
 
 /* ---- console: which settings the API has ------------------------------ */
 .pf-setup-list{display:flex;flex-direction:column;gap:6px;margin-top:4px}

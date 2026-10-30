@@ -80,7 +80,7 @@ const seed = ({ migrated = true } = {}) => {
   if (!migrated) db.exec(`DROP TABLE business_links;`);
   db.exec(`
     INSERT INTO accounts(id,name,subdomain,kind,plan,billing,trades,theme,use_default_mark)
-      VALUES ('acc_gc','Rudd Development','rudddev','general_contractor','basic','monthly','["roofing","painting"]','{"accent":"#123456"}',0),
+      VALUES ('acc_gc','Rudd Development','rudddev','general_contractor','basic','monthly','["roofing","painting"]','{"accent":"#123456","signInTitle":"Rudd-Development-Sign-in","applyTitle":"Rudd-Development-Sign-up"}',0),
              ('acc_pm2','Other PM','otherpm','property_manager','basic','monthly',NULL,NULL,1);
     INSERT INTO users(id,name,email,phone) VALUES ('u_marc','Marc Rudd','marc@rudd.test','2065550100'),
       ('u_pmx','Pat','pat@rudd.test',NULL),('u_ten','Ten','ten@x.test',NULL),('u_o','Ollie','o@x.test',NULL);
@@ -138,7 +138,11 @@ let pmId;
   const a = db.prepare(`SELECT * FROM accounts WHERE id = ?`).get(pmId);
   ck("on Basic, monthly, with the trades, colors and mark copied",
     a?.plan === "basic" && a.billing === "monthly" && a.trades === '["roofing","painting"]'
-    && a.theme === '{"accent":"#123456"}' && a.use_default_mark === 0, JSON.stringify(a));
+    && JSON.parse(a.theme || "{}").accent === "#123456" && a.use_default_mark === 0, JSON.stringify(a));
+  // The titles name the first business, so copied they put its name in the
+  // second one's tabs. Left off, the pages build them from its own name.
+  const t2 = JSON.parse(a?.theme || "{}");
+  ck("but not the first business's page titles", !("signInTitle" in t2) && !("applyTitle" in t2), a?.theme);
   const seat = db.prepare(`SELECT role FROM memberships WHERE user_id = 'u_marc' AND account_id = ?`).get(pmId);
   ck("the same person is its admin", seat?.role === "admin");
   ck("and nobody else was moved", !db.prepare(`SELECT 1 FROM memberships WHERE user_id = 'u_pmx' AND account_id = ? AND role <> 'contractor'`).get(pmId));
@@ -247,6 +251,34 @@ let pmId;
   ck("names the file and makes nothing", r.status === 503 && r.body.migration === "099_business_links"
     && !db.prepare(`SELECT 1 FROM accounts WHERE subdomain = 'ruddpm'`).get(), JSON.stringify(r.body));
   ck("and the billing read still answers", (await call(env, "/api/billing")).status === 200);
+}
+
+{
+  console.log("\n-- 101: a second business made before the titles stopped being copied --");
+  const db = seed();
+  db.exec(`
+    INSERT INTO accounts(id,name,subdomain,kind,plan,billing,theme) VALUES
+      ('acc_b1','Sound Maintenance','soundm','general_contractor','basic','monthly',
+       '{"accent":"#123456","signInTitle":"Rudd-Development-Sign-in","applyTitle":"Rudd-Development-Sign-up"}'),
+      ('acc_b2','Own Titles','owntitles','property_manager','basic','monthly',
+       '{"accent":"#123456","signInTitle":"Typed since","applyTitle":"Rudd-Development-Sign-up"}');
+    INSERT INTO business_links(id,account_a,account_b) VALUES ('l1','acc_gc','acc_b1');
+  `);
+  ck("the invariant counts it before the paste", runCheck(db).m101_inv_linked_titles_copied === 1);
+  // acc_b2 is in no pair, so its matching title is left exactly as it is.
+  db.exec(readFileSync(new URL("../worker/migrations/101_linked_titles.sql", import.meta.url), "utf8"));
+  const t1 = JSON.parse(db.prepare(`SELECT theme FROM accounts WHERE id='acc_b1'`).get().theme);
+  ck("101 takes the copied titles off and keeps the colors",
+    !("signInTitle" in t1) && !("applyTitle" in t1) && t1.accent === "#123456", JSON.stringify(t1));
+  const ta = JSON.parse(db.prepare(`SELECT theme FROM accounts WHERE id='acc_gc'`).get().theme);
+  ck("and leaves the first business's own titles", ta.signInTitle === "Rudd-Development-Sign-in");
+  const t2 = JSON.parse(db.prepare(`SELECT theme FROM accounts WHERE id='acc_b2'`).get().theme);
+  ck("and an account in no pair", t2.applyTitle === "Rudd-Development-Sign-up");
+  db.exec(`UPDATE accounts SET theme = '{"accent":"#123456","signInTitle":"Typed since"}' WHERE id='acc_b1'`);
+  db.exec(readFileSync(new URL("../worker/migrations/101_linked_titles.sql", import.meta.url), "utf8"));
+  ck("a title typed since is not a copy and stays",
+    JSON.parse(db.prepare(`SELECT theme FROM accounts WHERE id='acc_b1'`).get().theme).signInTitle === "Typed since");
+  ck("the invariant reads zero after", runCheck(db).m101_inv_linked_titles_copied === 0);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

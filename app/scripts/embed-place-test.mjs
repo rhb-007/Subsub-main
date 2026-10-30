@@ -95,6 +95,21 @@ const toCompany = async (page) => {
   await wait(700);
 };
 
+// Branding is two halves now, the way Pack & Passport is. The forms used to
+// sit at the foot of the branding page, under the logo, the colors and two
+// previews, and were reported as buried.
+const half = (page, label) => page.evaluate((l) => [...document.querySelectorAll(".acct-subtabs button")]
+  .find((b) => b.innerText.trim() === l)?.click(), label).then(() => wait(500));
+const toForms = (page) => half(page, "Website forms");
+const toLook = (page) => half(page, "Look and address");
+const signupBody = (page) => page.evaluate(() =>
+  document.querySelector(".embed-strip:not(.embed-signin) .embed-body")?.innerText.replace(/\s+/g, " ").trim() || null);
+const signin = (page) => page.evaluate(() => {
+  const el = document.querySelector(".embed-signin");
+  return el ? { text: el.innerText.replace(/\s+/g, " ").trim(),
+    link: el.querySelector(".embed-link")?.innerText.trim() || null } : null;
+});
+
 const panel = (page) => page.evaluate(() => {
   const el = document.querySelector(".embed-strip");
   return el ? { head: el.innerText.replace(/\s+/g, " ").trim().slice(0, 90) } : null;
@@ -107,21 +122,22 @@ try {
     const { ctx, page, crashes } = await open();
     await toCompany(page);
 
-    t.ck("the panel is on the branding pane", !!(await panel(page)));
-    const near = await page.evaluate(() => {
-      const strip = document.querySelector(".embed-strip");
-      const brand = document.querySelector(".brand-preview");
-      if (!strip || !brand) return null;
-      // Same pane, and the snippet comes after the form it is a copy of.
-      return brand.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING ? "after" : "before";
-    });
-    t.ck("and sits after the branded form it copies", near === "after", String(near));
+    t.ck("Branding opens on the look half, with the logo and colors",
+      await page.evaluate(() => !!document.querySelector(".brand-preview")));
+    t.ck("which no longer carries the forms at its foot", !(await panel(page)));
+    await toForms(page);
+    t.ck("the forms are their own half of Branding", !!(await panel(page)));
+    const tabs = await page.evaluate(() => ({
+      top: [...document.querySelectorAll(".acct-tabs button.on")].map((b) => b.innerText.trim()),
+      sub: [...document.querySelectorAll(".acct-subtabs button.on")].map((b) => b.innerText.trim()),
+      look: !!document.querySelector(".brand-preview"),
+    }));
+    t.ck("with Branding still lit and Website forms selected",
+      tabs.top.join() === "Branding" && tabs.sub.join() === "Website forms" && !tabs.look, JSON.stringify(tabs));
 
-    await page.evaluate(() => document.querySelector(".embed-head")?.click());
-    await wait(500);
-    const body = await page.evaluate(() =>
-      document.querySelector(".embed-body")?.innerText.replace(/\s+/g, " ").trim() || null);
-    t.ck("it opens", !!body);
+    const body = await signupBody(page);
+    t.ck("the sign-up form is open, with no disclosure to press", !!body
+      && await page.evaluate(() => !document.querySelector(".embed-head")));
     t.ck("with the hosted link, because the address resolves",
       /outerhome\.subsub\.work/.test(body || ""), (body || "").slice(0, 120));
     t.ck("and the code to paste", /Copy the code/.test(body || ""));
@@ -135,6 +151,18 @@ try {
     // bare .embed-code-btn would find the preview's and pass either way.
     t.ck("this panel carries no second code button",
       await page.evaluate(() => !document.querySelector(".embed-strip .embed-code-btn")));
+    const si = await signin(page);
+    t.ck("and the sign-in button sits beside it", !!si, JSON.stringify(si));
+    t.ck("which opens the live branded sign-in page", si?.link === "https://outerhome.subsub.work/", si?.link);
+    t.ck("and says passwords are never typed on their website", /never on your website/i.test(si?.text || ""));
+    const side = await page.evaluate(() => {
+      const a = document.querySelector(".embed-strip:not(.embed-signin)")?.getBoundingClientRect();
+      const b = document.querySelector(".embed-signin")?.getBoundingClientRect();
+      return a && b ? { sameRow: Math.abs(a.top - b.top) < 4, apart: b.left > a.right - 1 } : null;
+    });
+    t.ck("side by side on a wide screen", side?.sameRow && side?.apart, JSON.stringify(side));
+
+    await toLook(page);
     t.ck("the Sign up form block is titled",
       await page.evaluate(() => /hosted sign up form/i.test(
         document.querySelector(".sf-head h5")?.innerText || "")),
@@ -220,15 +248,13 @@ try {
     const { ctx, page, crashes } = await open();
     await toCompany(page);
 
-    t.ck("the panel renders on Basic", !!(await panel(page)));
     const upsell = await page.evaluate(() =>
       /Branding comes with Scale/.test(document.body.innerText));
-    t.ck("beside the branding upsell, not instead of it", upsell);
+    t.ck("the look half carries the branding upsell", upsell);
+    await toForms(page);
+    t.ck("the forms half renders on Basic", !!(await panel(page)));
 
-    await page.evaluate(() => document.querySelector(".embed-head")?.click());
-    await wait(500);
-    const body = await page.evaluate(() =>
-      document.querySelector(".embed-body")?.innerText.replace(/\s+/g, " ").trim() || null);
+    const body = await signupBody(page);
     t.ck("the code to paste is offered", /Copy the code/.test(body || ""),
       (body || "").slice(0, 140));
     // The form posts to the API, which checks no plan. The hosted URL does not
@@ -236,6 +262,10 @@ try {
     t.ck("but the hosted link is not", !/Copy link/.test(body || ""), (body || "").slice(0, 140));
     t.ck("and it says why", /needs your own sign-in address/.test(body || ""),
       (body || "").slice(0, 200));
+    const si = await signin(page);
+    t.ck("the sign-in button works on Basic too, through app.subsub.work",
+      si?.link === "https://app.subsub.work/", si?.link);
+    t.ck("and says so", /until outerhome\.subsub\.work is live/i.test(si?.text || ""), (si?.text || "").slice(-160));
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
     await ctx?.close?.();
   }
@@ -245,7 +275,10 @@ try {
     ACCOUNT = mkAccount("scale", "active");
     const { ctx, page, crashes } = await open();
     await page.evaluate(() => [...document.querySelectorAll("nav button, .nav-item")]
-      .find((b) => /Contractors/i.test(b.innerText || ""))?.click());
+      // The nav entry, which starts with the word (a count may follow): the
+      // profile menu's "Recruiting QR for subcontractors" matched a bare
+      // /Contractors/ first and opened that instead.
+      .find((b) => /^(Sub)?contractors\b/i.test((b.innerText || "").trim()))?.click());
     await wait(900);
 
     const ptr = await page.evaluate(() =>
