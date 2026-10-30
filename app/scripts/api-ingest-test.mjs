@@ -419,7 +419,13 @@ console.log("\n-- a token reaches its own account and no other --");
   // contractor setting up a Zapier step that the feature is not for them, and
   // a fourth name here would put that reading straight back.
   const NAME = "Connect your CRM";
-  ck("the app's panel is still called that", app2.includes(`<h4>${NAME}</h4>`), NAME);
+  // The panel in the app is "API keys" now: one key serves a CRM, an
+  // inspection app, Zapier, Postman and somebody's own code, so naming it
+  // after one of them told the rest it was not for them. The docs page says
+  // where the key lives by that name.
+  ck("the app's key panel is called API keys", app2.includes("<h4>API keys</h4>"));
+  ck("and the docs page sends people there by that name",
+    readFileSync(new URL("../../developers.html", import.meta.url), "utf8").includes("Integrations → API keys"));
   // The docs page itself is now the integrations home (its H1 is general,
   // because it also covers inspections, Postman and automation tools), so the
   // name lives on its CRM TAB and that tab's heading, which is where the

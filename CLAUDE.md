@@ -16060,6 +16060,25 @@ refactor.
   each card is a flex column whose body takes the slack. `test:embedplace`
   measures both; `align-items:start` puts the 11px gap back and fails it.
 
+- **THE TOKEN PANEL IS "API KEYS", AND THE RULES PANEL IS "JOB TYPES AND
+  TRADES", WORDED FOR EACH ACCOUNT TYPE.** Reported with both circled on
+  Account -> Integrations: *"Connect your CRM isn't about creating a token just
+  to integrate a CRM, it's everything"* and *"Your CRM calls things isn't just
+  about CRMs"*. One key is what a CRM, an inspection app, Zapier, Make, n8n,
+  Postman and somebody's own code all sign in with, so the panel is named for
+  the key, and its note lists them (an inspection app only on an account with
+  buildings, because nobody else can post one). The rules panel maps the words
+  on an arriving job to trades, whatever sent it. **Its example follows the
+  account kind**: a property manager, portfolio manager or owner reads about
+  work request categories from property management software (*Leaking
+  faucet*), and a general contractor or subcontractor about a CRM job type
+  (*Roof Replacement*). Two places in the app said to make a key under the old
+  name and now name *API keys*, as do `developers.html` and the Zapier app's
+  help text (**1.1.2**, text only). **Not renamed:** the developer page's
+  *Connect your CRM* tab and the pricing row, which are about connecting a
+  CRM. `test:inspingestui` reads both notes on both kinds; making the rules
+  note ignore the kind fails one assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -533,7 +533,7 @@ body.nav-open{overflow:hidden}
 
 <div class="dev-note">
   <p><strong>The API is part of the Scale plan.</strong> Create your key in SubSub under
-  <strong>My account → Integrations → Connect your CRM</strong>. It is shown once, when you create it:
+  <strong>My account → Integrations → API keys</strong>. It is shown once, when you create it:
   SubSub stores only a fingerprint of it, so nobody here can read it back to you.</p>
 </div>
 
@@ -726,7 +726,7 @@ Content-Type: application/json</code></pre>
   No CRM has a concept of a trade. What yours sends is a job type, a status and tags — your own
   words, and nothing in them means <code>roofing</code> until somebody says so. So the webhook
   address does not ask for <code>trades</code>. It reads those words and looks them up against the
-  rules on your account, under <strong>My account → Integrations → What your CRM calls things</strong>.
+  rules on your account, under <strong>My account → Integrations → Job types and trades</strong>.
   Rules apply to every system you post from, so it is one list however many you connect.
 </p>
 <p>
@@ -1006,7 +1006,7 @@ Content-Type: application/json</code></pre>
   the file. Then open the collection's <strong>Variables</strong>, paste your API key into
   <code>token</code>, and send <em>Who this token belongs to</em> first: it is a read, so it tests
   the key without creating anything. Make the key in SubSub under <strong>My account →
-  Integrations → Connect your CRM</strong>.
+  Integrations → API keys</strong>.
 </p>
 </section>
 

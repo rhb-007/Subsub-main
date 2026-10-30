@@ -21214,7 +21214,7 @@ function Avatar({ user, className = "" }) {
 // screen must be neither stricter nor looser than the route behind it. A
 // trade rule decides what every arriving job is read as, which is the same
 // account-level decision as the token panel above it.
-function CrmMapping() {
+function CrmMapping({ accountKind }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(null);      // which row is being answered
   const [picked, setPicked] = useState([]);
@@ -21284,12 +21284,16 @@ function CrmMapping() {
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>What your CRM calls things</h4>
+      <h4>{tt("Job types and trades")}</h4>
+      {/* Not "what your CRM calls things": the words arrive from whatever
+          posts the job, and a managing agent's is a work order category from
+          their property software rather than a CRM job type. The example
+          follows the account kind so each reader sees their own words. */}
       <p className="panel-note">
-        Jobs posted into SubSub from your CRM arrive with your own words on them — a job type, a status,
-        tags. Say once what each one means here and every job after that lands with its trades
-        ready to assign. Rules apply to every system you post from, so this is one list however
-        many you connect.
+        {kindHasProperties(accountKind)
+          ? tt("Work requests posted into SubSub from your property management software, Zapier or your own code carry your own words: a category like \"Leaking faucet\", a priority, tags. Say once which trade each word means, and every request after that arrives with its trades ready to assign.")
+          : tt("Jobs posted into SubSub from your CRM, Zapier or your own code carry your own words: a job type like \"Roof Replacement\", a status, tags. Say once which trade each word means, and every job after that arrives with its trades ready to assign.")}{" "}
+        {tt("One list covers every system you connect.")}
       </p>
 
       {err && <p className="fld-err" role="alert">{err}</p>}
@@ -21587,7 +21591,7 @@ function InspectionIngest({ isScale }) {
           <p className="cov-hint">
             Put your API token where it says <code>YOUR_TOKEN</code>. SubSub keeps only a
             fingerprint of a token, so no screen here can fill that in for you — make one under
-            <b> Connect your CRM</b> above and the whole address is printed beside it while it is on
+            <b> API keys</b> above and the whole address is printed beside it while it is on
             screen. <a href="https://subsub.work/developers" target="_blank" rel="noopener">The
             fields it expects are in the docs</a>.
           </p>
@@ -21781,7 +21785,7 @@ function IntegrationStarters({ zapierInvite }) {
           <>
             <p className="cov-hint">
               Use a <b>Webhooks by Zapier</b> step pointed at your webhook address. Make an API key
-              under <b>Connect your CRM</b> below and the address is printed beside it.
+              under <b>API keys</b> below and the address is printed beside it.
             </p>
             <a className="btn-solid integ-card-btn" href="https://subsub.work/developers#zapier"
               target="_blank" rel="noopener noreferrer">
@@ -21883,12 +21887,16 @@ function ApiTokens({ isScale, canInspect }) {
 
   return (
     <div className="portal-panel settings-panel">
-      <h4>Connect your CRM</h4>
+      <h4>API keys</h4>
+      {/* Named for what it is, not for one use of it. One key is what a CRM,
+          an inspection app, Zapier, Make, n8n, Postman and somebody's own
+          code all sign in with, and a heading naming the CRM told everybody
+          else it was not for them. */}
       <p className="panel-note">
-        Post scheduled jobs straight into SubSub from whatever you schedule in. They arrive with
-        their trades unassigned, ready for you to pick contractors — and it works with anything
-        that can send a web request, which includes Zapier, Make and n8n.{" "}
-        <a href="https://subsub.work/developers" target="_blank" rel="noopener">Read the API docs</a>.
+        {canInspect
+          ? tt("One key connects anything that sends work into SubSub: your CRM or property management software, an inspection app, Zapier, Make or n8n, Postman, or your own code. Jobs arrive with their trades unassigned, ready for you to pick who does them, and inspections arrive as drafts for you to check and finish.")
+          : tt("One key connects anything that sends work into SubSub: your CRM, Zapier, Make or n8n, Postman, or your own code. Jobs arrive with their trades unassigned, ready for you to pick who does them.")}{" "}
+        <a href="https://subsub.work/developers" target="_blank" rel="noopener">{tt("Read the API docs")}</a>.
       </p>
 
       {!isScale ? (
@@ -21988,7 +21996,7 @@ function ApiTokens({ isScale, canInspect }) {
           )}
 
           <div className="add-city-row">
-            <input value={name} maxLength={60} placeholder="What is it for? e.g. our CRM"
+            <input value={name} maxLength={60} placeholder="What is it for? e.g. Zapier, our CRM"
               onChange={(e) => { setName(e.target.value); setErr(""); }}
               onKeyDown={(e) => e.key === "Enter" && create()} />
             <button type="button" className="btn-solid" disabled={!name.trim() || busy} onClick={create}>
@@ -25332,7 +25340,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               trade rule is the dictionary every arriving job is read
               through. */}
           {canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && (
-            <CrmMapping />
+            <CrmMapping accountKind={accountKind} />
           )}
           {/* Beside the CRM pair, because it is the same story -- a system
               outside SubSub posting records in -- and setting one up should not

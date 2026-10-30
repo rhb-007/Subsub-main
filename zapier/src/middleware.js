@@ -38,7 +38,7 @@ const handleError = (response, z) => {
   if (response.status === 401 || body.error === "invalid_token") {
     throw new z.errors.ExpiredAuthError(
       said || "That SubSub token was not recognised. Create a new one in "
-        + "SubSub under My account -> Integrations -> Connect your CRM, and "
+        + "SubSub under My account -> Integrations -> API keys, and "
         + "reconnect with it."
     );
   }

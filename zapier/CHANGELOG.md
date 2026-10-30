@@ -7,6 +7,12 @@ under their feet.
 
 One heading per pushed version, newest first.
 
+## 1.1.2
+
+- The API token's help text and the reconnect message name the panel by its
+  new name in SubSub: **My account → Integrations → API keys**. Nothing else
+  changed.
+
 ## 1.1.1
 
 - The API token's help text points at the new place in SubSub: **My account →

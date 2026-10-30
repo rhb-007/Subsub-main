@@ -46,6 +46,14 @@ const t = tally();
 console.log("\n-- building --");
 buildApp({ outDir: OUT, apiPort: API });
 
+// The two integration panels' notes, read by heading. Their wording follows
+// the account kind, so both kinds are read in the same suite.
+const keyNotes = (page) => page.evaluate(() => {
+  const note = (h) => [...document.querySelectorAll(".portal-panel")]
+    .find((x) => x.querySelector("h4")?.textContent.trim() === h)?.querySelector(".panel-note")?.innerText || "";
+  return { keys: note("API keys"), rules: note("Job types and trades") };
+});
+
 let KIND = "property_manager";
 let PLAN = "scale";
 let RULES = { rules: [], unmapped: [] };
@@ -167,6 +175,10 @@ try {
       await page.evaluate(() => [...document.querySelectorAll(".portal-panel")]
         .filter((x) => /Inspections from your inspection app/i.test(x.textContent || "")).length) === 1);
     t.ck("it says what arrives", /draft inspection/i.test(p.text), p.text.slice(0, 200));
+    const pmNotes = await keyNotes(page);
+    t.ck("a property manager's key note names an inspection app", /inspection app/i.test(pmNotes.keys), pmNotes.keys);
+    t.ck("and its rules note speaks of property management software",
+      /property management software/i.test(pmNotes.rules) && /Leaking faucet/.test(pmNotes.rules), pmNotes.rules);
     // Said rather than left to be discovered: a JSON webhook cannot carry
     // bytes, so photographs are added on the inspection itself.
     t.ck("and that photographs are added here", /Photographs are added here/i.test(p.text),
@@ -316,7 +328,7 @@ try {
     // A token is hashed the moment it is minted, so no screen can print a
     // whole one again -- which this says, rather than printing a dead address.
     t.ck("with the token left as a placeholder", /YOUR_TOKEN/.test(p.code[0]), p.code[0]);
-    t.ck("and it says where to get one", /Connect your CRM/i.test(p.text), p.text.slice(-400));
+    t.ck("and it says where to get one", /API keys/i.test(p.text), p.text.slice(-400));
     t.ck("there is something to copy", await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
         .find((x) => /Inspections from your inspection app/i.test(x.textContent || ""));
@@ -350,7 +362,7 @@ try {
     const { ctx, page, crashes } = await openPanel();
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
+        .find((p) => /^API keys$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       const i = el.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(i, "Our inspection app");
@@ -359,7 +371,7 @@ try {
     await wait(300);
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
+        .find((p) => /^API keys$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       [...el.querySelectorAll("button")].find((b) => /Create token/i.test(b.innerText))?.click();
     });
     for (let n = 0; n < 40 && !minted.length; n++) await wait(150);
@@ -401,8 +413,12 @@ try {
     // an absence.
     t.ck("the account screen really opened", await page.evaluate(() =>
       [...document.querySelectorAll(".portal-panel")]
-        .some((x) => /^Connect your CRM$/i.test(x.querySelector("h4")?.textContent.trim() || ""))));
+        .some((x) => /^API keys$/i.test(x.querySelector("h4")?.textContent.trim() || ""))));
     t.ck("and there is no inspections panel on it", (await panelOf(page)) === null);
+    const gcNotes = await keyNotes(page);
+    t.ck("a general contractor's key note names no inspection app", !!gcNotes.keys && !/inspection/i.test(gcNotes.keys), gcNotes.keys);
+    t.ck("and its rules note speaks of a CRM job type",
+      /your CRM/i.test(gcNotes.rules) && /Roof Replacement/.test(gcNotes.rules) && !/property management/i.test(gcNotes.rules), gcNotes.rules);
 
     // Nor the second address in the token box: a general contractor has no
     // units to walk, the route refuses it, and a screen offering an address
@@ -410,7 +426,7 @@ try {
     // clipboard.
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
+        .find((p) => /^API keys$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       const i = el.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(i, "Our CRM");
@@ -419,7 +435,7 @@ try {
     await wait(300);
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
+        .find((p) => /^API keys$/i.test(p.querySelector("h4")?.textContent.trim() || ""));
       [...el.querySelectorAll("button")].find((b) => /Create token/i.test(b.innerText))?.click();
     });
     for (let n = 0; n < 40 && !minted.length; n++) await wait(150);

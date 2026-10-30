@@ -126,7 +126,7 @@ const openPanel = async () => {
 
 const panelOf = (page) => page.evaluate(() => {
   const el = [...document.querySelectorAll(".portal-panel")]
-    .find((p) => /What your CRM calls things/i.test(p.textContent || ""));
+    .find((p) => /Job types and trades/i.test(p.textContent || ""));
   return el ? {
     text: el.innerText.replace(/\s+/g, " ").trim(),
     gaps: [...el.querySelectorAll(".crm-row.gap")].map((r) => r.innerText.replace(/\s+/g, " ").trim()),
@@ -146,8 +146,8 @@ try {
     t.ck("the panel is there", !!p, String(p));
     t.ck("and there is one of it",
       await page.evaluate(() => [...document.querySelectorAll(".portal-panel")]
-        .filter((x) => /What your CRM calls things/i.test(x.textContent || "")).length) === 1);
-    t.ck("it explains what a rule does", /say once what each one means/i.test(p.text), p.text.slice(0, 120));
+        .filter((x) => /Job types and trades/i.test(x.textContent || "")).length) === 1);
+    t.ck("it explains what a rule does", /say once which trade each word means/i.test(p.text), p.text.slice(0, 120));
     t.ck("and does not pretend there is work to do", !/Waiting on you/i.test(p.text));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
@@ -325,11 +325,11 @@ try {
     RULES = { rules: [], unmapped: [] };
     const { ctx, page, crashes } = await openPanel();
     const prose = await page.evaluate(() => [...document.querySelectorAll(".portal-panel")]
-      .filter((el) => /What your CRM calls things|Connect your CRM/i.test(el.textContent || ""))
+      .filter((el) => /^(Job types and trades|API keys)$/i.test(el.querySelector("h4")?.textContent.trim() || ""))
       .map((el) => [...el.querySelectorAll("h4, .panel-note, .form-sec, .cov-hint, .crm-gap-note")]
         .map((n) => n.innerText).join(" "))
       .join(" ").replace(/\s+/g, " "));
-    t.ck("both panels were found", /What your CRM calls things/i.test(prose) && /Connect your CRM/i.test(prose),
+    t.ck("both panels were found", /Job types and trades/i.test(prose) && /API keys/i.test(prose),
       prose.slice(0, 160));
     t.ck("and no heading or note names one CRM", !/jobnimbus/i.test(prose),
       (prose.match(/.{0,60}jobnimbus.{0,60}/i) || [""])[0]);
@@ -351,7 +351,7 @@ try {
     saved.length = 0;
     const { ctx, page, crashes } = await openPanel();
     const p0 = await panelOf(page);
-    t.ck("it says rules apply everywhere", /every system you post from/i.test(p0.text), p0.text.slice(0, 260));
+    t.ck("it says rules apply everywhere", /every system you connect/i.test(p0.text), p0.text.slice(0, 260));
     // Where a job arrived from is a fact about the job, so the queue keeps it.
     // `short`, not `pick`: the picker's option has to teach and is a sentence
     // long, and a sentence inside a row pushes the button off the side.
@@ -409,7 +409,7 @@ try {
     const { ctx, page, crashes } = await openPanel();
     await page.evaluate(() => {
       const el = [...document.querySelectorAll(".portal-panel")]
-        .find((x) => /^Connect your CRM$/i.test(x.querySelector("h4")?.textContent.trim() || ""));
+        .find((x) => /^API keys$/i.test(x.querySelector("h4")?.textContent.trim() || ""));
       const i = el?.querySelector("input");
       const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
       set.call(i, "Our CRM");
@@ -470,7 +470,7 @@ try {
       before.find((r) => r.id === "hover")?.soon && !before.find((r) => r.id === "hover")?.hasSwitch);
     t.ck("the switches sit above the token panel", await page.evaluate(() => {
       const a = document.querySelector(".integ-panel")?.getBoundingClientRect().top;
-      const b = [...document.querySelectorAll(".portal-panel")].find((p) => /^Connect your CRM$/i.test(p.querySelector("h4")?.textContent.trim() || ""))
+      const b = [...document.querySelectorAll(".portal-panel")].find((p) => /^API keys$/i.test(p.querySelector("h4")?.textContent.trim() || ""))
         ?.getBoundingClientRect().top;
       return a != null && b != null && a < b;
     }));
