@@ -16056,6 +16056,9 @@ refactor.
   `subsub-apply` and not `subsub-signin`, and the sign-in modal the reverse.
   Handing the sign-in card the form's markup fails one assertion; removing a
   View code button fails one.
+  **The two cards are one height** side by side: the grid stretches them and
+  each card is a flex column whose body takes the slack. `test:embedplace`
+  measures both; `align-items:start` puts the 11px gap back and fails it.
 
 ## Working here
 
