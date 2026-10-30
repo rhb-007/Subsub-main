@@ -16016,6 +16016,18 @@ refactor.
   reason: its *Contractors* match found the profile menu's *Recruiting QR for
   subcontractors* before the nav entry.
 
+- **THE MENU OFFERS "YOUR OTHER BUSINESS" ONLY TO SOMEBODY WITH A SEAT
+  THERE.** Reported from Sound Maintenance with Joseph Edwin's drawer open:
+  *Sound Property Management · Your other business*, and under it *You don't
+  have a login on Sound Property Management's account yet*. The entry was
+  drawn for every admin of a linked account, but only the owner who added the
+  second business is seated on both. `GET /api/account/second-business` now
+  carries `linked.other.mySeat` (does the caller hold a membership there), and
+  the profile menu and the drawer draw the entry only when it is true. The
+  Company panel still names the pair, because that is a fact about the
+  account. `test:linked` (50) and `test:linkedui` (22); ignoring `mySeat`
+  fails one assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
