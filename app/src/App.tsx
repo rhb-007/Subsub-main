@@ -38692,16 +38692,19 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
 //
 // The preview is an iframe with srcDoc and no allow-same-origin, so it cannot
 // inherit our stylesheet and lie about how it will look on their page.
-function EmbedCodeModal({ html, copied, onCopy, onClose }) {
+function EmbedCodeModal({ html, copied, onCopy, onClose, kind = "form" }) {
   const [view, setView] = useState("form");
+  const button = kind === "button";
   return (
     <Modal wide onClose={onClose}>
-      <div className="form ecm">
-        <h2>{tt("The application form")}</h2>
-        <p className="up-sub">{tt("This is what the twelve lines draw on your website, and the markup that draws it. Nothing here needs hosting or a plugin.")}</p>
+      <div className={`form ecm ecm-${kind}`}>
+        <h2>{button ? tt("The sign-in button") : tt("The application form")}</h2>
+        <p className="up-sub">{button
+          ? tt("This is what the button looks like on your website, and the markup that draws it. It opens your SubSub sign-in page.")
+          : tt("This is what the twelve lines draw on your website, and the markup that draws it. Nothing here needs hosting or a plugin.")}</p>
         <div className="ecm-tabs" role="tablist">
           <button role="tab" aria-selected={view === "form"} className={view === "form" ? "on" : ""}
-            onClick={() => setView("form")}><Eye size={13} />{" "}{tt("The form")}</button>
+            onClick={() => setView("form")}><Eye size={13} />{" "}{button ? tt("The button") : tt("The form")}</button>
           <button role="tab" aria-selected={view === "code"} className={view === "code" ? "on" : ""}
             onClick={() => setView("code")}><Code2 size={13} />{" "}{tt("The code")}</button>
           <button className="btn-solid sm ecm-copy" onClick={onCopy}>
@@ -38709,7 +38712,7 @@ function EmbedCodeModal({ html, copied, onCopy, onClose }) {
           </button>
         </div>
         {view === "form" ? (
-          <iframe className="ecm-prev" title={tt("What the application form looks like")}
+          <iframe className="ecm-prev" title={button ? tt("What the sign-in button looks like") : tt("What the application form looks like")}
             sandbox="allow-scripts" srcDoc={`<!doctype html><meta charset="utf-8">
               <body style="margin:16px;font:15px/1.5 system-ui,sans-serif;color:#16241d">
               ${html}`} />
@@ -38796,14 +38799,18 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
                 <b>{tt("The form itself")}</b>
                 <em>{tt("Paste it where you want it. No plugins, nothing to host, and it styles itself to your page.")}</em>
               </div>
-              <button className="btn-solid sm" onClick={() => copy("html", html)}>
-                {copied === "html" ? tt("Copied") : tt("Copy the code")}
-              </button>
-              {/* No code icon here. The same markup is one tap from the Sign
-                  up form preview above, where somebody is standing when they
-                  wonder what it is; two ways in would be two buttons holding
-                  one modal. This panel's job is getting it onto their website,
-                  which is the Copy button. */}
+              <span className="embed-acts">
+                {/* View code beside Copy, asked for by the owner: somebody
+                    about to paste markup into their website wants to see it
+                    first. This reverses the old "one way in" note: the Look
+                    half's preview keeps its icon too. */}
+                <button className="btn-ghost sm embed-view-code" type="button" onClick={() => setPreview(true)}>
+                  <Code2 size={13} />{" "}{tt("View code")}
+                </button>
+                <button className="btn-solid sm" onClick={() => copy("html", html)}>
+                  {copied === "html" ? tt("Copied") : tt("Copy the code")}
+                </button>
+              </span>
             </div>
             {/* Eighty lines of markup sat inline under this, which is most of
                 why the tab scrolled forever -- and nobody reads pasted HTML on
@@ -38840,6 +38847,7 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
 // (shared/embed.js, signInButtonHtml).
 function EmbedSignIn({ subdomain, accountName, theme = null, liveHost = false }) {
   const [copied, setCopied] = useState("");
+  const [preview, setPreview] = useState(false);
   const link = signInUrl(subdomain, { liveHost });
   const html = useMemo(() => signInButtonHtml({ subdomain, accountName, theme, liveHost }),
     [subdomain, accountName, theme, liveHost]);
@@ -38885,14 +38893,21 @@ function EmbedSignIn({ subdomain, accountName, theme = null, liveHost = false })
               <b>{tt("The button")}</b>
               <em>{tt("Paste it where you want it. It wears your branding colors.")}</em>
             </div>
-            <button className="btn-solid sm" onClick={() => copy("html", html)}>
-              {copied === "html" ? tt("Copied") : tt("Copy the code")}
-            </button>
+            <span className="embed-acts">
+              <button className="btn-ghost sm embed-view-code" type="button" onClick={() => setPreview(true)}>
+                <Code2 size={13} />{" "}{tt("View code")}
+              </button>
+              <button className="btn-solid sm" onClick={() => copy("html", html)}>
+                {copied === "html" ? tt("Copied") : tt("Copy the code")}
+              </button>
+            </span>
           </div>
           {copied === "no" && (
             <p className="embed-note">{tt("Your browser wouldn’t let us copy that. Copy the link above by hand.")}</p>
           )}
         </div>
+        {preview && <EmbedCodeModal kind="button" html={html} copied={copied === "html"}
+          onCopy={() => copy("html", html)} onClose={() => setPreview(false)} />}
         <p className="embed-note">{tt("Passwords are only ever typed on your SubSub sign-in page, never on your website.")}{" "}
           {liveHost ? null : <>{tt("Until")}{" "}<b>{subdomain}{".subsub.work"}</b>{" "}{tt("is live, the button opens app.subsub.work, where everyone signs in with their email.")}</>}
         </p>
@@ -47772,6 +47787,8 @@ button.mc-title:hover{text-decoration:underline}
 .embed-opt-h b{font-size:13px;font-weight:700}
 .embed-opt-h em{font-size:11.5px;font-style:normal;color:var(--ink-soft);line-height:1.45}
 .embed-opt-h button{flex:none}
+.embed-acts{flex:none;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;max-width:60%}
+.embed-view-code{display:inline-flex;align-items:center;gap:4px}
 .embed-n{flex:none;width:20px;height:20px;border-radius:50%;background:var(--brand);color:#fff;
   font-size:11px;font-weight:800;display:grid;place-items:center;margin-top:1px}
 .embed-link{display:block;margin-top:9px;padding:9px 11px;background:var(--paper);

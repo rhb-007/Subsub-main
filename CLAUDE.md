@@ -16043,6 +16043,20 @@ refactor.
   else's roster) or other records point at it (`kept: "referenced"`). The
   reply says which. `test:consoledelete` (40); three mutations fire.
 
+- **EACH WEBSITE FORMS CARD HAS VIEW CODE BESIDE COPY THE CODE.** Asked for
+  with both Copy buttons circled: *"Add a view code link and modal here"*. The
+  sign-up card's markup had been reachable only from the Look half's preview
+  icon, on the reasoning that two ways into one modal is one too many; this
+  reverses that at the owner's word, because somebody about to paste markup
+  into their website wants to see it where they copy it. The sign-in card had
+  no way to see its code at all. `EmbedCodeModal` takes `kind` (`form` or
+  `button`), so the sign-in modal is titled *The sign-in button*, its preview
+  tab reads *The button*, and it shows `signInButtonHtml`. `test:embedplace`
+  (45) opens both and reads the code tab: the sign-up modal must carry
+  `subsub-apply` and not `subsub-signin`, and the sign-in modal the reverse.
+  Handing the sign-in card the form's markup fails one assertion; removing a
+  View code button fails one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -146,11 +146,38 @@ try {
     // -- so the code is one tap away, from the Sign up form preview it draws.
     t.ck("the markup is not dumped on the page",
       await page.evaluate(() => !document.querySelector(".embed-code")));
-    // And it is opened from the PREVIEW, not from here: two buttons holding
-    // one modal is two places to keep in step. Scoped selectors, because a
-    // bare .embed-code-btn would find the preview's and pass either way.
-    t.ck("this panel carries no second code button",
-      await page.evaluate(() => !document.querySelector(".embed-strip .embed-code-btn")));
+    // View code sits beside Copy on BOTH cards (asked for by the owner), and
+    // each opens the modal with its OWN markup: the sign-up card's form, the
+    // sign-in card's button. Reading the code tab is what tells the two apart.
+    const viewCode = async (sel) => {
+      const pressed = await page.evaluate((s) => {
+        const b = document.querySelector(s + " .embed-view-code");
+        if (!b) return false; b.click(); return true;
+      }, sel);
+      if (!pressed) return { pressed };
+      await new Promise((r) => setTimeout(r, 300));
+      await page.evaluate(() => [...document.querySelectorAll(".ecm [role=tab]")]
+        .find((b) => /code/i.test(b.textContent))?.click());
+      await new Promise((r) => setTimeout(r, 200));
+      const got = await page.evaluate(() => {
+        const m = document.querySelector(".ecm");
+        return m ? { title: m.querySelector("h2")?.innerText || "",
+          code: m.querySelector(".ecm-code")?.innerText || "" } : null;
+      });
+      await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
+      await new Promise((r) => setTimeout(r, 200));
+      return { pressed, got };
+    };
+    const vApply = await viewCode(".embed-strip:not(.embed-signin)");
+    t.ck("the sign-up card has View code beside Copy", vApply.pressed);
+    t.ck("which opens the form's markup",
+      /subsub-apply/.test(vApply.got?.code || "") && !/subsub-signin/.test(vApply.got?.code || ""),
+      JSON.stringify(vApply.got).slice(0, 160));
+    const vSign = await viewCode(".embed-signin");
+    t.ck("the sign-in card has View code beside Copy", vSign.pressed);
+    t.ck("which opens the button's markup, under its own title",
+      /subsub-signin/.test(vSign.got?.code || "") && /sign-in button/i.test(vSign.got?.title || ""),
+      JSON.stringify(vSign.got).slice(0, 160));
     const si = await signin(page);
     t.ck("and the sign-in button sits beside it", !!si, JSON.stringify(si));
     t.ck("which opens the live branded sign-in page", si?.link === "https://outerhome.subsub.work/", si?.link);
