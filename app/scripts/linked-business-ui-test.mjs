@@ -39,7 +39,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account") return [200, ACCOUNT()];
   if (path === "/api/account/second-business" && method === "POST") {
     posted.push(body);
-    LINKED = { other: { id: "acc_pm", name: body.name, subdomain: body.subdomain, kind: body.kind },
+    LINKED = { other: { id: "acc_pm", name: body.name, subdomain: body.subdomain, kind: body.kind, mySeat: true },
       discountOn: null, cheaper: "this", discountPercent: 50 };
     return [201, { id: "acc_pm", name: body.name, subdomain: body.subdomain, kind: body.kind,
       plan: "basic", connected: true, discountPercent: 50 }];
@@ -159,6 +159,19 @@ try {
   const sub = await page.evaluate(() => document.querySelector(".linked-discount")?.innerText.replace(/\s+/g, " ") || "");
   t.ck("the Subscription tab says this one is half off, and why",
     /50% off/.test(sub) && /Rudd Property Management pays for SubSub too/.test(sub), sub);
+
+  // Another admin on this account is not a member of the other business. The
+  // menu offered it anyway and it opened onto "You don't have a login there".
+  console.log("\n-- an admin with no seat on the other business --");
+  LINKED = { ...LINKED, other: { ...LINKED.other, mySeat: false } };
+  await page.reload({ waitUntil: "networkidle0" }).catch(() => {});
+  await wait(1500);
+  await page.evaluate(() => { if (!document.querySelector(".user-menu")) document.querySelector(".user-btn")?.click(); });
+  await wait(500);
+  const noSeat = await page.evaluate(() => ({ menu: !!document.querySelector(".user-menu"),
+    linked: document.querySelectorAll(".um-linked").length, drawer: !!document.querySelector(".drawer-linked") }));
+  t.ck("the menu opened, so the next one can fail", noSeat.menu, JSON.stringify(noSeat));
+  t.ck("and it does not offer the other business", noSeat.linked === 0 && !noSeat.drawer, JSON.stringify(noSeat));
 
   t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
 } finally {

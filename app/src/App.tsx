@@ -4237,7 +4237,10 @@ export default function SubSub() {
     if (role !== "admin" || !account?.id) { setLinkedBiz(null); return undefined; }
     let live = true;
     api.secondBusiness()
-      .then((d) => { if (live) setLinkedBiz(d?.linked?.other || null); })
+      // Only when this person has a seat there (mySeat): another admin on
+      // this account is not a member of the other business, and the entry
+      // would open onto "You don't have a login there".
+      .then((d) => { if (live) setLinkedBiz(d?.linked?.other?.mySeat ? d.linked.other : null); })
       .catch(() => { if (live) setLinkedBiz(null); });
     return () => { live = false; };
   }, [role, account?.id, linkedTick]);

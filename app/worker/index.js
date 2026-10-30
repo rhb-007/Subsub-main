@@ -26845,7 +26845,17 @@ app.get("/api/account/second-business", requireRole("admin"), async (c) => {
   const a = await c.env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
   const owner = await accountOwnerId(c.env, accountId);
   const ownerName = owner ? (await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(owner).first())?.name : null;
-  return c.json({ linked: await linkedView(c.env, accountId), allowed: secondKinds(a?.kind),
+  // Whether THIS person holds a seat over there. The menu offers the other
+  // business only then: an admin added to one business is not a member of the
+  // other, and a menu entry that opens onto a refusal is a dead end.
+  const linked = await linkedView(c.env, accountId);
+  if (linked?.other?.id) {
+    const seat = await c.env.DB.prepare(
+      `SELECT 1 FROM memberships WHERE user_id = ? AND account_id = ? LIMIT 1`)
+      .bind(c.get("auth").userId, linked.other.id).first();
+    linked.other = { ...linked.other, mySeat: !!seat };
+  }
+  return c.json({ linked, allowed: secondKinds(a?.kind),
     discountPercent: LINKED_DISCOUNT_PERCENT, isOwner: owner === c.get("auth").userId, ownerName: ownerName || null });
 });
 

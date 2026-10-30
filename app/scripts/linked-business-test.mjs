@@ -168,6 +168,14 @@ let pmId;
   const view = await call(env, "/api/account/second-business");
   ck("the account reads the pair", view.status === 200 && view.body.linked?.other?.id === pmId
     && view.body.linked.cheaper === "this" && view.body.linked.discountOn === null, JSON.stringify(view.body));
+  ck("and says the owner has a seat there", view.body.linked?.other?.mySeat === true);
+  // A second admin on the first business is not a member of the other one, so
+  // the menu must not offer it to them.
+  db.exec(`INSERT INTO memberships(id,user_id,account_id,role) VALUES ('m_jo','u_ten','acc_gc','admin')`);
+  const other = await call(env, "/api/account/second-business", { seat: ["u_ten", "acc_gc"] });
+  ck("another admin with no seat there is told so", other.status === 200 && other.body.linked?.other?.mySeat === false,
+    JSON.stringify(other.body.linked?.other));
+  db.exec(`DELETE FROM memberships WHERE id = 'm_jo'`);
   ck("the invariant reads zero", runCheck(db).m099_inv_bad_link === 0);
   db.exec(`INSERT INTO business_links(id,account_a,account_b) VALUES ('bad','acc_pm2','acc_pm2')`);
   ck("and counts an account paired with itself", runCheck(db).m099_inv_bad_link >= 1);
