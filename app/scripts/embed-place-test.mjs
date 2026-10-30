@@ -185,9 +185,13 @@ try {
     const side = await page.evaluate(() => {
       const a = document.querySelector(".embed-strip:not(.embed-signin)")?.getBoundingClientRect();
       const b = document.querySelector(".embed-signin")?.getBoundingClientRect();
-      return a && b ? { sameRow: Math.abs(a.top - b.top) < 4, apart: b.left > a.right - 1 } : null;
+      return a && b ? { sameRow: Math.abs(a.top - b.top) < 4, apart: b.left > a.right - 1,
+        hA: Math.round(a.height), hB: Math.round(b.height) } : null;
     });
     t.ck("side by side on a wide screen", side?.sameRow && side?.apart, JSON.stringify(side));
+    // Asked for as "make these cards same length": the sign-in card used to
+    // stop short of the sign-up card beside it.
+    t.ck("and the two cards are the same height", side && Math.abs(side.hA - side.hB) <= 1, JSON.stringify(side));
 
     await toLook(page);
     t.ck("the Sign up form block is titled",

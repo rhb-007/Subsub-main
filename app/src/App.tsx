@@ -50757,11 +50757,11 @@ iframe.dv-frame{display:block}
 .addr-host a:hover{text-decoration:underline}
 .addr-state p{font-size:13px;color:var(--ink-soft);line-height:1.55;margin:0}
 .forms-intro{margin:4px 0 14px}
-.forms-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start;margin-bottom:18px}
-.embed-strip.embed-card{margin:0;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:0;overflow:hidden}
+.forms-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:stretch;margin-bottom:18px}
+.embed-strip.embed-card{margin:0;border:1px solid var(--line);border-radius:12px;background:var(--card);padding:0;overflow:hidden;display:flex;flex-direction:column}
 .embed-card-h{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}
 .embed-card-h svg{color:var(--brand);flex:none;margin-top:2px}
-.embed-card .embed-body{padding:14px 16px}
+.embed-card .embed-body{padding:14px 16px;flex:1 1 auto}
 .signin-sample{padding:14px;border:1px dashed var(--line);border-radius:10px;margin-bottom:12px;background:var(--paper)}
 .signin-sample-btn{display:inline-flex;align-items:center;min-height:44px;padding:0 20px;border-radius:9px;font-weight:700;font-size:15px}
 .addr-check{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
