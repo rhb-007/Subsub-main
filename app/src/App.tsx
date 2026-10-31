@@ -28125,7 +28125,15 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // Anyone who wasn't declined was on the job, so they can be rated.
   const unrated = slots.filter((s) => s.a && s.a.status !== "declined" && !s.a.rating
     && s.job.status === "completed");
-  const committed = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto))
+  // ALL TIME AND THIS MONTH. Committed is the day the work order was
+  // accepted, or issued when it went out already accepted (auto-schedule),
+  // the same date the job's history uses for "booked". The month is the
+  // reader's own calendar month, compared on the date's YYYY-MM.
+  const committedSlots = slots.filter((s) => s.a && (s.a.status === "accepted" || s.a.auto));
+  const committed = committedSlots.reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
+  const monthKey = dayKey().slice(0, 7);
+  const committedMtd = committedSlots
+    .filter((s) => String(s.a.respondedAt || s.a.woIssued || "").slice(0, 7) === monthKey)
     .reduce((n, s) => n + Number(moneyRaw(s.a.value) || 0), 0);
   // READY TO MARK COMPLETE MEANS THE WORK COULD HAVE HAPPENED. It read "every
   // trade accepted" and nothing else, so a job with NO trades passed vacuously
@@ -28498,8 +28506,9 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
             so the card is not rendered for them at all -- the API does not
             send them the figures either. */}
         <button className="dash-card" onClick={onGoJobs}>
-          <span className="dc-num">{committed ? formatMoney(committed) : "—"}</span>
-          <span className="dc-lab">Committed {words.one} spend</span>
+          <span className="dc-num" data-spend="total">{committed ? formatMoney(committed) : "—"}</span>
+          <span className="dc-lab">Committed {words.one} spend · all time</span>
+          <span className="dc-sub" data-spend="mtd"><b>{formatMoney(committedMtd)}</b> this month</span>
         </button>
       </div>
       )}
@@ -46660,6 +46669,8 @@ p.fld-note{margin:6px 0 0}
 .dc-num{font-size:24px;font-weight:800;letter-spacing:-.03em;line-height:1.1}
 .dash-card.accent .dc-num{color:var(--amber)}
 .dc-lab{font-size:11.5px;color:var(--ink-soft);font-weight:600;line-height:1.3}
+.dc-sub{font-size:12px;color:var(--ink-soft);line-height:1.3;margin-top:2px}
+.dc-sub b{color:var(--ink);font-weight:700}
 .auto-strip{display:flex;align-items:center;gap:8px;background:#fbf0dd;border:1px solid #ecd9b0;color:#8a5a12;
   font-size:12.5px;font-weight:600;padding:10px 13px;border-radius:10px;margin-bottom:18px}
 .dash-sec{margin-bottom:24px}

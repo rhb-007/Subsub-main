@@ -16115,6 +16115,18 @@ refactor.
   `test:ratevisit` (13). Removing the trigger fails seven assertions, and
   dropping the accepted-only filter fails one.
 
+- **COMMITTED SPEND ON THE DASHBOARD SAYS ALL TIME, AND THIS MONTH UNDER
+  IT.** Reported with the *Committed contractor spend* tile circled: *"This
+  should be all time total and MTD"*. The tile summed every accepted work order
+  and said nothing about when. The big figure is still every accepted (or
+  auto-scheduled) order, now labeled *all time*, and under it is *$X this
+  month*. A work order is dated by when it was accepted, or by when it was
+  issued if it went out already accepted. That is the same date the job's
+  history uses for "booked". The month is the reader's own calendar month,
+  compared on the date's YYYY-MM. An open offer counts in neither figure.
+  `test:spendmtd` (5); counting every order as this month's fails one
+  assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
