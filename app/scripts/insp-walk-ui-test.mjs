@@ -415,6 +415,21 @@ try {
     await wait(500);
     return { ctx, page };
   };
+  const openCard = async () => {
+    const { ctx, page } = await openScreen("(Sub)?contractors");
+    await page.evaluate(() => {
+      const c = [...document.querySelectorAll(".grid .card")]
+        .find((x) => /Pike Maintenance/.test(x.innerText || ""));
+      if (c) c.click();
+    });
+    await wait(800);
+    const row = await page.evaluate(() => {
+      const r = document.querySelector(".modal .detail-rel");
+      return r ? (r.innerText || "").replace(/\s+/g, " ").trim() : null;
+    });
+    const opened = await page.evaluate(() => !!document.querySelector(".modal .detail-trades"));
+    return { ctx, page, row, opened };
+  };
   const picker = (page) => page.evaluate(() => {
     const g = [...document.querySelectorAll(".insp-kind.seg")]
       .find((x) => /Working relationship/i.test(x.getAttribute("aria-label") || ""));
@@ -505,6 +520,27 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- and on the contractor's card, with a way to change it --");
+  {
+    KIND = "property_manager";
+    const { ctx, page, row, opened } = await openCard();
+    t.ck("the card opened", opened);
+    t.ck("the card names the working relationship", /Working relationship: Subcontractor/.test(row || ""), row);
+    await page.evaluate(() => [...document.querySelectorAll(".modal .detail-rel button")]
+      .find((b) => /Change/.test(b.innerText || ""))?.click());
+    await wait(800);
+    const at = await page.evaluate(() => {
+      const g = document.querySelector('[data-rel="picker"]');
+      const props = [...document.querySelectorAll(".modal .fld")]
+        .find((x) => /Properties they cover/.test(x.innerText || ""));
+      return { picker: !!g, props: !!props,
+        above: !!(g && props && g.getBoundingClientRect().top < props.getBoundingClientRect().top) };
+    });
+    t.ck("Change opens the edit form on the picker", at.picker, JSON.stringify(at));
+    t.ck("which sits above the buildings list", at.props && at.above, JSON.stringify(at));
+    await ctx.close();
+  }
+
   console.log("\n-- and not on a general contractor, where there is no such thing --");
   {
     // A GC holds the prime contract, so everybody under it is a
@@ -522,6 +558,12 @@ try {
       !!document.querySelector(".pick-grid .pick")));
     t.ck("with the whole trade list on it", await page.evaluate(() =>
       [...document.querySelectorAll(".pick-grid .pick")].length > 20));
+    await ctx.close();
+  }
+  {
+    const { ctx, row, opened } = await openCard();
+    t.ck("a general contractor's card opened", opened);
+    t.ck("and names no working relationship", row === null, row);
     await ctx.close();
   }
 } finally {

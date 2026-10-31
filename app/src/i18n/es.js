@@ -1181,4 +1181,8 @@ export default {
   "Rate": "Calificar",
   "Skip for now": "Omitir por ahora",
   "Save rating": "Guardar calificación",
+  "Working relationship": "Relación de trabajo",
+  "Change": "Cambiar",
+  "Licensed trade company. Carries their own insurance and bond.": "Empresa de oficio con licencia. Tiene su propio seguro y fianza.",
+  "Maintenance worker for small jobs. No contractor license, and insurance is not required.": "Trabajador de mantenimiento para trabajos pequeños. Sin licencia de contratista y no se requiere seguro.",
 };

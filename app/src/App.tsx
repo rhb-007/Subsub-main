@@ -8687,6 +8687,7 @@ export default function SubSub() {
                a license box the form will not draw. */
             canEditCompany={!(allSubs.find((x) => x.id === selected.id) || selected).answersForItself
               || staffMayWriteShared({ impersonatedBy: impersonating?.by, role })}
+            canEngageHandyman={mayEngageHandyman(kindOf(account))}
             onEdit={(step) => { setEditStep(step === "license" ? "license" : (Number(step) || 1)); setEditing(selected); setSelected(null); }}
             onReviewDoc={(sb, kind) => { setSelected(null); setReviewing({ sub: sb, kind }); }}
             onVerifyLicense={(sb) => verifyLicense(sb.id)}
@@ -42588,7 +42589,7 @@ function EndEngagement({ sub, word, onEnd }) {
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -42670,6 +42671,17 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         </div>
         <button className="edit-btn" onClick={onEdit}><Pencil size={13} /> Edit</button>
       </div>
+
+      {/* WHAT THEY ARE TO THIS ACCOUNT, said on the card with its own way to
+          change it. It lived only on step 2 of Edit, under the buildings list,
+          and could not be found from here. */}
+      {canEngageHandyman && (
+        <div className="detail-rel" data-rel="card">
+          <span>{tt("Working relationship")}: <b>{tt(ENGAGED_AS[engagedAs(sub.engagedAs)].label)}</b>
+            <span className="detail-rel-note"> {tt(ENGAGED_AS[engagedAs(sub.engagedAs)].note)}</span></span>
+          <button type="button" className="btn-ghost" onClick={() => onEdit(2)}>{tt("Change")}</button>
+        </div>
+      )}
 
       {/* Auto-schedule straight under who they are and what they do, rather
           than below the capabilities and the stats: it is the one switch on
@@ -43893,25 +43905,6 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
             It is recorded against your name.</div>
         </div>
       )}
-      {(properties || []).length > 0 && (
-        <div className="fld">Properties they cover
-          <p className="fine">Leave all unticked and they're available at every property on the
-            account — which is how a general contractor would use it.</p>
-          <div className="pick-grid">
-            {properties.map((p) => (
-              <button key={p.id} type="button"
-                className={`pick ${(f.propertyIds || []).includes(p.id) ? "on" : ""}`}
-                onClick={() => toggle("propertyIds", p.id)}>{p.name}</button>
-            ))}
-          </div>
-          <p className="cov-hint">
-            {(f.propertyIds || []).length
-              ? `Scoped to ${f.propertyIds.length} propert${f.propertyIds.length === 1 ? "y" : "ies"}.`
-              : "Available at all properties."}
-          </p>
-        </div>
-      )}
-
       {/* WHAT THEY ARE TO YOU, and it is asked before the trades because it
           decides which trades there are. Offered only on an account with
           buildings -- a handyman is a maintenance worker for one, and the
@@ -43921,8 +43914,11 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
           A segmented pair rather than two chips: exactly one answer is true
           and exactly one can be, which the inspection screen already settled
           for move-in / move-out. */}
+      {/* FIRST on the step, above the buildings: on a portfolio the
+          buildings list is long, and the relationship was below it where
+          nobody found it. */}
       {canEngageHandyman && (
-        <div className="fld">What they are to you
+        <div className="fld" data-rel="picker">Working relationship
           <div className="insp-kind seg" role="group" aria-label="Working relationship">
             {Object.values(ENGAGED_AS).map((k) => (
               <button key={k.id} type="button" aria-pressed={f.engagedAs === k.id}
@@ -43964,6 +43960,25 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
               </div>
             );
           })()}
+        </div>
+      )}
+
+      {(properties || []).length > 0 && (
+        <div className="fld">Properties they cover
+          <p className="fine">Leave all unticked and they're available at every property on the
+            account — which is how a general contractor would use it.</p>
+          <div className="pick-grid">
+            {properties.map((p) => (
+              <button key={p.id} type="button"
+                className={`pick ${(f.propertyIds || []).includes(p.id) ? "on" : ""}`}
+                onClick={() => toggle("propertyIds", p.id)}>{p.name}</button>
+            ))}
+          </div>
+          <p className="cov-hint">
+            {(f.propertyIds || []).length
+              ? `Scoped to ${f.propertyIds.length} propert${f.propertyIds.length === 1 ? "y" : "ies"}.`
+              : "Available at all properties."}
+          </p>
         </div>
       )}
 
@@ -45266,6 +45281,9 @@ button.pack-ad-btn:disabled{opacity:.6;cursor:default}
 .detail-trades{display:flex;align-items:flex-start;justify-content:space-between;
   gap:12px;margin-bottom:16px}
 .detail-trades .cat-row{flex:1;min-width:0}
+.detail-rel{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);font-size:14px}
+.detail-rel-note{color:var(--ink-soft);font-size:13px}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:2px}
 .edit-btn{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;flex:none}
 .edit-btn:hover{background:var(--paper);border-color:var(--brand);color:var(--brand)}
