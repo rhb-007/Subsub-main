@@ -45,6 +45,9 @@ let STATUS = "draft";
 let JOB_ID = null;
 let OWNERS = [];     // the recipients the server would answer with
 let SENDS = [];
+let SUB_CATS = ["plumbing"];
+let SUB_AS = "subcontractor";
+const SUB_PATCHES = [];
 
 const acct = () => ({
   id: "acc_x", name: "Sound Property Management", subdomain: "soundpm", kind: KIND,
@@ -64,9 +67,9 @@ const SUB = () => ({
   available: true, unavailableDays: [], warranty: null,
   insurance: 0, bond: 0, contract: 0, w9: 1, docFiles: { w9: "w9.pdf" },
   notify: { email: true, sms: false }, docReview: { w9: verified },
-  categories: ["plumbing"], caps: [], rating: null, ratedJobs: 0, accepted: 0, declined: 0,
+  categories: SUB_CATS, caps: [], rating: null, ratedJobs: 0, accepted: 0, declined: 0,
   notes: "", status: "active", propertyIds: [], hasPortal: false, answersForItself: false,
-  autoSchedule: false, engagedAs: "subcontractor",
+  autoSchedule: false, engagedAs: SUB_AS,
   docs: { w9: { fileName: "w9.pdf", expiresOn: null } },
   docState: "missing", docAssignable: false, docSoonest: null,
 });
@@ -105,6 +108,12 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account") return [200, acct()];
   if (path === "/api/account-users") return [200, USERS()];
   if (path === "/api/subs") return [200, [SUB()]];
+  if (path === "/api/subs/cmp_h" && method === "PATCH") {
+    SUB_PATCHES.push(body);
+    if (body?.engagedAs) SUB_AS = body.engagedAs;
+    if (body?.categories) SUB_CATS = body.categories;
+    return [200, { ok: true }];
+  }
   if (path === "/api/properties") return [200, [{ id: "prop_1", accountId: "acc_x",
     name: "Press Apartments", address: "1620 Belmont Ave", city: "Seattle", state: "WA",
     zip: "98122", units: 141, notes: "", ownedByAnother: false, ownerDeclared: false }]];
@@ -523,24 +532,47 @@ try {
   console.log("\n-- and on the contractor's card, with a way to change it --");
   {
     KIND = "property_manager";
+    SUB_CATS = ["plumbing", "roofing"];
     const { ctx, page, row, opened } = await openCard();
     t.ck("the card opened", opened);
     t.ck("the card names the working relationship", /Working relationship: Subcontractor/.test(row || ""), row);
+    // THE CONTRACTOR HAS NO CREWS AND NO CAPABILITIES, which is the reported
+    // shape: the three-step form's Save waits on both, so it could never
+    // save the relationship. The window saves the relationship alone.
     await page.evaluate(() => [...document.querySelectorAll(".modal .detail-rel button")]
       .find((b) => /Change/.test(b.innerText || ""))?.click());
-    await wait(800);
-    const at = await page.evaluate(() => {
-      const g = document.querySelector('[data-rel="picker"]');
-      const props = [...document.querySelectorAll(".modal .fld")]
-        .find((x) => /Properties they cover/.test(x.innerText || ""));
-      return { picker: !!g, props: !!props,
-        above: !!(g && props && g.getBoundingClientRect().top < props.getBoundingClientRect().top) };
+    await wait(600);
+    const m = await page.evaluate(() => {
+      const el = document.querySelector('[data-rel="modal"]');
+      if (!el) return null;
+      return { text: (el.innerText || "").replace(/\s+/g, " "),
+        choices: [...el.querySelectorAll(".rel-choice")].map((b) => (b.innerText || "").split("\n")[0].trim()),
+        form: !!document.querySelector(".sf-steps") };
     });
-    t.ck("Change opens the edit form on the picker", at.picker, JSON.stringify(at));
-    t.ck("which sits above the buildings list", at.props && at.above, JSON.stringify(at));
+    t.ck("Change opens the relationship window, not the edit form", !!m && !m.form, JSON.stringify(m));
+    t.ck("which offers both answers", (m?.choices || []).length === 2 && /Handyman/.test(m.choices[1]), JSON.stringify(m?.choices));
+    await page.evaluate(() => [...document.querySelectorAll(".rel-choice")]
+      .find((b) => /Handyman/.test(b.innerText || ""))?.click());
+    await wait(300);
+    const warn = await page.evaluate(() => (document.querySelector(".rel-warn")?.innerText || "").replace(/\s+/g, " "));
+    t.ck("and says before the press which trade comes off", /Roofing/.test(warn), warn);
+    await page.evaluate(() => [...document.querySelectorAll('[data-rel="modal"] button')]
+      .find((b) => /^Save$/.test((b.innerText || "").trim()))?.click());
+    await wait(900);
+    const sent = SUB_PATCHES[SUB_PATCHES.length - 1];
+    t.ck("Save sends the relationship", sent?.engagedAs === "handyman", JSON.stringify(sent));
+    t.ck("with the trade a handyman can't hold taken off", JSON.stringify(sent?.categories) === '["plumbing"]', JSON.stringify(sent));
+    t.ck("and nothing about the company itself", sent && !("company" in sent) && !("crews" in sent), JSON.stringify(sent));
+    const after = await page.evaluate(() => ({
+      open: !!document.querySelector('[data-rel="modal"]'),
+      row: (document.querySelector(".modal .detail-rel")?.innerText || "").replace(/\s+/g, " "),
+    }));
+    t.ck("the window closes on a save", !after.open, JSON.stringify(after));
+    t.ck("and the card now says Handyman", /Working relationship: Handyman/.test(after.row), after.row);
     await ctx.close();
   }
 
+  SUB_AS = "subcontractor"; SUB_CATS = ["plumbing"];
   console.log("\n-- and not on a general contractor, where there is no such thing --");
   {
     // A GC holds the prime contract, so everybody under it is a
@@ -564,6 +596,34 @@ try {
     const { ctx, row, opened } = await openCard();
     t.ck("a general contractor's card opened", opened);
     t.ck("and names no working relationship", row === null, row);
+    await ctx.close();
+  }
+  console.log("\n-- the cities they cover are typed, never picked from a list --");
+  {
+    KIND = "property_manager";
+    const { ctx, page } = await openSubEdit();
+    const read = () => page.evaluate(() => {
+      const ed = document.querySelector('[data-cities="editor"]');
+      return ed ? [...ed.querySelectorAll(".pick")].map((b) => (b.innerText || "").trim()) : null;
+    });
+    const before = await read();
+    t.ck("the coverage step has the city editor", Array.isArray(before), JSON.stringify(before));
+    t.ck("it shows only the cities on file, no ready-made list", JSON.stringify(before) === '["Seattle"]', JSON.stringify(before));
+    await page.evaluate(() => {
+      const inp = document.querySelector('[data-cities="editor"] input');
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+      set.call(inp, "Ruston, tacoma, seattle"); inp.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(200);
+    await page.evaluate(() => [...document.querySelectorAll('[data-cities="editor"] button')]
+      .find((b) => /Add/.test(b.innerText || ""))?.click());
+    await wait(300);
+    const after = await read();
+    t.ck("typing cities adds each one, and a repeat once", JSON.stringify(after) === '["Seattle","Ruston","tacoma"]', JSON.stringify(after));
+    await page.evaluate(() => [...document.querySelectorAll('[data-cities="editor"] .pick')]
+      .find((b) => /Seattle/.test(b.innerText || ""))?.click());
+    await wait(200);
+    t.ck("and tapping one takes it off", JSON.stringify(await read()) === '["Ruston","tacoma"]', JSON.stringify(await read()));
     await ctx.close();
   }
 } finally {

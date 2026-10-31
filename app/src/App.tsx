@@ -241,7 +241,6 @@ const CAP_LIBRARY = {
   cleaning: ["Construction clean", "Final / detail clean", "Window clean", "Pressure wash", "Debris removal"],
 };
 
-const AREAS = ["Seattle", "Bellevue", "Tacoma", "Everett", "Kirkland", "Renton", "Kent", "Redmond", "Lynnwood", "Auburn"];
 
 // Approx lat/lng centroids for demo proximity math (no geocoding backend).
 const ZIP_GEO = {
@@ -2686,6 +2685,9 @@ export default function SubSub() {
   const [quotePanel, setQuotePanel] = useState(null);    // { job, trade }
   const [addMenu, setAddMenu] = useState(false);
   const [editing, setEditing] = useState(null); // sub being edited
+  // The working relationship, changed in a window of its own rather than
+  // inside the three-step form, whose Save is gated on every step.
+  const [relEditing, setRelEditing] = useState(null);
   // Which step that form opens on. Its own state rather than a field on the
   // record above: `editing` is what `build()` turns into the PATCH body, so
   // anything parked in it is a field this account would send to the server.
@@ -3840,6 +3842,15 @@ export default function SubSub() {
         ? `${who} answers for their own record — their name, contact, license and crews are theirs to change, not yours. Nothing was saved. Close and reopen this form and it will show you the part that is yours.`
         : "That did not save. Try again in a moment.");
     }
+  };
+  // THE WORKING RELATIONSHIP, saved on its own. The three-step form's Save
+  // waits on every step being complete, so a contractor missing a crew or a
+  // capability could never be switched to handyman from it. This sends only
+  // the engagement half: the word, and the trades and capabilities it drops.
+  // Awaited, and only then drawn, so a refusal is said rather than painted.
+  const saveRelationship = async (subId, patch) => {
+    await api.patchSub(subId, patch);
+    patchEngagement(subId, patch);
   };
   // One place for the "you've been matched but we need paperwork" email.
   // Available from every surface where a non-compliant contractor appears.
@@ -7135,7 +7146,7 @@ export default function SubSub() {
             <MultiSelect label="Category" icon={Filter} options={CATEGORIES} selected={fCats}
               onChange={(v) => { setFCats(v); setFCaps([]); }} />
             <MultiSelect label="Capability" options={capOptions} selected={fCaps} onChange={setFCaps} />
-            <MultiSelect label="Service area" options={AREAS} selected={fAreas} onChange={setFAreas} />
+            <MultiSelect label="Service area" options={[...new Set(subs.flatMap((s) => s.coverage?.cities || []))].sort()} selected={fAreas} onChange={setFAreas} />
             <div className="ms">
               <label><Target size={13} /> Job-site ZIP</label>
               <div className="zip-filter">
@@ -8691,9 +8702,22 @@ export default function SubSub() {
             onEdit={(step) => { setEditStep(step === "license" ? "license" : (Number(step) || 1)); setEditing(selected); setSelected(null); }}
             onReviewDoc={(sb, kind) => { setSelected(null); setReviewing({ sub: sb, kind }); }}
             onVerifyLicense={(sb) => verifyLicense(sb.id)}
+            onChangeRelationship={() => setRelEditing(selected.id)}
             onSchedule={() => { setAssignSub({ sub: selected }); setSelected(null); }} />
         </Modal>
       )}
+      {/* Drawn after the card, so it stacks over it. */}
+      {relEditing && (() => {
+        const sb = allSubs.find((x) => x.id === relEditing);
+        if (!sb) return null;
+        return (
+          <Modal onClose={() => setRelEditing(null)}>
+            <RelationshipModal sub={sb} hiringWord={rosterWords(account).One}
+              onSave={(patch) => saveRelationship(sb.id, patch)}
+              onClose={() => setRelEditing(null)} />
+          </Modal>
+        );
+      })()}
       {jobForm && <Modal onClose={() => setJobForm(null)} wide>
         <JobForm allJobs={allJobs} accountId={account.id} accountName={account.name}
           rosterWord={rosterWords(account).One} properties={accountProperties} forProperty={jobForm.forProperty} forSub={jobForm.forSub} forDate={jobForm.forDate} jobs={jobs} asOwner={role === "owner"}
@@ -29245,10 +29269,8 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
       <label className="fld">Service address<input value={f.address} onChange={(e) => set("address", e.target.value)} placeholder="1420 Maple St" /></label>
       <div className="fld-row">
         <label className="fld">City
-          <select value={f.area} onChange={(e) => { set("area", e.target.value); if (CITY_ZIP[e.target.value]) set("zip", CITY_ZIP[e.target.value]); }}>
-            <option value="">Select…</option>
-            {AREAS.map((a) => <option key={a}>{a}</option>)}
-          </select>
+          <input value={f.area} placeholder="City"
+            onChange={(e) => set("area", e.target.value)} />
         </label>
         <label className="fld">ZIP<input inputMode="numeric" value={f.zip} onChange={(e) => set("zip", e.target.value.trim())} placeholder="98101" /></label>
       </div>
@@ -36350,6 +36372,45 @@ function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
   );
 }
 
+// ---- Cities, typed in, never picked from a list --------------------------
+// Asked for as "should be wide open, there shouldn't be pre-created cities".
+// The chips were ten Seattle-area towns, which is a list nobody outside one
+// metro could use. The cities they cover are what they type: one chip each,
+// tap to take it off. Commas add several at once. Matched without regard to
+// case, so "tacoma" and "Tacoma" are one city.
+function CitiesEditor({ cities = [], onChange }) {
+  const [text, setText] = useState("");
+  const add = () => {
+    const next = [...cities];
+    for (const raw of text.split(",")) {
+      const c = raw.trim().replace(/\s+/g, " ");
+      if (c && !next.some((x) => x.toLowerCase() === c.toLowerCase())) next.push(c);
+    }
+    if (next.length !== cities.length) onChange(next);
+    setText("");
+  };
+  return (
+    <div className="cities-edit" data-cities="editor">
+      {cities.length > 0 ? (
+        <div className="pick-grid">
+          {cities.map((c) => (
+            <button key={c} type="button" className="pick on" aria-label={tt("Remove {city}", { city: c })}
+              onClick={() => onChange(cities.filter((x) => x !== c))}>{c} <X size={11} /></button>
+          ))}
+        </div>
+      ) : <p className="cov-hint">{tt("No cities yet. Type each city they work in.")}</p>}
+      <div className="add-city-row">
+        <input value={text} placeholder={tt("Add a city")}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }} />
+        <button type="button" className="btn-solid" disabled={!text.trim()} onClick={add}>
+          <Plus size={14} />{" "}{tt("Add")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---- Contractor: choose where they work --------------------------------
 function MyCoverage({ sub, onSave }) {
   const [mode, setMode] = useState(covMode(sub.coverage));
@@ -36374,7 +36435,6 @@ function MyCoverage({ sub, onSave }) {
 
   const cleanRadii = radii.filter((r) => r.zip && r.miles).map((r) => ({ zip: r.zip, miles: Number(r.miles) }));
   const valid = mode === "cities" ? cities.length > 0 : cleanRadii.length > 0;
-  const custom = cities.filter((c) => !AREAS.includes(c));
 
   return (
     <div className="portal-panel">
@@ -36389,31 +36449,7 @@ function MyCoverage({ sub, onSave }) {
       {mode === "cities" ? (
         <>
           <div className="cov-sub" style={{ marginTop: 16 }}>{tt("Cities you cover")}</div>
-          <div className="pick-grid">
-            {AREAS.map((a) => (
-              <button key={a} type="button" className={`pick ${cities.includes(a) ? "on" : ""}`} onClick={() => toggleCity(a)}>{a}</button>
-            ))}
-          </div>
-          {custom.length > 0 && (
-            <>
-              <div className="cov-sub" style={{ marginTop: 14 }}>{tt("Cities you added")}</div>
-              <div className="pick-grid">
-                {custom.map((c) => (
-                  <button key={c} type="button" className="pick on" onClick={() => toggleCity(c)}>
-                    {c} <X size={11} />
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-          <div className="add-city-row">
-            <input value={newCity} placeholder={tt("Add another city…")}
-              onChange={(e) => setNewCity(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && addCity()} />
-            <button type="button" className="btn-solid" disabled={!newCity.trim()} onClick={addCity}>
-              <Plus size={14} />{" "}{tt("Add")}
-            </button>
-          </div>
+          <CitiesEditor cities={cities} onChange={(next) => touch(() => setCities(next))} />
         </>
       ) : (
         <>
@@ -42589,7 +42625,79 @@ function EndEngagement({ sub, word, onEnd }) {
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false }) {
+// ---- The working relationship, in a window of its own -----------------------
+// Asked for as "make this a modal so more pronounced and save". It sends the
+// engagement half alone, so nothing else on the contractor has to be complete
+// for it to save, and it takes with it the trades a handyman cannot hold --
+// the same narrowing the edit form's picker does -- and says which, before
+// the press, because a trade that quietly disappears reads as a lost one.
+function RelationshipModal({ sub, hiringWord = "Contractor", onSave, onClose }) {
+  const start = engagedAs(sub.engagedAs);
+  const [as, setAs] = useState(start);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const cats = sub.categories || [];
+  const keep = cats.filter((c) => mayCover(as, c));
+  const dropped = cats.filter((c) => !mayCover(as, c));
+  const allowedCaps = new Set(keep.flatMap((c) => CAP_LIBRARY[c] || []));
+  const keepCaps = (sub.caps || []).filter((c) => allowedCaps.has(c));
+  const changed = as !== start;
+  const label = (id) => CATEGORIES.find((c) => c.id === id)?.label || id;
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const patch = { engagedAs: as };
+      if (dropped.length) { patch.categories = keep; patch.caps = keepCaps; }
+      await onSave(patch);
+      onClose();
+    } catch (e) {
+      const code = e?.body?.error;
+      setErr(code === "not_a_handyman_account"
+        ? tt("Only a property manager, portfolio manager or building owner can take somebody on as a handyman.")
+        : code === "impersonation_expired"
+          ? tt("Your staff sign-in ran out. Sign in again from the banner, then save.")
+          : tt("That didn't save ({code}). Nothing was changed.", { code: code || tt("no connection") }));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="rel-modal" data-rel="modal">
+      <h2>{tt("Working relationship")}</h2>
+      <p className="form-sub">{tt("What {name} is to your account.", { name: sub.company })}</p>
+      <div className="rel-choices" role="radiogroup" aria-label={tt("Working relationship")}>
+        {Object.values(ENGAGED_AS).map((k) => (
+          <button key={k.id} type="button" role="radio" aria-checked={as === k.id}
+            className={`rel-choice ${as === k.id ? "on" : ""}`} onClick={() => setAs(k.id)}>
+            <span className="rel-choice-top">
+              {as === k.id ? <CheckCircle2 size={18} /> : <span className="rel-dot" />}
+              <b>{k.id === "subcontractor" ? tt(hiringWord) : tt(k.label)}</b>
+            </span>
+            <span className="rel-choice-note">{tt(k.note)}</span>
+          </button>
+        ))}
+      </div>
+      {isHandyman(as) && (
+        <p className="fld-note">{tt("A handyman still needs a W-9 on file before they can be paid. Insurance and a bond are not asked for.")}</p>
+      )}
+      {changed && dropped.length > 0 && (
+        <div className="rel-warn">
+          <AlertTriangle size={14} />
+          <span>{keep.length
+            ? tt("A handyman can't hold these trades, so they come off: {list}.", { list: dropped.map(label).join(", ") })
+            : tt("None of their trades are handyman work, so they will have none until you add some: {list}.", { list: dropped.map(label).join(", ") })}</span>
+        </div>
+      )}
+      {err && <div className="form-err" role="alert">{err}</div>}
+      <div className="rel-actions">
+        <button type="button" className="btn-ghost" onClick={onClose}>{tt("Cancel")}</button>
+        <button type="button" className="btn-solid" disabled={!changed || busy} onClick={save}>
+          {busy ? tt("Saving…") : changed ? tt("Save") : tt("No change")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship }) {
   const ready = sub.bond && sub.insurance && sub.contract;
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
@@ -42679,7 +42787,8 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         <div className="detail-rel" data-rel="card">
           <span>{tt("Working relationship")}: <b>{tt(ENGAGED_AS[engagedAs(sub.engagedAs)].label)}</b>
             <span className="detail-rel-note"> {tt(ENGAGED_AS[engagedAs(sub.engagedAs)].note)}</span></span>
-          <button type="button" className="btn-ghost" onClick={() => onEdit(2)}>{tt("Change")}</button>
+          <button type="button" className="btn-ghost"
+            onClick={() => (onChangeRelationship ? onChangeRelationship() : onEdit(2))}>{tt("Change")}</button>
         </div>
       )}
 
@@ -44021,9 +44130,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
           <button type="button" className={f.covMode === "radius" ? "on" : ""} onClick={() => set("covMode", "radius")}>ZIP radius</button>
         </div>
         {f.covMode === "cities" ? (
-          <div className="pick-grid">
-            {AREAS.map((a) => <button key={a} type="button" className={`pick ${f.cities.includes(a) ? "on" : ""}`} onClick={() => toggle("cities", a)}>{a}</button>)}
-          </div>
+          <CitiesEditor cities={f.cities} onChange={(next) => set("cities", next)} />
         ) : (
           <div className="radii-edit">
             {(f.radii || []).map((r, i) => (
@@ -44046,7 +44153,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
         )}
         {!coverageOk && (
           <p className="fld-err"><AlertTriangle size={12} /> {f.covMode === "cities"
-            ? "Pick at least one city."
+            ? "Add at least one city."
             : "A radius needs both a ZIP and a distance."}</p>
         )}
         <p className="cov-hint">Coverage is either named cities or one-or-more ZIP radii — not both.</p>
@@ -45284,6 +45391,17 @@ button.pack-ad-btn:disabled{opacity:.6;cursor:default}
 .detail-rel{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
   margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);font-size:14px}
 .detail-rel-note{color:var(--ink-soft);font-size:13px}
+.rel-modal h2{margin:0 0 4px}
+.rel-choices{display:grid;gap:10px;margin:16px 0 12px}
+.rel-choice{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;padding:14px 16px;
+  border:2px solid var(--line);border-radius:12px;background:var(--paper);cursor:pointer;min-height:64px}
+.rel-choice.on{border-color:var(--brand);background:var(--brand-soft,#eaf3ee)}
+.rel-choice-top{display:flex;align-items:center;gap:8px;font-size:16px}
+.rel-choice.on .rel-choice-top{color:var(--brand)}
+.rel-choice-note{color:var(--ink-soft);font-size:13.5px;padding-left:26px}
+.rel-dot{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);flex:none}
+.rel-warn{display:flex;gap:8px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:#fdf5e6;color:#8a5a12;font-size:13.5px;margin:6px 0}
+.rel-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
 .detail-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:2px}
 .edit-btn{display:flex;align-items:center;gap:5px;border:1px solid var(--line);background:var(--card);color:var(--ink);font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;cursor:pointer;flex:none}
 .edit-btn:hover{background:var(--paper);border-color:var(--brand);color:var(--brand)}

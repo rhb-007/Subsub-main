@@ -16140,6 +16140,28 @@ refactor.
   was added, at the owner's word. `test:inspwalk` (75); drawing the line for a
   general contractor fails one assertion.
 
+- **CHANGING THE WORKING RELATIONSHIP IS A WINDOW OF ITS OWN, AND CITIES ARE
+  TYPED IN, NOT PICKED FROM A LIST.** Reported from Sound Property Management
+  editing Sound Maintenance: *"It's not saving as handyman, make this a modal"*
+  and *"Cities available to work in are limited to only these?"*
+
+  **It did not save because the edit form's Save waits on all three steps**:
+  crews, capabilities and coverage. A contractor with no crews could pick
+  Handyman on step 2 and never press Save. **Change** on the card's
+  *Working relationship* line now opens `RelationshipModal`, which saves the
+  engagement half alone through `PATCH /api/subs/:companyId` (`engagedAs` is an
+  engagement field, so it is never refused as `company_not_yours`). The trades a
+  handyman cannot hold (`mayCover`) come off in the same save, and the window
+  names them before the press. A refusal is named, and the window stays open.
+  The picker stays on Edit step 2 as well.
+
+  **The coverage cities were a fixed list of Seattle-area towns (`AREAS`).**
+  `CitiesEditor` replaces it on the roster form and on Account -> Company: chips
+  for what is chosen (tap to remove), a box to type one or several separated by
+  commas, deduped case-insensitively. The job form's City is a text box, and the
+  roster's city filter lists the cities the roster actually has. `AREAS` is
+  gone. `test:inspwalk` (85); two mutations fire.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
