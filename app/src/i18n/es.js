@@ -1175,4 +1175,10 @@ export default {
   "Work requests posted into SubSub from your property management software, Zapier or your own code carry your own words: a category like \"Leaking faucet\", a priority, tags. Say once which trade each word means, and every request after that arrives with its trades ready to assign.": "Las solicitudes de trabajo que llegan a SubSub desde su software de administración de propiedades, Zapier o su propio código traen sus propias palabras: una categoría como \"Leaking faucet\", una prioridad, etiquetas. Diga una vez qué oficio significa cada palabra y cada solicitud después de eso llega con sus oficios listos para asignar.",
   "Jobs posted into SubSub from your CRM, Zapier or your own code carry your own words: a job type like \"Roof Replacement\", a status, tags. Say once which trade each word means, and every job after that arrives with its trades ready to assign.": "Los trabajos que llegan a SubSub desde su CRM, Zapier o su propio código traen sus propias palabras: un tipo de trabajo como \"Roof Replacement\", un estado, etiquetas. Diga una vez qué oficio significa cada palabra y cada trabajo después de eso llega con sus oficios listos para asignar.",
   "One list covers every system you connect.": "Una sola lista cubre todos los sistemas que conecte.",
+  "the crews": "los equipos",
+  "How was {who}'s work?": "¿Qué tal el trabajo de {who}?",
+  "They showed up for {title}. Rate the work before you move on. You can change it later on the job.": "Se presentaron para {title}. Califique el trabajo antes de continuar. Puede cambiarlo después en el trabajo.",
+  "Rate": "Calificar",
+  "Skip for now": "Omitir por ahora",
+  "Save rating": "Guardar calificación",
 };

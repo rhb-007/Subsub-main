@@ -16093,6 +16093,28 @@ refactor.
   window and the company window. Taking the rule off fails sixteen; taking the
   console panels' margin off fails the account window.
 
+- **"YES, THEY SHOWED UP" OPENS A WINDOW TO RATE THEIR WORK BEFORE MOVING
+  ON.** Asked for with the job card's *Did the contractor show up?* on screen:
+  *"If they show up should add a modal to rate their work prior to moving onto
+  the next"*. Before this, a rating could be given only from a completed job's
+  trade rows or the dashboard's unrated list. By then the visit was no longer
+  in front of anybody.
+  - **`RateVisitWork` opens after the yes is saved**, from the job card and from
+    the dashboard's *Waiting on you* row. Both go through the app's
+    `visitOutcome`. It opens only for the hiring side (`maySetAccess`, because
+    the rate route is admin or pm), only on yes, and only when there is
+    something to rate.
+  - **`rateTargets` decides what is rated.** It takes the accepted work on that
+    appointment. A company's own appointment (098) rates that company's trades,
+    and a whole-job time rates every company that took work. An offer nobody
+    accepted is not work anybody did.
+  - **Stars per trade, grouped by company.** Save is disabled until a star is
+    picked, and it is awaited (`rateAssignmentNow`), so a refusal keeps the
+    window open with the reason. **Skip for now** is a real answer, because the
+    job's own stars still offer it later.
+  `test:ratevisit` (13). Removing the trigger fails seven assertions, and
+  dropping the accepted-only filter fails one.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

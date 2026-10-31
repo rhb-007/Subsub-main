@@ -183,6 +183,7 @@
     "test:visitafter": "node scripts/visit-after-test.mjs",
     "test:visitnobody": "node scripts/visit-nobody-test.mjs",
     "test:visitoutcome": "node --no-warnings scripts/visit-outcome-test.mjs",
+    "test:ratevisit": "node --no-warnings scripts/rate-visit-ui-test.mjs",
     "test:visitnocrew": "node --no-warnings scripts/visit-nocrew-ui-test.mjs",
     "test:reportdraft": "node --no-warnings scripts/report-draft-test.mjs",
     "test:reportdraftui": "node --no-warnings scripts/report-draft-ui-test.mjs",

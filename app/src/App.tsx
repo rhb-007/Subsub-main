@@ -2643,6 +2643,7 @@ export default function SubSub() {
   // The job somebody is about to close out, held so the confirmation can name
   // what is still outstanding on it.
   const [completingJob, setCompletingJob] = useState(null);
+  const [ratingVisit, setRatingVisit] = useState(null);
   // 066. The job being cancelled, put on hold, or closed out with nothing
   // done. One piece of state for the three, because the modal asks which.
   const [endingJob, setEndingJob] = useState(null);
@@ -3621,6 +3622,18 @@ export default function SubSub() {
   const rateAssignment = (jobId, trade, stars) => {
     const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
     if (woId) persist("rate", api.rateWorkOrder(woId, stars));
+    rateLocally(jobId, trade, stars);
+  };
+  // The same, AWAITED, for the rate-their-work window after a visit: a
+  // rating the window says was saved has to have been saved, or it closes
+  // over a refusal -- the save-that-reports-success shape.
+  const rateAssignmentNow = async (jobId, trade, stars) => {
+    const woId = allJobs.find((j) => j.id === jobId)?.assignments?.[trade]?.id;
+    if (!woId) throw new Error("no_work_order");
+    await api.rateWorkOrder(woId, stars);
+    rateLocally(jobId, trade, stars);
+  };
+  const rateLocally = (jobId, trade, stars) => {
     setJobs((js) => {
       const next = js.map((j) => j.id !== jobId ? j : {
         ...j, assignments: { ...j.assignments, [trade]: { ...j.assignments[trade], rating: stars } },
@@ -4868,6 +4881,15 @@ export default function SubSub() {
     try {
       const v = await api.visitOutcome(id, body);
       setVisits((vs) => vs.map((x) => x.id === id ? v : x));
+      // They showed up: the hiring side rates the work BEFORE moving on,
+      // while the visit is the thing in front of them. Only the hiring side
+      // (the route that rates is admin or pm), only on yes, and only when
+      // there is accepted work to rate on this appointment.
+      if (body?.happened && maySetAccess(role)) {
+        const job = allJobs.find((j) => j.id === (v?.jobId || visits.find((x) => x.id === id)?.jobId));
+        const targets = rateTargets(job, v?.companyId ?? visits.find((x) => x.id === id)?.companyId ?? null);
+        if (targets.length) setRatingVisit({ jobId: job.id, title: job.title, targets });
+      }
       return v;
     } catch (e) {
       // A refusal that means the screen is behind the server -- the time was
@@ -8768,6 +8790,14 @@ export default function SubSub() {
       {/* Closing one out. The effects are read off the job and the two lists
           beside it, so the modal names what is loose on THIS job rather than
           describing completion in general. */}
+      {ratingVisit && (
+        <RateVisitWork
+          title={ratingVisit.title}
+          targets={ratingVisit.targets.map((t) => ({
+            ...t, company: allSubs.find((x) => x.id === t.subId)?.company || t.company || "The contractor" }))}
+          onRate={(trade, stars) => rateAssignmentNow(ratingVisit.jobId, trade, stars)}
+          onClose={() => setRatingVisit(null)} />
+      )}
       {completingJob && (
         <ConfirmComplete
           job={completingJob}
@@ -13763,6 +13793,78 @@ function ConfirmRemove({ name, what, consequence, verb = "Remove", onConfirm, on
 // still outstanding on this particular job, because a job nobody was ever
 // assigned to is the commonest way this gets pressed by mistake and the card
 // above it only counts filled slots.
+// WHAT TO RATE AFTER A VISIT: the accepted work on that appointment. A
+// company's own appointment (098) rates that company's trades; a whole-job
+// time rates every company that took work on the job. An offer nobody
+// accepted is not work anybody did.
+function rateTargets(job, companyId = null) {
+  if (!job) return [];
+  return (job.trades || []).flatMap((t) => {
+    const a = job.assignments?.[t];
+    if (!a || !(a.status === "accepted" || a.auto)) return [];
+    if (companyId && a.subId !== companyId) return [];
+    return [{ trade: t, subId: a.subId, company: a.company || null, rating: a.rating || 0 }];
+  });
+}
+
+// "Yes, they showed up" opens this before anything else happens. Stars per
+// trade, grouped by company; Save is AWAITED and a refusal keeps the window
+// open with the reason. Skip is a real answer -- the job's own trade rows and
+// the dashboard's unrated list both still offer the stars later.
+function RateVisitWork({ title, targets, onRate, onClose }) {
+  const [stars, setStars] = useState(() => Object.fromEntries(targets.map((t) => [t.trade, t.rating || 0])));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const companies = [...new Set(targets.map((t) => t.company))];
+  const changed = targets.filter((t) => stars[t.trade] && stars[t.trade] !== (t.rating || 0));
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      for (const t of changed) await onRate(t.trade, stars[t.trade]);
+      onClose();
+    } catch (e) {
+      console.error("[rate] refused:", e);
+      setErr(e?.status === 401 || e?.body?.error === "impersonation_expired"
+        ? "Your sign-in ran out. Sign in again and rate them from the job."
+        : "That rating didn't save. Try again in a moment.");
+      setBusy(false);
+    }
+  };
+  const who = companies.length === 1 ? companies[0] : tt("the crews");
+  return (
+    <Modal onClose={busy ? () => {} : onClose}>
+      <div className="form rate-visit" data-rate-visit="">
+        <h2>
+          <Star size={18} style={{ color: "var(--amber)", verticalAlign: -3, marginRight: 8 }} />
+          {tt("How was {who}'s work?", { who })}
+        </h2>
+        <p className="form-sub">
+          {tt("They showed up for {title}. Rate the work before you move on. You can change it later on the job.", { title })}
+        </p>
+        {companies.map((co) => (
+          <div className="rv-co" key={co}>
+            {companies.length > 1 && <div className="form-sec">{co}</div>}
+            {targets.filter((t) => t.company === co).map((t) => (
+              <div className="rv-row" key={t.trade} data-rate-trade={t.trade}>
+                <span className="rv-trade">{TRADE_LABEL[t.trade] || t.trade}</span>
+                <StarRate value={stars[t.trade]} label={tt("Rate")}
+                  onRate={(n) => setStars((s) => ({ ...s, [t.trade]: n }))} />
+              </div>
+            ))}
+          </div>
+        ))}
+        {err && <div className="form-err" role="alert">{err}</div>}
+        <div className="form-actions">
+          <button className="btn-ghost" type="button" disabled={busy} onClick={onClose}>{tt("Skip for now")}</button>
+          <button className="btn-solid" type="button" disabled={busy || !changed.length} onClick={save}>
+            <Star size={15} /> {busy ? tt("Saving…") : tt("Save rating")}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function ConfirmComplete({ job, effects, onConfirm, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -45690,6 +45792,11 @@ p.fld-note{margin:6px 0 0}
 
 /* star rating */
 .star-rate{display:flex;align-items:center;gap:2px;flex:none}
+.rate-visit .rv-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+.rate-visit .rv-trade{font-weight:600;font-size:15px}
+.rate-visit .rv-row .sr-star{width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center}
+.rate-visit .rv-row .sr-star svg{width:24px;height:24px}
+.rate-visit .rv-co + .rv-co{margin-top:14px}
 .sr-label{font-size:10.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.04em;margin-right:5px}
 .sr-star{border:0;background:none;padding:1px;cursor:pointer;color:var(--line);display:grid;place-items:center}
 .sr-star.on{color:var(--amber)}
