@@ -16127,6 +16127,19 @@ refactor.
   `test:spendmtd` (5); counting every order as this month's fails one
   assertion.
 
+- **THE WORKING RELATIONSHIP IS ON THE CONTRACTOR'S CARD, AND FIRST ON THE
+  EDIT STEP.** Reported from Sound Property Management: *"I can't find how to
+  edit the working relationship into a handyman"*. The picker existed (Edit →
+  step 2), but it sat below the buildings list, which is long on a portfolio,
+  and it was labeled *What they are to you*. The card now carries a
+  **Working relationship: Subcontractor / Handyman** line with what it means
+  and **Change**, which opens Edit on step 2. The picker is the first thing on
+  that step and is labeled *Working relationship*. It is shown only to
+  property managers, portfolio managers and owners, the accounts that may
+  engage a handyman; a general contractor's card has no line. No account kind
+  was added, at the owner's word. `test:inspwalk` (75); drawing the line for a
+  general contractor fails one assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
