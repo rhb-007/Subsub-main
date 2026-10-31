@@ -48232,6 +48232,9 @@ a.meas-dl{text-decoration:none}
    so. Set on the panel rather than at each render site, where half of them
    were carrying it inline and half were not. */
 .settings-panel + .settings-panel{margin-top:18px}
+/* Any two stacked panels get the same space, not only two settings panels:
+   Your other business sat border on border on the agreement panel below it. */
+.portal-panel + .portal-panel{margin-top:18px}
 /* Said where the link to the live form would be, when there is no live form
    to link to yet. */
 .theme-note{font-size:12.5px;color:var(--ink-soft);text-align:right}

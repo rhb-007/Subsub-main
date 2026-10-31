@@ -11,7 +11,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, tally, wait, touchingSections } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-console-lists-test");
@@ -342,6 +342,12 @@ try {
   t.ck("pressing it lists the canceled accounts",
     JSON.stringify(await rowNames()) === JSON.stringify(["Gone Exteriors"]), JSON.stringify(await rowNames()));
   await nav("Dashboard"); await wait(400);
+  for (const tab of await page.evaluate(() => [...document.querySelectorAll(".pf-tabs button, .pf-dash-tabs button")].map((b) => b.innerText.trim()))) {
+    await page.evaluate((x) => [...document.querySelectorAll(".pf-tabs button, .pf-dash-tabs button")].find((b) => b.innerText.trim() === x)?.click(), tab);
+    await wait(300);
+    const dTouch = await touchingSections(page, ".pf-main");
+    t.ck(`no two sections touch on the dashboard's ${tab} tab`, dTouch.length === 0, JSON.stringify(dTouch));
+  }
 
   // The live total and the plan split were the whole of the Accounts card,
   // so they ride on Account types now rather than disappearing with it.
@@ -527,6 +533,8 @@ try {
   t.ck("the tenant is in Tenants and owners", JSON.stringify(panels?.guests) === '["Ruth Owner"]', JSON.stringify(panels?.guests));
   t.ck("labelled as a tenant, with their unit", /tenant/i.test(panels?.guestRole || "") && panels?.guestUnit,
     JSON.stringify(panels));
+  const acTouch = await touchingSections(page, ".modal-acct");
+  t.ck("no two sections touch in the account window", acTouch.length === 0, JSON.stringify(acTouch));
   await page.evaluate(() => [...document.querySelectorAll(".modal-acct .pf-guests button")]
     .find((b) => /Reset password/.test(b.innerText))?.click());
   await wait(300);
@@ -592,6 +600,9 @@ try {
   t.ck("for the row that was pressed", cw?.h2 === "Skagit Framing", cw?.h2);
   t.ck("with its detail", cw?.detail === true);
   t.ck("and its edit form, in the same window", cw?.edit === true);
+  // Every boxed section in the company window has space under it.
+  const coTouch = await touchingSections(page, ".modal-co");
+  t.ck("no two sections touch in the company window", coTouch.length === 0, JSON.stringify(coTouch));
   await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
   await wait(300);
 

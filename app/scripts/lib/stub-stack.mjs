@@ -207,3 +207,38 @@ export async function openCards(page) {
     await wait(250);
   }
 }
+
+// Boxed sections that touch. Reported twice from My account: one panel's
+// border sat on the next one's, so two sections read as one. A "boxed
+// section" is a visible element with a border on all four sides, taller than
+// 40px; two of them that are siblings, stacked one above the other and
+// overlapping across, must have at least `min` px between them. Measured on
+// the drawn page, because a missing margin is a rule that is not there.
+export function touchingSections(page, root = "body", min = 10) {
+  return page.evaluate((root, min) => {
+    const boxed = (el) => {
+      const cs = getComputedStyle(el);
+      if (cs.display === "none" || cs.visibility === "hidden" || cs.position === "fixed" || cs.position === "absolute") return false;
+      const r = el.getBoundingClientRect();
+      if (r.height < 40 || r.width < 120) return false;
+      return ["Top", "Right", "Bottom", "Left"].every((s) => parseFloat(cs[`border${s}Width`]) > 0 && cs[`border${s}Style`] !== "none");
+    };
+    const label = (el) => (el.className && typeof el.className === "string" ? el.className.split(" ").slice(0, 3).join(".") : el.tagName)
+      + " «" + (el.innerText || "").trim().split("\n")[0].slice(0, 40) + "»";
+    const out = [];
+    for (const top of document.querySelectorAll(root)) {
+      for (const parent of [top, ...top.querySelectorAll("*")]) {
+        const kids = [...parent.children].filter(boxed);
+        for (let i = 1; i < kids.length; i++) {
+          const a = kids[i - 1].getBoundingClientRect(), b = kids[i].getBoundingClientRect();
+          const stacked = b.top >= a.bottom - 4;
+          const across = Math.min(a.right, b.right) - Math.max(a.left, b.left) > 40;
+          if (stacked && across && b.top - a.bottom < min) {
+            out.push({ a: label(kids[i - 1]), b: label(kids[i]), gap: Math.round(b.top - a.bottom) });
+          }
+        }
+      }
+    }
+    return out;
+  }, root, min);
+}

@@ -16079,6 +16079,20 @@ refactor.
   CRM. `test:inspingestui` reads both notes on both kinds; making the rules
   note ignore the kind fails one assertion.
 
+- **TWO STACKED PANELS ALWAYS HAVE SPACE BETWEEN THEM, ON MY ACCOUNT AND IN
+  THE CONSOLE.** Reported from Account -> Company: *Your other business* sat
+  border on border on *Your subcontractor agreement*, so the two read as one.
+  Only two settings panels in a row got a margin (`.settings-panel +
+  .settings-panel`), and the agreement panel is not one. `.portal-panel +
+  .portal-panel{margin-top:18px}` covers any pair. `touchingSections` in
+  `scripts/lib/stub-stack.mjs` measures every pair of sibling boxed sections
+  (a border on all four sides, stacked, overlapping across) and fails under
+  10px. `test:sectiongap` walks every My account tab and both halves of the
+  merged ones, for a general contractor and a property manager at 1180px and
+  390px. `test:consolelists` runs it on the dashboard's three tabs, the account
+  window and the company window. Taking the rule off fails sixteen; taking the
+  console panels' margin off fails the account window.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
