@@ -1597,8 +1597,18 @@ const assignBlockers = (s) =>
   requiredDocsFor(s?.engagedAs, ASSIGN_KINDS).filter((k) => !docVerified(s, k));
 const payBlockers = (s) =>
   requiredDocsFor(s?.engagedAs, PAY_ONLY_KINDS).filter((k) => !docVerified(s, k));
+// Can a work order go to them today: the assign route's three documents and,
+// where one is needed, the registration. A handyman is judged on neither the
+// certificate, the bond nor the agreement, and needs no licence.
+const assignReady = (s) =>
+  assignBlockers(s).length === 0 && (!needsLicense(s?.engagedAs) || licenseOk(s));
+// What still stops assignment, in words, for the card's "Not assignable yet".
+const assignGaps = (s) => [
+  ...assignBlockers(s).map((k) => DOC_LABELS[k]),
+  ...(!needsLicense(s?.engagedAs) || licenseOk(s) ? [] : ["Active WA contractor registration"]),
+];
 const unverifiedDocs = (s) => DOC_KINDS.filter((k) => s[k] && !docVerified(s, k));
-const pendingReviewDocs = (s) => DOC_KINDS.filter((k) => docStatus(s, k) === "pending");
+const pendingReviewDocs = (s) => requiredDocsFor(s?.engagedAs, DOC_KINDS).filter((k) => docStatus(s, k) === "pending");
 const docsComplete = (s) =>
   missingDocs(s).length === 0 && (!needsLicense(s?.engagedAs) || licenseOk(s));
 // email body for "matched but blocked on paperwork"
@@ -7313,7 +7323,7 @@ export default function SubSub() {
           ) : (
             <div className={`grid ${rosterCards ? "" : "rows"}`}>
               {filtered.map((s) => {
-                const ready = s.bond && s.insurance && s.contract;
+                const ready = assignReady(s);
                 // THE LINE. Same click, same modal and the same Assign as the
                 // card; what it drops is the reading matter -- capabilities,
                 // coverage, stats -- which the modal carries in full. Its
@@ -28830,7 +28840,7 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
             </div>
           ))}
           {subs.map((s) => {
-            const ready = s.bond && s.insurance && s.contract;
+            const ready = assignReady(s);
             return (
               <React.Fragment key={s.id}>
                 <div className="cal-sub">
@@ -42702,7 +42712,10 @@ function RelationshipModal({ sub, hiringWord = "Contractor", onSave, onClose }) 
 }
 
 function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship }) {
-  const ready = sub.bond && sub.insurance && sub.contract;
+  const ready = assignReady(sub);
+  const payGaps = payBlockers(sub);
+  const required = requiredDocsFor(sub.engagedAs, DOC_KINDS);
+  const handy = engagedAs(sub.engagedAs) === "handyman";
   const [notes, setNotes] = useState(sub.notes || "");
   const [dirty, setDirty] = useState(false);
   const docs = [
@@ -42879,7 +42892,10 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         {dirty && <button className="notes-save" onClick={() => { onSaveNotes(sub.id, notes); setDirty(false); }}>Save notes</button>}
       </section>
 
-      <section>
+      {/* A handyman needs no state licence, so the section that asks for one
+          is not drawn over them: an "Add their L&I number" row on somebody the
+          account deliberately engaged without one reads as a requirement. */}
+      {needsLicense(sub.engagedAs) && <section>
         <h4><Shield size={13} /> WA contractor registration</h4>
         {(() => {
           const c = sub.licenseCheck;
@@ -42935,13 +42951,31 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
             Registration is {licenseStatusText(sub.licenseCheck)} — this contractor can't be assigned until it's renewed.
           </p>
         )}
-      </section>
+      </section>}
 
       <section>
         <h4>Compliance documents</h4>
+        {handy && (
+          <p className="rollup-note doc-handy-note">
+            {tt("Engaged as a handyman: no certificate of insurance, bond or signed agreement is required. The W-9 is still needed before you can pay them.")}
+          </p>
+        )}
         <div className="doc-rows">
           {docs.map((d) => {
             const st = docStatus(sub, d.key);
+            // A document this engagement is not judged on: say so, and offer
+            // no Upload or Request, because a button asking for it is a
+            // requirement in everything but name. One already on file still
+            // opens, since somebody sent it.
+            if (!required.includes(d.key) && st === "missing") return (
+              <div key={d.key} className="doc-row st-doc-excused">
+                <d.icon size={16} />
+                <div className="doc-label-wrap">
+                  <span className="doc-label">{d.label}</span>
+                  <span className="doc-state s-excused"><CheckCircle2 size={11} /> {tt("Not required for a handyman")}</span>
+                </div>
+              </div>
+            );
             const rv = docReview(sub, d.key);
             // Verified is a verdict somebody recorded once; a certificate has a
             // date. A row reading "Verified · expires 2024-03-01" in green is
@@ -43026,13 +43060,25 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
       <div className="detail-actions">
         <button className="mini primary" onClick={onSchedule}><Calendar size={14} /> Assign to a job</button>
       </div>
-      {!ready && (
+      {/* Two different questions: what stops a work order, and what stops
+          paying them. The W-9 is only the second, so it is never listed as a
+          reason they cannot be assigned. */}
+      {!ready ? (
         <div className="doc-block detail-doc-block">
           <AlertTriangle size={15} />
           <div>
-            <strong>Not assignable yet.</strong> Outstanding: {complianceGaps(sub).join(", ")}.
+            <strong>Not assignable yet.</strong> Outstanding: {assignGaps(sub).join(", ")}.
+            {payGaps.length > 0 && <> Needed before you can pay them: {payGaps.map((k) => DOC_LABELS[k]).join(", ")}.</>}
           </div>
           <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request docs</button>
+        </div>
+      ) : payGaps.length > 0 && (
+        <div className="doc-block detail-doc-block detail-pay-block">
+          <Receipt size={15} />
+          <div>
+            <strong>Can be assigned.</strong> Needed before you can pay them: {payGaps.map((k) => DOC_LABELS[k]).join(", ")}.
+          </div>
+          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request</button>
         </div>
       )}
       {/* LAST, and quiet. Removing somebody is not what this card is for --
@@ -48922,6 +48968,9 @@ iframe.dv-frame{display:block}
 .doc-state.s-pending{color:var(--amber)}
 .doc-state.s-rejected{color:var(--red)}
 .doc-state.s-missing{color:var(--ink-soft)}
+.doc-state.s-excused{color:var(--ink-soft)}
+.doc-row.st-doc-excused{opacity:.75}
+.doc-handy-note{margin:0 0 10px}
 .doc-row.st-doc-verified{background:#f2f8f4;border-color:#d4e7db}
 .doc-row.st-doc-pending{background:#fffdf6;border-color:#ecd9b0}
 .doc-row.st-doc-rejected{background:#fbf1ed;border-color:#f0d9d1}

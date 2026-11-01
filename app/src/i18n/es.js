@@ -66,6 +66,8 @@ export default {
   "Where to meet, or how they get in": "Dónde encontrarse, o cómo entrar",
   "e.g. Meet at the front door": "p. ej. Encontrémonos en la puerta principal",
   "Saving…": "Guardando…",
+  "Not required for a handyman": "No se requiere para un handyman",
+  "Engaged as a handyman: no certificate of insurance, bond or signed agreement is required. The W-9 is still needed before you can pay them.": "Contratado como handyman: no se requiere certificado de seguro, fianza ni acuerdo firmado. El W-9 sigue siendo necesario antes de poder pagarle.",
   "Save": "Guardar",
   "Cancel": "Cancelar",
   "Change where to meet": "Cambiar dónde encontrarse",

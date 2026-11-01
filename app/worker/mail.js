@@ -22,7 +22,8 @@ import { INSURANCE_LINES, BOND_MIN, problemsIn,
 // Imported and then re-exported, NOT `export ... from`: that re-exports
 // without binding either name in this file, so `missingDocs` below throws on
 // `DOC_KINDS` -- a module that loads fine and fails on the first email sent.
-import { DOC_KINDS, DOC_LABELS } from "../shared/docs.js";
+import { DOC_KINDS, DOC_LABELS, PAY_ONLY_KINDS } from "../shared/docs.js";
+import { requiredDocsFor } from "../shared/engaged.js";
 import { REPLY_MARKER } from "../shared/messaging.js";
 import { hiresLabelFor } from "../shared/hires.js";
 import { SMS_INCLUDED_SCALE } from "../shared/smsquota.js";
@@ -59,8 +60,9 @@ const docsLink = (subdomain) => `https://${portalUrl(subdomain)}/documents`;
 
 // Which documents are not usable: absent, unreviewed, or rejected. Mirrors the
 // app's own rule — a file on its own is not compliance, a human verdict is.
-export function missingDocs(company, docReview) {
-  return DOC_KINDS.filter((k) => {
+// Narrowed by the engagement: a handyman is asked for the W-9 alone.
+export function missingDocs(company, docReview, engagedAs = null) {
+  return requiredDocsFor(engagedAs, DOC_KINDS).filter((k) => {
     if (!company[k]) return true;
     return (docReview?.[k]?.status) !== "verified";
   });
@@ -68,11 +70,15 @@ export function missingDocs(company, docReview) {
 
 // ---- Templates ------------------------------------------------------------
 
-export function docRequestEmail({ company, contact, docReview, job, trade, account }) {
-  const missing = missingDocs(company, docReview);
+export function docRequestEmail({ company, contact, docReview, job, trade, account, engagedAs = null }) {
+  const missing = missingDocs(company, docReview, engagedAs);
   const who = account?.name || "our team";
   const link = docsLink(account?.subdomain);
-  const lead = job
+  // Only the W-9 left is a payment question, not a work one.
+  const payOnly = missing.length > 0 && missing.every((k) => PAY_ONLY_KINDS.includes(k));
+  const lead = payOnly
+    ? `${who} needs this on file before they can pay you:`
+    : job
     ? `You're matched to ${job.title || "a job"}${trade ? ` (${trade})` : ""}${job.date ? `, starting ${niceDate(job.date)}` : ""}. ${who} can send the work order once these are on file:`
     : `${who} can send you work once these are on file:`;
   // Only the limits a carrier needs to see, on one line each; the rest of the
@@ -97,7 +103,9 @@ Sign in as ${company.email || "the email on your account"}.
 
 ${NOREPLY}`;
   return {
-    subject: job
+    subject: payOnly
+      ? `Action needed: upload your ${DOC_LABELS[missing[0]]} so ${who} can pay you`
+      : job
       ? `Action needed: upload documents for ${job.title || "a job"}`
       : "Action needed: upload your compliance documents",
     text,

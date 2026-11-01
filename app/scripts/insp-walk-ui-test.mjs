@@ -59,6 +59,21 @@ const USERS = () => [{ id: "usr_r", name: "Christopher Lane", email: "chris@x.te
   role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }];
 
 const verified = { status: "verified", checks: {}, limits: {} };
+
+// What the card asks of them: the licence section, each document row's state
+// and buttons, and the not-assignable box.
+const cardAsks = (page) => page.evaluate(() => {
+  const m = document.querySelector(".modal .detail");
+  if (!m) return null;
+  const heads = [...m.querySelectorAll("h4")].map((h) => (h.innerText || "").trim().toLowerCase());
+  const rows = [...m.querySelectorAll(".doc-row")].map((r) => ({
+    label: (r.querySelector(".doc-label")?.innerText || "").trim(),
+    state: (r.querySelector(".doc-state")?.innerText || "").replace(/\s+/g, " ").trim(),
+    req: !!r.querySelector(".doc-req"), up: !!r.querySelector(".doc-add"),
+  }));
+  const block = (m.querySelector(".detail-doc-block")?.innerText || "").replace(/\s+/g, " ");
+  return { license: heads.some((h) => /contractor registration/.test(h)), rows, block };
+});
 const SUB = () => ({
   id: "cmp_h", engagementId: "en_h", accountId: "acc_x",
   company: "Pike Maintenance", contact: "Dale Ruiz", phone: "(206)555-0144",
@@ -536,6 +551,14 @@ try {
     const { ctx, page, row, opened } = await openCard();
     t.ck("the card opened", opened);
     t.ck("the card names the working relationship", /Working relationship: Subcontractor/.test(row || ""), row);
+    // AS A SUBCONTRACTOR the card asks for everything: the registration, all
+    // four documents, and it says they cannot be assigned. The same card, the
+    // same documents, read again below as a handyman -- so neither branch can
+    // pass on a card that simply stopped drawing.
+    const asSub = await cardAsks(page);
+    t.ck("a subcontractor's card asks for their registration", asSub?.license === true, JSON.stringify(asSub));
+    t.ck("and can request the certificate", asSub?.rows.find((r) => /insurance/i.test(r.label))?.req === true, JSON.stringify(asSub?.rows));
+    t.ck("and says they can't be assigned yet", /Not assignable yet/.test(asSub?.block || ""), asSub?.block);
     // THE CONTRACTOR HAS NO CREWS AND NO CAPABILITIES, which is the reported
     // shape: the three-step form's Save waits on both, so it could never
     // save the relationship. The window saves the relationship alone.
@@ -577,6 +600,19 @@ try {
       return box && next ? Math.round(next.getBoundingClientRect().top - box.getBoundingClientRect().bottom) : null;
     });
     t.ck("the next block sits at least 14px below the relationship box", gap !== null && gap >= 14, String(gap));
+    // AND AS A HANDYMAN THE CARD STOPS ASKING. Reported with the card still
+    // drawing the L&I section and Upload/Request on all four documents over a
+    // handyman, and "Not assignable yet" naming the agreement and the W-9.
+    const asHandy = await cardAsks(page);
+    t.ck("a handyman's card draws no registration section", asHandy?.license === false, JSON.stringify(asHandy));
+    const excused = (asHandy?.rows || []).filter((r) => /insurance|bond|agreement/i.test(r.label));
+    t.ck("the certificate, bond and agreement read not required", excused.length === 3
+      && excused.every((r) => /Not required for a handyman/.test(r.state)), JSON.stringify(excused));
+    t.ck("with no Upload or Request on any of them", excused.length === 3
+      && excused.every((r) => !r.req && !r.up), JSON.stringify(excused));
+    t.ck("the W-9 row is still a document they need", (asHandy?.rows || [])
+      .some((r) => /W-9/.test(r.label) && !/Not required/.test(r.state)), JSON.stringify(asHandy?.rows));
+    t.ck("and nothing says they can't be assigned", !/Not assignable/.test(asHandy?.block || ""), asHandy?.block);
     await ctx.close();
   }
 

@@ -28282,11 +28282,16 @@ async function smsOverageSweep(env, now = new Date()) {
 // the preview and the send so the two cannot drift.
 async function docRequestContext(c, companyId, jobId, trade, kind) {
   const { accountId } = c.get("auth");
-  const row = await c.env.DB.prepare(
-    `SELECT co.*, en.doc_review FROM companies co
+  // engaged_as too, so a handyman is asked for the W-9 alone; a database
+  // without 058 reads every engagement as a subcontractor, which it is there.
+  const sel = (extra) => c.env.DB.prepare(
+    `SELECT co.*, en.doc_review${extra} FROM companies co
        JOIN engagements en ON en.company_id = co.id AND en.account_id = ?
       WHERE co.id = ?`
   ).bind(accountId, companyId).first();
+  let row;
+  try { row = await sel(", en.engaged_as"); }
+  catch (e) { if (!/engaged_as/.test(String(e?.message || e))) throw e; row = await sel(""); }
   if (!row) return null;
   const account = await c.env.DB.prepare(
     `SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
@@ -28297,7 +28302,7 @@ async function docRequestContext(c, companyId, jobId, trade, kind) {
     : null;
   return {
     company: row, contact: row.contact, docReview: parseJson(row.doc_review, {}),
-    job, trade: trade || null, account, kind: kind || null,
+    engagedAs: row.engaged_as || null, job, trade: trade || null, account, kind: kind || null,
   };
 }
 

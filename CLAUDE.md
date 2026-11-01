@@ -16188,6 +16188,33 @@ refactor.
   dashboard list fails two (reproducing the screenshot), and the old margin
   fails one (a 0px gap).
 
+- **AND THE CONTRACTOR'S OWN CARD STOPS ASKING A HANDYMAN FOR THE PACK.**
+  Reported with a handyman's card still drawing the WA contractor
+  registration section, Upload and Request on all four documents, and *Not
+  assignable yet. Outstanding: Signed subcontractor agreement, IRS Form W-9*.
+  The dashboard and the assign route had moved; `SubDetail` read
+  `sub.bond && sub.insurance && sub.contract` and drew every section
+  unconditionally.
+  - **The registration section is drawn only when `needsLicense`.**
+  - **The certificate, bond and agreement read *Not required for a handyman***
+    with no Upload or Request, and a note at the top of the section says so and
+    that the W-9 is still needed to pay them. One already on file still opens.
+  - **"Not assignable yet" reads `assignGaps`** (the route's three documents
+    plus the license where one is needed), never the W-9. A W-9 still missing is
+    said separately: *Needed before you can pay them*, with its own Request,
+    and on an assignable card under *Can be assigned*.
+  - **`assignReady` is the one test** for the card, the roster line's *Ready*
+    and the availability calendar, which all read the three booleans before.
+    `pendingReviewDocs` reads the required kinds.
+  - **The request email follows**: `docRequestContext` reads `engaged_as`
+    (falling back without it on a database before 058), and a handyman is asked
+    for the W-9 alone, worded as a payment question.
+
+  `test:inspwalk` (94) reads the same card as a subcontractor and then as a
+  handyman; `test:engaged` (63) reads both emails. Four mutations fire, each
+  on its own assertion: the license gate, the excused rows, the old `ready`,
+  and the email's narrowing.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

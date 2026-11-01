@@ -357,5 +357,22 @@ console.log("\n-- what they may be sent to --");
     s === 200 || s === 201, `${s} ${out.error || ""} ${JSON.stringify(out.missing || "")}`);
 }
 
+{
+  // AND THE REQUEST EMAIL FOLLOWS. A handyman is asked for the W-9 alone,
+  // as a payment question; a subcontractor with the same documents for all
+  // four. Both in the same place, so a mail that stopped listing anything
+  // cannot pass.
+  const { docRequestEmail } = await import("../worker/mail.js");
+  const company = { company: "Pike Maintenance", insurance: 0, bond: 0, contract: 0, w9: 0 };
+  const acct = { name: "Sound PM", subdomain: "sound" };
+  const h = docRequestEmail({ company, docReview: {}, account: acct, engagedAs: "handyman" });
+  ck("a handyman's document request names only the W-9",
+    /W-9/.test(h.text) && !/insurance|Surety bond|agreement/i.test(h.text.split("Upload them")[0]), h.text);
+  ck("and says it is about paying them", /pay you/.test(h.subject) && /before they can pay you/.test(h.text), h.subject);
+  const sb = docRequestEmail({ company, docReview: {}, account: acct, engagedAs: null });
+  ck("a subcontractor's still names all four", ["insurance", "bond", "agreement", "W-9"]
+    .every((w) => new RegExp(w, "i").test(sb.text)), sb.text);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
