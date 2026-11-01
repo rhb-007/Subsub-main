@@ -33,7 +33,7 @@ const t = tally();
 // A photograph the size one off a phone is, made here rather than committed:
 // 2000x1500 is what the downscale has to actually shrink, and a 20KB base64
 // literal in a test file is a thing nobody can read or change.
-function png(w, h) {
+function png(w, h, noise = false) {
   const crcTable = [...Array(256)].map((_, n) => {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
@@ -52,12 +52,14 @@ function png(w, h) {
   };
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8; ihdr[9] = 0; // 8-bit greyscale
+  ihdr[8] = 8; ihdr[9] = noise ? 2 : 0; // 8-bit RGB speckle, or greyscale
   // Not a flat colour: a gradient is what makes a JPEG of it a plausible
   // size, so the byte cap is exercised against something real.
   const rows = Buffer.concat([...Array(h)].map((_, y) => Buffer.concat([
     Buffer.from([0]),
-    Buffer.from([...Array(w)].map((__, x) => (x * 7 + y * 3) % 256)),
+    Buffer.from(noise
+      ? [...Array(w * 3)].map((__, i) => (Math.imul(i * 374761393 + y * 668265263, 1274126177) >>> 24) & 255)
+      : [...Array(w)].map((__, x) => (x * 7 + y * 3) % 256)),
   ])));
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
@@ -65,6 +67,10 @@ function png(w, h) {
   ]);
 }
 const SHOT = png(2000, 1500);
+// Speckle: what a stone or gravel floor is to a JPEG encoder, and the photo
+// that came back "too large to read" at the standard size and quality.
+const BUSY = png(2000, 1500, true);
+let SERVE = SHOT;
 
 const acct = () => ({
   id: "acc_x", name: "Sound Property Management", subdomain: "soundpm", kind: "property_manager",
@@ -101,7 +107,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   // The bytes, as a real decodable image -- the canvas has to be able to
   // load it or the downscale cannot be exercised at all.
   if (/^\/api\/inspections\/insp_1\/photos\/ph\d$/.test(path)) {
-    return [200, null, { raw: SHOT, type: "image/png" }];
+    return [200, null, { raw: SERVE, type: "image/png" }];
   }
   const cap = /^\/api\/inspections\/insp_1\/rooms\/r1\/photos\/(ph\d)$/.exec(path);
   if (cap && method === "PATCH") {
@@ -354,6 +360,34 @@ try {
       JSON.stringify(rows[0]?.value));
     t.ck("wearing the dashed mark, because nobody has kept it yet",
       rows[0]?.isDraft === true && rows[0]?.borderStyle === "dashed", JSON.stringify(rows[0]));
+    await ctx.close();
+  }
+
+  console.log("\n-- a busy texture is stepped down until it fits --");
+  {
+    AI = true; STATUS = "draft"; SERVE = BUSY;
+    PHOTOS = [{ id: "ph1", name: "floor.jpg", type: "image/jpeg", caption: "", draft: "", draftUnclear: false }];
+    const { ctx, page } = await openOne();
+    // Chrome's encoder squeezes this speckle to about 330KB at the standard
+    // quality, under the cap; the iPad's, at the same setting, did not --
+    // which is the report. So the encoder is made to write the way that one
+    // did, about 0.15 of quality heavier, and the property under test is that
+    // the screen steps down until the photo fits, whatever the encoder does.
+    await page.evaluate(() => {
+      const real = HTMLCanvasElement.prototype.toDataURL;
+      HTMLCanvasElement.prototype.toDataURL = function (type, q) {
+        return real.call(this, type, typeof q === "number" ? Math.min(1, q + 0.15) : q);
+      };
+    });
+    sent.length = 0;
+    await page.evaluate(() => document.querySelector(".insp-draft-go").click());
+    await wait(4000);
+    const one = sent.find((x) => x.what === "draft")?.body?.photos?.[0];
+    const kb = Math.round((one?.data || "").length * 3 / 4 / 1024);
+    t.ck("a speckled floor still asks for a draft", !!one, JSON.stringify(sent.map((x) => x.what)));
+    t.ck("and fits under the cap the route refuses past",
+      !!one && (one.data || "").length * 3 / 4 <= MAX_DRAFT_BYTES, `${kb}KB of ${Math.round(MAX_DRAFT_BYTES / 1024)}KB`);
+    SERVE = SHOT;
     await ctx.close();
   }
 

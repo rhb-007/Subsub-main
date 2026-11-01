@@ -94,7 +94,7 @@ import { UNIT_LAYOUTS, layoutLabel, layoutChangeText } from "../shared/unitlayou
 import { ITEM_CONDITIONS, ITEM_CONDITION_ORDER, DEFAULT_CONDITION_TEXT, itemChanged, checklistTally,
   parseCost, flaggedItems, itemLabel, isIssueCondition } from "../shared/roomchecklist.js";
 import { DRAFT_LONG_EDGE, DRAFT_QUALITY, DRAFT_REFUSALS, MAX_CAPTION,
-  MAX_DRAFT_PHOTOS, whyNotDraft } from "../shared/photodraft.js";
+  MAX_DRAFT_PHOTOS, MAX_DRAFT_BYTES, whyNotDraft } from "../shared/photodraft.js";
 import { SUMMARY_REFUSALS, countComments, whyNotSummary } from "../shared/inspectsummary.js";
 import { AUTO_TRIES, isTurnaroundKind } from "../shared/autopick.js";
 import { agreementStateText, renderAgreement } from "../shared/agreement.js";
@@ -15719,20 +15719,34 @@ async function jpegForDraft(src) {
   const w = img.naturalWidth || img.width;
   const h = img.naturalHeight || img.height;
   if (!w || !h) throw new Error("decode_failed");
-  // Never upscale: a small photograph is sent as it is. Enlarging it would
-  // cost more tokens for pixels that carry nothing.
-  const scale = Math.min(1, DRAFT_LONG_EDGE / Math.max(w, h));
-  const cv = document.createElement("canvas");
-  cv.width = Math.max(1, Math.round(w * scale));
-  cv.height = Math.max(1, Math.round(h * scale));
-  cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
-  // JPEG, always, which is why the route hard-codes that media type rather
-  // than reading the original's: the original may be HEIC off an iPhone,
-  // which the API does not take at all.
-  const url = cv.toDataURL("image/jpeg", DRAFT_QUALITY);
-  const comma = url.indexOf(",");
-  if (comma < 0) throw new Error("encode_failed");
-  return url.slice(comma + 1);
+  // FITS UNDER THE ROUTE'S CAP, OR IS STEPPED DOWN UNTIL IT DOES. A busy
+  // texture (speckled stone, gravel, a patterned carpet) at 1120px and the
+  // standard quality runs past MAX_DRAFT_BYTES, and the route then refuses it
+  // as too_big, which reads as "try again" over a photo that will fail every
+  // time. So lower the quality first, then the size, and send the first one
+  // that fits. Never upscale: a small photograph is sent as it is.
+  const cap = MAX_DRAFT_BYTES * 0.95;
+  const steps = [
+    [DRAFT_LONG_EDGE, DRAFT_QUALITY], [DRAFT_LONG_EDGE, 0.65], [DRAFT_LONG_EDGE, 0.5],
+    [900, 0.5], [720, 0.5], [560, 0.45],
+  ];
+  let last = null;
+  for (const [edge, q] of steps) {
+    const scale = Math.min(1, edge / Math.max(w, h));
+    const cv = document.createElement("canvas");
+    cv.width = Math.max(1, Math.round(w * scale));
+    cv.height = Math.max(1, Math.round(h * scale));
+    cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+    // JPEG, always, which is why the route hard-codes that media type rather
+    // than reading the original's: the original may be HEIC off an iPhone,
+    // which the API does not take at all.
+    const url = cv.toDataURL("image/jpeg", q);
+    const comma = url.indexOf(",");
+    if (comma < 0) throw new Error("encode_failed");
+    last = url.slice(comma + 1);
+    if (last.length * 3 / 4 <= cap) return last;
+  }
+  return last;
 }
 
 function ReportPhoto({ jobId, photo, onOpen, onLoaded, load }) {
