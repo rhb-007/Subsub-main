@@ -25953,7 +25953,7 @@ function GettingStarted({ accountId, trades, subs, jobs, subLimit, onGoAccount, 
     try { return localStorage.getItem(key) === "1"; } catch { return false; }
   });
 
-  const approved = subs.filter((s) => DOC_KINDS.every((k) => s[k]));
+  const approved = subs.filter((s) => requiredDocsFor(s?.engagedAs, DOC_KINDS).every((k) => s[k]));
 
   // A subcontractor's checklist is not a shorter version of a hiring
   // account's, it is a different list.
@@ -28138,7 +28138,11 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // contractor on the roster and a declined one is finished business.
   const incoming = (connectsIn || []).filter((r) => r.status === "pending");
 
-  const nonCompliant = subs.filter((s) => DOC_KINDS.some((k) => !s[k]));
+  // Read through what they are to this account: a handyman is not asked for the
+  // certificate, the bond or the agreement, so listing those as "not uploaded"
+  // put a maintenance worker on this list for documents nobody wants.
+  const docsNotUploaded = (s) => requiredDocsFor(s?.engagedAs, DOC_KINDS).filter((k) => !s[k]);
+  const nonCompliant = subs.filter((s) => docsNotUploaded(s).length > 0);
   const toReview = subs.map((s) => ({ sub: s, kinds: pendingReviewDocs(s) })).filter((x) => x.kinds.length);
   const licenseIssues = subs.filter((s) => !licenseOk(s));
   // Offers that ran out of time need a different action from ones still ticking.
@@ -28688,7 +28692,7 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
               <div className="dash-avatar">{s.company.split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
               <div className="dash-row-main">
                 <span className="dr-title" onClick={() => onOpenSub(s)}>{s.company}</span>
-                <span className="dr-meta">Not uploaded: {DOC_KINDS.filter((k) => !s[k]).map((k) => DOC_LABELS[k]).join(", ")}</span>
+                <span className="dr-meta">Not uploaded: {docsNotUploaded(s).map((k) => DOC_LABELS[k]).join(", ")}</span>
               </div>
               <button className="btn-notify dash-row-btn" onClick={() => onRequestDocs(s)}>
                 <Mail size={13} /> Request
@@ -45389,7 +45393,7 @@ button.pack-ad-btn:disabled{opacity:.6;cursor:default}
   gap:12px;margin-bottom:16px}
 .detail-trades .cat-row{flex:1;min-width:0}
 .detail-rel{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;
-  margin:10px 0 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);font-size:14px}
+  margin:10px 0 18px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--paper);font-size:14px}
 .detail-rel-note{color:var(--ink-soft);font-size:13px}
 .rel-modal h2{margin:0 0 4px}
 .rel-choices{display:grid;gap:10px;margin:16px 0 12px}

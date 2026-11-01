@@ -160,7 +160,9 @@ export const mayCover = (as, trade) => !isHandyman(as) || handymanCovers(trade);
 // request mail has always said payment cannot be issued without it, and why
 // `paygate.js` reads it. Nothing about being a handyman changes who the IRS
 // expects a 1099 from.
-export const HANDYMAN_EXCUSED = ["insurance", "bond"];
+// And the signed agreement, at the owner's word: a handyman is not asked for
+// the compliance pack by the hiring party, so nothing but the W-9 is left.
+export const HANDYMAN_EXCUSED = ["insurance", "bond", "contract"];
 export const excusedFor = (as) => (isHandyman(as) ? HANDYMAN_EXCUSED : []);
 
 // The documents this engagement is judged on. Composed with whatever the

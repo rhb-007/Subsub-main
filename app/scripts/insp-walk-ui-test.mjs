@@ -569,6 +569,14 @@ try {
     }));
     t.ck("the window closes on a save", !after.open, JSON.stringify(after));
     t.ck("and the card now says Handyman", /Working relationship: Handyman/.test(after.row), after.row);
+    // THE BOX HAS ROOM UNDER IT. Reported with the Auto-schedule heading drawn
+    // against its bottom border: whatever follows it must sit clear.
+    const gap = await page.evaluate(() => {
+      const box = document.querySelector(".modal .detail-rel");
+      const next = box?.nextElementSibling;
+      return box && next ? Math.round(next.getBoundingClientRect().top - box.getBoundingClientRect().bottom) : null;
+    });
+    t.ck("the next block sits at least 14px below the relationship box", gap !== null && gap >= 14, String(gap));
     await ctx.close();
   }
 

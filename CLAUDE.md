@@ -16162,6 +16162,32 @@ refactor.
   roster's city filter lists the cities the roster actually has. `AREAS` is
   gone. `test:inspwalk` (85); two mutations fire.
 
+- **A HANDYMAN IS NOT ASKED FOR THE COMPLIANCE PACK, AND THE DASHBOARD SAYS
+  SO.** Reported with the dashboard's *Awaiting documents* listing Sound
+  Maintenance, a handyman, as missing a certificate, a bond, a signed agreement
+  and a W-9, and asked for as *"if handyman, should not require compliance pack
+  by hiring party"*.
+
+  **The signed agreement came off as well**, at the owner's word, which
+  reverses 058's *"the signed agreement is deliberately untouched"*.
+  `HANDYMAN_EXCUSED` is insurance, bond and contract now, so the assign route
+  refuses a handyman for nothing (the agreement was the one document it still
+  asked for, verified, even when no agreement had ever been sent). **The W-9
+  stays**, as a payment question and never an assignment one: it is what
+  makes a 1099 possible, and `paygate.js` still reads it.
+
+  **The dashboard read `DOC_KINDS` flat**: the *Awaiting documents* list, the
+  *missing docs* tile and the set-up checklist's approved count all ignored
+  the engagement. They read `requiredDocsFor(s.engagedAs, DOC_KINDS)` now, so a
+  handyman with a W-9 is listed nowhere and one without is listed for the W-9
+  alone. **And the working-relationship box on the card has 18px under it**,
+  where the Auto-schedule heading sat on its border.
+
+  `test:engaged` (60), `test:dashpeekui` (33), `test:inspwalk` (86). Putting
+  the agreement back on the excused list fails two assertions, the old
+  dashboard list fails two (reproducing the screenshot), and the old margin
+  fails one (a 0px gap).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

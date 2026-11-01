@@ -151,6 +151,7 @@ console.log("\n-- the rule, before anything is driven --");
   const hm = requiredDocsFor("handyman", DOC_KINDS);
   ck("a handyman is not asked for insurance", !hm.includes("insurance"), JSON.stringify(hm));
   ck("nor a bond", !hm.includes("bond"), JSON.stringify(hm));
+  ck("nor the signed agreement", !hm.includes("contract"), JSON.stringify(hm));
   ck("but is still asked for a W-9", hm.includes("w9"), JSON.stringify(hm));
   ck("a subcontractor is asked for all of them",
     requiredDocsFor("subcontractor", DOC_KINDS).length === DOC_KINDS.length);
@@ -340,6 +341,20 @@ console.log("\n-- what they may be sent to --");
     { method: "POST", body: { trade: "plumbing", companyId: "cmp_roof", value: 180 } }));
   ck("a missing W-9 alone does not refuse the work order",
     s !== 409 || out.error !== "documents_incomplete", `${s} ${out.error || ""}`);
+}
+
+{
+  // A HANDYMAN WITH NOTHING ON FILE AT ALL is still assigned. Reported from a
+  // dashboard listing one as missing a certificate, a bond, an agreement and a
+  // W-9: the hiring party does not ask a handyman for the compliance pack, and
+  // the W-9 is a payment question, not an assignment one.
+  const { db, env } = seed();
+  db.exec(`UPDATE engagements SET doc_review = '{}' WHERE id = 'en_fix'`);
+  db.exec(`UPDATE companies SET insurance = 0, bond = 0, contract = 0, w9 = 0, doc_files = '{}' WHERE id = 'cmp_fix'`);
+  const [s, out] = await json(await call(env, "/api/jobs/j_tap/assign",
+    { method: "POST", body: { trade: "plumbing", companyId: "cmp_fix", value: 180 } }));
+  ck("a handyman with no documents at all is assigned",
+    s === 200 || s === 201, `${s} ${out.error || ""} ${JSON.stringify(out.missing || "")}`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -37,6 +37,15 @@ const SUB = {
   hasPortal: true, license: "", licenseCheck: null, available: true, unavailableDays: [],
   docReview: {}, coverage: {}, engagedAs: "subcontractor",
 };
+// TWO HANDYMEN, the case reported from the dashboard. Neither is asked for a
+// certificate, a bond or an agreement. One has a W-9 and must not be listed at
+// all; the other has nothing, and is listed for the W-9 alone, because that is
+// what payment needs. Names chosen so no other assertion matches them.
+const HANDY = (id, name, w9) => ({ ...SUB, id, company: name, engagementId: `en_${id}`,
+  categories: ["painting"], bond: false, insurance: false, contract: false, w9,
+  hasPortal: false, engagedAs: "handyman" });
+const HANDY_OK = HANDY("cmp_hok", "Elm Street Handy Co", true);
+const HANDY_NO = HANDY("cmp_hno", "Birch Lane Repairs", false);
 const USERS = [{ id: "u_mgr", name: "Christopher Lane", email: "chris@soundpm.test", phone: null,
   role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true,
   inviteSentAt: null, hasAvatar: false }];
@@ -67,7 +76,7 @@ const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, PM];
   if (path === "/api/account") return [200, PM];
-  if (path === "/api/subs") return [200, [SUB]];
+  if (path === "/api/subs") return [200, [SUB, HANDY_OK, HANDY_NO]];
   if (path === "/api/account-users") return [200, USERS];
   if (path === "/api/jobs") return [200, [JOB]];
   if (path === "/api/properties") return [200, [{ id: "prop_1", accountId: "acc_pm", name: "Press Apartments",
@@ -146,6 +155,18 @@ try {
   const logs = [];
   page.on("console", (m) => { if (m.type() === "error") logs.push(m.text()); });
   await wait(2600);
+
+  console.log("\n-- a handyman is not asked for the compliance pack --");
+  const awaiting = await page.evaluate(() => {
+    const sec = [...document.querySelectorAll(".dash-sec")]
+      .find((x) => /Awaiting documents/i.test(x.querySelector("h3")?.innerText || ""));
+    return sec ? [...sec.querySelectorAll(".dash-row")].map((r) => r.innerText.replace(/\s+/g, " ").trim()) : [];
+  });
+  t.ck("a handyman with a W-9 is not awaiting anything",
+    !awaiting.some((r) => /Elm Street Handy Co/.test(r)), JSON.stringify(awaiting));
+  const birch = awaiting.find((r) => /Birch Lane Repairs/.test(r)) || "";
+  t.ck("one with no W-9 is listed for the W-9 alone",
+    /IRS Form W-9/.test(birch) && !/insurance|bond|agreement/i.test(birch), JSON.stringify(awaiting));
 
   const rows = await openRows(page);
   t.ck("the dashboard lists both open slots", rows?.length === 2, JSON.stringify(rows));
