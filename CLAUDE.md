@@ -16215,6 +16215,20 @@ refactor.
   on its own assertion: the license gate, the excused rows, the old `ready`,
   and the email's narrowing.
 
+- **A BUSY PHOTO IS STEPPED DOWN UNTIL IT FITS, INSTEAD OF REFUSED AS "TOO
+  LARGE TO READ".** Reported from an iPad with a speckled stone floor photo
+  reading *One of those photos was too large to read. Try again*. Every photo
+  is drawn at 1120px and JPEG 0.8 before it is described (`jpegForDraft`), and
+  the route refuses anything past `MAX_DRAFT_BYTES` (400KB). Fine detail like
+  speckle, gravel or a patterned carpet runs past that, apparently on the iPad's
+  encoder more than on Chrome's, so the same photo failed every time and "try
+  again" could never work. `jpegForDraft` now lowers the quality (0.65, then
+  0.5) and then the size (900, 720, 560px) and sends the first version under 95%
+  of the cap. The cap itself is unchanged, so no press costs more than it did.
+  `test:photodraftui` (41) drives a color speckle with the encoder nudged 0.15
+  heavier, standing in for the iPad's: 685KB without the step-down, 330KB with
+  it. **Not verified:** the iPad's own encoder, which the harness cannot run.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
