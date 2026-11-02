@@ -105,6 +105,14 @@ const shown = (page) => page.evaluate(() => {
     acts: [...m.querySelectorAll(".agr-actions button")].filter(vis).map((b) => (b.innerText || "").replace(/\s+/g, " ").trim()),
     note: (m.querySelector(".agr-note")?.innerText || "").trim(),
     height: m.closest(".modal")?.scrollHeight || 0,
+    // The chips row sits right above Capabilities; measured, because a
+    // missing margin reads as a design choice in the source.
+    chipGap: (() => {
+      const ch = m.querySelector(".di-chips");
+      const h4 = [...m.querySelectorAll("section h4")].find((x) => /Capabilities/i.test(x.innerText || ""));
+      if (!ch || !h4 || ch.offsetParent === null) return null;
+      return Math.round(h4.getBoundingClientRect().top - ch.getBoundingClientRect().bottom);
+    })(),
   };
 });
 const tab = (page, id) => page.evaluate((x) => document.querySelector(`.modal .sd-tabs [data-tab="${x}"]`)?.click(), id);
@@ -130,6 +138,7 @@ try {
   t.ck("only one pane is drawn", JSON.stringify(a?.panes) === '["overview"]', JSON.stringify(a?.panes));
   t.ck("the compliance tab counts what is outstanding", Number(a?.tabs?.[1]?.count) > 0, a?.tabs?.[1]?.count);
   t.ck("documents are not drawn on Overview", a?.docRows === 0, String(a?.docRows));
+  t.ck("the chips row does not touch the Capabilities heading", a?.chipGap >= 14, String(a?.chipGap));
 
   await tab(page, "compliance"); await wait(300);
   const c = await shown(page);

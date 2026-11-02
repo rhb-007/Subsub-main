@@ -45565,6 +45565,7 @@ button.pack-ad-btn:disabled{opacity:.6;cursor:default}
   display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .di-person b{color:var(--ink);font-weight:600}
 .di-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.detail .di-chips{margin:0 0 22px}
 /* Trades below the identity, with Edit at the end of them -- out of the
    close button's corner, and no longer a row of its own. */
 .detail-trades{display:flex;align-items:flex-start;justify-content:space-between;

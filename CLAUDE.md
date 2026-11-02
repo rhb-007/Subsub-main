@@ -16273,6 +16273,13 @@ refactor.
   `test:setupgaps` had been red before this change (its nav match found the
   wrong button) and passes now.
 
+- **THE CHIPS ROW ON THE CONTRACTOR CARD HAS SPACE UNDER IT.** Reported with
+  *No warranty on file* and *Email only* sitting on the Capabilities heading.
+  Tabbing the card moved `.di-chips` out of the identity block into the
+  Overview pane, where it had a top margin and no bottom one.
+  `.detail .di-chips{margin:0 0 22px}` matches a section's gap.
+  `test:subtabs` measures the gap; taking the rule off reads 0px and fails.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
