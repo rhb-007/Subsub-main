@@ -203,6 +203,41 @@ ${NOREPLY}`;
   };
 }
 
+// A subcontractor agreement is waiting on them.
+//
+// Issuing one used to email nobody: the agreement sat in their portal and the
+// only way they found it was opening the app for some other reason. Sent when
+// it is issued and again when the hiring account presses Resend, so the card
+// can say when it went and how many times.
+export function agreementSentEmail({ company, contact, account, source = "subsub_standard", resend = false, issuedOn = null }) {
+  const who = account?.name || "our team";
+  const link = docsLink(account?.subdomain);
+  const own = source === "uploaded";
+  const lead = own
+    ? `${who} needs their subcontractor agreement signed. They'll send you their own form; sign it and upload the signed copy.`
+    : `${who} sent you a subcontractor agreement to read and sign.`;
+  const again = resend && issuedOn ? `\n\nThis is a reminder. It was first sent on ${niceDate(issuedOn)}.` : "";
+  const text = `Hi ${contact || company.company},
+
+${lead}${again}
+
+${own ? "Upload it" : "Read and sign it"} here, under Compliance pack:
+  ${link}
+
+Sign in as ${company.email || "the email on your account"}.
+
+-- ${who}
+
+${NOREPLY}`;
+  return {
+    subject: resend
+      ? `Reminder: ${who} is waiting on your signed agreement`
+      : `${who} sent you a subcontractor agreement to sign`,
+    text,
+    html: textToHtml(text, link),
+  };
+}
+
 // A certificate is running out, or has.
 //
 // Sent to the SUBCONTRACTOR, because they are the only party who can fix it.

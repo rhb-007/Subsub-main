@@ -718,5 +718,75 @@ console.log("\n-- and 1.0.0 still renders 1.0.0 --");
   ck("and an unknown version throws rather than falling back", threw === "unknown_template", String(threw));
 }
 
+console.log("\n-- it is emailed when sent, can be resent, and the card can say when --");
+{
+  const db = seed();
+  db.exec(`UPDATE companies SET email='rae@bay.test', contact='Rae Okafor' WHERE id='${SUB_CO}'`);
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/emails")) {
+      sent.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ id: `em_${sent.length}` }), { status: 200 });
+    }
+    return realFetch(url, init);
+  };
+  const env = { ...ENV(db), RESEND_API_KEY: "re_test", MAIL_FROM: "SubSub <no-reply@subsub.work>" };
+  try {
+    const iss = await call(env, `/api/subs/${SUB_CO}/agreement`, { method: "POST", body: {} });
+    ck("issuing emails the subcontractor", iss.status === 200 && iss.body.emailed === true && sent.length === 1,
+      `${iss.status} ${JSON.stringify(iss.body.emailed)} ${sent.length}`);
+    ck("to the address on their company record", sent[0]?.to?.[0] === "rae@bay.test", JSON.stringify(sent[0]?.to));
+    ck("and the reply says where it went", iss.body.to === "rae@bay.test");
+    const id = iss.body.agreement?.id;
+    ck("the issue is the first send on the record, emailed",
+      iss.body.agreement?.sends?.length === 1 && iss.body.agreement.sends[0].kind === "issued"
+        && iss.body.agreement.sends[0].emailed === true && iss.body.agreement.sends[0].by === "Dana Ruiz",
+      JSON.stringify(iss.body.agreement?.sends));
+
+    const re = await call(env, `/api/agreements/${id}/resend`, { method: "POST" });
+    ck("resending emails them again", re.status === 200 && sent.length === 2, `${re.status} ${sent.length}`);
+    ck("as a reminder naming when it first went",
+      /Reminder/.test(sent[1]?.subject || "") && /first sent on/.test(sent[1]?.text || ""), sent[1]?.subject);
+    ck("and the record now has two sends, issue first",
+      re.body.agreement?.sends?.map((x) => x.kind).join(",") === "issued,resent",
+      JSON.stringify(re.body.agreement?.sends));
+    const g = await call(env, `/api/subs/${SUB_CO}/agreement`);
+    ck("the card's read carries the sends too", g.body.agreement?.sends?.length === 2);
+    ck("and the issue date", !!g.body.agreement?.issuedAt);
+    ck("resending does not change the document",
+      db.prepare(`SELECT COUNT(*) n FROM agreements`).get().n === 1
+        && db.prepare(`SELECT status FROM agreements WHERE id=?`).get(id).status === "sent");
+
+    const other = await call(env, `/api/agreements/${id}/resend`, { method: "POST", seat: { u: "u_pm", a: "acc_pm" } });
+    ck("another account cannot resend it", other.status === 404, `${other.status}`);
+
+    await call(env, `/api/my-agreements/${id}/sign`, { method: "POST", seat: SUB_SEAT,
+      body: { typedName: "Rae Okafor" } });
+    const after = await call(env, `/api/agreements/${id}/resend`, { method: "POST" });
+    ck("once they have signed it there is nothing to remind them about",
+      after.status === 409 && after.body.error === "not_waiting_on_them", `${after.status} ${after.body.error}`);
+
+    // No address: issuing still works and says nobody was emailed.
+    db.exec(`UPDATE companies SET email=NULL WHERE id='${OTHER_CO}'`);
+    const n0 = sent.length;
+    const iss2 = await call(env, `/api/subs/${OTHER_CO}/agreement`, { method: "POST", body: {} });
+    ck("with no email on file it is still issued, and says nobody was emailed",
+      iss2.status === 200 && iss2.body.emailed === false && sent.length === n0
+        && iss2.body.agreement?.sends?.[0]?.emailed === false, `${iss2.status} ${iss2.body.emailed}`);
+    const re2 = await call(env, `/api/agreements/${iss2.body.agreement.id}/resend`, { method: "POST" });
+    ck("and resending names the missing address", re2.status === 400 && re2.body.error === "no_email_on_file",
+      `${re2.status} ${re2.body.error}`);
+
+    // The last one, after a decline, so the card does not start blank.
+    await call(env, `/api/my-agreements/${iss2.body.agreement.id}/void`, { method: "POST" });
+    await call(env, `/api/agreements/${iss2.body.agreement.id}/void`, { method: "POST" });
+    const g2 = await call(env, `/api/subs/${OTHER_CO}/agreement`);
+    ck("with none live, the read names the last one and what happened to it",
+      !g2.body.agreement && g2.body.previous?.status === "void" && !!g2.body.previous?.issuedAt,
+      JSON.stringify(g2.body.previous && { s: g2.body.previous.status }));
+  } finally { globalThis.fetch = realFetch; }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

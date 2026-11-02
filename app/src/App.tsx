@@ -1905,6 +1905,21 @@ function formatExpiry(dateStr) {
 // `dayFromKey` all already use beside it, and for the stated reason: a
 // daylight-saving shift cannot move the date under it. This was the one date
 // helper in the file that did not, which is why nothing beside it was wrong.
+// A stored timestamp as a day. D1 writes `CURRENT_TIMESTAMP` as
+// "YYYY-MM-DD HH:MM:SS" in UTC with no zone, which Safari will not parse at
+// all and Chrome reads as local time, so it is made an ISO UTC string first.
+// The year is carried only when it is not this year, like `formatExpiry`.
+function stampDay(ts) {
+  if (!ts) return "";
+  const raw = String(ts);
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T12:00:00`
+    : /^\d{4}-\d{2}-\d{2} \d/.test(raw) ? `${raw.replace(" ", "T")}Z` : raw;
+  const d = new Date(iso);
+  if (isNaN(d)) return raw.slice(0, 10);
+  const opts = { month: "short", day: "numeric" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  return d.toLocaleDateString(uiLocale(), opts);
+}
 function niceDay(iso) {
   if (!iso) return "";
   const raw = String(iso);
@@ -5288,6 +5303,10 @@ export default function SubSub() {
         // Their published Passport, read off passports and named here by hand
         // for the same reason: neither whitelist would carry it.
         if ("passportUrl" in flat) en.passportUrl = flat.passportUrl || null;
+        // The live agreement's state, for the card's Agreement tab to flag one
+        // waiting on this account's countersignature. Neither whitelist would
+        // carry it.
+        if ("agreement" in flat) en.agreement = flat.agreement || null;
         // Same for what the documents say. These are read off company_docs,
         // which is neither a companies column nor an engagements one, so the
         // whitelists drop them -- and a roster whose `docs` is undefined reads
@@ -34623,8 +34642,9 @@ function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, on
   );
 }
 
-function AgreementPanel({ sub, canManage, myName, onChanged }) {
+function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile }) {
   const [data, setData] = useState(null);
+  const [note, setNote] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(false);
@@ -34686,23 +34706,53 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
 
   const ag = data.agreement;
   const act = async (fn, label) => {
-    setBusy(true); setErr("");
-    try { await fn(); await load(); onChanged?.(); }
+    setBusy(true); setErr(""); setNote("");
+    try {
+      const r = await fn(); await load(); onChanged?.();
+      // Say where it went, because "sent" with no address is a claim nobody
+      // can check, and "not emailed" is the one thing worth knowing before
+      // they wonder why it was never signed.
+      if (label === "issue") {
+        setNote(r?.emailed ? `Emailed to ${r.to}.`
+          : r?.to ? `Sent in SubSub, but the email to ${r.to} didn't go. Use Resend to try again.`
+          : `Sent in SubSub. ${sub.company} has no email on file, so nobody was emailed; they'll see it when they sign in.`);
+      }
+      if (label === "resend") setNote(`Emailed to ${r?.to} again.`);
+    }
     catch (e) {
       console.error(`[agreement] ${label} failed:`, e);
-      setErr(e?.body?.error === "name_mismatch"
+      const code = e?.body?.error;
+      setErr(code === "name_mismatch"
         ? `Type your name exactly as it appears on your account: ${e.body.expected || myName}`
-        : e?.body?.error === "already_issued" ? "There is already an agreement with them."
+        : code === "already_issued" ? "There is already an agreement with them."
+        : code === "no_email_on_file" ? `${sub.company} has no email on file. Add one on Edit, then resend.`
+        : code === "rate_limited" ? "It was resent a few times this hour already. Try again later."
+        : code === "not_waiting_on_them" ? "They have already answered it, so there is nothing to remind them about."
+        : code === "send_failed" ? "The email didn't go. Try again in a moment."
         : "That didn't work. Try again in a moment.");
     }
     setBusy(false);
   };
+  const prev = data.previous;
+  const sends = ag?.sends || [];
+  const first = sends.find((x) => x.kind === "issued");
+  const resends = sends.filter((x) => x.kind === "resent");
 
   return (
     <div className="portal-panel agr-panel">
       <h4>Subcontractor agreement</h4>
 
       {!ag && <>
+        {/* What happened to the last one, so a contractor who declined, or an
+            agreement this account withdrew, does not read as one never sent. */}
+        {prev && (
+          <p className="agr-prev" data-prev={prev.status}>
+            {prev.status === "declined"
+              ? <>The last one, sent {stampDay(prev.issuedAt)}, was declined{prev.declinedAt ? ` on ${stampDay(prev.declinedAt)}` : ""}{prev.declinedNote ? <>: “{prev.declinedNote}”</> : "."}</>
+              : <>The last one, sent {stampDay(prev.issuedAt)}, was {prev.status === "void" ? "withdrawn" : "replaced"}.</>}
+            {" "}You can send a new one below.
+          </p>
+        )}
         <p className="cx-sub">
           {/* Said plainly, because the recorded decision is that an agreement
               counts against a subcontractor only once somebody asks for one --
@@ -34745,12 +34795,42 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
       {ag && <>
         <p className="cx-sub">
           {agreementStateText(ag, { subName: sub.company, hiringName: "you" })}
-          {ag.signedAt && ` Signed by ${ag.signedByName} on ${formatExpiry(ag.signedAt)}.`}
+          {ag.signedAt && ` Signed by ${ag.signedByName} on ${stampDay(ag.signedAt)}.`}
+          {ag.countersignedAt && ` Countersigned by ${ag.countersignedByName} on ${stampDay(ag.countersignedAt)}.`}
         </p>
+        {/* WHEN IT WENT, AND HOW MANY TIMES. The issue date is the row's own;
+            each resend is an event. Whether the email went is said per line,
+            because an agreement nobody was emailed is one they have not seen. */}
+        <ul className="agr-sends" data-sends={sends.length}>
+          <li data-send="issued">
+            <Send size={12} /> <b>Sent {stampDay(first?.at || ag.issuedAt)}</b>
+            {first?.by ? ` by ${first.by}` : ""}
+            {first ? (first.emailed ? ` · emailed to ${first.to}` : " · not emailed") : ""}
+          </li>
+          {resends.map((x, i) => (
+            <li key={i} data-send="resent">
+              <RefreshCw size={12} /> Resent {stampDay(x.at)}{x.by ? ` by ${x.by}` : ""}
+              {x.emailed ? ` · emailed to ${x.to}` : ""}
+            </li>
+          ))}
+        </ul>
         <div className="agr-actions">
           {ag.document && (
-            <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}>
-              Read it
+            <button className="btn-ghost sm" type="button" data-act="view" onClick={() => setPreview(true)}>
+              <Eye size={13} /> View agreement
+            </button>
+          )}
+          {/* Their own paper has no SubSub document to draw. Once they have
+              uploaded the signed copy it opens like any other document. */}
+          {ag.source === "uploaded" && sub.docFiles?.contract && onViewFile && (
+            <button className="btn-ghost sm" type="button" data-act="view-file" onClick={onViewFile}>
+              <Eye size={13} /> View their signed copy
+            </button>
+          )}
+          {canManage && ag.status === "sent" && (
+            <button className="btn-ghost sm" type="button" data-act="resend" disabled={busy}
+              onClick={() => act(() => api.resendAgreement(ag.id), "resend")}>
+              <RefreshCw size={13} /> {busy ? "Sending…" : "Resend"}
             </button>
           )}
           {canManage && ag.waitingOn === "hiring_countersign" && (
@@ -34777,6 +34857,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged }) {
         </div>
       </>}
 
+      {note && <p className="agr-note" role="status">{note}</p>}
       {err && <div className="form-err">{err}</div>}
 
       {preview && (
@@ -42738,17 +42819,24 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
     { key: "contract", label: DOC_LABELS.contract, icon: ScrollText },
     { key: "w9", label: DOC_LABELS.w9, icon: Receipt },
   ];
+  // TABS, BECAUSE THE CARD WAS ONE LONG SCROLL. Who they are and whether they
+  // can be given work stay above the tabs, on every tab; what sits behind each
+  // tab is the detail somebody opens the card to do one thing with. Panes are
+  // hidden rather than unmounted, so half-typed notes and the agreement's
+  // loaded state survive looking at another tab -- the job window's rule.
+  const [tab, setTab] = useState("overview");
+  const compGaps = assignGaps(sub).length + pendingReviewDocs(sub).length + payGaps.length;
+  const agWaiting = sub.agreement?.waitingOn === "hiring_countersign";
+  const tabs = [
+    { id: "overview", label: tt("Overview") },
+    { id: "compliance", label: tt("Compliance"), count: compGaps },
+    { id: "agreement", label: tt("Agreement"), dot: agWaiting },
+    { id: "crews", label: tt("Crews") },
+    { id: "notes", label: tt("Notes") },
+  ];
+  const pane = (id) => (tab === id ? "jt-on" : "jt-off");
   return (
     <div className="detail">
-      {/* Who this is, first and on its own.
-          The trades used to sit above the company name -- nine chips of
-          "Electrical / Plumbing / HVAC / Drywall..." before anything said
-          WHOSE they were -- so the one thing somebody opens this card to
-          check arrived fourth. And the Edit button shared the top-right
-          corner with the modal's close X, which sits on top of everything
-          at a fixed position: Edit was half-covered and easy to miss the
-          other way. Identity is a panel of its own now, the trades are
-          below it where they belong, and nothing lives under the X. */}
       <div className="detail-id">
         <div className="di-top">
           <h2>{sub.company}</h2>
@@ -42773,44 +42861,56 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         {(sub.city || sub.zip) && (
           <p className="detail-addr"><MapPin size={13} /> {[sub.city, sub.state, sub.zip].filter(Boolean).join(", ")}</p>
         )}
-        {/* On the record, because that is where somebody is standing when they
-            notice nobody can sign in as this contractor. */}
-        {/* The record first, the nudge second. Both are answers to "they
-            have not arrived", and doing it yourself is the one that does not
-            depend on somebody else opening an email. */}
-        <SetupGaps sub={sub} canManage={canManage} onContinue={onEdit} />
-        <PortalInvite sub={sub} invite={invite} onSent={onInviteSent} />
-        {/* And the agreement, for the same reason. An agreement is between
-            this account and this contractor, so it belongs on their card and
-            nowhere else. */}
-        <AgreementPanel sub={sub} canManage={canManage} myName={myName}
-          onChanged={onAgreementChanged} />
-        <div className="di-chips">
-          {(sub.propertyIds || []).length > 0 && (
-            <span className="notify-chip" title="Properties this vendor is scoped to">
-              <Building2 size={12} /> {sub.propertyIds.length} propert{sub.propertyIds.length === 1 ? "y" : "ies"}
-            </span>
-          )}
-          <span className="notify-chip" title="How long they warranty their labor">
-            <ShieldCheck size={12} /> {warrantyLabel(sub)}
-          </span>
-          <span className="notify-chip" title="How this contractor receives automated notifications">
-            <Bell size={12} /> {notifyLabel(sub)}
-          </span>
-        </div>
       </div>
 
-      {/* The trades, and Edit beside them -- a long way from the close X. */}
-      <div className="detail-trades">
-        <div className="cat-row">
-          {sub.categories.map((c) => {
-            const M = catMeta(c);
-            return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={12} /> {M.label}</span>;
-          })}
+      <div className="detail-actions" data-strip="assign">
+        {ready && payGaps.length === 0 && (
+          <span className="sd-ready"><CheckCircle2 size={14} /> {tt("Ready for work")}</span>
+        )}
+        <button className="mini primary" onClick={onSchedule}><Calendar size={14} /> Assign to a job</button>
+      </div>
+      {/* Two different questions: what stops a work order, and what stops
+          paying them. The W-9 is only the second, so it is never listed as a
+          reason they cannot be assigned. */}
+      {!ready ? (
+        <div className="doc-block detail-doc-block">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>Not assignable yet.</strong> Outstanding: {assignGaps(sub).join(", ")}.
+            {payGaps.length > 0 && <> Needed before you can pay them: {payGaps.map((k) => DOC_LABELS[k]).join(", ")}.</>}
+          </div>
+          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request docs</button>
         </div>
-        <button className="edit-btn" onClick={onEdit}><Pencil size={13} /> Edit</button>
+      ) : payGaps.length > 0 && (
+        <div className="doc-block detail-doc-block detail-pay-block">
+          <Receipt size={15} />
+          <div>
+            <strong>Can be assigned.</strong> Needed before you can pay them: {payGaps.map((k) => DOC_LABELS[k]).join(", ")}.
+          </div>
+          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request</button>
+        </div>
+      )}
+
+      <div className="job-tabs sd-tabs" role="tablist">
+        {tabs.map((x) => (
+          <button key={x.id} type="button" role="tab" aria-selected={tab === x.id}
+            className={`job-tab ${tab === x.id ? "on" : ""}`} data-tab={x.id}
+            onClick={() => setTab(x.id)}>
+            {x.label}
+            {x.count > 0 && <span className="sd-tab-count">{x.count}</span>}
+            {x.dot && <ActDot tone="warn" />}
+          </button>
+        ))}
       </div>
 
+      <div className={pane("overview")} data-pane="overview">
+      {/* On the record, because that is where somebody is standing when they
+          notice nobody can sign in as this contractor. */}
+      {/* The record first, the nudge second. Both are answers to "they
+          have not arrived", and doing it yourself is the one that does not
+          depend on somebody else opening an email. */}
+      <SetupGaps sub={sub} canManage={canManage} onContinue={onEdit} />
+      <PortalInvite sub={sub} invite={invite} onSent={onInviteSent} />
       {/* WHAT THEY ARE TO THIS ACCOUNT, said on the card with its own way to
           change it. It lived only on step 2 of Edit, under the buildings list,
           and could not be found from here. */}
@@ -42822,6 +42922,17 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
             onClick={() => (onChangeRelationship ? onChangeRelationship() : onEdit(2))}>{tt("Change")}</button>
         </div>
       )}
+
+      {/* The trades, and Edit beside them -- a long way from the close X. */}
+      <div className="detail-trades">
+        <div className="cat-row">
+          {sub.categories.map((c) => {
+            const M = catMeta(c);
+            return <span key={c} className={`cat-badge cat-${c}`}><M.icon size={12} /> {M.label}</span>;
+          })}
+        </div>
+        <button className="edit-btn" onClick={onEdit}><Pencil size={13} /> Edit</button>
+      </div>
 
       {/* Auto-schedule straight under who they are and what they do, rather
           than below the capabilities and the stats: it is the one switch on
@@ -42836,6 +42947,19 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         </div>
       ); })()}
 
+      <div className="di-chips">
+        {(sub.propertyIds || []).length > 0 && (
+          <span className="notify-chip" title="Properties this vendor is scoped to">
+            <Building2 size={12} /> {sub.propertyIds.length} propert{sub.propertyIds.length === 1 ? "y" : "ies"}
+          </span>
+        )}
+        <span className="notify-chip" title="How long they warranty their labor">
+          <ShieldCheck size={12} /> {warrantyLabel(sub)}
+        </span>
+        <span className="notify-chip" title="How this contractor receives automated notifications">
+          <Bell size={12} /> {notifyLabel(sub)}
+        </span>
+      </div>
       <section><h4>Capabilities</h4><div className="caps">{sub.caps.map((c) => <span key={c} className="cap">{c}</span>)}</div></section>
 
       <section>
@@ -42855,57 +42979,17 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         )}
       </section>
 
-      {(sub.unavailableDays || []).length > 0 && (
-        <section>
-          <h4><Calendar size={13} /> Days marked off</h4>
-          <div className="area-chips">
-            {sub.unavailableDays.slice().sort().map((d) => (
-              <span key={d} className="off-chip"><XCircle size={11} /> {formatDay(d)}</span>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* LAST, and quiet. Removing somebody is not what this card is for --
+          it is opened to check a certificate or book a job -- so it sits below
+          everything rather than in the corner where Edit used to fight the
+          close X. Gated on `canManage`, which the caller passes as
+          can("contractors") to match requireRole("admin","pm") on the route:
+          using the admin-only gate would make the screen stricter than the
+          route, which this file has already called the same lie as looser. */}
+      {canManage && onEnd && <EndEngagement sub={sub} word={word} onEnd={onEnd} />}
+      </div>
 
-      <section>
-        <h4><Users size={13} /> Crews &amp; members</h4>
-        {(sub.crews || []).length === 0 ? <p className="muted">No crews set.</p> : (
-          <div className="crew-list">
-            {sub.crews.map((cr) => {
-              const cr2 = crewRatings(sub, jobs).find((x) => x.name === cr.name);
-              return (
-              <div key={cr.id} className="crew-card">
-                <div className="crew-head">
-                  <span className="crew-name">{cr.name}</span>
-                  <span className="crew-head-right">
-                    {cr2 ? <span className="crew-rating"><Star size={11} fill="currentColor" /> {cr2.avg.toFixed(1)} <em>({cr2.count})</em></span> : <span className="crew-unrated">unrated</span>}
-                    <span className="crew-size">{cr.members.length} {cr.members.length === 1 ? "member" : "members"}</span>
-                  </span>
-                </div>
-                <div className="crew-members">
-                  {cr.members.map((m, i) => (
-                    <span key={i} className="member"><span className="m-name">{m.name}</span>{m.role ? <span className="m-role">{m.role}</span> : null}</span>
-                  ))}
-                </div>
-              </div>
-            );})}
-          </div>
-        )}
-        {crewRatings(sub, jobs).length > 0 && (
-          <p className="rollup-note">
-            Crew ratings roll up to the contractor's overall score
-            {sub.rating ? <> — currently <strong>{sub.rating.toFixed(1)}</strong></> : null}
-            {sub.ratedJobs ? ` across ${sub.ratedJobs} rated ${sub.ratedJobs === 1 ? "job" : "jobs"}` : ""}.
-          </p>
-        )}
-      </section>
-
-      <section>
-        <h4><StickyNote size={13} /> Notes</h4>
-        <textarea className="notes-area" value={notes} rows={3}
-          onChange={(e) => { setNotes(e.target.value); setDirty(true); }} placeholder="Add notes about this sub…" />
-        {dirty && <button className="notes-save" onClick={() => { onSaveNotes(sub.id, notes); setDirty(false); }}>Save notes</button>}
-      </section>
-
+      <div className={pane("compliance")} data-pane="compliance">
       {/* A handyman needs no state licence, so the section that asks for one
           is not drawn over them: an "Add their L&I number" row on somebody the
           account deliberately engaged without one reads as a requirement. */}
@@ -43071,38 +43155,72 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
         )}
       </section>
 
-      <div className="detail-actions">
-        <button className="mini primary" onClick={onSchedule}><Calendar size={14} /> Assign to a job</button>
       </div>
-      {/* Two different questions: what stops a work order, and what stops
-          paying them. The W-9 is only the second, so it is never listed as a
-          reason they cannot be assigned. */}
-      {!ready ? (
-        <div className="doc-block detail-doc-block">
-          <AlertTriangle size={15} />
-          <div>
-            <strong>Not assignable yet.</strong> Outstanding: {assignGaps(sub).join(", ")}.
-            {payGaps.length > 0 && <> Needed before you can pay them: {payGaps.map((k) => DOC_LABELS[k]).join(", ")}.</>}
+
+      <div className={pane("agreement")} data-pane="agreement">
+      {/* And the agreement, for the same reason. An agreement is between
+          this account and this contractor, so it belongs on their card and
+          nowhere else. */}
+      <AgreementPanel sub={sub} canManage={canManage} myName={myName}
+        onChanged={onAgreementChanged} onViewFile={() => onReviewDoc(sub, "contract")} />
+      </div>
+
+      <div className={pane("crews")} data-pane="crews">
+      {(sub.unavailableDays || []).length > 0 && (
+        <section>
+          <h4><Calendar size={13} /> Days marked off</h4>
+          <div className="area-chips">
+            {sub.unavailableDays.slice().sort().map((d) => (
+              <span key={d} className="off-chip"><XCircle size={11} /> {formatDay(d)}</span>
+            ))}
           </div>
-          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request docs</button>
-        </div>
-      ) : payGaps.length > 0 && (
-        <div className="doc-block detail-doc-block detail-pay-block">
-          <Receipt size={15} />
-          <div>
-            <strong>Can be assigned.</strong> Needed before you can pay them: {payGaps.map((k) => DOC_LABELS[k]).join(", ")}.
-          </div>
-          <button className="btn-notify" onClick={() => onRequestDocs(sub)}><Mail size={14} /> Request</button>
-        </div>
+        </section>
       )}
-      {/* LAST, and quiet. Removing somebody is not what this card is for --
-          it is opened to check a certificate or book a job -- so it sits below
-          everything rather than in the corner where Edit used to fight the
-          close X. Gated on `canManage`, which the caller passes as
-          can("contractors") to match requireRole("admin","pm") on the route:
-          using the admin-only gate would make the screen stricter than the
-          route, which this file has already called the same lie as looser. */}
-      {canManage && onEnd && <EndEngagement sub={sub} word={word} onEnd={onEnd} />}
+
+      <section>
+        <h4><Users size={13} /> Crews &amp; members</h4>
+        {(sub.crews || []).length === 0 ? <p className="muted">No crews set.</p> : (
+          <div className="crew-list">
+            {sub.crews.map((cr) => {
+              const cr2 = crewRatings(sub, jobs).find((x) => x.name === cr.name);
+              return (
+              <div key={cr.id} className="crew-card">
+                <div className="crew-head">
+                  <span className="crew-name">{cr.name}</span>
+                  <span className="crew-head-right">
+                    {cr2 ? <span className="crew-rating"><Star size={11} fill="currentColor" /> {cr2.avg.toFixed(1)} <em>({cr2.count})</em></span> : <span className="crew-unrated">unrated</span>}
+                    <span className="crew-size">{cr.members.length} {cr.members.length === 1 ? "member" : "members"}</span>
+                  </span>
+                </div>
+                <div className="crew-members">
+                  {cr.members.map((m, i) => (
+                    <span key={i} className="member"><span className="m-name">{m.name}</span>{m.role ? <span className="m-role">{m.role}</span> : null}</span>
+                  ))}
+                </div>
+              </div>
+            );})}
+          </div>
+        )}
+        {crewRatings(sub, jobs).length > 0 && (
+          <p className="rollup-note">
+            Crew ratings roll up to the contractor's overall score
+            {sub.rating ? <> — currently <strong>{sub.rating.toFixed(1)}</strong></> : null}
+            {sub.ratedJobs ? ` across ${sub.ratedJobs} rated ${sub.ratedJobs === 1 ? "job" : "jobs"}` : ""}.
+          </p>
+        )}
+      </section>
+
+      </div>
+
+      <div className={pane("notes")} data-pane="notes">
+      <section>
+        <h4><StickyNote size={13} /> Notes</h4>
+        <textarea className="notes-area" value={notes} rows={3}
+          onChange={(e) => { setNotes(e.target.value); setDirty(true); }} placeholder="Add notes about this sub…" />
+        {dirty && <button className="notes-save" onClick={() => { onSaveNotes(sub.id, notes); setDirty(false); }}>Save notes</button>}
+      </section>
+
+      </div>
     </div>
   );
 }
@@ -49336,6 +49454,20 @@ iframe.dv-frame{display:block}
   border-bottom:3px solid transparent;margin-bottom:-1px;background:none;color:var(--ink-soft);
   font:inherit;font-size:15px;font-weight:600;cursor:pointer}
 .job-tab.on{color:var(--ink);border-bottom-color:var(--brand)}
+/* The contractor card's tabs stay in reach while a long pane scrolls. */
+.sd-tabs{position:sticky;top:0;z-index:2;background:var(--card);margin-top:16px}
+.sd-tab-count{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--amber);color:#fff;
+  font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}
+.detail .detail-actions[data-strip]{display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-wrap:wrap}
+.sd-ready{margin-right:auto;display:inline-flex;align-items:center;gap:6px;color:var(--brand);font-weight:700;font-size:14px}
+.agr-sends{list-style:none;margin:10px 0 4px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;
+  background:var(--paper);display:flex;flex-direction:column;gap:6px;font-size:13.5px;color:var(--ink-soft)}
+.agr-sends li{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.agr-sends b{color:var(--ink)}
+.agr-prev{margin:0 0 10px;padding:10px 12px;border-radius:10px;background:var(--paper);border:1px dashed var(--line);
+  font-size:13.5px;color:var(--ink-soft)}
+.agr-note{margin:8px 0 0;font-size:13.5px;color:var(--brand);font-weight:600}
+.agr-actions .btn-ghost svg{vertical-align:-2px;margin-right:4px}
 .job-tab:hover{color:var(--ink)}
 /* A SENTENCE IS TEXT, NOT A ROW OF FLEX ITEMS.
    This was a flex row with a gap, so the icon, each run of text AND every

@@ -116,6 +116,9 @@ const openCard = async (page) => {
     card?.click();
   });
   for (let n = 0; n < 40; n++) { await wait(250); if (await page.$(".agr-panel")) break; }
+  // The agreement is its own tab on the card now, and a hidden pane draws
+  // its inputs at zero height.
+  await page.evaluate(() => document.querySelector('.modal .sd-tabs [data-tab="agreement"]')?.click());
   await wait(400);
 };
 

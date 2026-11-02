@@ -16,7 +16,8 @@ import { sendEmail, welcomeEmail, founderIntroEmail, demoBookedEmail, docRequest
   autoScheduleRequestEmail, docExpiryEmail, overflowPostEmail, docPackEmail,
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
-  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail } from "./mail.js";
+  licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail,
+  agreementSentEmail } from "./mail.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
@@ -8875,6 +8876,7 @@ app.get("/api/subs", async (c) => {
           id: ag.id, status: ag.status, source: ag.source,
           waitingOn: waitingOn(ag), inForce: inForce(ag),
           signedAt: ag.signed_at || null, countersignedAt: ag.countersigned_at || null,
+          issuedAt: ag.issued_at || null,
         } : null;
         // Drawn as the document `docs.js` understands, so the roster does not
         // need a second code path for one of the four rows. A SubSub
@@ -14729,6 +14731,68 @@ function renderStored(r) {
   }
 }
 
+// Tell the subcontractor an agreement is waiting on them, by email. Issuing
+// used to tell nobody: the row sat in their portal until they opened the app
+// for some other reason. Best effort -- a mail that does not go never undoes
+// the agreement -- and the answer is recorded on the event, so the card can
+// say "emailed to x" or "not emailed" rather than implying a send that did not
+// happen.
+async function emailAgreement(c, row, { resend = false } = {}) {
+  const co = await c.env.DB.prepare(
+    `SELECT id, company, contact, email FROM companies WHERE id = ?`
+  ).bind(row.company_id).first();
+  const acct = await c.env.DB.prepare(`SELECT name, subdomain FROM accounts WHERE id = ?`)
+    .bind(row.account_id).first();
+  const to = co?.email || null;
+  if (!to) return { to: null, emailed: false, error: "no_email_on_file" };
+  const mail = agreementSentEmail({ company: co, contact: co.contact, account: acct,
+    source: row.source, resend, issuedOn: row.issued_at });
+  const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+  await logMail(c.env, { accountId: row.account_id, companyId: row.company_id, to,
+    kind: resend ? "agreement_resent" : "agreement_sent", subject: mail.subject, result,
+    sentBy: c.get("auth")?.userId || null });
+  return { to, emailed: !!result.ok, error: result.ok ? null : (result.error || "send_failed") };
+}
+
+// Every time this agreement went out: the issue, then each resend, oldest
+// first, with who pressed it and whether the email went. Read off the event
+// log rather than a column, because a resend is an event and there is no
+// migration to paste for it.
+async function agreementSends(env, id) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT e.kind, e.payload, e.created_at, u.name AS by_name
+         FROM events e LEFT JOIN users u ON u.id = e.actor_id
+        WHERE e.subject_id = ? AND e.kind IN ('agreement_issued','agreement_resent')
+        ORDER BY e.created_at, e.id`
+    ).bind(id).all();
+    return (results || []).map((r) => {
+      const p = parseJson(r.payload, {}) || {};
+      return {
+        kind: r.kind === "agreement_resent" ? "resent" : "issued",
+        at: r.created_at,
+        by: r.by_name || null,
+        to: p.to || null,
+        // Absent on rows written before this existed, when nothing was emailed.
+        emailed: p.emailed === true,
+      };
+    });
+  } catch (err) {
+    if (missingSchema(err)) return [];
+    throw err;
+  }
+}
+
+// The most recent agreement that is no longer live, so the card can say what
+// happened to the last one (declined, withdrawn) instead of starting blank.
+async function lastEndedAgreement(env, accountId, companyId) {
+  return await env.DB.prepare(
+    `SELECT * FROM agreements
+      WHERE account_id = ? AND company_id = ? AND status IN ('declined','void','superseded')
+      ORDER BY issued_at DESC, rowid DESC LIMIT 1`
+  ).bind(accountId, companyId).first();
+}
+
 // ---- the hiring account's standing terms ----------------------------------
 
 app.get("/api/agreement-terms", requireRole("admin", "pm"), async (c) => {
@@ -14815,8 +14879,11 @@ app.get("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c) 
       ...stored.terms,
       governingState: stored.terms.governingState || parties.hiring.state || null,
     });
+    const prev = row ? null : await lastEndedAgreement(c.env, accountId, companyId);
     return c.json({
-      agreement: agreementToJs(row, { document: renderStored(row) }),
+      agreement: agreementToJs(row, { document: renderStored(row),
+        sends: row ? await agreementSends(c.env, row.id) : [] }),
+      previous: agreementToJs(prev),
       preview: renderAgreement({
         templateId: STANDARD_AGREEMENT.id,
         templateVersion: STANDARD_AGREEMENT.version,
@@ -14887,11 +14954,16 @@ app.post("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c)
     ).bind(id, accountId, companyId, source, templateId, templateVersion,
       JSON.stringify(full), JSON.stringify(parties), governingState, docSha256, userId).run();
 
-    await logEvent(c.env, accountId, userId, "agreement_issued", id,
-      { companyId, source, templateVersion });
-
     const row = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
-    return c.json({ ok: true, agreement: agreementToJs(row, { document: renderStored(row) }) });
+    let sent = { to: null, emailed: false, error: "send_failed" };
+    try { sent = await emailAgreement(c, row); }
+    catch (err) { console.error("[agreement] email on issue failed:", err?.message || err); }
+    await logEvent(c.env, accountId, userId, "agreement_issued", id,
+      { companyId, source, templateVersion, to: sent.to, emailed: sent.emailed });
+
+    return c.json({ ok: true, emailed: sent.emailed, to: sent.to, emailError: sent.error,
+      agreement: agreementToJs(row, { document: renderStored(row),
+        sends: await agreementSends(c.env, id) }) });
   } catch (err) {
     if (missingSchema(err)) return c.json(agreementMigration(), 503);
     throw err;
@@ -14935,6 +15007,35 @@ app.post("/api/agreements/:id/countersign", requireRole("admin", "pm"), async (c
       { companyId: row.company_id });
     const after = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
     return c.json({ ok: true, agreement: agreementToJs(after, { document: renderStored(after) }) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json(agreementMigration(), 503);
+    throw err;
+  }
+});
+
+// Email it to them again. Only while it is waiting on THEM to sign: once they
+// have, the next move is this account's own countersignature, and a reminder
+// to the subcontractor about a form they already signed would be wrong news.
+// The agreement itself is untouched -- same terms, same hash, same row.
+app.post("/api/agreements/:id/resend", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { id } = c.req.param();
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT * FROM agreements WHERE id = ? AND account_id = ?`
+    ).bind(id, accountId).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    if (row.status !== "sent") return c.json({ error: "not_waiting_on_them", status: row.status }, 409);
+    const rl = await rateLimit(c.env, "agreement-resend", id, { limit: 3, windowMinutes: 60 });
+    if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+    const sent = await emailAgreement(c, row, { resend: true });
+    if (!sent.to) return c.json({ error: "no_email_on_file" }, 400);
+    if (!sent.emailed) return c.json({ error: "send_failed", detail: sent.error }, 502);
+    await logEvent(c.env, accountId, userId, "agreement_resent", id,
+      { companyId: row.company_id, to: sent.to, emailed: true });
+    return c.json({ ok: true, to: sent.to,
+      agreement: agreementToJs(row, { document: renderStored(row),
+        sends: await agreementSends(c.env, id) }) });
   } catch (err) {
     if (missingSchema(err)) return c.json(agreementMigration(), 503);
     throw err;

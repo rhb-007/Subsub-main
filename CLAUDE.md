@@ -16229,6 +16229,50 @@ refactor.
   heavier, standing in for the iPad's: 685KB without the step-down, 330KB with
   it. **Not verified:** the iPad's own encoder, which the harness cannot run.
 
+- **THE CONTRACTOR CARD IS FIVE TABS, AND ITS AGREEMENT TAB SAYS WHEN THE
+  AGREEMENT WENT, EMAILS IT AGAIN AND OPENS IT.** Reported with the card on
+  screen: *"too long of a scrolling modal"* and *"should be able to resend subsub
+  agreement, view agreement ... annotate when it was originally sent to sub"*.
+  - **Above the tabs, on every tab:** who they are (name, rating, contact,
+    Passport, address) and whether they can work: *Ready for work* or the
+    *Not assignable yet* box, and **Assign to a job**. That line must never sit
+    behind a tab.
+  - **Overview** (setup gaps, invite, working relationship, trades and Edit,
+    auto-schedule, stats, capabilities, coverage, and End at the foot),
+    **Compliance** (registration and documents, with a count of what is
+    outstanding on the tab), **Agreement** (a dot when it waits on this
+    account's countersignature), **Crews** (days off and crews) and **Notes**.
+    Auto-schedule stays on Overview under the trades, the place an earlier entry
+    decided for it. Panes are hidden, not unmounted (`jt-on` / `jt-off`), so
+    typed notes and the agreement's loaded state survive a tab change. The tab
+    bar is sticky inside the window.
+  - **Issuing an agreement now emails the subcontractor** (`agreementSentEmail`).
+    It emailed nobody before; the row waited in their portal until they happened
+    to open the app. The send is best effort and never undoes the agreement, and
+    the event records whether it went, so the card says *emailed to x* or *not
+    emailed* instead of implying a send that did not happen.
+  - **`POST /api/agreements/:id/resend`** (admin or pm) emails it again as a
+    reminder that names the first send's date. It is offered only while the
+    agreement waits on the sub to sign (`not_waiting_on_them` otherwise), and is
+    capped at 3 an hour per agreement. The agreement itself does not change:
+    same row, terms and hash.
+  - **Every send is listed on the card**: *Sent Oct 3 by Dana · emailed to x*,
+    then each *Resent*. Read off the event log (`agreement_issued` /
+    `agreement_resent`) by `agreementSends`, so no migration. With none live,
+    the read names the last one (`previous`) and what happened to it (declined,
+    with their note, or withdrawn).
+  - **View agreement** opens the document, and on an agreement they signed on
+    their own paper, **View their signed copy** opens the uploaded file through
+    the document review.
+  - `stampDay` formats D1's `YYYY-MM-DD HH:MM:SS` as UTC, which Safari will not
+    parse raw. The signed date used `formatExpiry`, which takes a bare date.
+
+  `test:agreement` (149) and `test:subtabs` (17). Drawing every pane, a Resend
+  wired to nothing, a missing sent date and resend allowed after signing each
+  fail their own assertions. `test:agrterms` opens the Agreement tab.
+  `test:setupgaps` had been red before this change (its nav match found the
+  wrong button) and passes now.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

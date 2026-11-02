@@ -27,6 +27,7 @@
     "test:feeterms": "node --no-warnings scripts/fee-terms-test.mjs",
     "test:feetermsui": "node --no-warnings scripts/fee-terms-ui-test.mjs",
     "test:agreement": "node --no-warnings scripts/agreement-test.mjs",
+    "test:subtabs": "node --no-warnings scripts/sub-tabs-ui-test.mjs",
     "test:agrterms": "node --no-warnings scripts/agreement-terms-ui-test.mjs",
     "test:removesub": "node --no-warnings scripts/remove-sub-test.mjs",
     "test:reviewguard": "node --no-warnings scripts/review-guard-test.mjs",

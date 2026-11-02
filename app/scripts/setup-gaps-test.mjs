@@ -128,7 +128,7 @@ const openCard = async (page, name) => {
   // the reason test:rosterword records: this suite is about the panel, not
   // about what the roster is called.
   await page.evaluate(() => [...document.querySelectorAll("nav button")]
-    .find((b) => /contractor/i.test(b.innerText || ""))?.click());
+    .find((b) => /^(Sub)?contractors/i.test((b.innerText || "").trim()))?.click());
   await wait(1600);
   // The name is a heading inside the tile rather than a button of its own,
   // which is what the first version of this missed -- reporting a panel that

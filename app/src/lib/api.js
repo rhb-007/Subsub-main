@@ -264,6 +264,7 @@ export const api = {
   countersignAgreement: (id, typedName) =>
     request(`/agreements/${id}/countersign`, { method: "POST", body: JSON.stringify({ typedName }) }),
   voidAgreement: (id) => request(`/agreements/${id}/void`, { method: "POST" }),
+  resendAgreement: (id) => request(`/agreements/${id}/resend`, { method: "POST" }),
   // The subcontractor's own, across every client -- the /api/my-work shape,
   // for the same reason: one waiting to be signed on one roster of twenty-five
   // is not something anybody finds by switching account twenty-five times.
