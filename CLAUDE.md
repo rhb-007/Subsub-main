@@ -16280,6 +16280,36 @@ refactor.
   `.detail .di-chips{margin:0 0 22px}` matches a section's gap.
   `test:subtabs` measures the gap; taking the rule off reads 0px and fails.
 
+- **A CONTRACTOR WHO JOINS THE ROSTER ON THEIR OWN IS SAID ON THE
+  DASHBOARD.** Reported as *"a subcontractor just signed up for Outerhome, but
+  it's not showing up ... it should show annotation on your dashboard. It's an
+  important event."* An application through the public form or an accepted
+  invite writes an engagement with nobody on the account pressing anything, so
+  the first anybody heard of it was finding the name on the roster.
+
+  **Read off the event log, so there is no migration.** `engagement.applied`
+  already existed; it now carries `via` (`form` or `invite`). `/api/subs`
+  carries `appliedAt`, `appliedVia` and `applicationSeenAt` per engagement,
+  sent as ISO with a Z (D1's bare stamp would read as local time). Looking is
+  `POST /api/subs/:companyId/application-seen` (admin or pm, this account's own
+  engagement only), which writes `engagement.application_seen` and nothing
+  else. `hydrateAccount` names the three fields by hand, as it does `hasPortal`.
+
+  **`newApplicants` in `shared/applicants.js` is the rule**: unseen, or seen
+  before the newest application (an invite accepted after a form is news
+  again), within `APPLICANT_DAYS` (30). A green-edged **New on your roster**
+  section sits above Waiting on you, with Open (opens the card and records it
+  seen) and Dismiss. Both are awaited; a refusal keeps the row and says why.
+
+  `test:newapplicant` (13) and `test:newapplicantui` (17). Three mutations
+  fire: the seen check dropped, the optimistic patch, and Open not recording.
+
+  **Not answered here: the Outerhome signup that did not appear.** A signup
+  through `get-started.html` makes the sub their own account and never lands on
+  anybody's roster, and during the Supabase pause it refused with
+  `auth_unreachable` and wrote nothing. The public apply form writes before any
+  Supabase call, so it would have landed.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

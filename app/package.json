@@ -177,6 +177,8 @@
     "test:avatarkey": "node scripts/avatar-key-test.mjs",
     "test:avatarcrop": "node --no-warnings scripts/avatar-crop-ui-test.mjs",
     "test:geopick": "node scripts/geopick-test.mjs",
+    "test:newapplicant": "node --no-warnings scripts/new-applicant-test.mjs",
+    "test:newapplicantui": "node --no-warnings scripts/new-applicant-ui-test.mjs",
     "test:approveref": "node --no-warnings scripts/approve-refused-test.mjs",
     "test:approvetrade": "node --no-warnings scripts/approve-trade-test.mjs",
     "test:waitingyou": "node --no-warnings scripts/waiting-you-test.mjs",

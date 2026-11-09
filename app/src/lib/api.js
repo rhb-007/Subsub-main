@@ -250,6 +250,9 @@ export const api = {
   // insured on the day of that job". The check runs first so the modal can
   // name what is still booked -- it never blocks.
   engagementEndCheck: (companyId) => request(`/subs/${companyId}/end-check`),
+  // The dashboard's "new on your roster" row, answered by looking.
+  applicationSeen: (companyId) =>
+    request(`/subs/${companyId}/application-seen`, { method: "POST" }),
   endEngagement: (companyId, status = "ended") =>
     request(`/subs/${companyId}/end`, { method: "POST", body: JSON.stringify({ status }) }),
 

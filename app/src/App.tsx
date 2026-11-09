@@ -135,6 +135,7 @@ import { passportPathSlug, PASSPORT_CTA, isSlug, passportGaps } from "../shared/
 import { inviteText, smsHref, PREFERRED_SUB, isGcKind } from "../shared/referral.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
+import { newApplicants, applicantLine } from "../shared/applicants.js";
 import { qrPath } from "./lib/qr.js";
 import { supabase, supabaseEnabled, hasStoredSession } from "./lib/supabaseClient";
 
@@ -5317,6 +5318,15 @@ export default function SubSub() {
         // waiting on this account's countersignature. Neither whitelist would
         // carry it.
         if ("agreement" in flat) en.agreement = flat.agreement || null;
+        // When they joined the roster through the form or an invite, and when
+        // somebody here last looked. Read off the event log, so neither
+        // whitelist carries them; the dashboard's "joined your roster" row
+        // reads both.
+        if ("appliedAt" in flat) {
+          en.appliedAt = flat.appliedAt || null;
+          en.appliedVia = flat.appliedVia || null;
+          en.applicationSeenAt = flat.applicationSeenAt || null;
+        }
         // Same for what the documents say. These are read off company_docs,
         // which is neither a companies column nor an engagements one, so the
         // whitelists drop them -- and a roster whose `docs` is undefined reads
@@ -7075,6 +7085,12 @@ export default function SubSub() {
           onGoProperties={() => setTab("properties")} onAddProperty={tryAddProperty}
           onAssign={(job, trade, replacing) => setAssigning({ job, trade, replacing })}
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
+          onSeenApplicant={async (sb) => {
+            // Awaited, then drawn: a dismiss that never reached the server
+            // would put the row back on the next reload.
+            const r = await api.applicationSeen(sb.id);
+            patchEngagement(sb.id, { applicationSeenAt: r?.seenAt || new Date().toISOString() });
+          }}
           onReviewDoc={(sb, kind) => setReviewing({ sub: sb, kind })}
           onVerifyLicense={(sb) => verifyLicense(sb.id)}
           onApproveJob={approveJob} onDeclineJob={declineJob} users={accountUsers}
@@ -28104,7 +28120,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
   );
 }
 
-function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, onVisitOutcome = null, users = [], runsAccount = true, visits = [], unitWord = "Unit",
+function AdminDashboard({ onSeenApplicant = null, subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, onVisitOutcome = null, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" },
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects, clientWork = null,
@@ -28235,6 +28251,17 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
   // WAITING ON YOU: every place a workflow has stopped until this account
   // answers, named with the answer offered beside it. See yourTurnItems.
   const yourTurn = role === "owner" ? [] : yourTurnItems(jobs, latestVisit, dayKey(), visitsPerJob);
+
+  // Contractors who joined the roster on their own and nobody here has looked
+  // at yet. See shared/applicants.js.
+  const applicants = role === "owner" ? [] : newApplicants(subs, Date.now());
+  const [applicantErr, setApplicantErr] = useState("");
+  const seeApplicant = async (s, open) => {
+    setApplicantErr("");
+    if (open) onOpenSub(s);
+    try { await onSeenApplicant?.(s); }
+    catch (e) { setApplicantErr(`Couldn't mark ${s.company} as seen (${e?.body?.error || e?.message || "no answer"}). Try again.`); }
+  };
 
   const first = me.name.split(" ")[0];
   const isOwner = role === "owner";
@@ -28473,6 +28500,30 @@ function AdminDashboard({ subs, jobs, role, me, now, trades, accountId, subLimit
       {/* Work OTHER accounts gave this one, led by what is waiting on it.
           Only a hireable account with client work gets one. */}
       {clientWork}
+
+      {/* A NEW CONTRACTOR ON THE ROSTER IS AN EVENT. They arrived through the
+          public form or an accepted invite with nobody here pressing
+          anything, so it is said at the top until somebody looks. */}
+      {applicants.length > 0 && (
+        <section className="dash-sec sec-joined" aria-label="Joined your roster">
+          <h3><ActDot /><UserPlus size={15} /> New on your roster
+            <span className="sec-count amber">{applicants.length}</span></h3>
+          {applicantErr && <p className="form-err">{applicantErr}</p>}
+          <DashRows id="joined">
+            {applicants.map((s) => (
+              <div key={s.id} className="dash-row joined-row">
+                <div className="dash-avatar">{(s.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>
+                <button className="dash-row-main dash-row-open" onClick={() => seeApplicant(s, true)}>
+                  <span className="dr-title">{s.company}</span>
+                  <span className="dr-meta">{applicantLine(s)} · {relTime(s.appliedAt)}</span>
+                </button>
+                <button className="btn-ghost dash-row-btn joined-dismiss" onClick={() => seeApplicant(s, false)}>Dismiss</button>
+                <button className="btn-solid dash-row-btn joined-open" onClick={() => seeApplicant(s, true)}>Open</button>
+              </div>
+            ))}
+          </DashRows>
+        </section>
+      )}
 
       {yourTurn.length > 0 && (
         <section className="dash-sec sec-yt" aria-label="Waiting on you">
@@ -48429,6 +48480,14 @@ button.mc-title:hover{text-decoration:underline}
 .sec-yt{border:1px solid #f0d9a8;border-left:4px solid var(--amber);background:#fffaf0;
   border-radius:13px;padding:14px 14px 6px}
 .sec-yt h3{margin-top:0}
+/* New on your roster: a green edge, because a contractor joining is good
+   news, not something gone wrong. Its rows wrap so Dismiss and Open sit under
+   the name on a phone. */
+.sec-joined{border:1px solid #cfe5d6;border-left:4px solid var(--brand);background:#f3faf5;
+  border-radius:13px;padding:14px 14px 6px}
+.sec-joined h3{margin-top:0}
+.joined-row{flex-wrap:wrap}
+.joined-row .dash-row-main{flex:1 1 220px;min-width:0}
 .yt-row{flex-wrap:wrap;align-items:flex-start}
 .yt-row .dash-row-main{flex:1 1 260px}
 .yt-lede{font-weight:700;font-size:14px;color:var(--amber-ink)}

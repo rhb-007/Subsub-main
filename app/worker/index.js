@@ -1643,7 +1643,10 @@ async function createApplication(env, account, body, note,
     ).bind(uid(), user.id, account.id, companyId).run();
   }
 
-  await logEvent(env, account.id, user.id, "engagement.applied", engagementId, { companyId, reused: !!company });
+  // `via` is what the dashboard says about it: an application through the
+  // public form, or somebody accepting an invite this account sent.
+  await logEvent(env, account.id, user.id, "engagement.applied", engagementId,
+    { companyId, reused: !!company, via: boundCompanyId || /invite/i.test(note || "") ? "invite" : "form" });
 
   // Confirm it landed, and say what happens next. Public entry point, so a
   // failure here must never turn a successful application into an error.
@@ -8833,6 +8836,37 @@ app.get("/api/subs", async (c) => {
     });
   });
 
+  // WHO JOINED THE ROSTER, AND WHETHER ANYBODY HERE HAS LOOKED. A company
+  // arriving through the public form or an accepted invite is written as an
+  // engagement with no person on this account having done anything, so the
+  // dashboard has to be told it happened. Read off the event log (no
+  // migration): the newest application per engagement, and the newest time
+  // somebody on this account marked it seen. One query for the roster.
+  try {
+    const { results: evRows } = await c.env.DB.prepare(
+      `SELECT subject_id, kind, MAX(created_at) AS at, payload FROM events
+        WHERE account_id = ? AND kind IN ('engagement.applied', 'engagement.application_seen')
+        GROUP BY subject_id, kind`
+    ).bind(accountId).all();
+    const applied = {}, seen = {}, via = {};
+    // D1 stamps "YYYY-MM-DD HH:MM:SS" in UTC with no zone; sent as ISO with a
+    // Z so the browser cannot read it as local time.
+    const iso = (t) => (t ? String(t).replace(" ", "T") + (/Z$/.test(t) ? "" : "Z") : null);
+    for (const r of evRows || []) {
+      if (r.kind === "engagement.applied") {
+        applied[r.subject_id] = iso(r.at);
+        try { via[r.subject_id] = JSON.parse(r.payload || "{}").via || null; } catch { via[r.subject_id] = null; }
+      } else seen[r.subject_id] = iso(r.at);
+    }
+    subs.forEach((sub) => {
+      sub.appliedAt = applied[sub.engagementId] || null;
+      sub.appliedVia = via[sub.engagementId] || null;
+      sub.applicationSeenAt = seen[sub.engagementId] || null;
+    });
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
+
   // What each company's paperwork says, so the roster can colour itself and
   // assignment can ask about the JOB'S date rather than today's. One query for
   // the whole roster: per-company would be a round trip each and this is the
@@ -9576,6 +9610,19 @@ app.get("/api/subs/:companyId/end-check", requireRole("admin", "pm"), async (c) 
 // makes people choose the wrong one. Paused is "not right now" -- a season, a
 // lapsed certificate, a falling-out that may mend. Ended is "we do not work
 // with them". Both come off the pickable roster; only one reads as final.
+// The dashboard's "joined your roster" row is answered by looking, not by any
+// change to the engagement, so this writes one event and nothing else. Scoped
+// to this account's own engagement; anything else is not_found.
+app.post("/api/subs/:companyId/application-seen", requireRole("admin", "pm"), async (c) => {
+  const auth = c.get("auth");
+  const en = await c.env.DB.prepare(
+    `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(auth.accountId, c.req.param("companyId")).first();
+  if (!en) return c.json({ error: "not_found" }, 404);
+  await logEvent(c.env, auth.accountId, auth.userId, "engagement.application_seen", en.id, {});
+  return c.json({ ok: true, seenAt: new Date().toISOString() });
+});
+
 app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const { companyId } = c.req.param();
