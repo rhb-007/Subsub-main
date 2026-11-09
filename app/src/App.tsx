@@ -254,6 +254,16 @@ const CITY_ZIP = {
   Redmond: "98052", Renton: "98055", Kent: "98032", Lynnwood: "98037", Auburn: "98002",
 };
 // Haversine miles; falls back to a stable pseudo-distance for unknown ZIPs.
+// A sign-in that never reached Supabase comes back as Safari's "Load failed"
+// or Chrome's "Failed to fetch". Printed raw, that reads as a wrong password.
+function signInErrText(error) {
+  const m = String(error?.message || "");
+  if (error?.name === "AuthRetryableFetchError" || !error?.status && /load failed|failed to fetch|network|fetch/i.test(m)) {
+    return "Couldn't reach the sign-in service just now. Check your connection, then try again.";
+  }
+  return m || "Couldn't sign you in. Try again.";
+}
+
 function zipDistance(a, b) {
   if (!a || !b) return null;
   if (a === b) return 0;
@@ -10265,7 +10275,7 @@ function SuperadminLogin({ onLogin }) {
     }
     setErr(""); setBusy(true);
     const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password: pw });
-    if (error) { setBusy(false); setErr("Wrong email or password."); return; }
+    if (error) { setBusy(false); setErr(/invalid/i.test(error.message || "") ? "Wrong email or password." : signInErrText(error)); return; }
     await finish();
   };
 
@@ -37307,7 +37317,7 @@ function LoginPage({ users, brand, accounts, memberships, onLogin, onSignup, ent
         setUnconfirmed(true);
         setErr(`Almost there — your address hasn't been confirmed yet. Look for a message from us at ${email.trim()} and click the link in it, then sign in.`);
       } else {
-        setErr(error.message);
+        setErr(signInErrText(error));
       }
       return;
     }
