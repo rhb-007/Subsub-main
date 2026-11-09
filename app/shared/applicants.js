@@ -25,5 +25,6 @@ export function newApplicants(subs, nowMs = Date.now()) {
 
 export function applicantLine(s) {
   return s?.appliedVia === "invite" ? "Accepted your invite and joined your roster"
+    : s?.appliedVia === "staff" ? "Added to your roster by SubSub support"
     : "Applied to join your roster";
 }

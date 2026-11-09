@@ -286,6 +286,7 @@
     "test:consoledelete": "node --no-warnings scripts/console-delete-test.mjs",
     "test:consoledeleteui": "node --no-warnings scripts/console-delete-ui-test.mjs",
     "test:engaged": "node --no-warnings scripts/engaged-test.mjs",
+    "test:rosteradd": "node --no-warnings scripts/console-roster-add-test.mjs",
     "test:handycap": "node --no-warnings scripts/handycap-test.mjs",
     "test:held": "node --no-warnings scripts/held-test.mjs",
     "test:gcal": "node --no-warnings scripts/gcal-test.mjs",

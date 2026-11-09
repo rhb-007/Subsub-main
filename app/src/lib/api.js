@@ -1083,6 +1083,12 @@ export const api = {
       request(`/platform/engagements/${encodeURIComponent(engagementId)}`,
         { method: "PATCH", body: JSON.stringify({ engagedAs }) }),
 
+    // Put a company already on SubSub onto an account's roster, as though a
+    // connect request had been asked and accepted. Superadmin, with a reason.
+    addToRoster: (accountId, body) =>
+      request(`/platform/accounts/${encodeURIComponent(accountId)}/roster`,
+        { method: "POST", body: JSON.stringify(body) }),
+
     // Which settings the Worker actually has. Names only, never values.
     setupCheck: () => request("/platform/setup-check"),
     systemHealth: () => request("/platform/system-health"),

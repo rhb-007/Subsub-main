@@ -138,6 +138,7 @@ let HOLD = null;
 // Every resend and cancel the console posts, so a button is proved by what it sends.
 const INVITE_CALLS = [];
 const CREATED = [];
+const ROSTER = [];
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/platform/impersonate/") && method === "POST") {
     impersonated.push({ path, body });
@@ -153,6 +154,8 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
       userInvites: (body.users || []).filter((u) => u.email).map((u) => ({ name: u.name, email: u.email,
         role: u.role, invite: { invited: true, to: u.email, emailed: true } })) }];
   }
+  const ro = path.match(/^\/api\/platform\/accounts\/([^/]+)\/roster$/);
+  if (ro && method === "POST") { ROSTER.push({ acct: ro[1], body }); return [200, { ok: true, seated: 1, reactivated: false }]; }
   if (path === "/api/platform/me") return [200, STAFF()];
   if (path === "/api/platform/bootstrap") return [200, BOOT];
   if (path === "/api/platform/companies") return [200, []];
@@ -632,6 +635,42 @@ try {
   t.ck("pressing it signs in to THEIR account, as them",
     impersonated.length === 1 && /\/acc_gc$/.test(impersonated[0].path) && impersonated[0].body?.userId === "u_a1",
     JSON.stringify(impersonated));
+
+  // ADD TO A ROSTER. The company that signed up on its own goes onto another
+  // account's roster from here: never its own account, never one it is live on.
+  const ar = await page.evaluate(() => {
+    const f = document.querySelector(".modal-co .pfc-roster-form");
+    if (!f) return null;
+    return { opts: [...f.querySelectorAll("select option")].map((o) => o.value).filter(Boolean),
+      disabled: f.querySelector(".pfc-roster-go")?.disabled };
+  });
+  t.ck("the company window offers Add to a roster", !!ar, JSON.stringify(ar));
+  // acc_pm holds a contractor SEAT for them and no engagement, so it is offered:
+  // a seat is not a roster entry. Which roster they are live on is pinned in
+  // test:rosteradd.
+  t.ck("it does not offer their own account",
+    !!ar && !ar.opts.includes("acc_gc") && ar.opts.includes("acc_gc2"), JSON.stringify(ar?.opts));
+  t.ck("and it waits for an account and a reason", ar?.disabled === true, JSON.stringify(ar));
+  await page.evaluate(() => {
+    const f = document.querySelector(".modal-co .pfc-roster-form");
+    const sel = f.querySelector("select");
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(sel, "acc_gc2");
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await wait(150);
+  await page.evaluate(() => {
+    const i = document.querySelector(".modal-co .pfc-roster-form input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, "Both asked");
+    i.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await wait(150);
+  await page.evaluate(() => document.querySelector(".modal-co .pfc-roster-go")?.click());
+  await wait(600);
+  const done = await page.evaluate(() => document.querySelector(".modal-co .pfc-roster-ok")?.innerText || null);
+  t.ck("pressing it posts the company and the reason",
+    ROSTER.length === 1 && ROSTER[0].acct === "acc_gc2" && ROSTER[0].body?.companyId === "cmp_own_acc_gc"
+      && ROSTER[0].body?.reason === "Both asked", JSON.stringify(ROSTER));
+  t.ck("and says it worked", /Added to .*roster/.test(done || ""), String(done));
   await page.evaluate(() => document.querySelector(".modal-co .modal-close")?.click());
   await wait(300);
 

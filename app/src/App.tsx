@@ -6326,6 +6326,12 @@ export default function SubSub() {
           // company id -- a control that took the company would say the word
           // for every account that hires them, which is the thing 058 put it
           // on `engagements` to prevent.
+          // Throws, so the form under the company names why it was refused.
+          onAddToRoster={async (accountId, body) => {
+            const r = await api.platform.addToRoster(accountId, body);
+            try { setPlatform(await api.platform.bootstrap()); setPlatformAt(Date.now()); } catch { /* the add stands */ }
+            return r;
+          }}
           onSetEngagedAs={async (engagementId, engagedAs) => {
             await platformWrite(() => api.platform.setEngagedAs(engagementId, engagedAs),
               "Could not change that working relationship.");
@@ -10381,7 +10387,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
   accounts, users, memberships, companies, engagements,
   jobs, subEvents, activity, smsDaily = [], err, onPatchAccount, onAddUser, onSetUserRole, onSetOwner, onImpersonate, onSignOut,
   onCreateAccount, onCreateCompany, onEditCompany, onDeleteAccount, onDeleteCompany, onVerifyCompanyLicense,
-  onSetEngagedAs, onAddSecondBusiness,
+  onSetEngagedAs, onAddToRoster, onAddSecondBusiness,
   onResetPassword, onSyncHostname, onCheckHostnameSetup, onMailLog, onSetupCheck, onSystemHealth, onIntegrationHealth }) {
   const [screen, setScreen] = useState("dashboard");
   const [openId, setOpenId] = useState(null);
@@ -12092,6 +12098,12 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
                             </span>
                           </div>
                         )}
+                        {isSuper && onAddToRoster && (
+                          <div className="pfc-row pfc-addroster">
+                            <span>Add to a roster</span>
+                            <ConsoleAddToRoster co={co} rows={r.engs} accounts={accounts} onAdd={onAddToRoster} />
+                          </div>
+                        )}
                         {isSuper && (
                           <div className="pfc-row">
                             <span>Account status</span>
@@ -13705,6 +13717,73 @@ function FeeTermsPanel({ accountId, canEdit }) {
 // Staff asking the state's register about a company's license again, from
 // the console's company window. The answer replaces State status when the
 // console reloads; a check that did not run says why beside the button.
+// Puts this company on another account's roster from the console -- the
+// connect request asked and accepted in one press, for when both sides have
+// already said yes to support. Offers only accounts it is not live on (an
+// ended engagement is offered, and is put back), never the company's own
+// account, and the handyman choice only where the account may engage one.
+const ROSTER_ERR = {
+  reason_required: "Say why, for the record.",
+  already_on_roster: "They are already on that roster.",
+  own_company: "That is their own account.",
+  not_a_handyman_account: "That kind of account only engages subcontractors.",
+  company_not_found: "That company no longer exists.",
+  not_found: "That account no longer exists.",
+};
+function ConsoleAddToRoster({ co, rows, accounts, onAdd }) {
+  const live = new Set((rows || []).filter(({ e }) => e.status !== "ended").map(({ e }) => e.accountId));
+  const ended = new Set((rows || []).filter(({ e }) => e.status === "ended").map(({ e }) => e.accountId));
+  const options = (accounts || [])
+    .filter((a) => !live.has(a.id) && a.companyId !== co.id && (a.status || "active") !== "deleted")
+    .sort((x, y) => String(x.name).localeCompare(String(y.name)));
+  const [acctId, setAcctId] = useState("");
+  const [as, setAs] = useState("subcontractor");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const acct = options.find((a) => a.id === acctId);
+  const handy = acct && mayEngageHandyman(acct.kind);
+  const go = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await onAdd(acctId, { companyId: co.id, engagedAs: handy ? as : "subcontractor", reason: reason.trim() });
+      setMsg({ ok: true, text: `${r?.reactivated ? "Put back on" : "Added to"} ${acct?.name || "that account"}'s roster`
+        + (r?.seated ? `, and ${r.seated} ${r.seated === 1 ? "person" : "people"} can open it.` : ". Nobody at the company has a login yet.") });
+      setAcctId(""); setReason("");
+    } catch (err) {
+      const code = err?.body?.error;
+      setMsg({ ok: false, text: ROSTER_ERR[code] || (err?.status === 403 ? "You do not have permission to do that." : `That did not work${code ? ` (${code})` : ""}.`) });
+    } finally { setBusy(false); }
+  };
+  if (!options.length) return <span className="pf-sub">They are on every account's roster already.</span>;
+  return (
+    <span className="pfc-roster-form">
+      <select aria-label="Account to add them to" value={acctId} onChange={(e) => { setAcctId(e.target.value); setMsg(null); }}>
+        <option value="">Pick an account</option>
+        {options.map((a) => (
+          <option key={a.id} value={a.id}>{a.name}{ended.has(a.id) ? " (taken off before)" : ""}</option>
+        ))}
+      </select>
+      {handy && (
+        <span className="insp-kind seg pfc-seg" role="group" aria-label="Working relationship">
+          {Object.values(ENGAGED_AS).map((k) => (
+            <button key={k.id} type="button" aria-pressed={as === k.id}
+              className={as === k.id ? "on" : ""} onClick={() => setAs(k.id)}>{k.label}</button>
+          ))}
+        </span>
+      )}
+      <input type="text" aria-label="Reason" placeholder="Why (for example: both asked on the phone)"
+        value={reason} onChange={(e) => setReason(e.target.value)} />
+      <button type="button" className="pf-mini pfc-roster-go" disabled={!acctId || !reason.trim() || busy} onClick={go}>
+        {busy ? "Adding..." : "Add to roster"}
+      </button>
+      {acctId && !reason.trim() && <span className="pf-sub">Say why before adding them.</span>}
+      {acctId && <span className="pf-sub">It shows on {acct?.name}'s dashboard as new on their roster, and their team is seated there as contractors.</span>}
+      {msg && <span className={msg.ok ? "pfc-roster-ok" : "pfc-roster-err"} role={msg.ok ? "status" : "alert"}>{msg.text}</span>}
+    </span>
+  );
+}
+
 function ConsoleLicenseRecheck({ id, onVerify }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -47557,6 +47636,11 @@ span.insp-cl-check{cursor:default}
 .pfe-why{margin:8px 0 0;color:var(--amber-ink)}
 .pfc-engaged > span:last-child{display:flex;flex-direction:column;gap:8px;align-items:flex-end}
 .pfc-eng{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.pfc-roster-form{display:flex;flex-direction:column;align-items:stretch;gap:12px;min-width:0;width:100%;max-width:420px;margin-left:auto}
+.pfc-roster-form select,.pfc-roster-form input{min-height:44px;padding:8px 12px;font-size:15px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);width:100%;box-sizing:border-box}
+.pfc-roster-go{align-self:flex-start;min-height:38px}
+.pfc-roster-ok{color:var(--brand-ink, #1f6b3a);font-weight:600}
+.pfc-roster-err{color:#b5442e;font-weight:600}
 .pfc-seg{display:inline-flex}
 .pfc-seg button{padding:4px 10px;font-size:12px}
 

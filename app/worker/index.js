@@ -27534,6 +27534,122 @@ app.post("/api/platform/companies/:id/verify-license", async (c) => {
 // SUPERADMIN, unlike the company edit beside it. This is the entry that
 // excuses somebody their insurance and their licence on a roster -- it is
 // closer to the delete button than to correcting a phone number.
+// PUT A COMPANY THAT IS ALREADY ON SUBSUB ONTO ANOTHER ACCOUNT'S ROSTER.
+// A subcontractor who signed up as their own account is on nobody's roster,
+// and the connect request is the only customer-side door -- one that needs
+// the hiring account to look them up and the sub to answer. When both have
+// already said yes to support on the phone, this is that request asked and
+// accepted in one press: the same rows the accept route writes (an active
+// engagement, and the company's people seated there as contractors so they
+// can read the work they are given).
+//
+// Superadmin, a reason required, and audited on the account it lands on,
+// because it writes to a roster nobody on that account touched. A live
+// engagement is refused rather than changed; an ended one is put back to
+// active, since ending is the reversible act the roster already records.
+// The dashboard's "New on your roster" picks it up from the event, so the
+// account is told rather than finding the name on its list.
+app.post("/api/platform/accounts/:id/roster", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+
+  const b = await c.req.json().catch(() => ({}));
+  const reason = String(b.reason || "").trim();
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+  if (b.engagedAs != null && b.engagedAs !== "" && !isEngagedAs(b.engagedAs)) {
+    return c.json({ error: "bad_engaged_as" }, 400);
+  }
+
+  const acct = await c.env.DB.prepare(
+    `SELECT id, name, kind, company_id FROM accounts WHERE id = ?`).bind(c.req.param("id")).first();
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  const co = await c.env.DB.prepare(`SELECT id, company FROM companies WHERE id = ?`)
+    .bind(String(b.companyId || "")).first();
+  if (!co) return c.json({ error: "company_not_found" }, 404);
+  // An account on its own roster is a company hiring itself.
+  if (acct.company_id && acct.company_id === co.id) return c.json({ error: "own_company" }, 409);
+
+  const want = engagedAs(b.engagedAs);
+  if (isHandyman(want) && !mayEngageHandyman(acct.kind)) {
+    return c.json({ error: "not_a_handyman_account", accountKind: acct.kind }, 409);
+  }
+
+  const existing = await c.env.DB.prepare(
+    `SELECT id, status FROM engagements WHERE account_id = ? AND company_id = ?`).bind(acct.id, co.id).first();
+  if (existing && existing.status !== "ended") {
+    return c.json({ error: "already_on_roster", status: existing.status }, 409);
+  }
+
+  // The trades they already work under, as the accept route does: from an
+  // engagement they have elsewhere, else the trades their own account lists.
+  // Empty categories make a contractor who matches no job.
+  let categories = "[]";
+  const prior = await c.env.DB.prepare(
+    `SELECT categories FROM engagements WHERE company_id = ? AND categories <> '[]'
+      ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, invited_at DESC LIMIT 1`).bind(co.id).first();
+  if (prior?.categories) categories = prior.categories;
+  else {
+    const own = await c.env.DB.prepare(
+      `SELECT trades FROM accounts WHERE company_id = ? AND trades IS NOT NULL LIMIT 1`).bind(co.id).first()
+      .catch((err) => { if (!missingSchema(err)) throw err; return null; });
+    try { if (Array.isArray(JSON.parse(own?.trades || "null"))) categories = own.trades; } catch { /* keep [] */ }
+  }
+
+  const store = isHandyman(want) ? "handyman" : null;
+  let engagementId;
+  if (existing) {
+    engagementId = existing.id;
+    await c.env.DB.prepare(`UPDATE engagements SET status = 'active' WHERE id = ?`).bind(existing.id).run();
+    if (store || b.engagedAs) {
+      await c.env.DB.prepare(`UPDATE engagements SET engaged_as = ? WHERE id = ?`).bind(store, existing.id).run()
+        .catch((err) => { if (!missingSchema(err)) throw err; });
+    }
+  } else {
+    engagementId = uid();
+    if (store) {
+      await c.env.DB.prepare(
+        `INSERT INTO engagements (id, account_id, company_id, status, categories, caps, engaged_as)
+         VALUES (?, ?, ?, 'active', ?, '[]', ?)`).bind(engagementId, acct.id, co.id, categories, store).run();
+    } else {
+      await c.env.DB.prepare(
+        `INSERT INTO engagements (id, account_id, company_id, status, categories, caps)
+         VALUES (?, ?, ?, 'active', ?, '[]')`).bind(engagementId, acct.id, co.id, categories).run();
+    }
+  }
+
+  // Seated, or they are on a roster they cannot open: the company's contractor
+  // seats, and the admins and project managers of its own account.
+  const { results: seats } = await c.env.DB.prepare(
+    `SELECT DISTINCT user_id FROM memberships WHERE company_id = ? AND role = 'contractor'`).bind(co.id).all();
+  let team = [];
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT DISTINCT m.user_id FROM memberships m JOIN accounts a ON a.id = m.account_id
+        WHERE a.company_id = ? AND m.role IN ('admin', 'pm')`).bind(co.id).all();
+    team = results || [];
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  let seated = 0;
+  for (const userId of new Set([...(seats || []), ...team].map((r) => r.user_id).filter(Boolean))) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO memberships (id, user_id, account_id, role, company_id) VALUES (?, ?, ?, 'contractor', ?)`
+      ).bind(uid(), userId, acct.id, co.id).run();
+      seated += 1;
+    } catch (err) {
+      if (!/UNIQUE constraint failed/i.test(String(err?.message || err))) throw err;
+    }
+  }
+
+  await logEvent(c.env, acct.id, staff.userId, "engagement.applied", engagementId,
+    { companyId: co.id, via: "staff" });
+  await auditPlatform(c.env, staff, acct.id, "engagement_added_by_staff",
+    `${staff.name} added ${co.company} to ${acct.name}'s roster: ${reason}`,
+    { engagementId, companyId: co.id, engagedAs: want, reactivated: !!existing, reason });
+  return c.json({ ok: true, engagementId, seated, reactivated: !!existing });
+});
+
 app.patch("/api/platform/engagements/:id", async (c) => {
   const { error, staff } = await requireStaff(c);
   if (error) return error;

@@ -16310,6 +16310,32 @@ refactor.
   `auth_unreachable` and wrote nothing. The public apply form writes before any
   Supabase call, so it would have landed.
 
+- **STAFF CAN PUT A COMPANY THAT IS ALREADY ON SUBSUB ONTO ANOTHER
+  ACCOUNT'S ROSTER.** Asked for as *"if the subcontractor has already signed up
+  for general sub, I should be able to assign them to outerhome roster from
+  admin console"*. A subcontractor who signs up through get-started is their own
+  account and on nobody's roster, and the only customer door is a connect
+  request, which needs the hiring account to look them up and the sub to
+  answer. `POST /api/platform/accounts/:id/roster` is that request asked and
+  accepted in one press, writing the same rows the accept route writes:
+  - an **active** engagement on that account, with the trades they work under
+    elsewhere, else their own account's trades;
+  - their contractor seats and their own account's admins and pms **seated
+    there as contractors**, so they can open the work (a tenant or owner on
+    their account is never seated);
+  - `engagement.applied` with `via: "staff"`, so the account's dashboard shows
+    them under **New on your roster**, *Added to your roster by SubSub support*.
+
+  **Superadmin, a reason required, and audited on that account's feed**, because
+  it writes to a roster nobody there touched. It refuses their own account
+  (`own_company`), a live engagement (`already_on_roster`) and a handyman on a
+  kind that cannot engage one; an **ended** engagement is put back to active on
+  the same row. **The form is in the company's console window** (*Add to a
+  roster*): an account picker leaving out their own account and any they are
+  live on, the handyman choice only where the account may engage one, and the
+  reason. `test:rosteradd` (24) and `test:consolelists` (141); three mutations
+  fire (the own-account check, the live check, and seating every role).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
