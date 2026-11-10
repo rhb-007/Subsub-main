@@ -19793,9 +19793,13 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   // raised before this shipped, which is what the form has always assumed.
   const applyAs = engagedAs(invite?.engagedAs);
   const applyHandyman = isHandyman(applyAs);
+  // `tradesAllowed` answers NULL for a subcontractor, meaning every trade.
+  // `new Set(null)` is an EMPTY set, so reading it as a list showed every
+  // subcontractor applying a Trades step with no trades on it and a Continue
+  // that could never enable. Same reading the roster form uses.
   const applyTrades = useMemo(() => {
-    const allowed = new Set(tradesAllowed(applyAs));
-    return CATEGORIES.filter((c) => allowed.has(c.id));
+    const allowed = tradesAllowed(applyAs);
+    return allowed ? CATEGORIES.filter((c) => allowed.includes(c.id)) : CATEGORIES;
   }, [applyAs]);
   // On both paths now, invited or not. Applying already creates this person
   // a contractor membership on the account -- the password grants nothing

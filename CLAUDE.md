@@ -16336,6 +16336,21 @@ refactor.
   reason. `test:rosteradd` (24) and `test:consolelists` (141); three mutations
   fire (the own-account check, the live check, and seating every role).
 
+- **THE APPLICATION FORM'S TRADES STEP WAS EMPTY FOR EVERY SUBCONTRACTOR,
+  BECAUSE "EVERY TRADE" IS NULL AND `new Set(null)` IS EMPTY.** Reported from
+  outerhome.subsub.work/?apply=1: step 2 drew *What trades do you cover?* with
+  nothing under it, then City, ZIP and crews, and Continue never enabled.
+  `tradesAllowed` answers `null` for a subcontractor, meaning no narrowing (the
+  `jobScopeFrom` asymmetry), and 059's narrowing read it as
+  `new Set(tradesAllowed(applyAs))`. So since 059 every subcontractor applying,
+  cold or by invite, was shown no trades, and only a handyman invite worked,
+  which is why the handyman suite stayed green. It now reads the null the way
+  the roster form beside it always has: no list means every trade.
+  `test:applytrades` drives a cold application, a subcontractor invite and a
+  handyman invite in the same place; putting the Set back reads *0 of 29* and
+  fails five assertions. **The general shape:** a function that answers null for
+  "everything" must never be passed straight into a collection constructor.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

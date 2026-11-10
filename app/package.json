@@ -94,6 +94,7 @@
     "test:reportdetail": "node scripts/report-detail-test.mjs",
     "test:tenantui": "node scripts/tenant-report-ui-test.mjs",
     "test:applyform": "node scripts/apply-form-test.mjs",
+    "test:applytrades": "node --no-warnings scripts/apply-trades-ui-test.mjs",
     "test:buttons": "node scripts/button-align-test.mjs",
     "test:chrome": "node scripts/favicon-sections-test.mjs",
     "test:request": "node scripts/request-detail-test.mjs",
