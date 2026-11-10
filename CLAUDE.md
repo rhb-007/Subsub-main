@@ -7771,235 +7771,7 @@ refactor.
   writing down is about assertions that cannot fail. This is its opposite — an
   assertion that fired every time, correctly, into silence.
 
-  So the rule is in `- **A JOB WITH NO TRADE CAN NEVER BE ASSIGNED, SO IT IS NOT APPROVED WITHOUT
-  ONE.** Reported with a tenant's report about torn upholstery: approved, filed
-  as *Something else*, and sitting at **0/0 trades** with a visit form asking
-  for a time and a footer reading *All trades assigned — mark complete*. Every
-  one of those reads a job with no trade as finished rather than as stuck.
-  Nobody can be offered a slot that does not exist, so it was a closed loop
-  from the moment Approve was pressed.
-
-  **`POST /api/jobs/:id/approve` refuses `trade_required` when neither the
-  job nor the body names a trade**, and takes `trades` in the body, filtered to
-  `TRADE_IDS` and added to what is already there. An already-approved job still
-  answers `alreadyApproved` first, so a second press is not refused.
-
-  **The trade is picked where the request is approved.** A request with no
-  trade reads *Pick a trade* on its dashboard row and opens the request, where
-  *What kind of work is this?* lists every trade with how many people on the
-  roster do it, covered ones first. Approve stays disabled, with the reason
-  beside it, until one is picked. A trade nobody covers is allowed, with a line
-  saying so and naming overflow or decline as the ways on. Refusing it would
-  mean the account could not approve work it intends to send out.
-
-  **A job already in that state is told apart and given a way out.** The card
-  says *No trade yet* instead of 0/0. The visit block is replaced by a line
-  saying there is nobody to send yet. The footer says to add a trade or cancel.
-  The *Waiting on you* row adds **Not work we handle**, which opens the cancel
-  and defer window, because that is the honest answer for work the account
-  does not hire for.
-
-  `test:approvetrade` (8) and `test:waitingyou` (48). Three UI mutations fire:
-  the row approving directly, Approve not gated, and the trade not sent.
-
-- **WHAT'S SCHEDULED READS THE NEWEST WINDOW, AND PAST DUE IS BY THE
-  CLOCK.** Reported with the manager's dashboard on screen: two jobs listed as
-  past their date that had both been rescheduled, and the request *"all
-  dashboards need to be checked always if past due or current"*.
-
-  **The panel read `jobs.date`, the target somebody typed when the job was
-  raised.** A new time lives in `visits`, so a job moved to Saturday went on
-  being filed under last week. `ScheduleHero` now takes the newest live window
-  (proposed or confirmed) per job and falls back to the job's date only when
-  there is none, which is the rule the crew's card and the tenant's screen
-  already follow. The *Work scheduled* tile counts the same way.
-
-  **Past due is the window's end, not the calendar day.** A 9 AM visit is past
-  due at 4 PM the same day, and a job with no time on it is past due once its
-  day is over. It is the same `visitPassed` test the Waiting on you panel uses
-  for a lapsed window. The contractor's own schedule and their job lines use it
-  too, and a confirmed or target date that has gone by reads **Past due** on
-  the crew's line.
-
-  **Each past-due row says what went by**, because each needs a different
-  answer: *Visit passed, mark done or reschedule*, *Time passed, never
-  confirmed*, or *Date passed, no visit set*. They are listed **newest first**,
-  so what just went by is on screen and the oldest sit behind *more*. The
-  next-up card says *not confirmed yet* over a proposed time.
-
-  `test:waitingyou` drives it on both sides with a rescheduled job and a visit
-  that ended earlier today. Three mutations fire: reading the job's date
-  (4 assertions), a day-only test (3) and the crew's flag removed (1).
-
-- **THE CAL EVENT IS NAMED BY ITS PUBLIC NAME, BECAUSE CAL NO LONGER SHOWS
-  THE NUMBER.** Setting up Book a demo needed `CAL_EVENT_TYPE_ID`, and Cal's
-  newer dashboard puts an opaque link id in the address bar
-  (`app.cal.com/links/1cF6tyYe1K7Ae7UjkQFNQt`) that the API does not accept;
-  the numeric id is shown nowhere. `calEvent` in `worker/demo.js` takes the
-  number, `username/slug` as the event's URL field shows it, or that URL
-  pasted whole, and both endpoints send `username` + `eventTypeSlug` in place
-  of `eventTypeId`. **A dashboard address is refused rather than read as a
-  name**: `app.cal.com/links/<id>` parses as `links/<id>` otherwise, which the
-  test caught on its first run. Unreadable is not configured, so the page
-  offers email rather than a request Cal refuses. The Health light now carries
-  Cal's own words when it refuses. `test:calevent`; two mutations fire.
-  **Not verified here:** a live Cal answer to the name form, which is the
-  documented one.
-
-- **BBB HAS NO PUBLIC API, SO THE PASSPORT LINKS TO THE SUB'S OWN BBB
-  PROFILE AND DRAWS NO GRADE.** The `api.bbb.org/v2` the card was built
-  against is BBB's partner API, granted case by case, and nobody can sign up
-  for it. The third-party services that sell BBB grades scrape bbb.org, which
-  BBB's terms prohibit. Most match by business name, and another company's
-  grade under the sub's name is the worst thing this card could show. So the
-  scrapers were refused, at the owner's choice.
-
-  `bbbPublic` now returns the profile link whenever one is linked, and the
-  card reads **BBB profile** with *See their rating and reviews on the BBB®
-  website* and a **See BBB profile** button. The reader sees the grade on
-  BBB's own site, where it is always current. A grade is drawn beside the link
-  only from a live reading under `BBB_STALE_DAYS`, so the API path still works
-  untouched if BBB ever grants access. **Nothing linked means no card**, which
-  replaces the "coming soon" dash: with no API coming, a placeholder promises
-  something that will not arrive. The sub's Passport tab says the profile
-  shows as a link and stops saying ratings are "not switched on yet".
-
-  `test:bbb` (44) and `test:passportui` (76). Hiding the card when there is no
-  grade fails two assertions.
-
-- **A READER WHO CANNOT CONNECT SEES THE SAME PASSPORT, WITH CONNECT GREYED
-  OUT.** Reported with the Passport open in a seat that cannot connect: the
-  header's green *Connect with Orcas Roofing* looked pressable, and the box
-  beside the Compliance pack held one sentence over a tall empty panel. Asked
-  for as *"keep all of the same content, just grey out the ability to click on
-  the call to actions ... in the box and in the headline"*.
-
-  `usePassportConnect` returns `blocked`, the one reason this reader cannot
-  connect, read by the header and the box: not an admin or pm seat, an account
-  that does not hire, or nobody at the company able to answer. The box draws the
-  same offer anybody else sees, with the four perks, the note field and Connect
-  disabled in gray, and the reason under them. The header's button stays and is
-  disabled the same way. Signed out is not blocked, because signing in may fix
-  it. `test:passportui` (82) reads both controls, their gray, and that pressing
-  either sends nothing. The mutation putting the bare sentence back fails three
-  assertions.
-
-- **THE CONSOLE'S SIGN-IN BUTTONS HAD NO STYLES, BECAUSE THE CSS WAS WRITTEN
-  UNDER OTHER NAMES.** Reported with the console's sign-in card on screen:
-  *Continue with Google* and *Use a password instead* were drawn side by side,
-  touching, at two heights, in the browser's own gray chrome. The markup uses
-  `sa-btn`, `sa-google`, `sa-alt` and `sa-note`, while the stylesheet had rules
-  for `sa-google-btn` and `sa-google-note`. Nothing matched, so nothing applied.
-  This is the same failure as the `.chip.on` rule that did not exist: the markup
-  is right, and no static check can see a rule missing from another file.
-
-  The rules now use the markup's names. Google is a full-width white button,
-  48px tall. The password option is a quiet outlined button at the same width
-  and height, stacked under it. The password form's *Sign in* is solid amber,
-  and its fields are drawn for the dark card. `test:consolesignin` measures the
-  buttons at 1024px and 390px. Taking the CSS out fails ten of its twelve
-  assertions.
-
-- **THE CREW WAS SWAPPED FOR A NEW TAKE OF THE SAME SIX, CUT THE SAME WAY.**
-  Same size (1639x960), so the srcset, width/height and centered alignment did
-  not move. Cut by flood fill from the edges through pixels that are exactly
-  neutral (channel spread 4 or less), then 2px into near-neutral pixels for the
-  antialiased edge. The tighter test is what kept the **white hard hat**: it
-  touches the border through light pixels, but carries a slight tint (spread
-  about 12) the printed checkerboard does not. Two enclosed pockets were
-  cleared because they carry both checker tones in quantity (behind the hammer,
-  and inside the nail gun's grip), and the bearded puppet's eye whites, which
-  carry one, were kept. **A hole-fill step undoes exactly that clearing**, which
-  the first attempt found. `test:hero` 60/60, and swapping the uncut upload back
-  in fails three. The alt text says lumber, not timber.
-
-- **THE MENU ENTRY SAYS PASSPORT, AND THE HERO CREW STAYS INSIDE ITS COLUMN.**
-  Two asks, one message. *"Should the my QR code refer to passport, so it's
-  more usable and clear what it is?"* The code in the profile menu has opened
-  the Passport since the Passport shipped, and the entry still read **My QR
-  code**, so nobody could tell from the menu what a stranger would land on. It
-  reads **My Passport QR** in the menu, the drawer and the Profile panel (one
-  name for one object), and the note under the code says it opens the
-  Passport. Every printed code still works, as the Passport entry records.
-
-  **The crew overran its column on purpose and that was the fault.** The 125%
-  width and -13% margin made the picture as tall as the copy, and the hero
-  clips the spill, so on an iPad the nail gun and the plank were cut off at the
-  right edge and the hammer sat over the lede, reported with both edges
-  circled. It is `width:100%` inside its own column now. The price is height:
-  about 0.63 of the copy's rather than 0.7. `test:hero` moved with it, from "no
-  more than a sliver clipped" to **nothing past the viewport and clear of the
-  words**, and putting the overrun back fails four assertions.
-
-- **THE HIRING SIDE'S AUTO-SCHEDULE BOX SAYS WHAT HAPPENS, IN ORDER, AND
-  SAYS "OFF" ONCE.** Reported with a contractor card on screen: *"Off / Off --
-  every job you assign sits pending until the response window runs out, and
-  nobody is there to answer it / [ ] Off"*, then *"They have no SubSub account,
-  so no one is going to press accept. Turning this on schedules the work and
-  leaves telling them to you."* -- "doesn't currently make any sense". The title,
-  the sentence and the switch each said Off, and the note under it described the
-  consequence before saying what the switch does.
-
-  The title still carries the state. The sentence (`autoStateText`, now taking
-  the company's name) says what happens to a job sent to them, with no "On --"
-  prefix: off, *jobs you send Ace Gutters wait for them to accept; they have no
-  SubSub login, so nobody can, and each job expires unanswered*; on, *booked
-  right away; let them know about each job yourself, by phone or text*. The
-  switch is labelled for what it does, **Book automatically**, rather than
-  repeating the state. The note says what turning it on does and why the
-  account may set it here: no login of their own. The rule is unchanged.
-  The contractor's own card reads the same function and is now in Spanish.
-  `test:autoschedui` pins that Off appears once and that the company is named.
-
-  **AND "BOOKED ONTO THEIR SCHEDULE" WAS FALSE FOR THE ONE CASE THIS BOX IS
-  FOR.** *"Someone can't get a job put into their calendar without an account
-  or a SubSub login."* Right: the hiring side only ever sets this for a
-  contractor with no login, and they have no calendar here to book onto. What
-  it really does is issue the work order already accepted, so it does not sit
-  waiting and expire. So the switch reads **Count jobs as accepted**, on says
-  *counts as accepted right away... they won't see it, so call or text them*,
-  and the note offers the real way out: invite them to SubSub so they can
-  accept jobs and see them on their own calendar (the invite panel sits just
-  above it on the card).
-
-- **THE PRICING PAGE SAYS WHO ITS PLANS ARE FOR, AND THE 404'S FOOTER IS
-  THE REAL LOGO.** Asked for as making it clear the plans are for general
-  contractors, property managers, portfolio managers and building owners, with
-  the subcontractor and handyman signup below. A sub reading *Up to 3
-  subcontractors* concluded they needed a plan. `#forWho` sits between the
-  Monthly/Annual toggle and the cards, gold-edged, and links `#subFreeCta`.
-  The unclaimed 404's footer read *Powered by* and the word in plain text; it
-  is now *Powered by* and `email-logo.png`, the same mark as its header.
-  `test:sitetools` and `test:unclaimed` pin both; removing either fails it.
-
-- **AN EXPIRED INVITE STAYS ON THE ROSTER AND SEND AGAIN RENEWS IT; ADD A
-  LICENSE NUMBER LANDS IN THE LICENSE BOX.** Reported from Outerhome: *"where
-  have the subcontractors I've invited but haven't accepted yet gone?"* The
-  invited strip listed `status === "open"` only, so thirty days after an
-  invite was sent it dropped off the screen with nothing saying so, and
-  `POST /api/invites/:id/resend` answered `expired`. That left retyping the
-  contractor as the only way back. The resend now renews an expired invite
-  **on the same token** for `INVITE_TTL_DAYS`, the rule the console's resend
-  already had, and a link made to hand over is renewed with nothing sent.
-  `pendingInvites` lists open and expired invites, minus an expired one that a
-  newer open invite to the same company or address replaced, so one person is
-  one card. An expired card is amber and reads *Link expired ... tap to send
-  again*. Its panel says the link no longer opens, offers Send again (or Renew
-  link) as the primary button and no Copy link, and the note says the link
-  works for 30 more days.
-
-  **Add on "No license number on file" opened the edit form at its top**, with
-  the license box under More details and nothing pointing at it, so it read as
-  doing nothing. Over a contractor who keeps their own record it opened a form
-  that cannot change the license at all. It now sends `onEdit("license")`:
-  step 1, More details open, the box scrolled to, rung (`fld-ring`) and
-  focused. A contractor who answers for themselves (and no staff standing in)
-  gets *They add it on their own account* instead of the button, read off the
-  same two facts as `SubForm`'s lock. `test:inviteexpired` (16) and
-  `test:inviteedit` (39); putting the strip back on open only and Add back on
-  the plain edit fails nine.
-
-## Working here`: **run `npm run lint` before any commit
+  So the rule is in `## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
   not happen. And when work is pushed, **check the run went green** rather than
@@ -16335,6 +16107,234 @@ refactor.
   live on, the handyman choice only where the account may engage one, and the
   reason. `test:rosteradd` (24) and `test:consolelists` (141); three mutations
   fire (the own-account check, the live check, and seating every role).
+
+- **A JOB WITH NO TRADE CAN NEVER BE ASSIGNED, SO IT IS NOT APPROVED WITHOUT
+  ONE.** Reported with a tenant's report about torn upholstery: approved, filed
+  as *Something else*, and sitting at **0/0 trades** with a visit form asking
+  for a time and a footer reading *All trades assigned — mark complete*. Every
+  one of those reads a job with no trade as finished rather than as stuck.
+  Nobody can be offered a slot that does not exist, so it was a closed loop
+  from the moment Approve was pressed.
+
+  **`POST /api/jobs/:id/approve` refuses `trade_required` when neither the
+  job nor the body names a trade**, and takes `trades` in the body, filtered to
+  `TRADE_IDS` and added to what is already there. An already-approved job still
+  answers `alreadyApproved` first, so a second press is not refused.
+
+  **The trade is picked where the request is approved.** A request with no
+  trade reads *Pick a trade* on its dashboard row and opens the request, where
+  *What kind of work is this?* lists every trade with how many people on the
+  roster do it, covered ones first. Approve stays disabled, with the reason
+  beside it, until one is picked. A trade nobody covers is allowed, with a line
+  saying so and naming overflow or decline as the ways on. Refusing it would
+  mean the account could not approve work it intends to send out.
+
+  **A job already in that state is told apart and given a way out.** The card
+  says *No trade yet* instead of 0/0. The visit block is replaced by a line
+  saying there is nobody to send yet. The footer says to add a trade or cancel.
+  The *Waiting on you* row adds **Not work we handle**, which opens the cancel
+  and defer window, because that is the honest answer for work the account
+  does not hire for.
+
+  `test:approvetrade` (8) and `test:waitingyou` (48). Three UI mutations fire:
+  the row approving directly, Approve not gated, and the trade not sent.
+
+- **WHAT'S SCHEDULED READS THE NEWEST WINDOW, AND PAST DUE IS BY THE
+  CLOCK.** Reported with the manager's dashboard on screen: two jobs listed as
+  past their date that had both been rescheduled, and the request *"all
+  dashboards need to be checked always if past due or current"*.
+
+  **The panel read `jobs.date`, the target somebody typed when the job was
+  raised.** A new time lives in `visits`, so a job moved to Saturday went on
+  being filed under last week. `ScheduleHero` now takes the newest live window
+  (proposed or confirmed) per job and falls back to the job's date only when
+  there is none, which is the rule the crew's card and the tenant's screen
+  already follow. The *Work scheduled* tile counts the same way.
+
+  **Past due is the window's end, not the calendar day.** A 9 AM visit is past
+  due at 4 PM the same day, and a job with no time on it is past due once its
+  day is over. It is the same `visitPassed` test the Waiting on you panel uses
+  for a lapsed window. The contractor's own schedule and their job lines use it
+  too, and a confirmed or target date that has gone by reads **Past due** on
+  the crew's line.
+
+  **Each past-due row says what went by**, because each needs a different
+  answer: *Visit passed, mark done or reschedule*, *Time passed, never
+  confirmed*, or *Date passed, no visit set*. They are listed **newest first**,
+  so what just went by is on screen and the oldest sit behind *more*. The
+  next-up card says *not confirmed yet* over a proposed time.
+
+  `test:waitingyou` drives it on both sides with a rescheduled job and a visit
+  that ended earlier today. Three mutations fire: reading the job's date
+  (4 assertions), a day-only test (3) and the crew's flag removed (1).
+
+- **THE CAL EVENT IS NAMED BY ITS PUBLIC NAME, BECAUSE CAL NO LONGER SHOWS
+  THE NUMBER.** Setting up Book a demo needed `CAL_EVENT_TYPE_ID`, and Cal's
+  newer dashboard puts an opaque link id in the address bar
+  (`app.cal.com/links/1cF6tyYe1K7Ae7UjkQFNQt`) that the API does not accept;
+  the numeric id is shown nowhere. `calEvent` in `worker/demo.js` takes the
+  number, `username/slug` as the event's URL field shows it, or that URL
+  pasted whole, and both endpoints send `username` + `eventTypeSlug` in place
+  of `eventTypeId`. **A dashboard address is refused rather than read as a
+  name**: `app.cal.com/links/<id>` parses as `links/<id>` otherwise, which the
+  test caught on its first run. Unreadable is not configured, so the page
+  offers email rather than a request Cal refuses. The Health light now carries
+  Cal's own words when it refuses. `test:calevent`; two mutations fire.
+  **Not verified here:** a live Cal answer to the name form, which is the
+  documented one.
+
+- **BBB HAS NO PUBLIC API, SO THE PASSPORT LINKS TO THE SUB'S OWN BBB
+  PROFILE AND DRAWS NO GRADE.** The `api.bbb.org/v2` the card was built
+  against is BBB's partner API, granted case by case, and nobody can sign up
+  for it. The third-party services that sell BBB grades scrape bbb.org, which
+  BBB's terms prohibit. Most match by business name, and another company's
+  grade under the sub's name is the worst thing this card could show. So the
+  scrapers were refused, at the owner's choice.
+
+  `bbbPublic` now returns the profile link whenever one is linked, and the
+  card reads **BBB profile** with *See their rating and reviews on the BBB®
+  website* and a **See BBB profile** button. The reader sees the grade on
+  BBB's own site, where it is always current. A grade is drawn beside the link
+  only from a live reading under `BBB_STALE_DAYS`, so the API path still works
+  untouched if BBB ever grants access. **Nothing linked means no card**, which
+  replaces the "coming soon" dash: with no API coming, a placeholder promises
+  something that will not arrive. The sub's Passport tab says the profile
+  shows as a link and stops saying ratings are "not switched on yet".
+
+  `test:bbb` (44) and `test:passportui` (76). Hiding the card when there is no
+  grade fails two assertions.
+
+- **A READER WHO CANNOT CONNECT SEES THE SAME PASSPORT, WITH CONNECT GREYED
+  OUT.** Reported with the Passport open in a seat that cannot connect: the
+  header's green *Connect with Orcas Roofing* looked pressable, and the box
+  beside the Compliance pack held one sentence over a tall empty panel. Asked
+  for as *"keep all of the same content, just grey out the ability to click on
+  the call to actions ... in the box and in the headline"*.
+
+  `usePassportConnect` returns `blocked`, the one reason this reader cannot
+  connect, read by the header and the box: not an admin or pm seat, an account
+  that does not hire, or nobody at the company able to answer. The box draws the
+  same offer anybody else sees, with the four perks, the note field and Connect
+  disabled in gray, and the reason under them. The header's button stays and is
+  disabled the same way. Signed out is not blocked, because signing in may fix
+  it. `test:passportui` (82) reads both controls, their gray, and that pressing
+  either sends nothing. The mutation putting the bare sentence back fails three
+  assertions.
+
+- **THE CONSOLE'S SIGN-IN BUTTONS HAD NO STYLES, BECAUSE THE CSS WAS WRITTEN
+  UNDER OTHER NAMES.** Reported with the console's sign-in card on screen:
+  *Continue with Google* and *Use a password instead* were drawn side by side,
+  touching, at two heights, in the browser's own gray chrome. The markup uses
+  `sa-btn`, `sa-google`, `sa-alt` and `sa-note`, while the stylesheet had rules
+  for `sa-google-btn` and `sa-google-note`. Nothing matched, so nothing applied.
+  This is the same failure as the `.chip.on` rule that did not exist: the markup
+  is right, and no static check can see a rule missing from another file.
+
+  The rules now use the markup's names. Google is a full-width white button,
+  48px tall. The password option is a quiet outlined button at the same width
+  and height, stacked under it. The password form's *Sign in* is solid amber,
+  and its fields are drawn for the dark card. `test:consolesignin` measures the
+  buttons at 1024px and 390px. Taking the CSS out fails ten of its twelve
+  assertions.
+
+- **THE CREW WAS SWAPPED FOR A NEW TAKE OF THE SAME SIX, CUT THE SAME WAY.**
+  Same size (1639x960), so the srcset, width/height and centered alignment did
+  not move. Cut by flood fill from the edges through pixels that are exactly
+  neutral (channel spread 4 or less), then 2px into near-neutral pixels for the
+  antialiased edge. The tighter test is what kept the **white hard hat**: it
+  touches the border through light pixels, but carries a slight tint (spread
+  about 12) the printed checkerboard does not. Two enclosed pockets were
+  cleared because they carry both checker tones in quantity (behind the hammer,
+  and inside the nail gun's grip), and the bearded puppet's eye whites, which
+  carry one, were kept. **A hole-fill step undoes exactly that clearing**, which
+  the first attempt found. `test:hero` 60/60, and swapping the uncut upload back
+  in fails three. The alt text says lumber, not timber.
+
+- **THE MENU ENTRY SAYS PASSPORT, AND THE HERO CREW STAYS INSIDE ITS COLUMN.**
+  Two asks, one message. *"Should the my QR code refer to passport, so it's
+  more usable and clear what it is?"* The code in the profile menu has opened
+  the Passport since the Passport shipped, and the entry still read **My QR
+  code**, so nobody could tell from the menu what a stranger would land on. It
+  reads **My Passport QR** in the menu, the drawer and the Profile panel (one
+  name for one object), and the note under the code says it opens the
+  Passport. Every printed code still works, as the Passport entry records.
+
+  **The crew overran its column on purpose and that was the fault.** The 125%
+  width and -13% margin made the picture as tall as the copy, and the hero
+  clips the spill, so on an iPad the nail gun and the plank were cut off at the
+  right edge and the hammer sat over the lede, reported with both edges
+  circled. It is `width:100%` inside its own column now. The price is height:
+  about 0.63 of the copy's rather than 0.7. `test:hero` moved with it, from "no
+  more than a sliver clipped" to **nothing past the viewport and clear of the
+  words**, and putting the overrun back fails four assertions.
+
+- **THE HIRING SIDE'S AUTO-SCHEDULE BOX SAYS WHAT HAPPENS, IN ORDER, AND
+  SAYS "OFF" ONCE.** Reported with a contractor card on screen: *"Off / Off --
+  every job you assign sits pending until the response window runs out, and
+  nobody is there to answer it / [ ] Off"*, then *"They have no SubSub account,
+  so no one is going to press accept. Turning this on schedules the work and
+  leaves telling them to you."* -- "doesn't currently make any sense". The title,
+  the sentence and the switch each said Off, and the note under it described the
+  consequence before saying what the switch does.
+
+  The title still carries the state. The sentence (`autoStateText`, now taking
+  the company's name) says what happens to a job sent to them, with no "On --"
+  prefix: off, *jobs you send Ace Gutters wait for them to accept; they have no
+  SubSub login, so nobody can, and each job expires unanswered*; on, *booked
+  right away; let them know about each job yourself, by phone or text*. The
+  switch is labelled for what it does, **Book automatically**, rather than
+  repeating the state. The note says what turning it on does and why the
+  account may set it here: no login of their own. The rule is unchanged.
+  The contractor's own card reads the same function and is now in Spanish.
+  `test:autoschedui` pins that Off appears once and that the company is named.
+
+  **AND "BOOKED ONTO THEIR SCHEDULE" WAS FALSE FOR THE ONE CASE THIS BOX IS
+  FOR.** *"Someone can't get a job put into their calendar without an account
+  or a SubSub login."* Right: the hiring side only ever sets this for a
+  contractor with no login, and they have no calendar here to book onto. What
+  it really does is issue the work order already accepted, so it does not sit
+  waiting and expire. So the switch reads **Count jobs as accepted**, on says
+  *counts as accepted right away... they won't see it, so call or text them*,
+  and the note offers the real way out: invite them to SubSub so they can
+  accept jobs and see them on their own calendar (the invite panel sits just
+  above it on the card).
+
+- **THE PRICING PAGE SAYS WHO ITS PLANS ARE FOR, AND THE 404'S FOOTER IS
+  THE REAL LOGO.** Asked for as making it clear the plans are for general
+  contractors, property managers, portfolio managers and building owners, with
+  the subcontractor and handyman signup below. A sub reading *Up to 3
+  subcontractors* concluded they needed a plan. `#forWho` sits between the
+  Monthly/Annual toggle and the cards, gold-edged, and links `#subFreeCta`.
+  The unclaimed 404's footer read *Powered by* and the word in plain text; it
+  is now *Powered by* and `email-logo.png`, the same mark as its header.
+  `test:sitetools` and `test:unclaimed` pin both; removing either fails it.
+
+- **AN EXPIRED INVITE STAYS ON THE ROSTER AND SEND AGAIN RENEWS IT; ADD A
+  LICENSE NUMBER LANDS IN THE LICENSE BOX.** Reported from Outerhome: *"where
+  have the subcontractors I've invited but haven't accepted yet gone?"* The
+  invited strip listed `status === "open"` only, so thirty days after an
+  invite was sent it dropped off the screen with nothing saying so, and
+  `POST /api/invites/:id/resend` answered `expired`. That left retyping the
+  contractor as the only way back. The resend now renews an expired invite
+  **on the same token** for `INVITE_TTL_DAYS`, the rule the console's resend
+  already had, and a link made to hand over is renewed with nothing sent.
+  `pendingInvites` lists open and expired invites, minus an expired one that a
+  newer open invite to the same company or address replaced, so one person is
+  one card. An expired card is amber and reads *Link expired ... tap to send
+  again*. Its panel says the link no longer opens, offers Send again (or Renew
+  link) as the primary button and no Copy link, and the note says the link
+  works for 30 more days.
+
+  **Add on "No license number on file" opened the edit form at its top**, with
+  the license box under More details and nothing pointing at it, so it read as
+  doing nothing. Over a contractor who keeps their own record it opened a form
+  that cannot change the license at all. It now sends `onEdit("license")`:
+  step 1, More details open, the box scrolled to, rung (`fld-ring`) and
+  focused. A contractor who answers for themselves (and no staff standing in)
+  gets *They add it on their own account* instead of the button, read off the
+  same two facts as `SubForm`'s lock. `test:inviteexpired` (16) and
+  `test:inviteedit` (39); putting the strip back on open only and Add back on
+  the plain edit fails nine.
 
 - **THE APPLICATION FORM'S TRADES STEP WAS EMPTY FOR EVERY SUBCONTRACTOR,
   BECAUSE "EVERY TRADE" IS NULL AND `new Set(null)` IS EMPTY.** Reported from
