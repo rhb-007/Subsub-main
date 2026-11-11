@@ -7425,7 +7425,7 @@ export default function SubSub() {
                           <span className="nr-right">
                             {s.preferredSub && <span className="pref-sub" title="Brought a paying GC onto SubSub"><Award size={11} /> {PREFERRED_SUB}</span>}
                             {s.rating > 0 && <Stars value={s.rating} />}
-                            <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
+                            <span className={`avail-dot ${rosterDot(s, ready)}`} data-dot={rosterDot(s, ready)} title={rosterDotTitle(s, ready)} />
                           </span>
                         </div>
                         <p className="contact">{s.contact}</p>
@@ -7460,7 +7460,7 @@ export default function SubSub() {
                         <span className="nr-right">
                           {s.preferredSub && <span className="pref-sub" title="Brought a paying GC onto SubSub"><Award size={11} /> {PREFERRED_SUB}</span>}
                           {s.rating > 0 && <Stars value={s.rating} />}
-                          <span className={`avail-dot ${s.available ? "up" : "down"}`} title={s.available ? "Available" : "Not available"} />
+                          <span className={`avail-dot ${rosterDot(s, ready)}`} data-dot={rosterDot(s, ready)} title={rosterDotTitle(s, ready)} />
                         </span>
                       </div>
                       <p className="contact">{s.contact} · <Users size={11} /> {crewCount(s)} {crewCount(s) === 1 ? "crew" : "crews"} · {headCount(s)} ppl</p>
@@ -36447,7 +36447,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
           onAnswer={answerVisit}
           onPropose={() => onProposeVisit({ job, trade, a, elsewhere: elsewhere || null })} />
       )}
-      {/* WHAT KIND OF TIME IT IS, said rather than left to the colour. A
+      {/* WHAT KIND OF TIME IT IS, said rather than left to the color. A
           confirmed window and one nobody has agreed to are the same pixels
           otherwise, and the difference is whether you get in the van -- the
           expired-versus-never-added distinction, pointed at a calendar.
@@ -38818,7 +38818,7 @@ function CompliancePack({ company, onManage, onAddField, onReload }) {
           : st2.state === "expiring" ? "amber" : "green",
         // The date is on every row that has one, because "current" without a
         // date is the claim an attached PDF already makes and cannot keep.
-        // Amber adds how long is left, so the colour is not the only thing
+        // Amber adds how long is left, so the color is not the only thing
         // separating it from green.
         note: st2.state === "missing" ? "Not added"
           : st2.state === "expired" ? `Expired ${formatExpiry(d.expiresOn)}`
@@ -42761,6 +42761,21 @@ function SetupGaps({ sub, canManage, onContinue }) {
   );
 }
 
+// THE ROSTER DOT says whether they can be given work, not only whether they
+// marked themselves available. It read availability alone, so a line saying
+// "5 gaps" carried the same green dot as one saying "Ready" -- the color
+// that means go, over a contractor the assign route will refuse. Amber is
+// outstanding items (the same rule as the line's own count), green is ready
+// and available, red is ready but not taking work.
+function rosterDot(s, ready) {
+  if (!ready) return "gap";
+  return s.available ? "up" : "down";
+}
+function rosterDotTitle(s, ready) {
+  if (!ready) return "Can't be assigned yet: items outstanding";
+  return s.available ? "Ready and available" : "Ready, but not available";
+}
+
 function PortalInvite({ sub, invite, onSent }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
@@ -45119,7 +45134,7 @@ body{background:var(--paper)}
   justify-content:center;color:#fff;background:transparent;
   border:1.5px solid var(--ink-soft)}
 /* Green on file, amber expiring inside WARN_DAYS, red expired or never
-   added. The words tell expired and never-added apart; the colour only says
+   added. The words tell expired and never-added apart; the color only says
    whether it is cover. */
 .cpack-rows li.tone-green .cpr-dot{background:var(--brand);border-color:var(--brand)}
 .cpack-rows li.tone-amber .cpr-dot{background:var(--amber);border-color:var(--amber)}
@@ -45663,6 +45678,7 @@ button.pack-ad-btn:disabled{opacity:.6;cursor:default}
 .avail-dot{width:11px;height:11px;border-radius:50%;flex:none;margin-top:3px}
 .avail-dot.up{background:#3a9b63;box-shadow:0 0 0 3px #d9ecdf}
 .avail-dot.down{background:#c05a3f;box-shadow:0 0 0 3px #f2ddd5}
+.avail-dot.gap{background:#d08a1c;box-shadow:0 0 0 3px #f6e6c8}
 .name-row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
 .name-row.big{margin:8px 0 6px}
 .name-row h3{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em;flex:1;min-width:0}
@@ -46863,7 +46879,7 @@ p.fld-note{margin:6px 0 0}
   padding:13px 15px;border:1px solid color-mix(in srgb,var(--brand) 30%,var(--line));
   border-radius:12px;background:color-mix(in srgb,var(--brand) 6%,var(--card))}
 /* The nudge is a plain surface, not the tinted one: the job is raised and
-   leaving it is a real answer, so it must not wear the colour that means
+   leaving it is a real answer, so it must not wear the color that means
    something is waiting on you. */
 .insp-next.is-extra{border-color:var(--line);background:var(--card)}
 .insp-next-say{flex:1 1 260px;min-width:0}
@@ -48393,7 +48409,7 @@ button.mc-title:hover{text-decoration:underline}
   .setup-gaps{flex-wrap:wrap}
   .setup-gaps .btn-ghost{margin-left:23px}
 }
-.portal-inv{display:flex;align-items:flex-start;gap:10px;margin-top:11px;padding:11px 13px;
+.portal-inv{display:flex;align-items:flex-start;gap:10px;margin:11px 0 18px;padding:11px 13px;
   border:1px solid #e6d3ab;background:#fbf2e2;border-radius:10px;
   font-size:13px;line-height:1.5;color:var(--amber-ink)}
 .portal-inv > svg{flex:none;margin-top:2px}
@@ -50073,7 +50089,7 @@ iframe.dv-frame{display:block}
    and we have never seen it: the whole lockup -- wording, wordmark and mark
    -- is either white or black, whichever reads against what they chose.
    No orange, and no opacity. A 60% white on a dark page is grey, which is
-   how this came to be unreadable in the first place; the colour is picked
+   how this came to be unreadable in the first place; the color is picked
    by measurement (--wl-on-bg) and then left alone. */
 .powered-by{display:inline-flex;align-items:center;gap:7px;font-size:11.5px;
   letter-spacing:.01em;text-decoration:none;cursor:pointer;
@@ -50772,6 +50788,11 @@ iframe.dv-frame{display:block}
   .sf-steps button{font-size:0;gap:0;padding:12px 6px}
   .sf-steps button .sb-n{font-size:11px}
   .sf-steps button[data-state="now"]{font-size:12.5px;gap:7px}
+  /* The steps that are only a number take a number's width, and the one
+     whose name is shown takes the rest. Three equal thirds left the
+     current step's name ellipsed to a few letters at 390px. */
+  .sf-steps button:not([data-state="now"]){flex:0 0 46px}
+  .sf-steps button[data-state="now"]{flex:1 1 auto;min-width:0}
 
   /* upgrade gate on phones */
   .up-buy{flex-direction:column;align-items:stretch;gap:12px}
@@ -51464,7 +51485,7 @@ iframe.dv-frame{display:block}
 .pf-setup-typo{font-size:11px;font-weight:700;color:#8a5a12;background:#fbf0dd;border-radius:999px;padding:2px 8px}
 .pf-setup-body{padding:2px 12px 12px 36px}
 /* A light per integration, the same three colours as the system boxes and
-   with a word beside it, because the colour alone is not a status. Grey is
+   with a word beside it, because the color alone is not a status. Grey is
    "not set up", which for an optional integration is not a fault. */
 .pf-int-light{flex:none;width:11px;height:11px;border-radius:50%;background:#b9c2bd}
 .pf-int-light.l-green{background:#2f9e5f;box-shadow:0 0 0 3px #e3f2e8}
@@ -51478,7 +51499,7 @@ iframe.dv-frame{display:block}
 .pf-int-word.l-red{background:#faece7;color:var(--red)}
 .pf-int-say{font-size:12.5px;color:var(--ink-soft);margin:0 0 8px;line-height:1.45}
 /* THE THREE LIGHTS. A box per host, three across where there is room. The
-   light is the colour AND a word beside it, because a red that cannot be told
+   light is the color AND a word beside it, because a red that cannot be told
    from a green by about one man in twelve is not a status. */
 .pf-sys{margin:0 0 18px}
 .pf-sys-hd{display:flex;align-items:center;gap:10px;margin-bottom:8px}
@@ -51593,7 +51614,7 @@ iframe.dv-frame{display:block}
   box-shadow:0 8px 22px rgba(26,43,35,.25)}
 .pf-chart-tip b{font-size:13.5px;font-weight:800}
 .pf-chart-tip span{font-size:11px;opacity:.72}
-/* RECURRING REVENUE. A headline, then one chart behind two tabs; the colour
+/* RECURRING REVENUE. A headline, then one chart behind two tabs; the color
    is the brand for gains and red for a month that lost, never a third hue. */
 .pf-mrr .pf-panel-hd{display:flex;align-items:center;gap:10px}
 .pf-mrr-span{display:flex;gap:4px;margin-left:auto}

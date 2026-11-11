@@ -38,6 +38,9 @@ const PM = {
   theme: null, trades: [], logoKey: null, subscriptionStatus: "active", hostnameStatus: "active",
   user: { id: "u_mgr", name: "Christopher Lane", email: "chris@soundpm.test", role: "admin" },
 };
+// A fixed date passes: the job then reads "Past due" and the line asserts
+// about a reply go stale. Twenty days ahead stays upcoming whenever this runs.
+const AHEAD = new Date(Date.now() + 20 * 864e5).toISOString().slice(0, 10);
 const sub = (id, company, cats, extra = {}) => ({
   id, company, engagementId: `en_${id}`, accountId: "acc_pm", contact: `${company} owner`,
   email: `${id}@test.test`, phone: null, categories: cats, caps: ["Repairs", "Installs"], crews: [],
@@ -47,7 +50,14 @@ const sub = (id, company, cats, extra = {}) => ({
 });
 const SUBS = [
   sub("cmp_pac", "Pacific apartment maintenance", ["plumbing", "painting"]),
-  sub("cmp_bay", "Bay Roofing", ["roofing", "gutters"]),
+  // Bay is the READY one: its three documents verified and its registration
+  // checked, which is what assignReady asks. Uploaded-only reads as gaps.
+  sub("cmp_bay", "Bay Roofing", ["roofing", "gutters"], {
+    docReview: Object.fromEntries(["insurance", "bond", "contract", "w9"].map((k) =>
+      [k, { status: "verified", verifiedBy: "Christopher Lane", verifiedAt: "2026-10-01T00:00:00Z" }])),
+    license: "BAYROOF881QT",
+    licenseCheck: { found: true, status: "ACTIVE", expirationDate: "2027-12-31", checkedAt: "2026-10-20", licenseNumber: "BAYROOF881QT" },
+  }),
   sub("cmp_gap", "Gap Electric", ["electrical"], { insurance: false, bond: false }),
 ];
 const USERS = [{ id: "u_mgr", name: "Christopher Lane", email: "chris@soundpm.test", phone: null,
@@ -57,7 +67,7 @@ const USERS = [{ id: "u_mgr", name: "Christopher Lane", email: "chris@soundpm.te
   role: "contractor", subId: "cmp_bay", propertyIds: [], unit: null, hasLogin: true,
   inviteSentAt: null, hasAvatar: false }];
 const base = (id, title, trades, extra = {}) => ({
-  id, accountId: "acc_pm", propertyId: "prop_1", title, status: "active", date: "2026-11-02", time: null,
+  id, accountId: "acc_pm", propertyId: "prop_1", title, status: "active", date: AHEAD, time: null,
   address: "1620 Belmont Ave", area: "Seattle", zip: "98122", trades, assignments: {},
   notes: "", createdAt: "2026-10-05", photos: [], severity: null, client: null, sqft: null,
   stories: null, scope: "Work at the building", measurementDocs: [], materialSource: null,
@@ -87,7 +97,7 @@ const MY_WORK = { work: [
   { woId: "wo_1", wo: "WO-1001", jobId: "j_noreply", trade: "gutters",
     accountId: "acc_pm", accountName: "Sound Property Management", accountSubdomain: "soundpm",
     here: true, status: "pending", auto: false, respondBy: FUTURE,
-    title: "Gutter run at the back", address: "1620 Belmont Ave", date: "2026-11-02",
+    title: "Gutter run at the back", address: "1620 Belmont Ave", date: AHEAD,
     propertyName: "Press Apartments", jobStatus: "active", value: "1200", payKind: "fixed" },
 ] };
 const PORTAL_JOB = { ...JOBS[1], assignments: { gutters: { ...JOBS[1].assignments.gutters, respondBy: FUTURE } } };
@@ -368,8 +378,16 @@ try {
         names: rows.map((c) => c.querySelector(".name-row h3")?.innerText || ""),
         gap: rows.find((c) => /Gap Electric/.test(c.innerText))?.querySelector(".cr-docs")?.innerText || null,
         ready: rows.find((c) => /Bay Roofing/.test(c.innerText))?.querySelector(".cr-docs")?.innerText || null,
+        dotGap: rows.find((c) => /Gap Electric/.test(c.innerText))?.querySelector(".avail-dot")?.dataset.dot || null,
+        dotReady: rows.find((c) => /Bay Roofing/.test(c.innerText))?.querySelector(".avail-dot")?.dataset.dot || null,
+        bgGap: (() => { const d = rows.find((c) => /Gap Electric/.test(c.innerText))?.querySelector(".avail-dot"); return d ? getComputedStyle(d).backgroundColor : null; })(),
+        bgReady: (() => { const d = rows.find((c) => /Bay Roofing/.test(c.innerText))?.querySelector(".avail-dot"); return d ? getComputedStyle(d).backgroundColor : null; })(),
       };
     });
+    // The dot is the one mark read before the words: green over "2 gaps" was
+    // the report. Read off the drawn color too, so a class with no rule fails.
+    t.ck("a line with gaps carries an amber dot, not green", r.dotGap === "gap" && r.bgGap && r.bgGap !== r.bgReady, JSON.stringify([r.dotGap, r.bgGap, r.bgReady]));
+    t.ck("a ready line keeps its green dot", r.dotReady === "up", String(r.dotReady));
     t.ck("there are contractors on the screen", r.n === 3, JSON.stringify(r));
     t.ck("each is a line, not a card", r.n === 3 && r.lines === 3 && r.rowsClass, JSON.stringify(r));
     t.ck("and each line is narrow", r.hs.length === 3 && r.hs.every((h) => h > 0 && h <= 80), JSON.stringify(r.hs));
@@ -390,7 +408,9 @@ try {
       rowsClass: !!document.querySelector(".grid.rows"),
       lines: document.querySelectorAll(".grid .card-row").length,
       cards: document.querySelectorAll(".grid .card .card-docs").length,
+      dotGap: [...document.querySelectorAll(".grid .card")].find((c) => /Gap Electric/.test(c.innerText))?.querySelector(".avail-dot")?.dataset.dot || null,
     }));
+    t.ck("the card view's dot follows the same rule", c.dotGap === "gap", String(c.dotGap));
     t.ck("the cards are one press away", !c.rowsClass && c.lines === 0 && c.cards === 3, JSON.stringify(c));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
@@ -438,7 +458,7 @@ try {
     });
     t.ck("the jobs rendered on a phone", j.n > 0, JSON.stringify(j));
     t.ck("every job is a line on a phone", j.n > 0 && j.lines === j.n, JSON.stringify(j));
-    t.ck("and each is short", j.hs.every((h) => h > 0 && h <= 130), JSON.stringify(j.hs));
+    t.ck("and each is short", j.hs.every((h) => h > 0 && h <= 140), JSON.stringify(j.hs));
     t.ck("and the page does not scroll sideways", !j.scrollX, JSON.stringify(j));
     t.ck("nothing crashed on a phone", crashes.length === 0, crashes.join(" | "));
     await ctx.close();

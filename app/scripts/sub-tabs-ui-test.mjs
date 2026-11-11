@@ -107,6 +107,15 @@ const shown = (page) => page.evaluate(() => {
     height: m.closest(".modal")?.scrollHeight || 0,
     // The chips row sits right above Capabilities; measured, because a
     // missing margin reads as a design choice in the source.
+    // The invite box sat touching the trades row under it (reported).
+    invGap: (() => {
+      const inv = m.querySelector(".portal-inv");
+      if (!inv || inv.offsetParent === null) return null;
+      let n = inv.nextElementSibling;
+      while (n && (n.offsetParent === null || !n.getBoundingClientRect().height)) n = n.nextElementSibling;
+      if (!n) return null;
+      return Math.round(n.getBoundingClientRect().top - inv.getBoundingClientRect().bottom);
+    })(),
     chipGap: (() => {
       const ch = m.querySelector(".di-chips");
       const h4 = [...m.querySelectorAll("section h4")].find((x) => /Capabilities/i.test(x.innerText || ""));
@@ -135,6 +144,7 @@ try {
   t.ck("it has five tabs, Overview first and selected",
     a?.tabs.map((x) => x.id).join(",") === "overview,compliance,agreement,crews,notes" && a.tabs[0].on,
     JSON.stringify(a?.tabs));
+  t.ck("the invite box has room under it", a?.invGap != null && a.invGap >= 12, String(a?.invGap));
   t.ck("only one pane is drawn", JSON.stringify(a?.panes) === '["overview"]', JSON.stringify(a?.panes));
   t.ck("the compliance tab counts what is outstanding", Number(a?.tabs?.[1]?.count) > 0, a?.tabs?.[1]?.count);
   t.ck("documents are not drawn on Overview", a?.docRows === 0, String(a?.docRows));
@@ -185,6 +195,40 @@ try {
   t.ck("Notes draws only the notes", JSON.stringify(n?.panes) === '["notes"]'
     && await page.evaluate(() => document.querySelector(".modal .notes-area")?.offsetParent !== null));
   await ctx.close();
+
+  // THE STEP BAR ON A PHONE. Reported with the Add form on step 2: three
+  // equal thirds left "Trades & coverage" ellipsed beside a tick and a 3.
+  // The current step's name must be shown whole, measured as drawn.
+  {
+    const { ctx: pc, page: pp } = await visitApp(browser, { host: "soundpm", webPort: WEB,
+      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 390, height: 844 } });
+    await wait(2600);
+    await pp.evaluate(() => {
+      const nb = document.querySelector(".nav-burger, .hamburger, [aria-label='Menu']");
+      if (nb) nb.click();
+    });
+    await wait(300);
+    await pp.evaluate(() => [...document.querySelectorAll("nav button, .drawer button")]
+      .find((b) => /^(Sub)?contractors/i.test((b.innerText || "").trim()))?.click());
+    await wait(800);
+    await pp.evaluate(() => [...document.querySelectorAll(".grid .card")].find((x) => /Pike Roofing/.test(x.innerText || ""))?.click());
+    await wait(900);
+    await pp.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => /^Edit$/.test((b.innerText || "").trim()))?.click());
+    await wait(700);
+    await pp.evaluate(() => [...document.querySelectorAll(".sf-steps button")][1]?.click());
+    await wait(400);
+    const sb = await pp.evaluate(() => {
+      const now = document.querySelector('.sf-steps button[data-state="now"]');
+      if (!now) return null;
+      const bar = now.parentElement.getBoundingClientRect();
+      return { text: (now.innerText || "").trim(), clipped: now.scrollWidth > now.clientWidth + 1,
+        share: Math.round(now.getBoundingClientRect().width / bar.width * 100) };
+    });
+    t.ck("on a phone the current step's name is shown whole",
+      !!sb && /Trades/.test(sb.text) && !sb.clipped, JSON.stringify(sb));
+    t.ck("and it takes most of the bar", !!sb && sb.share >= 55, JSON.stringify(sb));
+    await pc.close();
+  }
 } finally {
   await browser.close();
   web.close(); api.close();

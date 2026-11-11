@@ -7771,7 +7771,28 @@ refactor.
   writing down is about assertions that cannot fail. This is its opposite — an
   assertion that fired every time, correctly, into silence.
 
-  So the rule is in `## Working here`: **run `npm run lint` before any commit
+  So the rule is in `- **THE ROSTER DOT SAYS WHETHER THEY CAN BE GIVEN WORK, THE INVITE BOX HAS
+  ROOM UNDER IT, AND THE STEP BAR SHOWS THE CURRENT STEP WHOLE ON A PHONE.**
+  Three reports from one iPhone session.
+  - **Every roster line carried a green dot, "5 gaps" included.** It was
+    `avail-dot`, which read availability alone, so the color that means go sat
+    over contractors the assign route refuses. `rosterDot` makes it amber
+    whenever `assignReady` is false, green when ready and available, and red
+    when ready but not taking work, on the Lines and Cards views alike, with a
+    title that says which.
+  - **The invited box touched the trade chips under it.** `.portal-inv` had a
+    top margin and no bottom one; it is `margin:11px 0 18px`.
+  - **Three equal thirds ellipsed "Trades & coverage" to a few letters** at
+    390px. On a phone, steps showing only a number are 46px and the current
+    one takes the rest.
+  `test:cardlines` and `test:subtabs` measure all three, and reverting each
+  fix fails its own check. `test:cardlines` had been red for stale reasons:
+  its "ready" contractor was never verified, and its fixed job date had
+  passed. Bay Roofing is now verified with an active registration, the job
+  date is twenty days ahead, and the phone job-line bound is 140px, because
+  the line now names the company.
+
+## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
   not happen. And when work is pushed, **check the run went green** rather than
