@@ -8981,6 +8981,23 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
   const body = await c.req.json();
   const licenseKey = (body.license || "").trim().toUpperCase();
 
+  // FINISHING AN INVITE BY HAND. The account met them, sent a link and has
+  // heard nothing; rather than wait, it types the rest in itself. The invite
+  // is checked BEFORE anything is written, so a refused one leaves no roster
+  // row behind it, and it is bound to the new record afterwards so that the
+  // link already in their inbox lands their login on THIS row rather than
+  // minting a second copy of them.
+  let fromInvite = null;
+  if (body.fromInviteId) {
+    fromInvite = await c.env.DB.prepare(
+      `SELECT id, company_id, used_at, revoked_at FROM sub_invites WHERE id = ? AND account_id = ?`
+    ).bind(String(body.fromInviteId), accountId).first();
+    if (!fromInvite) return c.json({ error: "invite_not_found" }, 404);
+    if (fromInvite.used_at) return c.json({ error: "already_accepted" }, 409);
+    if (fromInvite.revoked_at) return c.json({ error: "revoked" }, 409);
+    if (fromInvite.company_id) return c.json({ error: "on_their_card" }, 409);
+  }
+
   let company = null;
   if (licenseKey) {
     company = await c.env.DB.prepare(`SELECT * FROM companies WHERE UPPER(TRIM(license)) = ?`).bind(licenseKey).first();
@@ -9035,7 +9052,15 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
   // machinery as adding a manager: a seat, then a link that sets a
   // password.
   let invite = { invited: false, reason: "no_email" };
-  const inviteEmail = realEmail(body.email);
+  if (fromInvite) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET company_id = ? WHERE id = ? AND company_id IS NULL`)
+      .bind(companyId, fromInvite.id).run();
+    await logEvent(c.env, accountId, userId, "invite.added_by_hand", fromInvite.id, { companyId, engagementId });
+    // Nothing more is sent: the link they already hold is their way in, and a
+    // second invitation for one person is two emails reading as two asks.
+    invite = { invited: false, reason: "invite_already_out" };
+  }
+  const inviteEmail = fromInvite ? null : realEmail(body.email);
   if (inviteEmail) {
     let user = await c.env.DB.prepare(`SELECT * FROM users WHERE lower(email) = lower(?)`).bind(inviteEmail).first();
     if (!user) {
@@ -9063,7 +9088,8 @@ app.post("/api/subs", requireRole("admin", "pm"), async (c) => {
     invite = await inviteAccountUser(c, { accountId, user, role: "contractor", invitedBy: by });
   }
 
-  return c.json({ companyId, engagementId, reused: !!company, invite }, 201);
+  return c.json({ companyId, engagementId, reused: !!company, invite,
+    ...(fromInvite ? { fromInvite: { id: fromInvite.id, bound: true } } : {}) }, 201);
 });
 
 // Routes a flat patch to companies/engagements exactly like splitPatch() on

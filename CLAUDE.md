@@ -16351,6 +16351,35 @@ refactor.
   fails five assertions. **The general shape:** a function that answers null for
   "everything" must never be passed straight into a collection constructor.
 
+- **AN INVITE NOBODY HAS ACCEPTED CAN BE FINISHED BY HAND: "ADD TO YOUR
+  ROSTER" ON ITS PANEL.** Asked for with Enterprise Roofing's invite open,
+  sent 15 days ago: *"Include add to roster from this treatment, so I can simply
+  add them myself completely"*. The panel only let the account chase or correct
+  the invite, so the one way to get somebody it met on the roster today was to
+  type them in again through Add one myself, beside an invite that went on
+  reading as a different person.
+  - **The button opens the same add form**, not a second one, with the
+    company, contact, email, mobile and working relationship from the invite
+    already in it (`SubForm preset`). It starts on the "are they already on
+    SubSub?" step, which still matters here: they may have signed up some
+    other way.
+  - **`POST /api/subs` takes `fromInviteId`**, checked before anything is
+    written: another account's invite or none is `invite_not_found`, an
+    accepted one `already_accepted`, a revoked one `revoked`, one already on a
+    card `on_their_card`. After the engagement is written the invite is bound
+    to the new record (`company_id`), so the link already in their inbox signs
+    them in to this row through `boundCompanyId` rather than making a second
+    copy of them. **No second invitation is sent** and no seat is made ahead of
+    them; the reply says `invite_already_out`.
+  - **The save is awaited**, unlike the ordinary add, so a refusal is named and
+    nothing is drawn on the roster.
+  - **An invite bound to somebody on the roster is no longer listed in the
+    invited strip**, because their card already says invited and two rows read
+    as two people. This also covers invites raised from a card.
+  The button is drawn where Edit details is (not accepted, not already on a
+  card). `test:invitetoroster` (18) and `test:invitetorosterui` (10). Removing
+  the bind fails two assertions.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

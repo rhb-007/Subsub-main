@@ -139,6 +139,8 @@
     "test:inviteas": "node --no-warnings scripts/invite-engaged-test.mjs",
     "test:inviteasui": "node --no-warnings scripts/invite-engaged-ui-test.mjs",
     "test:inviteexpired": "node --no-warnings scripts/invite-expired-ui-test.mjs",
+    "test:invitetoroster": "node --no-warnings scripts/invite-to-roster-test.mjs",
+    "test:invitetorosterui": "node --no-warnings scripts/invite-to-roster-ui-test.mjs",
     "test:inviteedit": "node --no-warnings scripts/invite-edit-test.mjs",
     "test:inviteeditui": "node --no-warnings scripts/invite-edit-ui-test.mjs",
     "test:inspection": "node --no-warnings scripts/inspection-test.mjs",

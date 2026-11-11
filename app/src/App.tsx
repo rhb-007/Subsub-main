@@ -2686,6 +2686,9 @@ export default function SubSub() {
   const [overflowOffers, setOverflowOffers] = useState([]);
   const [overflowStanding, setOverflowStanding] = useState(null);
   const [adding, setAdding] = useState(false);
+  // An invite the account is finishing by hand: the add form opens over it,
+  // prefilled, and saving ties the invite to the record it makes.
+  const [finishingInvite, setFinishingInvite] = useState(null);
   // The recruiting code, opened from the add-a-contractor form as well as
   // from Branding. One component, two ways in.
   const [recruitQr, setRecruitQr] = useState(false);
@@ -3729,7 +3732,34 @@ export default function SubSub() {
   // per resident would price the feature out of being used at all.
   const seatCount = accountUsers.filter((u) => u.role !== "contractor" && u.role !== "tenant").length;
   const atSeatLimit = seatCount >= PLANS[plan].userLimit;
-  const addSub = (sub) => {
+  const addSub = async (sub) => {
+    // Finishing an invite is AWAITED, unlike the ordinary add. The server may
+    // refuse it (accepted meanwhile, revoked, already on a card), and a roster
+    // card drawn over a refusal is the save-that-reports-success shape.
+    if (finishingInvite) {
+      const inv = finishingInvite;
+      try {
+        const made = await api.addSub({ ...sub, fromInviteId: inv.id });
+        const { co, en } = splitSeed(sub);
+        if (!companies.some((c) => c.id === made.companyId)) setCompanies((cs) => [{ ...co, id: made.companyId }, ...cs]);
+        setEngagements((es) => [{
+          id: made.engagementId || "e" + Date.now(), accountId: account.id, companyId: made.companyId,
+          ...en, status: "invited", rating: 0, ratedJobs: 0, accepted: 0, declined: 0,
+        }, ...es]);
+        setInvites((cur) => (cur || []).map((i) => i.id === inv.id ? { ...i, companyId: made.companyId } : i));
+        logEvent("sub_added", `Added ${sub.company}`);
+        setAdding(false); setFinishingInvite(null);
+        setBillingNote(`${sub.company} is on your roster. The link they were sent still works, and opening it signs them in to this record.`);
+      } catch (e) {
+        const code = e?.body?.error;
+        setBillingNote(code === "already_accepted" ? "They accepted the invite in the meantime, so they are on your roster already."
+          : code === "revoked" ? "That invite was revoked, so it can’t be finished."
+          : code === "on_their_card" ? "That invite already belongs to a contractor card on your roster."
+          : code === "already_engaged" ? "A contractor with that email is already on your roster."
+          : "Couldn’t add them just now. Try once more.");
+      }
+      return;
+    }
     logEvent("sub_added", `Added ${sub.company}`);
     // Dedupe on WA L&I license: if this business is already on SubSub for
     // another account, reuse the company record and only add the relationship.
@@ -5198,9 +5228,14 @@ export default function SubSub() {
   // left off, because two rows for one person reads as two people.
   const pendingInvites = useMemo(() => {
     const live = new Set(openInvites.flatMap((i) => [i.companyId, (i.email || "").toLowerCase()].filter(Boolean)));
-    return (invites || []).filter((i) => i.status === "open" || (i.status === "expired"
-      && !(i.companyId && live.has(i.companyId)) && !(i.email && live.has(i.email.toLowerCase()))));
-  }, [invites, openInvites]);
+    // An invite bound to somebody ALREADY on the roster is that card's, which
+    // says "Invited, not opened yet" itself -- listing it here too is one
+    // person drawn as two.
+    const carded = new Set(subs.map((x) => x.id));
+    return (invites || []).filter((i) => !(i.companyId && carded.has(i.companyId))
+      && (i.status === "open" || (i.status === "expired"
+      && !(i.companyId && live.has(i.companyId)) && !(i.email && live.has(i.email.toLowerCase())))));
+  }, [invites, openInvites, subs]);
 
   // The search box reaches them, because searching for a name and being told
   // nothing matches -- when an invite to that name went out on Tuesday -- is
@@ -9151,8 +9186,13 @@ export default function SubSub() {
           words={rosterWords(account)} liveHost={account.hostnameStatus === "active"}
           onClose={() => setRecruitQr(false)} />
       )}
-      {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); }} wide>
+      {adding && <Modal onClose={() => { setAdding(false); setResumeAssign(null); setFinishingInvite(null); }} wide>
         <SubForm properties={accountProperties} onSubmit={addSub}
+          preset={finishingInvite ? {
+            company: finishingInvite.companyName || finishingInvite.label || "",
+            contact: finishingInvite.contact || "", email: finishingInvite.email || "",
+            phone: formatPhone(finishingInvite.phone || ""), engagedAs: engagedAs(finishingInvite.engagedAs),
+          } : null}
           canEngageHandyman={mayEngageHandyman(kindOf(account))}
           onRecruitQr={isHiring(account) && PLANS[plan].branding
             ? () => { setAdding(false); setRecruitQr(true); } : null}
@@ -9164,7 +9204,7 @@ export default function SubSub() {
             setBillingNote(`Asked ${match.company} to connect. They will be on your list `
               + "as soon as they accept.");
           }}
-          onCancel={() => { setAdding(false); setResumeAssign(null); }} /></Modal>}
+          onCancel={() => { setAdding(false); setResumeAssign(null); setFinishingInvite(null); }} /></Modal>}
 
       {noticeOpen && (() => {
         // Only buildings this account runs: its tenants are its tenants
@@ -9207,6 +9247,12 @@ export default function SubSub() {
       {invitedOpen && <Modal onClose={() => setInvitedOpen(null)}>
         <InvitedPanel invite={invitedOpen} canRevoke={role === "admin"}
           canEngageHandyman={mayEngageHandyman(kindOf(account))}
+          onAddToRoster={() => {
+            const inv = invitedOpen;
+            setInvitedOpen(null);
+            if (atContractorLimit) { setUpgradePrompt({ kind: "contractor" }); return; }
+            setFinishingInvite(inv); setAdding(true);
+          }}
           onChanged={(after) => {
             setInvitedOpen(after);
             setInvites((cur) => (cur || []).map((i) => i.id === after.id ? { ...i, ...after } : i));
@@ -20522,7 +20568,7 @@ function RequestedPanel({ request, onWithdrawn, onAskedAgain, onClose }) {
 // somebody accepts, all that exists is a name, an address, a link and a
 // date, and a full-width panel of empty sections would imply otherwise.
 function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
-  canEngageHandyman = false }) {
+  canEngageHandyman = false, onAddToRoster = null }) {
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
@@ -20646,8 +20692,18 @@ function InvitedPanel({ invite, canRevoke, onChanged, onRevoked, onClose,
       )}
       <p className="panel-note">
         Nothing else is known about them yet. Their trades, crews, documents and
-        rating arrive when they finish setting up their account.
+        rating arrive when they finish setting up their account
+        {editable && onAddToRoster ? ", or you can add them to your roster yourself now." : "."}
       </p>
+      {/* Not waiting on them. The same form "Add one myself" opens, with what
+          the invite already holds filled in, and the invite tied to the record
+          it makes so the link they hold signs them in to it. Only where the
+          invite is not already on a card: that one is on the roster. */}
+      {editable && onAddToRoster && !edit && (
+        <button className="btn-solid inv-add-roster" disabled={!!busy} onClick={onAddToRoster}>
+          <Plus size={15} /> Add to your roster
+        </button>
+      )}
 
       {edit ? (
         /* The same four things the list above states, now as fields. In
@@ -43713,7 +43769,7 @@ function connectLookupFailText(code) {
 
 function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect,
   onOpenExisting, onRecruitQr, onUploadDoc, onDeleteDoc, canEngageHandyman = false,
-  staffWrite = false }) {
+  staffWrite = false, preset = null }) {
   const init = existing ? {
     company: existing.company, contact: existing.contact, phone: existing.phone, email: existing.email,
     categories: existing.categories, caps: existing.caps,
@@ -43754,6 +43810,8 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     cities: [], covMode: "cities", radii: [{ zip: "", miles: 25 }], rating: 0,
     bond: false, insurance: false, contract: false, available: true, notes: "",
     docFiles: { bond: null, insurance: null, contract: null },
+    // Finishing an invite: what the invite already holds, so nothing is typed twice.
+    ...(preset || {}),
   };
   const [f, setF] = useState(init);
   // Their record, or yours?
@@ -44803,6 +44861,7 @@ body{background:var(--paper)}
 
 .invited-panel{max-width:420px}
 .invited-panel h2{margin:4px 0 0}
+.inv-add-roster{display:inline-flex;align-items:center;gap:8px;margin:4px 0 14px;min-height:44px}
 .invited-facts{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:14px 0 12px;font-size:13px}
 .invited-facts dt{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   color:var(--ink-soft);align-self:center}
