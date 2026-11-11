@@ -3643,6 +3643,47 @@ app.post("/api/subs/:companyId/invite", requireRole("admin", "pm"), async (c) =>
 // The invite raised from a contractor's own card, as a function, because 093's
 // held assignment sends the same one: a second copy would be a second set of
 // rules about resending rather than replacing.
+// The live invite for a company on this roster, found by company id or by the
+// address (an invite off the blank form carries no company_id until it is
+// adopted here), or minted when `create` and there is none. Never sends: the
+// caller decides whether it is an invitation or a link inside another email.
+// One place, so the invite route and the document request cannot mint two
+// live tokens for one contractor.
+async function rosterInviteRow(env, { accountId, userId, company, email, phone, create = false }) {
+  const companyId = company.id;
+  const open = await env.DB.prepare(
+    `SELECT * FROM sub_invites
+      WHERE account_id = ? AND used_at IS NULL AND revoked_at IS NULL
+        AND datetime(expires_at) > datetime('now')
+        AND (company_id = ?
+             OR (company_id IS NULL AND ? IS NOT NULL AND lower(email) = lower(?))
+             OR (company_id IS NULL AND ? IS NOT NULL AND phone = ?))
+      ORDER BY created_at DESC LIMIT 1`
+  ).bind(accountId, companyId, email, email, phone, phone).first().catch(() => null);
+
+  // Adopt it while we are here. From now on it names the company it is for, so
+  // redeeming it attaches the seat to this record rather than deduping its way
+  // back to it. Only on a write path: the preview changes nothing.
+  if (open && !open.company_id && create) {
+    await env.DB.prepare(`UPDATE sub_invites SET company_id = ? WHERE id = ?`)
+      .bind(companyId, open.id).run();
+    open.company_id = companyId;
+  }
+  if (open || !create) return { row: open || null, existed: open || null };
+
+  const id = uid();
+  const token = newInviteToken();
+  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 864e5).toISOString();
+  await env.DB.prepare(
+    `INSERT INTO sub_invites (id, account_id, token, label, email, phone, contact,
+                              company_name, company_id, created_by, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, accountId, token, company.company, email, phone,
+    company.contact || null, company.company, companyId, userId, expires).run();
+  const row = await env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
+  return { row, existed: null };
+}
+
 async function inviteRosterCompany(env, { accountId, userId, companyId, email: wantEmail, phone: wantPhone, reason = null }) {
   const ok = (body) => ({ status: 200, body });
   const no = (error, status) => ({ status, body: { error } });
@@ -3682,38 +3723,8 @@ async function inviteRosterCompany(env, { accountId, userId, companyId, email: w
   // company id would have missed every one of them and minted a second live
   // token for a contractor who already had one sitting in their inbox -- which
   // is the exact thing this route refuses to do.
-  const open = await env.DB.prepare(
-    `SELECT * FROM sub_invites
-      WHERE account_id = ? AND used_at IS NULL AND revoked_at IS NULL
-        AND datetime(expires_at) > datetime('now')
-        AND (company_id = ?
-             OR (company_id IS NULL AND ? IS NOT NULL AND lower(email) = lower(?))
-             OR (company_id IS NULL AND ? IS NOT NULL AND phone = ?))
-      ORDER BY created_at DESC LIMIT 1`
-  ).bind(accountId, companyId, email, email, phone, phone).first().catch(() => null);
-
-  // Adopt it while we are here. From now on it names the company it is for, so
-  // redeeming it attaches the seat to this record rather than deduping its way
-  // back to it.
-  if (open && !open.company_id) {
-    await env.DB.prepare(`UPDATE sub_invites SET company_id = ? WHERE id = ?`)
-      .bind(companyId, open.id).run();
-    open.company_id = companyId;
-  }
-
-  let row = open;
-  if (!row) {
-    const id = uid();
-    const token = newInviteToken();
-    const expires = new Date(Date.now() + INVITE_TTL_DAYS * 864e5).toISOString();
-    await env.DB.prepare(
-      `INSERT INTO sub_invites (id, account_id, token, label, email, phone, contact,
-                                company_name, company_id, created_by, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, accountId, token, company.company, email, phone,
-      company.contact || null, company.company, companyId, userId, expires).run();
-    row = await env.DB.prepare(`SELECT * FROM sub_invites WHERE id = ?`).bind(id).first();
-  }
+  const { row, existed: open } = await rosterInviteRow(env,
+    { accountId, userId, company, email, phone, create: true });
 
   const account = await env.DB.prepare(`SELECT * FROM accounts WHERE id = ?`).bind(accountId).first();
   const sent = await deliverSubInvite(env, { row, account, accountId, userId, reason });
@@ -28570,7 +28581,7 @@ async function smsOverageSweep(env, now = new Date()) {
 
 // Everything the document-request template needs, fetched once and shared by
 // the preview and the send so the two cannot drift.
-async function docRequestContext(c, companyId, jobId, trade, kind) {
+async function docRequestContext(c, companyId, jobId, trade, kind, { forSend = false } = {}) {
   const { accountId } = c.get("auth");
   // engaged_as too, so a handyman is asked for the W-9 alone; a database
   // without 058 reads every engagement as a subcontractor, which it is there.
@@ -28584,7 +28595,20 @@ async function docRequestContext(c, companyId, jobId, trade, kind) {
   catch (e) { if (!/engaged_as/.test(String(e?.message || e))) throw e; row = await sel(""); }
   if (!row) return null;
   const account = await c.env.DB.prepare(
-    `SELECT id, name, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
+    `SELECT id, name, subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
+  // Nobody can sign in as them yet, so "sign in and upload" is a dead end. The
+  // request carries their invite link instead: the live one if it is out (the
+  // same token as the invitation, so both emails open one door), or one minted
+  // on send. The preview mints nothing, and says a link will be added.
+  let loginLink = null, loginInviteId = null;
+  if (!(await companyAnswersForItself(c.env, row.id))) {
+    const email = String(row.email || "").trim() || null;
+    const phone = normalizePhone(String(row.phone || "").trim()) || null;
+    const { row: inv } = await rosterInviteRow(c.env, { accountId, userId: c.get("auth").userId,
+      company: row, email, phone, create: forSend && !!email });
+    if (inv) { loginLink = inviteUrl(account, inv.token); loginInviteId = inv.id; }
+    else loginLink = "pending";
+  }
   const job = jobId
     ? await c.env.DB.prepare(
         `SELECT id, title, address, area, zip, date FROM jobs WHERE id = ? AND account_id = ?`
@@ -28593,6 +28617,7 @@ async function docRequestContext(c, companyId, jobId, trade, kind) {
   return {
     company: row, contact: row.contact, docReview: parseJson(row.doc_review, {}),
     engagedAs: row.engaged_as || null, job, trade: trade || null, account, kind: kind || null,
+    loginLink, loginInviteId,
   };
 }
 
@@ -28635,7 +28660,7 @@ app.get("/api/notify/documents/preview", requireRole("admin", "pm"), async (c) =
 app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
-  const ctx = await docRequestContext(c, b.companyId, b.jobId, b.trade, b.kind);
+  const ctx = await docRequestContext(c, b.companyId, b.jobId, b.trade, b.kind, { forSend: true });
   if (!ctx) return c.json({ error: "not_engaged" }, 404);
 
   const to = ctx.company.email;
@@ -28653,6 +28678,11 @@ app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
     subject: mail.subject, result, sentBy: userId });
 
   if (!result.ok) return c.json({ error: result.error, detail: result.detail }, 502);
+  // The invite link went out inside this email, so the invite reads as sent.
+  if (ctx.loginInviteId) {
+    await c.env.DB.prepare(`UPDATE sub_invites SET sent_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(ctx.loginInviteId).run().catch(() => {});
+  }
   await logActivity(c.env, accountId, userId, "email_sent",
     template === "findings"
       ? `Told ${ctx.company.company} what to fix on their ${(ctx.kind || "document").replace("w9", "W-9")}`

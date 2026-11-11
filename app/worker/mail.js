@@ -70,10 +70,15 @@ export function missingDocs(company, docReview, engagedAs = null) {
 
 // ---- Templates ------------------------------------------------------------
 
-export function docRequestEmail({ company, contact, docReview, job, trade, account, engagedAs = null }) {
+export function docRequestEmail({ company, contact, docReview, job, trade, account, engagedAs = null, loginLink = null }) {
   const missing = missingDocs(company, docReview, engagedAs);
   const who = account?.name || "our team";
-  const link = docsLink(account?.subdomain);
+  // With no SubSub login yet, the way in is their invite link: choose a
+  // password, then upload. "pending" is the preview's word for a link that is
+  // minted on send.
+  const firstLogin = !!loginLink;
+  const link = firstLogin && loginLink !== "pending" ? loginLink
+    : firstLogin ? "(your personal sign-up link)" : docsLink(account?.subdomain);
   // Only the W-9 left is a payment question, not a work one.
   const payOnly = missing.length > 0 && missing.every((k) => PAY_ONLY_KINDS.includes(k));
   const lead = payOnly
@@ -94,10 +99,13 @@ ${lead}
 ${missing.map((k) => `  - ${DOC_LABELS[k]}`).join("\n")}
 ${ins}${bond}
 
-Upload them here (a phone photo is fine):
+${firstLogin
+  ? `You don't have a SubSub login yet. Choose your password here, then upload them (a phone photo is fine):
+  ${link}`
+  : `Upload them here (a phone photo is fine):
   ${link}
 
-Sign in as ${company.email || "the email on your account"}.
+Sign in as ${company.email || "the email on your account"}.`}
 
 -- ${who}
 
@@ -109,7 +117,7 @@ ${NOREPLY}`;
       ? `Action needed: upload documents for ${job.title || "a job"}`
       : "Action needed: upload your compliance documents",
     text,
-    html: textToHtml(text, link),
+    html: textToHtml(text, firstLogin && loginLink === "pending" ? null : link),
     missing,
   };
 }

@@ -16380,6 +16380,25 @@ refactor.
   card). `test:invitetoroster` (18) and `test:invitetorosterui` (10). Removing
   the bind fails two assertions.
 
+- **A DOCUMENT REQUEST TO SOMEBODY WITH NO LOGIN CARRIES THEIR SIGN-UP LINK.**
+  Asked as *"what if I just request docs from them after I create their
+  account? It should also prompt them to create a login if they haven't yet"*.
+  The request said *Upload them here ... Sign in as <email>*, which is a dead
+  end for somebody nobody has given a password. When `companyAnswersForItself`
+  is false, `docRequestEmail` takes `loginLink` and says *You don't have a
+  SubSub login yet. Choose your password here, then upload them*:
+  - **The live invite's own token**, found the way the invite route finds it
+    (`rosterInviteRow`, now one function for both), so the invitation and the
+    request open one door and no second link is minted;
+  - **one minted on send when there is none**, bound to the company and marked
+    sent, so the request is the invitation and nothing else is emailed;
+  - **the preview mints nothing**, and says a personal sign-up link will be
+    added.
+  A company with a login gets the request exactly as before.
+  `test:docreqlogin` (15); dropping the check fails nine. **Not changed:** the
+  findings email (*here is what to fix on your certificate*), which goes to
+  somebody whose document is already on file.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
