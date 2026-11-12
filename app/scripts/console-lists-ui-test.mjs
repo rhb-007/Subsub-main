@@ -854,6 +854,17 @@ try {
   });
   const c1 = await clipAt(); await wait(450); const c2 = await clipAt();
   t.ck("the switching screen draws the SubSub loading mark", !!c1, String(c1));
+  // The mark is the file the owner uploaded, drawn as a mask; a mask whose
+  // file does not load draws nothing and every check on the clip still passes.
+  const mk = await page.evaluate(async () => {
+    const f = document.querySelector(".switching-screen .load-mark .lm-fill");
+    const st = f ? getComputedStyle(f) : null;
+    const mask = st ? (st.maskImage || st.webkitMaskImage || "") : "";
+    const r = await fetch("/loading-mark.png").catch(() => null);
+    return { mask, ok: !!r && r.ok, type: r ? r.headers.get("content-type") : null };
+  });
+  t.ck("and it is the uploaded mark, and that file loads",
+    /loading-mark\.png/.test(mk.mask) && mk.ok && /image\/png/.test(mk.type || ""), JSON.stringify(mk));
   t.ck("and it fills over time rather than standing still", !!c1 && !!c2 && c1 !== c2, `${c1} -> ${c2}`);
   release([500, { error: "stub" }]); HOLD = null;
   await wait(800);

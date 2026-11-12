@@ -7811,9 +7811,11 @@ refactor.
   is on the boot screen, the sign-up redirect, the post-sign-in load and the
   account switch. **This reverses the boot screen's "deliberately anonymous"
   note**, at the owner's word: the mark is SubSub's own and is never the wrong
-  company's, even on a customer's address. Two copies of the real mark's
-  paths, the top one revealed by `clip-path`, ink rather than black so it reads
-  in dark mode. It loops, because nothing knows how far the load is, and a fill
+  company's, even on a customer's address. **It is the file the owner
+  uploaded for it** (`app/public/loading-mark.png`, cropped and given a
+  transparent background), drawn as a CSS mask over `currentColor` twice, the
+  top copy revealed by `clip-path`, ink rather than black so it reads in dark
+  mode. The suite checks the mask names that file and that the file loads. It loops, because nothing knows how far the load is, and a fill
   that stopped at the top would read as finished. Reduced motion gets it half
   filled and still. `test:consolelists` samples the clip twice mid-switch;
   removing the animation fails it.

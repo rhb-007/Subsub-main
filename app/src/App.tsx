@@ -37189,23 +37189,17 @@ function SubSubMark({ height = 24 }) {
   );
 }
 
-// The loading mark: SubSub's mark, faint, filling with ink from the bottom up
-// while a screen waits. Asked for by the owner in place of a spinner. Two
-// copies of the same paths, the top one clipped; ink rather than black so it
-// reads in dark mode. It loops, because nothing here knows how far along the
+// The loading mark: the SubSub mark the owner uploaded for this screen
+// (public/loading-mark.png, cut from that file with its background made
+// transparent), faint, filling with ink from the bottom up. Drawn as a CSS
+// mask over currentColor rather than as an <img>, so the fill can be clipped
+// and it reads white in dark mode. It loops, because nothing knows how far the
 // load is, and a fill that stopped at the top would read as finished.
 function LoadingMark({ height = 56, label = "Loading" }) {
-  const paths = (
-    <>
-      <path d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/>
-      <path d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/>
-      <path d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/>
-    </>
-  );
   return (
-    <span className="load-mark" role="img" aria-label={label} style={{ height, width: height * 96 / 114 }}>
-      <svg className="lm-base" viewBox="36 62 96 114" aria-hidden="true">{paths}</svg>
-      <svg className="lm-fill" viewBox="36 62 96 114" aria-hidden="true">{paths}</svg>
+    <span className="load-mark" role="img" aria-label={label} style={{ height, width: height * 262 / 320 }}>
+      <span className="lm-base" aria-hidden="true" />
+      <span className="lm-fill" aria-hidden="true" />
     </span>
   );
 }
@@ -48390,7 +48384,8 @@ button.mc-title:hover{text-decoration:underline}
    the ink copy is revealed by its clip. Held full for a beat, then empties
    and fills again. Reduced motion gets the mark half filled and still. */
 .load-mark{position:relative;display:block;flex:none;color:var(--ink)}
-.load-mark svg{position:absolute;inset:0;width:100%;height:100%;fill:currentColor}
+.load-mark span{position:absolute;inset:0;background:currentColor;
+  -webkit-mask:url(/loading-mark.png) center/contain no-repeat;mask:url(/loading-mark.png) center/contain no-repeat}
 .load-mark .lm-base{opacity:.12}
 .load-mark .lm-fill{clip-path:inset(100% 0 0 0);animation:lm-fill 2.2s ease-in-out infinite}
 @keyframes lm-fill{0%{clip-path:inset(100% 0 0 0)}70%,88%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 0 0 0);opacity:0}}
