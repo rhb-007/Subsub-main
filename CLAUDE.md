@@ -7803,9 +7803,20 @@ refactor.
   not read it. The lien waiver form's own line is unchanged. `test:agrterms`
   reads the preview modal for "legal advice", and putting the box back fails it.
   The plain-text "Loading…" shown while a signed-in account's data arrives is
-  now the SubSub logo, the boot spinner and *Loading your account…*. SubSub's
-  mark rather than the account's, because the account in state may still be the
-  one being left.
+  now *Loading your account…* under SubSub's mark rather than the account's,
+  because the account in state may still be the one being left.
+
+  **Every full-page wait is `LoadingMark`: the SubSub mark, faint, filling with
+  ink from the bottom up**, asked for by the owner in place of the spinner. It
+  is on the boot screen, the sign-up redirect, the post-sign-in load and the
+  account switch. **This reverses the boot screen's "deliberately anonymous"
+  note**, at the owner's word: the mark is SubSub's own and is never the wrong
+  company's, even on a customer's address. Two copies of the real mark's
+  paths, the top one revealed by `clip-path`, ink rather than black so it reads
+  in dark mode. It loops, because nothing knows how far the load is, and a fill
+  that stopped at the top would read as finished. Reduced motion gets it half
+  filled and still. `test:consolelists` samples the clip twice mid-switch;
+  removing the animation fails it.
 
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy

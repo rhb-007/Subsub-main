@@ -6096,8 +6096,7 @@ export default function SubSub() {
       <div className="ss-root">
         <style>{CSS}</style>
         <div className="boot-wait" role="status" aria-live="polite">
-          <span className="boot-spin" aria-hidden="true" />
-          <span className="sr-only">Loading</span>
+          <LoadingMark />
         </div>
       </div>
     );
@@ -6151,8 +6150,7 @@ export default function SubSub() {
       <div className="ss-root">
         <style>{CSS}</style>
         <div className="boot-wait" role="status" aria-live="polite">
-          <span className="boot-spin" aria-hidden="true" />
-          <span className="sr-only">Opening sign-up</span>
+          <LoadingMark label="Opening sign-up" />
         </div>
       </div>
     );
@@ -6255,8 +6253,7 @@ export default function SubSub() {
             mark rather than the account's: the account in state may still
             be the one being left, so its logo could be the wrong company's. */}
         <div className="boot-wait boot-load" role="status" aria-live="polite">
-          <SubSubLogo height={26} />
-          <span className="boot-spin" aria-hidden="true" />
+          <LoadingMark label={tt("Loading your account…")} />
           <span className="boot-msg">{tt("Loading your account…")}</span>
         </div>
       </div>
@@ -6268,7 +6265,7 @@ export default function SubSub() {
       <div className="ss-root">
         <style>{CSS}</style>
         <div className="switching-screen" role="status">
-          <SubSubLogo height={26} />
+          <LoadingMark label={tt("Signing in to {name}…", { name: switchingTo })} />
           <p>{tt("Signing in to {name}…", { name: switchingTo })}</p>
         </div>
       </div>
@@ -37176,6 +37173,27 @@ function SubSubMark({ height = 24 }) {
   );
 }
 
+// The loading mark: SubSub's mark, faint, filling with ink from the bottom up
+// while a screen waits. Asked for by the owner in place of a spinner. Two
+// copies of the same paths, the top one clipped; ink rather than black so it
+// reads in dark mode. It loops, because nothing here knows how far along the
+// load is, and a fill that stopped at the top would read as finished.
+function LoadingMark({ height = 56, label = "Loading" }) {
+  const paths = (
+    <>
+      <path d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/>
+      <path d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/>
+      <path d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/>
+    </>
+  );
+  return (
+    <span className="load-mark" role="img" aria-label={label} style={{ height, width: height * 96 / 114 }}>
+      <svg className="lm-base" viewBox="36 62 96 114" aria-hidden="true">{paths}</svg>
+      <svg className="lm-fill" viewBox="36 62 96 114" aria-hidden="true">{paths}</svg>
+    </span>
+  );
+}
+
 // SubSub's own sign-in page wears the stacked logo, mark over word: the mark
 // in the brand gold and the word in black. The word is drawn here rather than set in a font, so it
 // is the real logo and not the name in whatever face the page has.
@@ -48352,6 +48370,15 @@ button.mc-title:hover{text-decoration:underline}
   border:2.5px solid var(--line);border-top-color:var(--ink-soft);
   animation:boot-turn .7s linear infinite}
 @keyframes boot-turn{to{transform:rotate(360deg)}}
+/* The loading mark fills from the bottom: the faint copy is the empty mark,
+   the ink copy is revealed by its clip. Held full for a beat, then empties
+   and fills again. Reduced motion gets the mark half filled and still. */
+.load-mark{position:relative;display:block;flex:none;color:var(--ink)}
+.load-mark svg{position:absolute;inset:0;width:100%;height:100%;fill:currentColor}
+.load-mark .lm-base{opacity:.12}
+.load-mark .lm-fill{clip-path:inset(100% 0 0 0);animation:lm-fill 2.2s ease-in-out infinite}
+@keyframes lm-fill{0%{clip-path:inset(100% 0 0 0)}70%,88%{clip-path:inset(0 0 0 0)}100%{clip-path:inset(0 0 0 0);opacity:0}}
+@media (prefers-reduced-motion:reduce){.load-mark .lm-fill{animation:none;clip-path:inset(50% 0 0 0)}}
 .boot-load{flex-direction:column;gap:16px}
 .boot-msg{color:var(--muted);font-size:15px}
 @media (prefers-reduced-motion:reduce){.boot-spin{animation:none;opacity:.55}}

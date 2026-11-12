@@ -845,6 +845,16 @@ try {
   t.ck("while it loads, a neutral screen names the account", /Signing in to Outerhome/.test(mid.screen || ""),
     JSON.stringify(mid));
   t.ck("and no app header or stale empty state is drawn meanwhile", !mid.header && !mid.stale, JSON.stringify(mid));
+  // The loading mark fills from the bottom: the ink copy's clip moves over
+  // time. Sampled twice, because a mark that is drawn and never moves passes
+  // every check on its presence.
+  const clipAt = () => page.evaluate(() => {
+    const f = document.querySelector(".switching-screen .load-mark .lm-fill");
+    return f ? getComputedStyle(f).clipPath : null;
+  });
+  const c1 = await clipAt(); await wait(450); const c2 = await clipAt();
+  t.ck("the switching screen draws the SubSub loading mark", !!c1, String(c1));
+  t.ck("and it fills over time rather than standing still", !!c1 && !!c2 && c1 !== c2, `${c1} -> ${c2}`);
   release([500, { error: "stub" }]); HOLD = null;
   await wait(800);
   const after = await page.evaluate(() => !!document.querySelector(".switching-screen"));
