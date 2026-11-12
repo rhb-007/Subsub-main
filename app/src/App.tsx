@@ -6251,8 +6251,13 @@ export default function SubSub() {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: "var(--muted)" }}>
-          Loading…
+        {/* After sign-in, while the account's own data arrives. SubSub's
+            mark rather than the account's: the account in state may still
+            be the one being left, so its logo could be the wrong company's. */}
+        <div className="boot-wait boot-load" role="status" aria-live="polite">
+          <SubSubLogo height={26} />
+          <span className="boot-spin" aria-hidden="true" />
+          <span className="boot-msg">{tt("Loading your account…")}</span>
         </div>
       </div>
     );
@@ -35068,33 +35073,12 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile }) {
               {ag ? agreementStateText(ag, { subName: sub.company, hiringName: "you" })
                 : `SubSub's standard form, with your company and your terms filled in. This is what ${sub.company} will be asked to sign.`}
             </p>
-            {/* WHAT THIS SAYS NOW, AND WHAT IT DELIBERATELY NO LONGER SAYS.
-                It named its own provenance -- that SubSub wrote the form, that
-                no lawyer had read it, and that some subcontract clauses are
-                limited or void by statute depending on the state -- on the
-                reasoning that an unreviewed form reads exactly like a reviewed
-                one, so the screen had to say which it was at the moment
-                somebody decides whether to rely on it.
-
-                Removed on request. What is kept is the part that asks for the
-                same action without arguing against the product on the screen
-                where somebody is about to use it: this is not legal advice,
-                and their own lawyer should read it. The instruction is
-                unchanged; only the case for it is gone.
-
-                `reviewed` itself is UNTOUCHED and still null in
-                `agreement-standard.js` -- the flag is the record, and it is not
-                something anybody gets for free. This gate stays keyed to it, so
-                the day a lawyer does read the text the box comes off by
-                itself. */}
-            {!livePreview?.reviewed && (
-              <div className="agr-warn">
-                <b>A starting point, not legal advice.</b>
-                <span>
-                  Have your own lawyer read it before you rely on it.
-                </span>
-              </div>
-            )}
+            {/* NO DISCLAIMER BOX OVER THE DOCUMENT, at the owner's word: this
+                is SubSub's standard agreement, and a box reading "a starting
+                point, not legal advice" over it read as an example rather than
+                the form. It was cut back to that one line once before and is
+                now gone. `reviewed` in agreement-standard.js is untouched and
+                still null: the flag is the record. */}
             <AgreementDoc document={ag?.document || livePreview} />
             {canManage && ag?.waitingOn === "hiring_countersign" && <>
               <div className="agr-sign">
@@ -48368,6 +48352,8 @@ button.mc-title:hover{text-decoration:underline}
   border:2.5px solid var(--line);border-top-color:var(--ink-soft);
   animation:boot-turn .7s linear infinite}
 @keyframes boot-turn{to{transform:rotate(360deg)}}
+.boot-load{flex-direction:column;gap:16px}
+.boot-msg{color:var(--muted);font-size:15px}
 @media (prefers-reduced-motion:reduce){.boot-spin{animation:none;opacity:.55}}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0 0 0 0);white-space:nowrap;border:0}
@@ -50320,11 +50306,6 @@ iframe.dv-frame{display:block}
 .agr-sec h5{margin:0 0 6px;font-size:13px;font-weight:700;letter-spacing:.01em}
 .agr-sec p{margin:0 0 7px;max-width:72ch}
 .agr-doc-gone{display:flex;flex-direction:column;gap:6px;max-height:none}
-/* The one line that survives: not legal advice, and have a lawyer read it.
-   Amber rather than red, because it is a caveat and not a failure. */
-.agr-warn{display:flex;flex-direction:column;gap:4px;margin:12px 0;padding:11px 13px;
-  border:1px solid var(--warn,#b45309);border-radius:9px;
-  background:color-mix(in srgb,var(--warn,#b45309) 8%,transparent);font-size:12.5px}
 .agr-sign{margin:12px 0 4px;display:flex;flex-direction:column;gap:5px}
 .agr-sign label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600}
 .agr-sign input{font-size:16px;padding:9px 11px}

@@ -7792,6 +7792,21 @@ refactor.
   date is twenty days ahead, and the phone job-line bound is 140px, because
   the line now names the company.
 
+- **THE AGREEMENT PREVIEW CARRIES NO "NOT LEGAL ADVICE" BOX, AND THE
+  POST-SIGN-IN LOADING SCREEN WEARS SUBSUB'S MARK.** Asked for as *"this is our
+  subsub standard agreement not some example"*. The one line the box had been
+  cut back to (*A starting point, not legal advice. Have your own lawyer read
+  it*) read as a sample rather than the form, so it is gone, with its CSS. This
+  reverses the entry above that kept it gated on `reviewed`. **`reviewed` is
+  still null in `agreement-standard.js` and `agreement-test.mjs` still pins
+  it**, so nothing downstream claims the text was checked; a lawyer still has
+  not read it. The lien waiver form's own line is unchanged. `test:agrterms`
+  reads the preview modal for "legal advice", and putting the box back fails it.
+  The plain-text "Loading…" shown while a signed-in account's data arrives is
+  now the SubSub logo, the boot spinner and *Loading your account…*. SubSub's
+  mark rather than the account's, because the account in state may still be the
+  one being left.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

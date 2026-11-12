@@ -129,6 +129,7 @@ export default {
   "Not paying yet": "Todavía no paga",
   "Try again": "Intentar de nuevo",
   "Loading…": "Cargando…",
+  "Loading your account…": "Cargando su cuenta…",
   "Make it big enough to scan": "Hacerlo grande para escanear",
   "Show the code full screen": "Mostrar el código en pantalla completa",
   "Tap to scan": "Toque para escanear",

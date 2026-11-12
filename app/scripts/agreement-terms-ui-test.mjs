@@ -230,6 +230,11 @@ try {
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".agr-doc")) break; }
     const doc = await page.evaluate(() => (document.querySelector(".agr-doc")?.innerText || "").replace(/\s+/g, " "));
     t.ck("the preview shows the document", /Warranty/i.test(doc), doc.slice(0, 80));
+    // It is SubSub's standard agreement, so no "starting point, not legal
+    // advice" box over it: that read as an example rather than the form.
+    const modalText = await page.evaluate(() => (document.querySelector(".agr-doc")?.closest(".modal")?.innerText || "").replace(/\s+/g, " "));
+    t.ck("the preview carries no not-legal-advice box",
+      !!modalText && !/legal advice/i.test(modalText), modalText.slice(0, 120));
     t.ck("and it runs for two years, not the account's three",
       /runs for 2 years/.test(doc) && !/runs for 3 years/.test(doc),
       (doc.match(/runs for [^.]*/) || [])[0]);
