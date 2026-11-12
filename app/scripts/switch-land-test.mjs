@@ -236,6 +236,60 @@ try {
     await ctx.close();
   }
 
+  // Reported: refreshing on the roster landed on the dashboard.
+  console.log("\n-- a reload stays on the screen you were on --");
+  {
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_sam", accountId: "acc_home" }, viewport: { width: 1200, height: 1400 } });
+    await wait(3000);
+    const onTab = () => page.evaluate(() =>
+      document.querySelector("nav button.on")?.innerText.replace(/\s+/g, " ").trim() || null);
+    t.ck("an admin starts on the dashboard", /^Dashboard/.test((await onTab()) || ""), String(await onTab()));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^(Sub)?[Cc]ontractors/.test(b.innerText))?.click());
+    await wait(800);
+    const before = await onTab();
+    t.ck("the roster is open", /ontractors/.test(before || ""), String(before));
+    await page.reload(); await wait(3200);
+    const after = await onTab();
+    t.ck("after a reload the roster is still open, not the dashboard", /ontractors/.test(after || ""), String(after));
+    t.ck("and the roster's rows are drawn", /Ridge Roofing/.test(await text(page)));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Jobs/.test(b.innerText))?.click());
+    await wait(600);
+    await page.reload(); await wait(3200);
+    t.ck("and so does Jobs", /^Jobs/.test((await onTab()) || ""), String(await onTab()));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+  {
+    // A saved screen this seat cannot reach is not put back: a contractor seat
+    // holding a saved roster screen lands on its portal, not an empty page.
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_sam", accountId: "acc_cascade" }, viewport: { width: 1200, height: 1400 } });
+    await wait(3000);
+    const lit = () => page.evaluate(() =>
+      document.querySelector("nav button.on")?.innerText.replace(/\s+/g, " ").trim() || null);
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Compliance pack/.test(b.innerText))?.click());
+    await wait(700);
+    t.ck("a contractor seat opens its compliance pack", /^Compliance pack/.test((await lit()) || ""), String(await lit()));
+    await page.reload(); await wait(3200);
+    t.ck("and a reload keeps it there", /^Compliance pack/.test((await lit()) || ""), String(await lit()));
+    await page.evaluate(() => sessionStorage.setItem("ss_view:acc_cascade:u_sam",
+      JSON.stringify({ tab: "network", pane: "jobs", netView: "roster" })));
+    await page.reload(); await wait(3200);
+    // A contractor seat draws its portal whatever the tab says, so the guard
+    // in the restore cannot be told apart here; what this pins is that a
+    // stale saved screen never leaves the seat on something it cannot use.
+    const body = await text(page);
+    t.ck("a saved screen the seat cannot reach still lands on the contractor portal",
+      /You can't be assigned jobs|Job requests|My Jobs/.test(body) && !/Ridge Roofing/.test(body),
+      body.slice(0, 160));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- a seat that really is unlinked still says so --");
   {
     UNLINKED = true;

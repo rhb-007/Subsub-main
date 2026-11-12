@@ -7835,6 +7835,23 @@ refactor.
   then `/api/subs` open on a 390px screen and reads the text every 250ms; the
   old gate fails it. A seat that really is unlinked still says so once loaded.
 
+- **A RELOAD STAYS ON THE PAGE YOU WERE ON.** Reported as *"if I'm in
+  subcontractors and I refresh the page, it should not go back to the
+  dashboard"*. `resumeSession` never set the tab, so a reload always drew the
+  default, which is the dashboard. The tab, the portal pane and the roster's
+  half are saved in `sessionStorage` under `ss_view:<account>:<user>` (per
+  browser tab and per seat, try/catch, because it is a convenience) and put
+  back **once**, on the first load after the page opened, in a layout effect so
+  the dashboard is never painted first. Only a screen the seat can still reach
+  is put back (`tabAllowed`: the roster reads `can("contractors")`, the portal
+  `can("portal")` or a subcontractor account's referral pane), and anything
+  else falls through to the usual first screen. Switching accounts is not a
+  reload and lands where it always did. `test:switchland` reloads the roster,
+  Jobs and a contractor's Compliance pack; dropping the restore fails three
+  assertions. **Not tested:** a saved screen a seat cannot reach, because a
+  contractor seat draws its portal whatever the tab says, so the guard cannot
+  be told apart in that harness.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did

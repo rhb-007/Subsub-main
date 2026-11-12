@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback, useLayoutEffect } from "react";
 // The one thing that has to escape the tree it is rendered in: the code
 // held up to be scanned. Inside the profile menu it would be clipped by
 // the menu's own scrolling box.
@@ -5999,6 +5999,38 @@ export default function SubSub() {
   // over, the menu would show the last one -- which is somebody else's
   // standing offer to be asked, handed to the wrong person to show around.
   useEffect(() => { setQrCode(null); setQrOpen(false); setQrErr(""); }, [currentAccountId]);
+
+  // A reload stays on the screen you were on. The tab, the portal pane and
+  // the roster's half are kept per browser tab (sessionStorage) and per seat,
+  // and put back ONCE, on the first load after the page opened, only where
+  // this seat can still reach them: a saved screen the role no longer has
+  // falls through to the usual first tab rather than an empty page. Switching
+  // accounts is not a reload and keeps landing where it always did.
+  const viewKey = `ss_view:${currentAccountId}:${currentUserId}`;
+  const viewRestored = useRef(false);
+  const tabAllowed = (t, p) => {
+    if (t === "network") return can("contractors");
+    if (t === "portal") return can("portal") || (!!ownSub && p === "refer");
+    return can(t);
+  };
+  // Layout effect, so the restored screen is the first one painted rather
+  // than the dashboard for a frame and then the page you were on.
+  useLayoutEffect(() => {
+    if (!loggedIn || superadminView || hydratedFor !== currentAccountId) return;
+    if (!viewRestored.current) {
+      viewRestored.current = true;
+      let v = null;
+      try { v = JSON.parse(sessionStorage.getItem(viewKey) || "null"); } catch { v = null; }
+      if (v && typeof v.tab === "string" && tabAllowed(v.tab, v.pane)) {
+        if (typeof v.pane === "string") setPane(v.pane);
+        if (typeof v.netView === "string") setNetView(v.netView);
+        setTab(v.tab);
+      }
+      return;
+    }
+    try { sessionStorage.setItem(viewKey, JSON.stringify({ tab, pane, netView })); } catch { /* private mode */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loggedIn, superadminView, hydratedFor, currentAccountId, tab, pane, netView]);
 
   // Switching accounts, or an admin changing the account type, can leave the
   // current tab unreachable. Fall back rather than render an empty page.
