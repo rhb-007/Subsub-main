@@ -74,11 +74,18 @@ const HOME_SUBS = [
 const AWAY_SUBS = [sub("cmp_outerhome", "Outerhome", "acc_cascade", "en_out")];
 
 const acctOf = (headers) => String(headers["x-account-id"] || "");
+// Held open to read the screen while the roster is still on its way, and an
+// empty roster to prove the real "unlinked" message still draws once it lands.
+let HOLD = null, HOLD_ME = null, UNLINKED = false;
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   const at = acctOf(headers);
   const away = at === "acc_cascade";
-  if (path === "/api/auth/me") return [200, { user: USER, memberships: [
+  if (path === "/api/auth/me" && HOLD_ME) return HOLD_ME.promise.then(() => ME);
+  if (path === "/api/auth/me") return ME;
+  return route2(path, method, body, headers, at, away);
+} });
+const ME = [200, { user: USER, memberships: [
     { accountId: "acc_home", accountName: "Outerhome", subdomain: "outerhome",
       kind: "general_contractor", role: "admin", companyId: null, plan: "scale",
       billing: "monthly", theme: null, trades: [], logoKey: null, useDefaultMark: true },
@@ -87,6 +94,7 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
       companyId: "cmp_outerhome", plan: "basic", billing: "monthly", theme: null,
       trades: [], logoKey: null, useDefaultMark: true },
   ] }];
+function route2(path, method, body, headers, at, away) {
   // The seat, per account. Sam is an admin at Outerhome and a contractor for
   // cmp_outerhome at Cascade -- the same person, two different seats.
   if (path === "/api/account-users") return [200, [
@@ -96,14 +104,17 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   ]];
   if (path === "/api/account") return [200, away ? AWAY : HOME];
   if (path.startsWith("/api/account-by-subdomain/")) return [200, HOME];
-  if (path === "/api/subs") return [200, away ? AWAY_SUBS : HOME_SUBS];
+  if (path === "/api/subs") {
+    if (away && HOLD) return HOLD.promise;
+    return [200, away ? (UNLINKED ? [] : AWAY_SUBS) : HOME_SUBS];
+  }
   if (path === "/api/my-work") return [200, { work: [] }];
   if (path === "/api/jobs" || path === "/api/properties" || path === "/api/invites"
     || path === "/api/connect-requests" || path === "/api/my-connect-requests"
     || path === "/api/doc-shares" || path === "/api/clients"
     || path === "/api/property-transfers") return [200, []];
   return undefined;
-} });
+}
 
 const browser = await launch();
 const text = (page) => page.evaluate(() =>
@@ -183,6 +194,57 @@ try {
       await page.evaluate(() => [...document.querySelectorAll("nav button")]
         .some((b) => /^Dashboard/.test(b.innerText))));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  // Reported from a phone: opening a contractor seat from an email flashed
+  // "This contractor login isn't linked to a contractor record yet" before the
+  // pages loaded. That message is a guess until the roster has arrived.
+  console.log("\n-- arriving in a contractor seat while the roster is still loading --");
+  {
+    // Both halves: the seats reload (the gap the flash lived in, between
+    // being signed in and starting to load) and then the roster itself.
+    let releaseMe; HOLD_ME = { promise: new Promise((r) => { releaseMe = r; }) };
+    let release; HOLD = { promise: new Promise((r) => { release = r; }) };
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_sam", accountId: "acc_cascade" }, viewport: { width: 390, height: 844 } });
+    let flashed = false;
+    for (let i = 0; i < 8; i++) {
+      await wait(250);
+      flashed ||= await page.evaluate(() => /isn't linked to a contractor record/.test(document.body.innerText));
+    }
+    t.ck("the unlinked message never flashes while the seats reload", !flashed);
+    releaseMe(); HOLD_ME = null;
+    let sawUnlinked = false, sawMark = false;
+    for (let i = 0; i < 12; i++) {
+      await wait(250);
+      const r = await page.evaluate(() => ({
+        unlinked: /isn't linked to a contractor record/.test(document.body.innerText),
+        mark: !!document.querySelector(".load-mark"),
+      }));
+      sawUnlinked ||= r.unlinked; sawMark ||= r.mark;
+    }
+    t.ck("the unlinked message never flashes while the roster loads", !sawUnlinked);
+    t.ck("the loading mark is drawn meanwhile", sawMark);
+    release([200, AWAY_SUBS]); HOLD = null;
+    await wait(1500);
+    const done = await text(page);
+    t.ck("and the portal draws once it lands",
+      !/isn't linked to a contractor record/.test(done) && !(await page.evaluate(() => !!document.querySelector(".load-mark"))),
+      done.slice(0, 140));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- a seat that really is unlinked still says so --");
+  {
+    UNLINKED = true;
+    const { ctx, page } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_sam", accountId: "acc_cascade" }, viewport: { width: 390, height: 844 } });
+    await wait(3000);
+    t.ck("the message draws once the roster has loaded without them",
+      /isn't linked to a contractor record/.test(await text(page)));
+    UNLINKED = false;
     await ctx.close();
   }
 } finally {

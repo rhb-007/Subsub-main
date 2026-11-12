@@ -2196,6 +2196,11 @@ export default function SubSub() {
   const [users, setUsers] = useState(BUILD === "platform" ? seedUsers : seedUsers.filter((u) => !u.platform));
   const [currentUserId, setCurrentUserId] = useState("u1");
   const [currentAccountId, setCurrentAccountId] = useState("a1");
+  // Which account the roster in state was last loaded for. Until it matches
+  // the current one, "this contractor login isn't linked to a record" is a
+  // guess about data that has not arrived -- it flashed on every sign-in to a
+  // contractor seat, between the session landing and the roster loading.
+  const [hydratedFor, setHydratedFor] = useState(null);
   const now = useNow();
   // Which account's own subdomain (e.g. outerhome.subsub.work) this browser
   // is on, if any — fetched once, publicly, so the login screen can show
@@ -5416,6 +5421,9 @@ export default function SubSub() {
     } catch (err) {
       console.error("[hydrate] failed:", err);
     } finally {
+      // In finally, so a failed load still ends the wait and the error
+      // screen, not a mark filling for ever, is what is drawn.
+      setHydratedFor(accountId);
       if (!quiet) setLoading(false);
     }
   }
@@ -6245,7 +6253,14 @@ export default function SubSub() {
     );
   }
 
-  if (loading) {
+  // Signed in, but this account's data has not arrived yet. Every sign-in
+  // marks the session as signed in a moment before it starts loading the
+  // account (resumeSession reloads the seats first), and in that gap the app
+  // drew whatever was in state: for a contractor seat, "this contractor login
+  // isn't linked to a contractor record yet", which flashed on every open from
+  // an email. Waiting on hydratedFor covers that gap and every one like it.
+  const awaitingAccount = loggedIn && !superadminView && hydratedFor !== currentAccountId;
+  if ((loading || awaitingAccount) && !switchingTo) {
     return (
       <div className="ss-root">
         <style>{CSS}</style>
@@ -6422,6 +6437,7 @@ export default function SubSub() {
             setImpersonating({ by: me.name, account: acct });
             logEvent("impersonation", `${me.name} signed in as this account`, { accountId: acct.id, userId: null });
             setCurrentAccountId(acct.id); setCurrentUserId(mem.userId);
+            setHydratedFor(acct.id); // seed data, nothing to fetch
             setTab("dashboard"); setSuperadminView(false);
           }}
           onSignOut={() => { setStaff(null); setSuperadminView(false); setLoggedIn(false);

@@ -7818,6 +7818,21 @@ refactor.
   filled and still. `test:consolelists` samples the clip twice mid-switch;
   removing the animation fails it.
 
+- **"THIS CONTRACTOR LOGIN ISN'T LINKED" FLASHED ON EVERY SIGN-IN TO A
+  CONTRACTOR SEAT, BECAUSE THE APP WAS SIGNED IN BEFORE IT STARTED LOADING.**
+  Reported from a phone, opening outerhome.subsub.work from an email: the
+  message showed for a moment and then the pages loaded. `resumeSession` sets
+  `loggedIn` and then awaits `reloadAccounts()` before `hydrateAccount` sets
+  `loading`, so in that gap the app drew whatever was in state, and for a
+  contractor seat with no roster yet `mySub` is null. `hydratedFor` records
+  which account the data in state was last loaded for (set in `hydrateAccount`'s
+  `finally`, so a failed load still ends the wait), and the full loading screen
+  is drawn while `loggedIn && hydratedFor !== currentAccountId`, outside the
+  staff console and the account-switch screen. The dev seat picker sets it
+  itself, because it fetches nothing. `test:switchland` holds `/api/auth/me` and
+  then `/api/subs` open on a 390px screen and reads the text every 250ms; the
+  old gate fails it. A seat that really is unlinked still says so once loaded.
+
 ## Working here`: **run `npm run lint` before any commit
   that touches `app/src`, `app/shared` or `app/worker`**, because the deploy
   runs it and a failure there is not a failed test, it is a release that did
