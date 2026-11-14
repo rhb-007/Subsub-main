@@ -393,3 +393,31 @@ export function signInButtonHtml({ subdomain, accountName, theme = null, liveHos
 <span class="ss-signin-note">For your team and the subcontractors who work with you.</span>
 </div>`;
 }
+
+// THE SIGN-UP BUTTON, the link form of the sign-up form. Some sites want a
+// button in their header rather than a whole form on a page, so this opens the
+// account's own hosted application form (applyUrl): <sub>.subsub.work/?apply=1
+// while that resolves, and app.subsub.work/?apply=<sub> otherwise, which draws
+// the same branded form. So, like the form, it works on every plan.
+export function signUpButtonHtml({ subdomain, accountName, theme = null, liveHost = false } = {}) {
+  const url = applyUrl(subdomain, { liveHost });
+  if (!url) return "";
+  const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
+  const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
+  const href = esc(url);
+  const label = accountName ? `Apply to work with ${esc(accountName)}` : "Apply to work with us";
+  return `<!-- ${esc(accountName || "SubSub").replace(/-{2,}/g, "-")} sign-up button, from SubSub. Opens your SubSub application form. -->
+<div id="subsub-signup">
+<style>
+#subsub-signup{font:inherit}
+#subsub-signup .ss-signup{display:inline-flex;align-items:center;gap:8px;padding:12px 20px;border-radius:9px;
+  background:${accent};color:${btnText};font-weight:700;font-size:15px;line-height:1.2;text-decoration:none;
+  border:0;min-height:44px;box-sizing:border-box}
+#subsub-signup .ss-signup:hover{background:${darken(accent)};color:${btnText}}
+#subsub-signup .ss-signup:focus-visible{outline:3px solid ${accent};outline-offset:3px}
+#subsub-signup .ss-signup-note{display:block;margin-top:6px;font-size:12px;opacity:.75}
+</style>
+<a class="ss-signup" href="${href}" target="_blank" rel="noopener">${label}</a>
+<span class="ss-signup-note">For subcontractors who want to work with you.</span>
+</div>`;
+}

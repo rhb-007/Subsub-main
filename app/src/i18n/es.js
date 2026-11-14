@@ -1205,4 +1205,11 @@ export default {
   "Remove {city}": "Quitar {city}",
   "No cities yet. Type each city they work in.": "Aún no hay ciudades. Escriba cada ciudad donde trabajan.",
   "Add a city": "Agregar una ciudad",
+  "The sign-up button": "El botón de registro",
+  "This is what the button looks like on your website, and the markup that draws it. It opens your SubSub sign-up form.": "Así se ve el botón en su sitio web, y el código que lo dibuja. Abre su formulario de registro de SubSub.",
+  "What the sign-up button looks like": "Cómo se ve el botón de registro",
+  "A sign-up button": "Un botón de registro",
+  "For your site's header or menu. It opens your sign-up form.": "Para el encabezado o el menú de su sitio. Abre su formulario de registro.",
+  "Apply to work with": "Solicite trabajar con",
+  "Apply to work with us": "Solicite trabajar con nosotros",
 };

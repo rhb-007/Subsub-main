@@ -103,7 +103,12 @@ const half = (page, label) => page.evaluate((l) => [...document.querySelectorAll
 const toForms = (page) => half(page, "Website forms");
 const toLook = (page) => half(page, "Look and address");
 const signupBody = (page) => page.evaluate(() =>
-  document.querySelector(".embed-strip:not(.embed-signin) .embed-body")?.innerText.replace(/\s+/g, " ").trim() || null);
+  { const b = document.querySelector(".embed-strip:not(.embed-signin) .embed-body");
+    if (!b) return null; const c = b.cloneNode(true);
+    // The sign-up button (option 3) has a link of its own that works on every
+    // plan; this reads the form's half, where "Copy link" means the hosted one.
+    c.querySelector(".embed-signup-btn")?.remove();
+    return c.innerText.replace(/\s+/g, " ").trim(); });
 const signin = (page) => page.evaluate(() => {
   const el = document.querySelector(".embed-signin");
   return el ? { text: el.innerText.replace(/\s+/g, " ").trim(),
@@ -173,6 +178,22 @@ try {
     t.ck("which opens the form's markup",
       /subsub-apply/.test(vApply.got?.code || "") && !/subsub-signin/.test(vApply.got?.code || ""),
       JSON.stringify(vApply.got).slice(0, 160));
+    // The sign-up BUTTON (option 3 on the sign-up card): its own View code,
+    // its own markup, and a link to the hosted form.
+    const vBtn = await viewCode(".embed-signup-btn");
+    t.ck("the sign-up card offers a sign-up button with View code", vBtn.pressed);
+    t.ck("which opens the sign-up button's markup, under its own title",
+      /subsub-signup/.test(vBtn.got?.code || "") && !/subsub-apply|subsub-signin/.test(vBtn.got?.code || "")
+        && /sign-up button/i.test(vBtn.got?.title || ""),
+      JSON.stringify(vBtn.got).slice(0, 160));
+    t.ck("and the button links to the hosted sign-up form",
+      /href="https:\/\/outerhome\.subsub\.work\/\?apply=1"/.test(vBtn.got?.code || ""),
+      (vBtn.got?.code || "").slice(0, 200));
+    const btnRow = await page.evaluate(() => ({
+      sample: document.querySelector(".embed-signup-btn .signin-sample-btn")?.innerText || "",
+      link: document.querySelector(".embed-signup-btn .embed-link")?.innerText || "" }));
+    t.ck("with a preview of the button and its link",
+      /Apply to work with Outerhome/.test(btnRow.sample) && /\?apply=1$/.test(btnRow.link), JSON.stringify(btnRow));
     const vSign = await viewCode(".embed-signin");
     t.ck("the sign-in card has View code beside Copy", vSign.pressed);
     t.ck("which opens the button's markup, under its own title",
@@ -296,6 +317,9 @@ try {
     const si = await signin(page);
     t.ck("the sign-in button works on Basic too, through app.subsub.work",
       si?.link === "https://app.subsub.work/", si?.link);
+    const bl = await page.evaluate(() => document.querySelector(".embed-signup-btn .embed-link")?.innerText || "");
+    t.ck("the sign-up button works on Basic too, through app.subsub.work",
+      bl === "https://app.subsub.work/?apply=outerhome", bl);
     t.ck("and says so", /until outerhome\.subsub\.work is live/i.test(si?.text || ""), (si?.text || "").slice(-160));
     t.ck("nothing threw", crashes.length === 0, crashes.join(" | "));
     await ctx?.close?.();

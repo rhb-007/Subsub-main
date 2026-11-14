@@ -124,7 +124,7 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -39203,12 +39203,15 @@ function RecruitQr({ subdomain, accountName, words, liveHost = false, asModal = 
 // inherit our stylesheet and lie about how it will look on their page.
 function EmbedCodeModal({ html, copied, onCopy, onClose, kind = "form" }) {
   const [view, setView] = useState("form");
-  const button = kind === "button";
+  const button = kind === "button" || kind === "signup";
+  const signup = kind === "signup";
   return (
     <Modal wide onClose={onClose}>
       <div className={`form ecm ecm-${kind}`}>
-        <h2>{button ? tt("The sign-in button") : tt("The application form")}</h2>
-        <p className="up-sub">{button
+        <h2>{signup ? tt("The sign-up button") : button ? tt("The sign-in button") : tt("The application form")}</h2>
+        <p className="up-sub">{signup
+          ? tt("This is what the button looks like on your website, and the markup that draws it. It opens your SubSub sign-up form.")
+          : button
           ? tt("This is what the button looks like on your website, and the markup that draws it. It opens your SubSub sign-in page.")
           : tt("This is what the twelve lines draw on your website, and the markup that draws it. Nothing here needs hosting or a plugin.")}</p>
         <div className="ecm-tabs" role="tablist">
@@ -39221,7 +39224,7 @@ function EmbedCodeModal({ html, copied, onCopy, onClose, kind = "form" }) {
           </button>
         </div>
         {view === "form" ? (
-          <iframe className="ecm-prev" title={button ? tt("What the sign-in button looks like") : tt("What the application form looks like")}
+          <iframe className="ecm-prev" title={signup ? tt("What the sign-up button looks like") : button ? tt("What the sign-in button looks like") : tt("What the application form looks like")}
             sandbox="allow-scripts" srcDoc={`<!doctype html><meta charset="utf-8">
               <body style="margin:16px;font:15px/1.5 system-ui,sans-serif;color:#16241d">
               ${html}`} />
@@ -39251,6 +39254,15 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
     [subdomain, accountName, trades, theme]);
   const themed = !!(theme && theme.accent);
   const link = applyLink(subdomain);
+  // The sign-up BUTTON: the same form, as a link a site can put in its header
+  // (shared/embed.js, signUpButtonHtml). It opens the hosted form, which works
+  // on every plan, so it is offered on every plan.
+  const [btnPreview, setBtnPreview] = useState(false);
+  const btnLink = applyUrl(subdomain, { liveHost });
+  const btnHtml = useMemo(() => signUpButtonHtml({ subdomain, accountName, theme, liveHost }),
+    [subdomain, accountName, theme, liveHost]);
+  const btnAccent = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.accent || "")) ? theme.accent : "#1f6b4a";
+  const btnFg = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.btnText || "")) ? theme.btnText : "#ffffff";
 
   const copy = async (what, text) => {
     try {
@@ -39332,6 +39344,38 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
           </div>
           {preview && <EmbedCodeModal html={html} copied={copied === "html"}
             onCopy={() => copy("html", html)} onClose={() => setPreview(false)} />}
+
+          {btnLink && (
+            <div className="embed-opt embed-signup-btn">
+              <div className="embed-opt-h">
+                <span className="embed-n">3</span>
+                <div>
+                  <b>{tt("A sign-up button")}</b>
+                  <em>{tt("For your site's header or menu. It opens your sign-up form.")}</em>
+                </div>
+                <span className="embed-acts">
+                  <button className="btn-ghost sm embed-view-code" type="button" onClick={() => setBtnPreview(true)}>
+                    <Code2 size={13} />{" "}{tt("View code")}
+                  </button>
+                  <button className="btn-solid sm" onClick={() => copy("btn", btnHtml)}>
+                    {copied === "btn" ? tt("Copied") : tt("Copy the code")}
+                  </button>
+                </span>
+              </div>
+              <div className="signin-sample" aria-hidden="true">
+                <span className="signin-sample-btn" style={{ background: btnAccent, color: btnFg }}>
+                  {accountName ? `${tt("Apply to work with")} ${accountName}` : tt("Apply to work with us")}</span>
+              </div>
+              <div className="embed-link-row">
+                <code className="embed-link">{btnLink}</code>
+                <button className="btn-ghost sm" onClick={() => copy("btnlink", btnLink)}>
+                  {copied === "btnlink" ? tt("Copied") : tt("Copy link")}
+                </button>
+              </div>
+            </div>
+          )}
+          {btnPreview && <EmbedCodeModal kind="signup" html={btnHtml} copied={copied === "btn"}
+            onCopy={() => copy("btn", btnHtml)} onClose={() => setBtnPreview(false)} />}
 
           {/* A pasted snippet is a COPY, taken at the moment it was copied.
               Change the colours above and the form already on somebody's
@@ -51516,6 +51560,9 @@ iframe.dv-frame{display:block}
 .embed-card-h svg{color:var(--brand);flex:none;margin-top:2px}
 .embed-card .embed-body{padding:14px 16px;flex:1 1 auto}
 .signin-sample{padding:14px;border:1px dashed var(--line);border-radius:10px;margin-bottom:12px;background:var(--paper)}
+.embed-signup-btn .signin-sample{margin:10px 0}
+.embed-link-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.embed-link-row .embed-link{flex:1 1 200px;min-width:0}
 .signin-sample-btn{display:inline-flex;align-items:center;min-height:44px;padding:0 20px;border-radius:9px;font-weight:700;font-size:15px}
 .addr-check{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px}
 .addr-check-btn{display:inline-flex;align-items:center;gap:6px;min-height:36px}
