@@ -124,7 +124,7 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -39259,8 +39259,9 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
   // on every plan, so it is offered on every plan.
   const [btnPreview, setBtnPreview] = useState(false);
   const btnLink = applyUrl(subdomain, { liveHost });
-  const btnHtml = useMemo(() => signUpButtonHtml({ subdomain, accountName, theme, liveHost }),
-    [subdomain, accountName, theme, liveHost]);
+  const btnWho = (words && words.many) || "subcontractors";
+  const btnHtml = useMemo(() => signUpButtonHtml({ subdomain, accountName, theme, liveHost, who: btnWho }),
+    [subdomain, accountName, theme, liveHost, btnWho]);
   const btnAccent = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.accent || "")) ? theme.accent : "#1f6b4a";
   const btnFg = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.btnText || "")) ? theme.btnText : "#ffffff";
 
@@ -39365,6 +39366,7 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
               <div className="signin-sample" aria-hidden="true">
                 <span className="signin-sample-btn" style={{ background: btnAccent, color: btnFg }}>
                   {accountName ? `${tt("Apply to work with")} ${accountName}` : tt("Apply to work with us")}</span>
+                <span className="signup-sample-note">{signUpNote(btnWho)}</span>
               </div>
               <div className="embed-link-row">
                 <code className="embed-link">{btnLink}</code>
@@ -51561,6 +51563,7 @@ iframe.dv-frame{display:block}
 .embed-card .embed-body{padding:14px 16px;flex:1 1 auto}
 .signin-sample{padding:14px;border:1px dashed var(--line);border-radius:10px;margin-bottom:12px;background:var(--paper)}
 .embed-signup-btn .signin-sample{margin:10px 0}
+.signup-sample-note{display:block;margin-top:6px;font-size:12px;color:var(--ink-soft)}
 .embed-link-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .embed-link-row .embed-link{flex:1 1 200px;min-width:0}
 .signin-sample-btn{display:inline-flex;align-items:center;min-height:44px;padding:0 20px;border-radius:9px;font-weight:700;font-size:15px}

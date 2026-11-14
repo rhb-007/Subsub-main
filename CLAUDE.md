@@ -16492,9 +16492,18 @@ refactor.
   branded form. So it works on every plan, like the form, and its own Copy link
   is offered on Basic too. On the Sign-up form card it is option 3: a preview of
   the button, View code (the code window titled *The sign-up button*), Copy the
-  code, and the link with Copy link. `test:embedplace` (53) reads its markup,
+  code, and the link with Copy link. `test:embedplace` (52) reads its markup,
   its link on Scale and on Basic, and that the form's half on Basic still offers
   no hosted link. Removing the block fails the suite.
+
+  **The line under the button speaks to whoever presses it**, a subcontractor
+  or installer on the account's website, not the account that pasted the code.
+  It read *For subcontractors who want to work with you*, which is a note to
+  the installer of the snippet. It is now `signUpNote(who)`: *Subcontractors
+  and installers: apply in a few minutes to join our roster*, with the roster
+  noun from `rosterWords` (contractors for a property manager). The in-app
+  preview draws the same line under the button. Putting the old line back fails
+  one assertion.
 
 ## Working here
 

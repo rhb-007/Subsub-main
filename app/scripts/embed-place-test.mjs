@@ -189,6 +189,12 @@ try {
     t.ck("and the button links to the hosted sign-up form",
       /href="https:\/\/outerhome\.subsub\.work\/\?apply=1"/.test(vBtn.got?.code || ""),
       (vBtn.got?.code || "").slice(0, 200));
+    // The line under the button speaks to the subcontractor about to press
+    // it, in this account's roster noun, never to whoever pasted the code.
+    t.ck("and the line under it asks the subcontractor to join the roster",
+      /Subcontractors and installers: apply in a few minutes to join our roster\./.test(vBtn.got?.code || "")
+        && !/who want to work with you/.test(vBtn.got?.code || ""),
+      (vBtn.got?.code || "").match(/ss-signup-note">[^<]*/)?.[0] || "");
     const btnRow = await page.evaluate(() => ({
       sample: document.querySelector(".embed-signup-btn .signin-sample-btn")?.innerText || "",
       link: document.querySelector(".embed-signup-btn .embed-link")?.innerText || "" }));

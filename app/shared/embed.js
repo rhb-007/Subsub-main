@@ -399,7 +399,16 @@ export function signInButtonHtml({ subdomain, accountName, theme = null, liveHos
 // account's own hosted application form (applyUrl): <sub>.subsub.work/?apply=1
 // while that resolves, and app.subsub.work/?apply=<sub> otherwise, which draws
 // the same branded form. So, like the form, it works on every plan.
-export function signUpButtonHtml({ subdomain, accountName, theme = null, liveHost = false } = {}) {
+// The line under the button speaks to whoever is about to press it: a
+// subcontractor or installer on the account's website, not the account that
+// pasted it. `who` is the roster noun (subcontractors for a GC, contractors for
+// a property manager), passed in so it follows the account kind.
+export function signUpNote(who = "subcontractors") {
+  const w = String(who || "subcontractors").trim() || "subcontractors";
+  return `${w.charAt(0).toUpperCase()}${w.slice(1)} and installers: apply in a few minutes to join our roster.`;
+}
+
+export function signUpButtonHtml({ subdomain, accountName, theme = null, liveHost = false, who = "subcontractors" } = {}) {
   const url = applyUrl(subdomain, { liveHost });
   if (!url) return "";
   const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
@@ -418,6 +427,6 @@ export function signUpButtonHtml({ subdomain, accountName, theme = null, liveHos
 #subsub-signup .ss-signup-note{display:block;margin-top:6px;font-size:12px;opacity:.75}
 </style>
 <a class="ss-signup" href="${href}" target="_blank" rel="noopener">${label}</a>
-<span class="ss-signup-note">For subcontractors who want to work with you.</span>
+<span class="ss-signup-note">${esc(signUpNote(who))}</span>
 </div>`;
 }
