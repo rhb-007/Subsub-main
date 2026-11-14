@@ -16480,6 +16480,22 @@ refactor.
   findings email (*here is what to fix on your certificate*), which goes to
   somebody whose document is already on file.
 
+- **THE SIGN-UP FORM CARD ALSO HANDS OVER A SIGN-UP BUTTON, BUILT LIKE THE
+  SIGN-IN BUTTON.** Asked for as *"create a sign up button just like sign in
+  with code for the button so you can link the sign up button as well to the
+  form"*. Some sites want a button in their header, not a whole form on a page.
+  `signUpButtonHtml` in `shared/embed.js` is the sign-in button's twin: the same
+  `hex()` color check and the same escaped account name. It is
+  `#subsub-signup`, labeled *Apply to work with <account>*, and it links to
+  `applyUrl`. That is `<sub>.subsub.work/?apply=1` while the branded address is
+  live and `app.subsub.work/?apply=<sub>` otherwise, which draws the same
+  branded form. So it works on every plan, like the form, and its own Copy link
+  is offered on Basic too. On the Sign-up form card it is option 3: a preview of
+  the button, View code (the code window titled *The sign-up button*), Copy the
+  code, and the link with Copy link. `test:embedplace` (53) reads its markup,
+  its link on Scale and on Basic, and that the form's half on Basic still offers
+  no hosted link. Removing the block fails the suite.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
