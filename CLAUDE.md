@@ -16505,6 +16505,22 @@ refactor.
   preview draws the same line under the button. Putting the old line back fails
   one assertion.
 
+- **THE LOGO ON THE HOSTED SIGN-UP FORM IS A LINK, AND BRANDING SAYS
+  WHERE.** Asked for as *"on the form the logo should go back or be redirected
+  to the main site index, and this should be editable from the admin"*.
+  Account -> Branding -> **Logo link** stores `theme.homeUrl` (the account's own
+  website). Unset, the logo on the branded address goes to `/`, that address's
+  own home page (its sign-in page). On `app.subsub.work/?apply=<sub>`, which is
+  nobody's home, it is not a link unless a website was set. `cleanHomeUrl` in
+  `shared/embed.js` is the one check, read by the form, the field and
+  `validTheme`: http(s) only, a real hostname, no credentials, 200 characters,
+  and a bare `acme.com` gains https. Anything else answers null and is never
+  drawn, and the server refuses the save (`invalid_theme`) rather than storing
+  it. The field says where pressing the logo goes, names a bad address, and
+  Save is disabled while it is bad. Reset to default keeps it. No migration:
+  `theme` is a JSON column. `test:logolink` (25); drawing a plain logo and
+  dropping the save gate each fail.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

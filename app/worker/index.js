@@ -60,7 +60,7 @@ import { mayRetouch, isOptedOut, RETOUCH_WINDOW_DAYS } from "../shared/retouch.j
 import { inviteStage, dedupe, rank, summarise } from "../shared/stuck.js";
 import { INBOX_DAYS, INBOX_ASKS_PER_HOUR, inboxState, inboxRow, rankInbox,
   inboxSummary } from "../shared/inbox.js";
-import { shouldNudgeEmbed, EMBED_NUDGE_AT } from "../shared/embed.js";
+import { shouldNudgeEmbed, EMBED_NUDGE_AT, cleanHomeUrl } from "../shared/embed.js";
 import { canRequestQuotes, quotableSubs, validInvitees, canQuote, validQuote,
   quoteJobShape, rankQuotes, canAward, requestState, MAX_INVITES } from "../shared/quotes.js";
 import { isSupplier, materialLine, OTHER } from "../shared/suppliers.js";
@@ -7447,6 +7447,14 @@ function validTheme(theme) {
       .trim()
       .slice(0, 60);
     if (own) out[k] = own;
+  }
+  // Where the logo on the hosted forms goes. Blank is "not set"; anything that
+  // is not a real http(s) address refuses the save rather than being dropped,
+  // so a typo is said instead of quietly losing the link.
+  if (theme.homeUrl != null && String(theme.homeUrl).trim() !== "") {
+    const url = cleanHomeUrl(theme.homeUrl);
+    if (!url) return null;
+    out.homeUrl = url;
   }
   return out;
 }

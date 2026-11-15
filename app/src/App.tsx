@@ -124,7 +124,7 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, cleanHomeUrl, HOME_URL_MAX } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -1634,6 +1634,21 @@ const docsLink = (brand) => `https://${portalUrl(brand)}/documents`;
 // right now, if any? "app" is the generic, unbranded entry point — not a
 // company — and local/preview hosts (localhost, *.pages.dev) have no
 // subdomain to detect at all.
+// Where the logo on the hosted sign-up form goes: the account's own website
+// when Branding names one, otherwise the branded address's own home page (its
+// sign-in page). On app.subsub.work there is no company home to go to, so the
+// logo is not a link there unless a website was set.
+function logoHref(brand) {
+  return cleanHomeUrl(brand?.theme?.homeUrl) || (typeof window !== "undefined" && detectSubdomain() ? "/" : null);
+}
+function WlBrand({ brand }) {
+  const inner = (<><BrandMark brand={brand} height={30} />
+    <span className="wl-brand-name">{brand.name}</span></>);
+  const href = logoHref(brand);
+  return href
+    ? <a className="wl-brand wl-brand-link" href={href} aria-label={tt("Go to {name}'s website").replace("{name}", brand.name || "")}>{inner}</a>
+    : <div className="wl-brand">{inner}</div>;
+}
 function detectSubdomain() {
   const host = window.location.hostname.toLowerCase();
   if (!host.endsWith(".subsub.work")) return null;
@@ -19961,8 +19976,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   if (sent) return (
     <div className="wl-page" style={themeVars(t)}>
       <div className="wl-card wl-done">
-        <div className="wl-brand"><BrandMark brand={brand} height={30} />
-          <span className="wl-brand-name">{brand.name}</span></div>
+        <WlBrand brand={brand} />
         <div className="wl-tick"><CheckCircle2 size={34} /></div>
         <h1>{shortPath ? "You're set." : "Thanks — we've got it."}</h1>
         {/* On the short path nothing was applied for: the account already holds
@@ -20008,8 +20022,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   if (shortPath) return (
     <div className="wl-page" style={themeVars(t)}>
       <div className="wl-card">
-        <div className="wl-brand"><BrandMark brand={brand} height={30} />
-          <span className="wl-brand-name">{brand.name}</span></div>
+        <WlBrand brand={brand} />
 
         <h1>Choose a password</h1>
         <p className="wl-lede">{brand.name} already has your details — you just need a
@@ -20050,8 +20063,7 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
   return (
     <div className="wl-page" style={themeVars(t)}>
       <div className="wl-card">
-        <div className="wl-brand"><BrandMark brand={brand} height={30} />
-          <span className="wl-brand-name">{brand.name}</span></div>
+        <WlBrand brand={brand} />
 
         <h1>Work with {brand.name}</h1>
         <p className="wl-lede">Tell us about your company and we'll add you to our
@@ -25003,6 +25015,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // company branding
   const [b, setB] = useState({ ...brand });
   const [th, setTh] = useState(() => themeOf(brand));
+  const homeBad = !!String(th.homeUrl || "").trim() && !cleanHomeUrl(th.homeUrl);
   const [bSaved, setBSaved] = useState(false);
   // The snippet's markup, opened from the preview it draws rather than from a
   // second panel further down. Generated from `th` -- the colours in the
@@ -25535,6 +25548,19 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             </label>
           ))}
 
+          <div className="form-sec">{tt("Logo link")}</div>
+          <label className="fld">{tt("Your website")}{" "}
+            <span className="fld-note">{tt("where your logo on the sign-up form goes")}</span>
+            <input className="home-url-input" value={th.homeUrl || ""} maxLength={HOME_URL_MAX} inputMode="url"
+              autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={tt("yourcompany.com")}
+              onChange={(e) => { setTh({ ...th, homeUrl: e.target.value }); setBSaved(false); setBErr(""); }} />
+            {homeBad
+              ? <span className="fld-err"><AlertTriangle size={12} /> {tt("That isn't a website address. Try something like yourcompany.com.")}</span>
+              : <span className="cov-hint home-url-hint">{cleanHomeUrl(th.homeUrl)
+                  ? <>{tt("Pressing your logo opens")}{" "}<b>{cleanHomeUrl(th.homeUrl)}</b></>
+                  : <>{tt("Left blank, pressing your logo opens your sign-in page at")}{" "}<b>{slug || tt("yourcompany")}{".subsub.work"}</b></>}</span>}
+          </label>
+
           {(() => {
             const cr = contrastRatio(th.text, th.surface);
             const br = contrastRatio(th.btnText, th.accent);
@@ -25582,7 +25608,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
           <div className="theme-actions">
             <button type="button" className="btn-ghost"
-              onClick={() => { setTh({ ...DEFAULT_THEME }); setBSaved(false); setBErr(""); }}>{tt("Reset to default")}</button>
+              onClick={() => { setTh({ ...DEFAULT_THEME, homeUrl: th.homeUrl }); setBSaved(false); setBErr(""); }}>{tt("Reset to default")}</button>
             {/* The real form on the real address, in a new tab. It used to
                 open a copy inside this tab, which meant signing out of the
                 app to look at it and coming back to generic SubSub branding
@@ -25614,10 +25640,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           <div className="panel-actions">
             <span className="panel-count">{slug || tt("yourcompany")}{".subsub.work"}</span>
             {bSaved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
-              : <button className="btn-solid" disabled={bBusy || !b.name || !slug || !!subProblem}
+              : <button className="btn-solid" disabled={bBusy || !b.name || !slug || !!subProblem || homeBad}
                   onClick={async () => {
                     setBBusy(true); setBErr("");
-                    const err = await onSaveBrand({ ...b, subdomain: slug, theme: th });
+                    const err = await onSaveBrand({ ...b, subdomain: slug, theme: { ...th, homeUrl: cleanHomeUrl(th.homeUrl) || undefined } });
                     setBBusy(false);
                     if (err) setBErr(err); else { setBSaved(true); setB((x) => ({ ...x, subdomain: slug })); }
                   }}>
@@ -49890,6 +49916,9 @@ iframe.dv-frame{display:block}
 .wl-card{width:100%;max-width:560px;background:var(--wl-surface);border-radius:14px;
   padding:34px;box-shadow:0 18px 50px rgba(0,0,0,.12)}
 .wl-brand{display:flex;align-items:center;gap:11px;margin-bottom:22px}
+.wl-brand-link{text-decoration:none;color:inherit;width:max-content;border-radius:8px}
+.wl-brand-link:hover .wl-brand-name{text-decoration:underline}
+.wl-brand-link:focus-visible{outline:2px solid var(--wl-accent);outline-offset:4px}
 .wl-brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--wl-text)}
 .wl-card h1{font-size:25px;letter-spacing:-.03em;margin:0;color:var(--wl-text)}
 .wl-lede{font-size:15px;opacity:.72;margin-top:9px;line-height:1.5}

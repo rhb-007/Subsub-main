@@ -430,3 +430,22 @@ export function signUpButtonHtml({ subdomain, accountName, theme = null, liveHos
 <span class="ss-signup-note">${esc(signUpNote(who))}</span>
 </div>`;
 }
+
+// WHERE THE LOGO ON THE HOSTED FORMS GOES. The account's own website, typed in
+// Branding. Only http(s), only a real hostname, never a script URL: it lands in
+// an href on a page somebody opened from a stranger's site. A bare
+// "acme.com" gains https://. Anything else answers null, never the string it
+// was given, the same rule hex() follows for a colour.
+export const HOME_URL_MAX = 200;
+export function cleanHomeUrl(v) {
+  let s = String(v ?? "").trim();
+  if (!s || s.length > HOME_URL_MAX) return null;
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) s = "https://" + s;
+  let u;
+  try { u = new globalThis.URL(s); } catch { return null; }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  const host = u.hostname.toLowerCase();
+  if (!host.includes(".") || host.startsWith(".") || host.endsWith(".")) return null;
+  if (u.username || u.password) return null;
+  return u.href;
+}
