@@ -25683,7 +25683,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 trades={CATEGORIES.map((c) => ({ id: c.id, label: c.label }))}
                 theme={brand?.theme || null}
                 liveHost={hostnameStatus === "active"} />
-              <EmbedSignIn subdomain={applySubdomain} accountName={brand.name}
+              <EmbedSignIn subdomain={applySubdomain} accountName={brand.name} who={rosterWords({ kind: accountKind }).one}
                 theme={brand?.theme || null} liveHost={hostnameStatus === "active"} />
             </div>
           ) : (
@@ -39426,12 +39426,12 @@ function EmbedApply({ subdomain, accountName, trades, theme = null, liveHost = t
 // typed into a box on somebody else's page is a password that page can read,
 // so the button opens the account's own SubSub sign-in page instead
 // (shared/embed.js, signInButtonHtml).
-function EmbedSignIn({ subdomain, accountName, theme = null, liveHost = false }) {
+function EmbedSignIn({ subdomain, accountName, theme = null, liveHost = false, who = "subcontractor" }) {
   const [copied, setCopied] = useState("");
   const [preview, setPreview] = useState(false);
   const link = signInUrl(subdomain, { liveHost });
-  const html = useMemo(() => signInButtonHtml({ subdomain, accountName, theme, liveHost }),
-    [subdomain, accountName, theme, liveHost]);
+  const html = useMemo(() => signInButtonHtml({ subdomain, accountName, theme, liveHost, who }),
+    [subdomain, accountName, theme, liveHost, who]);
   const accent = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.accent || "")) ? theme.accent : "#1f6b4a";
   const btnText = (theme && /^#[0-9a-fA-F]{6}$/.test(theme.btnText || "")) ? theme.btnText : "#ffffff";
   const copy = async (what, text) => {

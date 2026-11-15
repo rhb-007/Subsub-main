@@ -205,6 +205,27 @@ try {
     t.ck("which opens the button's markup, under its own title",
       /subsub-signin/.test(vSign.got?.code || "") && /sign-in button/i.test(vSign.got?.title || ""),
       JSON.stringify(vSign.got).slice(0, 160));
+    // "Team & subcontractor login" tells the visitor who the button is for; on
+    // a desktop nav it is no note at all, because a nav link cannot carry one.
+    const sCode = vSign.got?.code || "";
+    t.ck("the sign-in note names who it is for, in the account's word",
+      /Team &amp; subcontractor login/.test(sCode) && !/who work with you/.test(sCode),
+      sCode.match(/ss-signin-note">[^<]*/)?.[0] || "");
+    const noteAt = async (width) => {
+      const p2 = await browser.newPage();
+      await p2.setViewport({ width, height: 800 });
+      await p2.setContent(`<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body>${sCode}</body></html>`);
+      const r = await p2.evaluate(() => {
+        const n = document.querySelector("#subsub-signin .ss-signin-note");
+        return n ? { display: getComputedStyle(n).display, text: n.innerText } : null;
+      });
+      await p2.close();
+      return r;
+    };
+    const wide = await noteAt(1024), narrow = await noteAt(390);
+    t.ck("no note under the button on a desktop", wide?.display === "none", JSON.stringify(wide));
+    t.ck("and on a phone it reads Team & subcontractor login",
+      narrow?.display === "block" && narrow.text === "Team & subcontractor login", JSON.stringify(narrow));
     const si = await signin(page);
     t.ck("and the sign-in button sits beside it", !!si, JSON.stringify(si));
     t.ck("which opens the live branded sign-in page", si?.link === "https://outerhome.subsub.work/", si?.link);
