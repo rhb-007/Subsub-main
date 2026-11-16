@@ -205,8 +205,8 @@ try {
     t.ck("which opens the button's markup, under its own title",
       /subsub-signin/.test(vSign.got?.code || "") && /sign-in button/i.test(vSign.got?.title || ""),
       JSON.stringify(vSign.got).slice(0, 160));
-    // "Team & subcontractor login" tells the visitor who the button is for; on
-    // a desktop nav it is no note at all, because a nav link cannot carry one.
+    // "Team & subcontractor login" tells the visitor who the button is for, at
+    // every width, and the in-app preview draws it too.
     const sCode = vSign.got?.code || "";
     t.ck("the sign-in note names who it is for, in the account's word",
       /Team &amp; subcontractor login/.test(sCode) && !/who work with you/.test(sCode),
@@ -223,9 +223,12 @@ try {
       return r;
     };
     const wide = await noteAt(1024), narrow = await noteAt(390);
-    t.ck("no note under the button on a desktop", wide?.display === "none", JSON.stringify(wide));
-    t.ck("and on a phone it reads Team & subcontractor login",
+    t.ck("under the button on a desktop it reads Team & subcontractor login",
+      wide?.display === "block" && wide.text === "Team & subcontractor login", JSON.stringify(wide));
+    t.ck("and on a phone too",
       narrow?.display === "block" && narrow.text === "Team & subcontractor login", JSON.stringify(narrow));
+    const prevNote = await page.evaluate(() => document.querySelector(".embed-signin .signin-sample-note")?.innerText || "");
+    t.ck("the preview in the app draws the same line under the button", prevNote === "Team & subcontractor login", prevNote);
     const si = await signin(page);
     t.ck("and the sign-in button sits beside it", !!si, JSON.stringify(si));
     t.ck("which opens the live branded sign-in page", si?.link === "https://outerhome.subsub.work/", si?.link);

@@ -373,12 +373,10 @@ export function signInUrl(subdomain, { liveHost = false } = {}) {
   return `https://${APP_HOST}/`;
 }
 
-// The line under the sign-in button, read by the person about to press it. A
-// nav link cannot carry a sentence beside it without clutter, so it is drawn
-// only on a phone, where the button stands on its own line, and it names who
-// the login is for. `who` is the roster noun in the singular, so a property
-// manager's reads "Team & contractor login".
-export const SIGNIN_NOTE_MAX_WIDTH = 600;
+// The line under the sign-in button, read by the person about to press it. It
+// names who the login is for, in four words, so it fits under a nav link too.
+// `who` is the roster noun in the singular, so a property manager's reads
+// "Team & contractor login".
 export function signInNote(who = "subcontractor") {
   const w = String(who || "subcontractor").trim().toLowerCase() || "subcontractor";
   return `Team & ${w} login`;
@@ -398,8 +396,7 @@ export function signInButtonHtml({ subdomain, accountName, theme = null, liveHos
   border:0;min-height:44px;box-sizing:border-box}
 #subsub-signin .ss-signin:hover{background:${darken(accent)};color:${btnText}}
 #subsub-signin .ss-signin:focus-visible{outline:3px solid ${accent};outline-offset:3px}
-#subsub-signin .ss-signin-note{display:none;margin-top:6px;font-size:12px;opacity:.75}
-@media (max-width:${SIGNIN_NOTE_MAX_WIDTH}px){#subsub-signin .ss-signin-note{display:block}}
+#subsub-signin .ss-signin-note{display:block;margin-top:6px;font-size:12px;opacity:.75}
 </style>
 <a class="ss-signin" href="${href}" target="_blank" rel="noopener">${label}</a>
 <span class="ss-signin-note">${esc(signInNote(who))}</span>

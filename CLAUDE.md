@@ -16521,19 +16521,21 @@ refactor.
   `theme` is a JSON column. `test:logolink` (25); drawing a plain logo and
   dropping the save gate each fail.
 
-- **THE SIGN-IN BUTTON HAS NO NOTE ON A DESKTOP, AND ON A PHONE IT READS
-  "TEAM & SUBCONTRACTOR LOGIN".** Asked for because the line under it, *For
-  your team and the subcontractors who work with you*, was SubSub describing
-  the button to the account that pastes it, not to the visitor who presses it
-  (the same fault the sign-up note had). A nav link also cannot carry a
-  sentence under it. `signInNote(who)` in `shared/embed.js` is now *Team &
-  <noun> login*, with the noun from `rosterWords` (*Team & contractor login* for
-  a property manager), and the snippet hides it above `SIGNIN_NOTE_MAX_WIDTH`
-  (600px) with a media query. The in-app card's own description still speaks to
-  the account, because the account is who reads it there. Code already pasted
-  keeps the old line until it is copied again. `test:embedplace` (55) renders
-  the snippet on a blank page at 1024px and 390px; showing it on a desktop and
-  dropping the media query each fail their own assertion.
+- **THE SIGN-IN BUTTON READS "TEAM & SUBCONTRACTOR LOGIN" UNDER IT, AT EVERY
+  WIDTH.** The line under it, *For your team and the subcontractors who work
+  with you*, was SubSub describing the button to the account that pastes it,
+  not to the visitor who presses it (the same fault the sign-up note had).
+  `signInNote(who)` in `shared/embed.js` is *Team & <noun> login*, with the
+  noun from `rosterWords` (*Team & contractor login* for a property manager).
+  It was first drawn only on a phone, on the reasoning that a nav link cannot
+  carry a sentence; four words is not a sentence, and the owner asked for it
+  under the button everywhere, so the media query is gone. The in-app preview
+  on the Sign-in button card draws the same line. The card's own description
+  still speaks to the account, because the account is who reads it there.
+  Code already pasted keeps the old line until it is copied again.
+  `test:embedplace` (56) renders the snippet on a blank page at 1024px and
+  390px and reads the preview; hiding it on either width or dropping it from
+  the preview fails its own assertion.
 
 ## Working here
 

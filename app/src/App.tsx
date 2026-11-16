@@ -124,7 +124,7 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, cleanHomeUrl, HOME_URL_MAX } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, signInNote, cleanHomeUrl, HOME_URL_MAX } from "../shared/embed.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -39453,6 +39453,7 @@ function EmbedSignIn({ subdomain, accountName, theme = null, liveHost = false, w
         <div className="signin-sample" aria-hidden="true">
           <span className="signin-sample-btn" style={{ background: accent, color: btnText }}>
             {accountName ? `${tt("Sign in to")} ${accountName}` : tt("Sign in")}</span>
+          <span className="signup-sample-note signin-sample-note">{signInNote(who)}</span>
         </div>
         <div className="embed-opt">
           <div className="embed-opt-h">
