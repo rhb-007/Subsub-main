@@ -17,7 +17,7 @@ import { sendEmail, welcomeEmail, founderIntroEmail, demoBookedEmail, docRequest
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
   licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail,
-  agreementSentEmail } from "./mail.js";
+  agreementSentEmail, rosterJoinedEmail } from "./mail.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
@@ -1047,6 +1047,41 @@ async function logActivity(env, accountId, userId, kind, text, meta) {
   }
 }
 
+// TOLD BY EMAIL, not only on the dashboard, when a contractor lands on this
+// roster without anybody here pressing anything. Every admin and project
+// manager on the account, once per address, by their own email setting.
+// Never fails the caller: the engagement is written by the time this runs.
+async function notifyRosterJoined(env, { accountId, companyId, engagementId, via }) {
+  try {
+    const account = await env.DB.prepare(
+      `SELECT id, name, kind, subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
+    const co = await env.DB.prepare(`SELECT company, contact FROM companies WHERE id = ?`).bind(companyId).first();
+    if (!account || !co) return { sent: 0 };
+    const { results: team } = await env.DB.prepare(
+      `SELECT u.id, u.name, u.email, u.notify FROM memberships m JOIN users u ON u.id = m.user_id
+        WHERE m.account_id = ? AND m.role IN ('admin', 'pm')`).bind(accountId).all();
+    const link = `${accountOrigin(account)}/?open=sub&id=${encodeURIComponent(companyId)}`;
+    const seen = new Set();
+    let sent = 0;
+    for (const u of team || []) {
+      const to = realEmail(u.email);
+      if (!to || !notifyOf(u).email) continue;
+      const key = to.trim().toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const mail = rosterJoinedEmail({ firstName: String(u.name || "").split(" ")[0], account,
+        companyName: co.company, contact: co.contact, via, kind: account.kind, link });
+      const result = await sendEmail(env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+      await logMail(env, { accountId, companyId, to, kind: "roster_joined", subject: mail.subject, result, sentBy: null });
+      if (result.ok) sent++;
+    }
+    return { sent, engagementId };
+  } catch (err) {
+    console.error("[roster_joined] notify failed:", err?.message || err);
+    return { sent: 0 };
+  }
+}
+
 async function logEvent(env, accountId, actorId, kind, subjectId, payload) {
   await env.DB.prepare(
     `INSERT INTO events (account_id, actor_id, kind, subject_id, payload) VALUES (?, ?, ?, ?, ?)`
@@ -1645,8 +1680,10 @@ async function createApplication(env, account, body, note,
 
   // `via` is what the dashboard says about it: an application through the
   // public form, or somebody accepting an invite this account sent.
+  const via = boundCompanyId || /invite/i.test(note || "") ? "invite" : "form";
   await logEvent(env, account.id, user.id, "engagement.applied", engagementId,
-    { companyId, reused: !!company, via: boundCompanyId || /invite/i.test(note || "") ? "invite" : "form" });
+    { companyId, reused: !!company, via });
+  await notifyRosterJoined(env, { accountId: account.id, companyId, engagementId, via });
 
   // Confirm it landed, and say what happens next. Public entry point, so a
   // failure here must never turn a successful application into an error.
@@ -27689,6 +27726,7 @@ app.post("/api/platform/accounts/:id/roster", async (c) => {
 
   await logEvent(c.env, acct.id, staff.userId, "engagement.applied", engagementId,
     { companyId: co.id, via: "staff" });
+  await notifyRosterJoined(c.env, { accountId: acct.id, companyId: co.id, engagementId, via: "staff" });
   await auditPlatform(c.env, staff, acct.id, "engagement_added_by_staff",
     `${staff.name} added ${co.company} to ${acct.name}'s roster: ${reason}`,
     { engagementId, companyId: co.id, engagedAs: want, reactivated: !!existing, reason });

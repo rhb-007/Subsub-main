@@ -16537,6 +16537,24 @@ refactor.
   390px and reads the preview; hiding it on either width or dropping it from
   the preview fails its own assertion.
 
+
+- **A CONTRACTOR WHO JOINS THE ROSTER ON THEIR OWN IS ALSO EMAILED TO THE
+  ACCOUNT, NOT ONLY SHOWN ON THE DASHBOARD.** Asked for with the dashboard's
+  *New on your roster* row on screen: *"they should get an email notification
+  not just a notice on their dashboard"*. `notifyRosterJoined` runs beside
+  every `engagement.applied`: an application through the public form, an
+  accepted invite, and SubSub support adding them from the console. It emails
+  every admin and project manager on the account (`rosterJoinedEmail`, under
+  100 words), by each person's own email setting, once per address, logged as
+  `roster_joined`. It never fails the caller, because the engagement is written
+  by then. The link is `/?open=sub&id=<companyId>`. That opens the roster with
+  their card up, once signed in and once the roster has loaded, and records an
+  application as seen, which is what Open on the dashboard row does. A connect
+  request the account sent itself is not emailed, because they asked.
+  `test:newapplicant` (22) and `test:newapplicantui` (23). Dropping the send
+  fails six, ignoring the email setting fails two, and not opening the card
+  fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

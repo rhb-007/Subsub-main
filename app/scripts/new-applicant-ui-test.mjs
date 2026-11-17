@@ -127,6 +127,30 @@ try {
   t.ck("and it is recorded as seen", asked.includes("cmp_bay"), JSON.stringify(asked));
   t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
+
+  console.log("\n-- the email's link: ?open=sub&id=<company> --");
+  {
+    const before = asked.length;
+    const v = await visitApp(browser, { host: "x", webPort: WEB, path: "/?open=sub&id=cmp_typed",
+      seat: { userId: "usr_r", accountId: "acc_out" }, viewport: { width: 1180, height: 1300 } });
+    await wait(2800);
+    const got = await v.page.evaluate(() => ({
+      card: [...document.querySelectorAll(".modal")].some((m) => /Typed In Tile/.test(m.innerText)),
+      query: window.location.search,
+    }));
+    t.ck("the link opens that contractor's card", got.card, JSON.stringify(got));
+    t.ck("and the query is taken off the address", got.query === "", got.query);
+    t.ck("a card that was never an application records nothing", asked.length === before, JSON.stringify(asked));
+    await v.ctx.close();
+    const w = await visitApp(browser, { host: "x", webPort: WEB, path: "/?open=sub&id=cmp_bad",
+      seat: { userId: "usr_r", accountId: "acc_out" }, viewport: { width: 1180, height: 1300 } });
+    await wait(2800);
+    t.ck("an unseen application's link opens its card",
+      await w.page.evaluate(() => [...document.querySelectorAll(".modal")].some((m) => /Refused Siding/.test(m.innerText))));
+    t.ck("and records it as seen, as Open does", asked.slice(before).includes("cmp_bad"), JSON.stringify(asked));
+    t.ck("nothing crashed on arrival", v.crashes.length === 0 && w.crashes.length === 0, [...v.crashes, ...w.crashes].join(" | "));
+    await w.ctx.close();
+  }
 } catch (e) {
   t.ck("the suite ran without throwing", false, e?.stack || String(e));
 } finally {

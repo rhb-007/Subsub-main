@@ -29,11 +29,24 @@ db.exec(`
   INSERT INTO accounts(id,name,subdomain,kind,plan,billing) VALUES
     ('acc','Outerhome','outerhome','general_contractor','scale','monthly'),
     ('acc2','Other GC','othergc','general_contractor','scale','monthly');
-  INSERT INTO users(id,name,email) VALUES ('u_ann','Ann','ann@x.test'),('u_zed','Zed','zed@x.test');
+  INSERT INTO users(id,name,email) VALUES ('u_ann','Ann Lee','ann@x.test'),('u_zed','Zed','zed@x.test'),
+    ('u_pat','Pat','pat@x.test'),('u_dup','Ann Again','ANN@x.test');
+  INSERT INTO users(id,name,email,notify) VALUES ('u_off','Off','off@x.test','{"email":false}');
   INSERT INTO memberships(id,user_id,account_id,role) VALUES
-    ('m_ann','u_ann','acc','admin'),('m_zed','u_zed','acc2','admin');
+    ('m_ann','u_ann','acc','admin'),('m_zed','u_zed','acc2','admin'),
+    ('m_pat','u_pat','acc','pm'),('m_off','u_off','acc','admin'),('m_dup','u_dup','acc','pm');
 `);
-const env = { DB: makeD1(db) };
+// Resend, stubbed at fetch, so the mail is what was really asked to go.
+const mails = [];
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, init) => {
+  if (String(url).startsWith("https://mail.test/")) {
+    mails.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ id: "m" + mails.length }), { status: 200 });
+  }
+  return realFetch(url, init);
+};
+const env = { DB: makeD1(db), RESEND_API_KEY: "k", MAIL_FROM: "hello@subsub.work", RESEND_API_BASE: "https://mail.test" };
 const call = async (path, { method = "GET", as = "u_ann", acct = "acc", body } = {}) => {
   const res = await worker.fetch(new Request(`https://api.subsub.work${path}`, {
     method, headers: { "Content-Type": "application/json", "X-User-Id": as, "X-Account-Id": acct },
@@ -48,6 +61,21 @@ const applied = await worker.fetch(new Request("https://api.subsub.work/api/appl
   body: JSON.stringify({ company: "Bay Roofing", contact: "Rae Bay", email: "rae@bay.test", categories: ["roofing"] }),
 }), env, { waitUntil() {} });
 ck("the application is accepted", applied.status === 200, String(applied.status));
+
+console.log("\n-- the account is told by email --");
+const told = mails.filter((m) => /roster/.test(m.subject));
+const toList = told.map((m) => m.to[0].toLowerCase()).sort();
+ck("the admin and the project manager are emailed", toList.includes("ann@x.test") && toList.includes("pat@x.test"), JSON.stringify(toList));
+ck("somebody who turned email off is not", !toList.includes("off@x.test"), JSON.stringify(toList));
+ck("one address is emailed once", toList.filter((t) => t === "ann@x.test").length === 1, JSON.stringify(toList));
+ck("nobody on another account is", !toList.includes("zed@x.test"), JSON.stringify(toList));
+const annMail = told.find((m) => m.to[0] === "ann@x.test");
+ck("it names the company and says they applied", /Bay Roofing applied to join your roster/.test(annMail?.subject || ""), annMail?.subject);
+ck("it greets them by first name", /^Hi Ann,/.test(annMail?.text || ""), annMail?.text);
+ck("it links straight to their card", /\/\?open=sub&id=/.test(annMail?.text || ""), annMail?.text);
+ck("the applicant still gets their own confirmation", mails.some((m) => m.to[0] === "rae@bay.test"));
+const logged = db.prepare("SELECT COUNT(*) n FROM email_log WHERE kind = 'roster_joined' AND account_id = 'acc'").get().n;
+ck("each send is logged", logged === 2, String(logged));
 
 let subs = (await call("/api/subs")).body;
 let bay = (subs || []).find((s) => s.company === "Bay Roofing");

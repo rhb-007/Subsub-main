@@ -388,6 +388,31 @@ ${NOREPLY}`;
   return { subject: `We received your application to ${who}`, text, html: textToHtml(text, null) };
 }
 
+// TOLD WHEN SOMEBODY JOINS YOUR ROSTER ON THEIR OWN. An application through
+// the public form, an invite accepted, or SubSub support adding them: each
+// writes an engagement with nobody on this account pressing anything, so the
+// dashboard row alone was the first anybody heard of it. Sent to the
+// account's admins and project managers, by their own email setting.
+export function rosterJoinedEmail({ firstName, account, companyName, contact, via, kind, link }) {
+  const noun = hiresLabelFor(kind);
+  const who = companyName || "A company";
+  const how = via === "invite" ? `accepted your invitation and joined your ${noun} roster`
+    : via === "staff" ? `was added to your ${noun} roster by SubSub support`
+    : `applied to join your ${noun} roster`;
+  const text = `Hi ${firstName || "there"},
+
+${who}${contact && contact !== companyName ? ` (${contact})` : ""} ${how}.
+
+Open their card to check their details and documents before giving them work:
+${link}
+
+${NOREPLY}`;
+  const subject = via === "invite" ? `${who} joined your roster`
+    : via === "staff" ? `${who} was added to your roster`
+    : `${who} applied to join your roster`;
+  return { subject, text, html: linkAlso(textToHtml(text, null), link) };
+}
+
 // What somebody who signed up on the marketing site is sent, from us.
 //
 // Signing up sent nothing of SubSub's own. The only mail was Supabase's

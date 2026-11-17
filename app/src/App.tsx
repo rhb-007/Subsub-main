@@ -4500,6 +4500,33 @@ export default function SubSub() {
   const patchEngagement = (companyId, patch) =>
     setEngagements((es) => es.map((e) =>
       (e.companyId === companyId && e.accountId === account.id) ? { ...e, ...patch } : e));
+  // Arriving from the "joined your roster" email (?open=sub&id=<companyId>):
+  // the roster with that contractor's card open, recorded as seen, which is
+  // what pressing Open on the dashboard row does. Held until signed in and
+  // until this account's roster has loaded, because the card is drawn from it.
+  const [subAsk] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return q.get("open") === "sub" ? q.get("id") || null : null;
+    } catch { return null; }
+  });
+  const subAimed = useRef(false);
+  useEffect(() => {
+    if (!subAsk || subAimed.current || !loggedIn || !can("contractors")) return;
+    if (hydratedFor !== currentAccountId) return;
+    subAimed.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    setTab("network");
+    const sb = allSubs.find((x) => x.id === subAsk);
+    if (!sb) return;
+    setSelected(sb);
+    if (sb.appliedAt && !sb.applicationSeenAt) {
+      api.applicationSeen(sb.id).then((r) =>
+        patchEngagement(sb.id, { applicationSeenAt: r?.seenAt || new Date().toISOString() }))
+        .catch(() => { /* the dashboard row stays, which is the honest answer */ });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subAsk, loggedIn, role, hydratedFor, currentAccountId, allSubs]);
   // Split a flat patch and write each half to its own table.
   const patchSub = (companyId, patch) => {
     // propertyIds is an engagement field, but it lives in its own join table
