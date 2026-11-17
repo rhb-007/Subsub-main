@@ -17478,7 +17478,18 @@ refactor.
   `setBusy(true); setErr("");` appears in dozens of components — 45 `no-undef`
   errors, and it also clobbered `ReportPhoto`'s own unrelated `setFailed`.
   `npm run lint` named every one in a second, which is the entire argument for
-  the rule in `## Working here`. A rename inside one function is scoped to that
+  the rule in `- **THE POWERED-BY MARK ON THE PASTED SIGN-UP FORM READ "SUBSU", BECAUSE ITS
+  LAST LETTER WAS NEVER IN THE SNIPPET.** Reported from outerhome.co. The inline
+  SVG in `applyFormHtml` (`shared/embed.js`) carried the three mark paths and
+  five letters and stopped; the final `b` (`M531.05,...`, the same path
+  `SubSubLogo` draws) is added. **The test had pinned "at least 7 paths", which
+  the broken mark passed with 8**, so `test:embed` now requires nine paths and
+  measures the drawn word's right edge with `getBBox`: 531 with the `b`, 467
+  without. Removing the path fails both. The marketing pages' copies were
+  whole. **Code already pasted on a customer's site keeps the old mark** until
+  it is copied again from Branding -> Website forms.
+
+## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 
   **WHAT THIS DELIBERATELY DOES NOT DO: migrate to `POST /v2/core/accounts`.**

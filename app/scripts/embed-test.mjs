@@ -175,6 +175,11 @@ console.log("\n-- and it actually works in a browser --");
         label: el.getAttribute("aria-label"),
         svg: !!el.querySelector("svg"),
         paths: el.querySelectorAll("svg path").length,
+        // How far right the artwork actually reaches, in viewBox units. The
+        // last letter of SubSub ends at x=531; a mark missing it ends at 467.
+        right: (() => { const g = el.querySelector("svg"); if (!g) return 0;
+          return Math.max(...[...g.querySelectorAll("path")].map((p) => {
+            const b = p.getBBox(); return b.x + b.width; })); })(),
         img: !!el.querySelector("img") } : null;
     });
     t.ck("it carries a Powered by line", /powered by/i.test(by?.text || ""), JSON.stringify(by));
@@ -182,7 +187,11 @@ console.log("\n-- and it actually works in a browser --");
     // The real mark, not the word. It is our logo on somebody else's website
     // and a text substitute is not the thing that was asked for.
     t.ck("and the actual mark beside it", by?.svg === true, JSON.stringify(by));
-    t.ck("drawn in full", (by?.paths || 0) >= 7, String(by?.paths));
+    // A path count of "at least seven" passed for months with the final b
+    // missing, so the snippet read "SubSu". Nine paths (three in the mark, six
+    // letters) and the word reaching the right edge of the viewBox.
+    t.ck("drawn in full", by?.paths === 9, String(by?.paths));
+    t.ck("down to the last b of SubSub", (by?.right || 0) > 525, String(by?.right));
     // Inline, never fetched: a snippet that loads an image is a snippet with a
     // dependency, and one that breaks leaves a broken-image icon on their page.
     t.ck("fetching no image to do it", by?.img === false, JSON.stringify(by));
