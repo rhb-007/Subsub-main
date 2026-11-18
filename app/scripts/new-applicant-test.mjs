@@ -125,7 +125,7 @@ console.log("\n-- accepting and declining --");
 
   await worker.fetch(new Request("https://api.subsub.work/api/apply/outerhome", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ company: "Nope Paint", contact: "Ned", email: "ned@nope.test", categories: ["painting"] }),
+    body: JSON.stringify({ company: "Nope Paint", contact: "Ned Nope", email: "ned@nope.test", categories: ["painting"] }),
   }), env, { waitUntil() {} });
   const nope = (await call("/api/subs")).body.find((x) => x.company === "Nope Paint");
   ck("a second applicant is pending", nope?.application === "pending" && nope?.status === "paused", JSON.stringify(nope));
@@ -135,7 +135,9 @@ console.log("\n-- accepting and declining --");
   const seats = db.prepare("SELECT COUNT(*) n FROM memberships WHERE account_id = 'acc' AND company_id = ? AND role = 'contractor'").get(nope.id).n;
   ck("and takes away the seat applying gave them", seats === 0, String(seats));
   const told3 = mails.slice(b2).find((m) => m.to[0] === "ned@nope.test");
-  ck("they are told kindly, with no reason", /aren't taking Nope Paint on right now/.test(told3?.text || ""), told3?.text);
+  ck("they are greeted by first name", /^Hi Ned,/.test(told3?.text || ""), told3?.text);
+  ck("and told plainly, with no reason", /Outerhome isn't able to accept your subcontractor application at this time\./.test(told3?.text || ""), told3?.text);
+  ck("with what the free account gives them", /compliance pack current/.test(told3?.text || "") && /Passport/.test(told3?.text || "") && /Invite the GCs/.test(told3?.text || ""), told3?.text);
 
   // A DECLINE IS NOT AN EVICTION FROM SUBSUB: they keep a free account of
   // their own, on the company row they applied as, so the pack survives.
@@ -145,7 +147,7 @@ console.log("\n-- accepting and declining --");
   ck("and the person who applied is its admin", seatAt.length === 1 && seatAt[0].role === "admin" && /ned@nope\.test/i.test(seatAt[0].email), JSON.stringify(seatAt));
   const pp = db.prepare("SELECT COUNT(*) n FROM passports WHERE company_id = ?").get(nope.id).n;
   ck("with a Passport for the same company", pp === 1, String(pp));
-  ck("the email says the account is still theirs, with the sign-in link", /free SubSub account is still yours/.test(told3?.text || "") && /https:\/\/app\.subsub\.work\//.test(told3?.text || ""), told3?.text);
+  ck("the email says the account is still theirs, with the sign-in link", /You still have a free SubSub account/.test(told3?.text || "") && /https:\/\/app\.subsub\.work\//.test(told3?.text || ""), told3?.text);
   // Somebody who already has a seat somewhere has a home and gets no second one.
   await worker.fetch(new Request("https://api.subsub.work/api/apply/outerhome", {
     method: "POST", headers: { "Content-Type": "application/json" },

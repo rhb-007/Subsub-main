@@ -415,6 +415,9 @@ ${NOREPLY}`;
 // and gives no reason, because the account gave none.
 export function applicationDecidedEmail({ contact, companyName, account, accepted, signInLink, homeLink = null }) {
   const who = account?.name || "the team";
+  // The first name, because this is the one email that has to be personal.
+  const first = String(contact || "").trim().split(/\s+/)[0] || companyName || "there";
+  const noun = hiresLabelFor(account?.kind);
   const text = accepted
     ? `Hi ${contact || companyName},
 
@@ -429,17 +432,24 @@ ${WHAT_TO_ADD}
 -- ${who}
 
 ${NOREPLY}`
-    : `Hi ${contact || companyName},
+    : `Hi ${first},
 
-Thank you for applying to ${who}. They aren't taking ${companyName} on right now.
+${who} isn't able to accept your ${noun} application at this time.
 ${homeLink ? `
-Your free SubSub account is still yours. Sign in to keep your compliance pack current, send it to other GCs and invite the GCs you work with:
+You still have a free SubSub account. With it you can:
+- Keep your compliance pack current, with expiry reminders
+- Send it to any GC in seconds, as a live link
+- Share your Passport so GCs can add you to their roster
+- Invite the GCs you work with
+
+Sign in here:
 ${homeLink}
-` : ""}
--- ${who}
+
+-- The SubSub team` : `
+-- ${who}`}
 
 ${NOREPLY}`;
-  const subject = accepted ? `${who} accepted your application` : `Your application to ${who}`;
+  const subject = accepted ? `${who} accepted your application` : `Your ${noun} application to ${who}`;
   const link = accepted ? signInLink : homeLink;
   return { subject, text, html: link ? linkAlso(textToHtml(text, null), link) : textToHtml(text, null) };
 }

@@ -16617,9 +16617,13 @@ refactor.
   the person has a seat elsewhere; it never fails the decline. From there they
   have the compliance pack, Get your GCs, and Account -> Company to become a
   general contractor. `addPackSender`'s own-company check reads
-  `accounts.company_id`, because that row is not `cmp_own_<id>`. The decline
-  email adds one sentence: *Your free SubSub account is still yours*, with
-  app.subsub.work, naming no plan or price. `test:newapplicant` (46); giving a
+  `accounts.company_id`, because that row is not `cmp_own_<id>`. **The decline
+  email greets them by first name**, says *<account> isn't able to accept your
+  subcontractor application at this time* (the noun follows the hiring
+  account's kind), then lists what the free account gives them (the pack kept
+  current with reminders, sending it as a live link, the Passport, inviting
+  GCs) with app.subsub.work, signed by the SubSub team, naming no plan or
+  price. `test:newapplicant` (46); giving a
   second account to somebody seated elsewhere fails one, and skipping the home
   fails four.
 
