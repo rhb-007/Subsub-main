@@ -79,6 +79,7 @@ import { canSet as canSetAuto, AUTO_DENY_TEXT, autoStateText } from "../shared/a
 import { DOC_KINDS, EXPIRING_KINDS as EXPIRING_DOC_KINDS, REQUIRED_KINDS,
   ASSIGN_KINDS, PAY_ONLY_KINDS, isOptionalDoc, docStatus as docStatusOf,
   coversJob as coversJobDocs, daysBetween as daysBetweenIso, DOC_LABELS } from "../shared/docs.js";
+import { DOC_NOTIFY_KINDS, docNotifyOn } from "../shared/docnotify.js";
 import { setupGaps, mayFinishSetup, firstGapStep } from "../shared/setup.js";
 import { jobIsClosed, jobClosure, completionEffects, jobHold, jobIsLive,
   endingEffects, whyNotEnd, whyNotResume, ENDING_KINDS, ENDING_REFUSALS,
@@ -17081,6 +17082,51 @@ function gcalErrText(e) {
   return `That didn't work (${code || `error ${e.status}`}). Try again.`;
 }
 
+// EMAILS ABOUT THE ROSTER'S COMPLIANCE PACKS. One switch per item, each on
+// unless this person turned it off. Saves only its own key, so the other
+// notification panels are left as they are.
+function DocNotifyPanel({ notify, onSave }) {
+  const [on, setOn] = useState(() => Object.fromEntries(
+    DOC_NOTIFY_KINDS.map((k) => [k.id, docNotifyOn(notify || {}, k.id)])));
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState("");
+  const emailOff = notify && notify.email === false;
+  return (
+    <div className="portal-panel settings-panel doc-notify-panel">
+      <h4>{tt("Compliance pack emails")}</h4>
+      <p className="panel-note">{tt("We email you when a company on your roster adds to its compliance pack. A signed agreement asks you to countersign it.")}</p>
+      <div className="notify-opts">
+        {DOC_NOTIFY_KINDS.map((k) => (
+          <label key={k.id} className={`notify-opt ${on[k.id] ? "on" : ""}`} data-kind={k.id}>
+            <input type="checkbox" checked={!!on[k.id]}
+              onChange={(e) => { setOn({ ...on, [k.id]: e.target.checked }); setSaved(false); setErr(""); }} />
+            <Mail size={17} />
+            <span className="no-txt">
+              <span className="no-name">{tt(k.label)}</span>
+              <span className="no-sub">{tt(k.hint)}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+      {emailOff && <p className="cov-hint">{tt("Your email notifications are off, so none of these are sent.")}</p>}
+      {err && <p className="billing-err" role="alert">{err}</p>}
+      <div className="panel-actions">
+        <span className="panel-count">{tt("{n} of {m} on", { n: Object.values(on).filter(Boolean).length, m: DOC_NOTIFY_KINDS.length })}</span>
+        {saved ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
+          : <button className="btn-solid doc-notify-save" disabled={busy}
+              onClick={async () => {
+                setBusy(true); setErr("");
+                const e = await onSave({ docUploads: on });
+                setBusy(false);
+                if (e) setErr(e); else setSaved(true);
+              }}>
+              <Check size={15} />{" "}{busy ? tt("Saving…") : tt("Save")}</button>}
+      </div>
+    </div>
+  );
+}
+
 function GoogleCalendarPanel({ landed = null, crewSide = true }) {
   const [s, setS] = useState(null);
   const [busy, setBusy] = useState("");
@@ -25394,6 +25440,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                       <Check size={15} />{" "}{tt("Save notifications")}</button>}
               </div>
             </div>
+          )}
+
+          {(role === "admin" || role === "pm") && (
+            <DocNotifyPanel notify={me?.notify} onSave={onSaveNotify} />
           )}
 
           {role === "tenant" && (

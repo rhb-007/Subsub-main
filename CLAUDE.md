@@ -17561,6 +17561,39 @@ refactor.
   whole. **Code already pasted on a customer's site keeps the old mark** until
   it is copied again from Branding -> Website forms.
 
+- **THE HIRING SIDE IS EMAILED WHEN A COMPANY ON ITS ROSTER ADDS TO ITS
+  COMPLIANCE PACK, AND EACH ITEM HAS ITS OWN SWITCH, ON BY DEFAULT.** Asked
+  for as *"email notifications ... for any compliance pack item that is
+  uploaded, ie. Insurance, surety, W9, License #, agreement returned/signed
+  (and should prompt contractor to countersign) -- these should all be
+  editable (turn on (default)/off) ... under notifications"*.
+  `app/shared/docnotify.js` holds the five items and the rule;
+  `notifyDocUploaded` in the Worker sends.
+  - **Who is told:** every admin and project manager of every account with a
+    live (not ended) engagement on that company, once per address, by their
+    email setting and their switch for that item. **Not the account the upload
+    came from**: a hiring account uploading on somebody's behalf is not told
+    about its own press. A contractor seat is on the hiring account, so its
+    upload still tells that account.
+  - **A signed agreement goes only to the account it is with**, because an
+    agreement is between two parties. Signing in the app tells that account;
+    uploading their own signed copy tells the accounts whose `uploaded`
+    agreement it advanced, and nobody when there was none to advance. The
+    email says it is not in force until they countersign, and links to the
+    contractor's card.
+  - **A license number** is told when it is added or changed, from Account ->
+    Company or from the contractor's card. Saving the same number is silent.
+  - **The switches are `users.notify.docUploads`**, per person, a missing key
+    on, so nobody's setting moved. `PATCH /api/me` now keeps any key the body
+    leaves out, so the Settings panel saving its switches cannot reset the
+    email or status settings, and the reverse. The panel is **Compliance pack
+    emails** in My account -> Settings, for admins and project managers.
+  `test:docnotify` (42) and `test:docnotifyui` (10). Eight mutations fire:
+  the own-account exclusion, the switch ignored, the settings merge, the
+  agreement sent to everybody, the unchanged license sent again, the panel
+  ignoring what is stored, Save sending other keys, and the panel shown to a
+  contractor seat.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

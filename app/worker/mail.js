@@ -482,6 +482,33 @@ ${NOREPLY}`;
   return { subject, text, html: linkAlso(textToHtml(text, null), link) };
 }
 
+// TOLD WHEN A COMPANY ON YOUR ROSTER ADDS TO ITS COMPLIANCE PACK: a
+// certificate, a bond, a W-9, a license number, or your agreement signed.
+// A signed agreement is not in force until this account countersigns it,
+// so that one says so and asks for it.
+export function docUploadedEmail({ firstName, companyName, kind, label, link, licenseNumber = null }) {
+  const who = companyName || "A company on your roster";
+  const what = kind === "agreement" ? "signed your subcontractor agreement"
+    : kind === "license" ? `added their license number${licenseNumber ? ` (${licenseNumber})` : ""}`
+    : `uploaded their ${kind === "w9" ? "IRS Form W-9" : String(label || "document").toLowerCase()}`;
+  const ask = kind === "agreement"
+    ? "It is not in force until you countersign it. Open their card to read it and countersign:"
+    : kind === "license" ? "Open their card to see what the state register says:"
+    : "Open their card to review it:";
+  const text = `Hi ${firstName || "there"},
+
+${who} ${what}.
+
+${ask}
+${link}
+
+${NOREPLY}`;
+  const subject = kind === "agreement" ? `${who} signed your agreement: countersign it`
+    : kind === "license" ? `${who} added their license number`
+    : `${who} uploaded their ${kind === "w9" ? "IRS Form W-9" : String(label || "document").toLowerCase()}`;
+  return { subject, text, html: linkAlso(textToHtml(text, null), link) };
+}
+
 // What somebody who signed up on the marketing site is sent, from us.
 //
 // Signing up sent nothing of SubSub's own. The only mail was Supabase's

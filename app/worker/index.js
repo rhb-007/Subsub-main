@@ -17,7 +17,8 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
   docRenewedEmail, embedNudgeEmail, docInboxEmail, inspectionReportEmail,
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
   licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail,
-  agreementSentEmail, rosterJoinedEmail } from "./mail.js";
+  agreementSentEmail, rosterJoinedEmail, docUploadedEmail } from "./mail.js";
+import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
 import { sendSms, toE164, smsConfig } from "./sms.js";
@@ -1078,6 +1079,57 @@ async function notifyRosterJoined(env, { accountId, companyId, engagementId, via
     return { sent, engagementId };
   } catch (err) {
     console.error("[roster_joined] notify failed:", err?.message || err);
+    return { sent: 0 };
+  }
+}
+
+// TOLD BY EMAIL WHEN A COMPANY ON YOUR ROSTER ADDS TO ITS COMPLIANCE PACK.
+// Every account with a live engagement on that company (or, for a signed
+// agreement, the one account the agreement is with), except the account the
+// upload came from: a hiring account uploading on somebody's behalf does not
+// need telling about its own press. Each admin and project manager, once per
+// address, by their email setting AND their switch for that item, which is on
+// unless they turned it off. Never fails the caller.
+async function notifyDocUploaded(env, { companyId, kind, exceptAccountId = null, accountIds = null, licenseNumber = null }) {
+  const nk = docNotifyKind(kind);
+  if (!nk) return { sent: 0 };
+  try {
+    const co = await env.DB.prepare(`SELECT company FROM companies WHERE id = ?`).bind(companyId).first();
+    if (!co) return { sent: 0 };
+    let ids = accountIds;
+    if (!ids) {
+      const { results } = await env.DB.prepare(
+        `SELECT DISTINCT account_id FROM engagements WHERE company_id = ? AND status <> 'ended'`).bind(companyId).all();
+      ids = (results || []).map((r) => r.account_id);
+    }
+    let sent = 0;
+    for (const accountId of [...new Set(ids)]) {
+      if (!accountId || accountId === exceptAccountId) continue;
+      const account = await env.DB.prepare(
+        `SELECT id, name, kind, subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
+      if (!account) continue;
+      const { results: team } = await env.DB.prepare(
+        `SELECT u.id, u.name, u.email, u.notify FROM memberships m JOIN users u ON u.id = m.user_id
+          WHERE m.account_id = ? AND m.role IN ('admin', 'pm')`).bind(accountId).all();
+      const link = `${accountOrigin(account)}/?open=sub&id=${encodeURIComponent(companyId)}`;
+      const seen = new Set();
+      for (const u of team || []) {
+        const to = realEmail(u.email);
+        const prefs = notifyOf(u);
+        if (!to || !prefs.email || !docNotifyOn(prefs, nk)) continue;
+        const key = to.trim().toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const mail = docUploadedEmail({ firstName: String(u.name || "").split(" ")[0], companyName: co.company,
+          kind: nk, label: docNotifyLabel(nk), link, licenseNumber });
+        const result = await sendEmail(env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+        await logMail(env, { accountId, companyId, to, kind: `doc_uploaded_${nk}`, subject: mail.subject, result, sentBy: null });
+        if (result.ok) sent++;
+      }
+    }
+    return { sent };
+  } catch (err) {
+    console.error("[doc_uploaded] notify failed:", err?.message || err);
     return { sent: 0 };
   }
 }
@@ -5965,6 +6017,9 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   let licenseVerify = null;
   const licChanged = fields.license !== undefined && (fields.license || null) !== (before?.license || null);
   const stateChanged = fields.state !== undefined && (fields.state || null) !== (before?.state || null);
+  if (licChanged && fields.license) {
+    await notifyDocUploaded(c.env, { companyId, kind: "license", licenseNumber: fields.license, exceptAccountId: accountId });
+  }
   if (licChanged || (stateChanged && (fields.license ?? before?.license))) {
     try {
       const r = await checkCompanyLicense(c.env, companyId, { fresh: true });
@@ -7527,9 +7582,14 @@ app.patch("/api/me", async (c) => {
   const { userId } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   const n = b.notify || {};
+  // A key the body leaves out keeps what is stored, so one panel saving its
+  // own switches cannot reset another panel's.
+  const had = notifyOf(await c.env.DB.prepare(`SELECT notify FROM users WHERE id = ?`).bind(userId).first().catch(() => null));
   const notify = {
-    email: !!n.email, sms: !!n.sms,
-    statusChanges: n.statusChanges === undefined ? true : !!n.statusChanges,
+    email: n.email === undefined ? !!had.email : !!n.email,
+    sms: n.sms === undefined ? !!had.sms : !!n.sms,
+    statusChanges: n.statusChanges === undefined ? had.statusChanges !== false : !!n.statusChanges,
+    docUploads: { ...cleanDocNotify(had.docUploads), ...cleanDocNotify(n.docUploads) },
   };
   try {
     await c.env.DB.prepare(`UPDATE users SET notify = ? WHERE id = ?`)
@@ -9358,7 +9418,15 @@ app.patch("/api/subs/:companyId", async (c) => {
     }
   }
 
+  const licBefore = patch.license !== undefined
+    ? (await c.env.DB.prepare(`SELECT license FROM companies WHERE id = ?`).bind(companyId).first())?.license || null
+    : null;
   await applySubPatch(c.env.DB, companyId, engagement.id, patch);
+  const licNow = patch.license !== undefined ? String(patch.license || "").trim() || null : null;
+  if (licNow && licNow !== licBefore) {
+    await notifyDocUploaded(c.env, { companyId, kind: "license", licenseNumber: licNow,
+      exceptAccountId: editingSelf ? null : accountId });
+  }
 
   await logEvent(c.env, accountId, userId, "sub.updated", companyId, { fields: Object.keys(patch) });
   // A SEPARATE RECORD, not a flag on the one above, because it is a different
@@ -14796,8 +14864,17 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
   // It advances to `signed`, not to in force: the hiring account still has to
   // say the paper they got back is the one they sent, which is the same
   // second signature SubSub's own form takes.
+  // Who to tell. For a certificate, a bond or a W-9: every account that hires
+  // them. For their signed copy of an agreement: only the accounts whose
+  // agreement it advanced, because the agreement is between two parties and
+  // nobody else sent one.
+  let signedFor = [];
   if (kind === "contract" && fileName) {
     try {
+      const { results: waiting } = await c.env.DB.prepare(
+        `SELECT DISTINCT account_id FROM agreements
+          WHERE company_id = ? AND source = 'uploaded' AND status = 'sent'`).bind(companyId).all();
+      signedFor = (waiting || []).map((r) => r.account_id);
       await c.env.DB.prepare(
         `UPDATE agreements SET status = 'signed', signed_at = CURRENT_TIMESTAMP,
            signed_by = ?, file_name = ?
@@ -14808,6 +14885,12 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
       // must not fail for want of a table this route never needed before.
       if (!missingSchema(err)) throw err;
     }
+  }
+  const except = auth.role === "contractor" ? null : auth.accountId;
+  if (kind === "contract") {
+    if (signedFor.length) await notifyDocUploaded(c.env, { companyId, kind, accountIds: signedFor, exceptAccountId: except });
+  } else {
+    await notifyDocUploaded(c.env, { companyId, kind, exceptAccountId: except });
   }
   return c.json({ ok: true, detail });
 });
@@ -15446,6 +15529,7 @@ app.post("/api/my-agreements/:id/sign", async (c) => {
       c.req.header("CF-Connecting-IP") || null, hash, id).run();
 
     await logEvent(c.env, row.account_id, userId, "agreement_signed", id, { companyId });
+    await notifyDocUploaded(c.env, { companyId, kind: "contract", accountIds: [row.account_id] });
     const after = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
     return c.json({ ok: true, agreement: agreementToJs(after, { document: renderStored(after) }) });
   } catch (err) {
