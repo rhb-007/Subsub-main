@@ -3168,7 +3168,22 @@ export default function SubSub() {
   // They are NOT hidden altogether: a status is reversible where a delete is
   // not, and a removed contractor nobody can find is a removal nobody can
   // undo -- which is the no-way-in failure this file keeps recording.
-  const offRoster = useMemo(() => allSubs.filter((s) => !onRoster(s.status)), [allSubs]);
+  // 102. A contractor who applied through the form and is waiting on a yes is
+  // off the roster (paused) but not REMOVED, so they are listed as an
+  // application to decide rather than under "Not on your roster".
+  const applications = useMemo(() => allSubs.filter((s) => s.application === "pending"), [allSubs]);
+  const offRoster = useMemo(() => allSubs.filter((s) => !onRoster(s.status) && s.application !== "pending"), [allSubs]);
+  const [acceptedApp, setAcceptedApp] = useState(null);
+  // Awaited, then drawn: a decision that never reached the server must not
+  // move the row. Accepting offers the agreement next.
+  const decideApplication = async (sb, decision) => {
+    const r = await api.decideApplication(sb.id, decision);
+    patchEngagement(sb.id, { status: r.status, application: r.application,
+      applicationSeenAt: new Date().toISOString() });
+    if (decision === "accept") setAcceptedApp(sb);
+    return r;
+  };
+  const mayDecide = role === "admin" || role === "pm";
   const filtered = useMemo(() => {
     const list = subs.filter((s) => {
       // Scoped to a building. A vendor with no buildings listed works them
@@ -5404,6 +5419,9 @@ export default function SubSub() {
         // somebody here last looked. Read off the event log, so neither
         // whitelist carries them; the dashboard's "joined your roster" row
         // reads both.
+        // 102. A form application waiting on this account's yes. Neither
+        // whitelist carries it either.
+        if ("application" in flat) en.application = flat.application || null;
         if ("appliedAt" in flat) {
           en.appliedAt = flat.appliedAt || null;
           en.appliedVia = flat.appliedVia || null;
@@ -7218,6 +7236,8 @@ export default function SubSub() {
           onGoProperties={() => setTab("properties")} onAddProperty={tryAddProperty}
           onAssign={(job, trade, replacing) => setAssigning({ job, trade, replacing })}
           onRequestDocs={requestDocs} onOpenSub={(sb) => setSelected(sb)}
+          applications={mayDecide ? applications : []}
+          onDecideApplication={mayDecide ? decideApplication : null}
           onSeenApplicant={async (sb) => {
             // Awaited, then drawn: a dismiss that never reached the server
             // would put the row back on the next reload.
@@ -7231,6 +7251,11 @@ export default function SubSub() {
           onOpenInspection={can("inspections") ? openInspection : null}
           clientWork={clientWorkPanel}
           runsAccount={runsTheAccount(role, membership)} />
+      )}
+
+      {acceptedApp && (
+        <AcceptedAppModal sub={acceptedApp} onClose={() => setAcceptedApp(null)}
+          onOpen={() => { const sb = acceptedApp; setAcceptedApp(null); setSelected(sb); }} />
       )}
 
       {tab === "network" && can("contractors") && (
@@ -7292,6 +7317,9 @@ export default function SubSub() {
               </section>
             </>
           ) : (<>
+          {applications.length > 0 && mayDecide && (
+            <ApplicationsPanel apps={applications} onDecide={decideApplication} onOpen={(sb) => setSelected(sb)} />
+          )}
           {/* Arriving from a building's card. A filtered list that does not
               say it is filtered is how somebody concludes they have three
               contractors when they have thirty. */}
@@ -8859,6 +8887,7 @@ export default function SubSub() {
               until it was closed and reopened. Looking it up by id each
               render costs nothing and makes every field here current. */}
           <SubDetail sub={allSubs.find((s) => s.id === selected.id) || selected} brand={brand}
+            onDecideApplication={mayDecide ? decideApplication : null}
             /* The invite already out to them, so the card can say so rather
                than offering to send one as if none existed. Matched on the
                company first and the address second, because an invite raised
@@ -14036,6 +14065,111 @@ function HandOwnership({ person, onConfirm, onCancel }) {
               setBusy(false);
             }
           }}>{busy ? tt("Saving...") : tt("Make owner")}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// 102. A CONTRACTOR WHO APPLIED WAITS FOR A YES. Each row names who applied
+// and when, opens their card, and carries Accept and Decline. Decline asks
+// once more on the row, because it ends the engagement and tells them.
+// Both are awaited and a refusal is named.
+function ApplicationsPanel({ apps, onDecide, onOpen = null, single = false }) {
+  const [busy, setBusy] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [err, setErr] = useState("");
+  const decide = async (s, d) => {
+    setErr(""); setBusy(s.id + d);
+    try { await onDecide(s, d); setConfirm(""); }
+    catch (e) {
+      const code = e?.body?.error || e?.message || "no answer";
+      setErr(code === "not_pending"
+        ? `${s.company}'s application was already ${e?.body?.state || "decided"}. Reload to see it.`
+        : `That didn't go through (${code}). Try again.`);
+    } finally { setBusy(""); }
+  };
+  return (
+    <section className={`dash-sec sec-apps${single ? " sec-apps-one" : ""}`} aria-label="Applications to review">
+      <h3><ActDot /><UserPlus size={15} /> {single ? "Applied to join your roster" : "Applications to review"}
+        {!single && <span className="sec-count amber">{apps.length}</span>}</h3>
+      <p className="apps-note">
+        {single ? "They are not on your roster until you accept." : "Not on your roster until you accept."} Check their
+        details and documents, then accept or decline. Once you accept, you can send them the SubSub Standard
+        Subcontractor Agreement.
+      </p>
+      {err && <p className="form-err">{err}</p>}
+      {apps.map((s) => (
+        <div key={s.id} className="dash-row app-row">
+          {!single && <div className="dash-avatar">{(s.company || "?").split(" ").map((w) => w[0]).join("").slice(0, 2)}</div>}
+          {!single && (
+            <button className="dash-row-main dash-row-open" onClick={() => onOpen?.(s)}>
+              <span className="dr-title">{s.company}</span>
+              <span className="dr-meta">Applied {s.appliedAt ? relTime(s.appliedAt) : "through your form"}
+                {(s.categories || []).length ? ` · ${(s.categories || []).map((id) => tt(CATEGORIES.find((c) => c.id === id)?.label || id)).join(", ")}` : ""}</span>
+            </button>
+          )}
+          {confirm === s.id ? (
+            <div className="app-acts">
+              <span className="app-ask">Decline {s.company}? They'll be told.</span>
+              <button className="btn-ghost dash-row-btn" disabled={!!busy} onClick={() => setConfirm("")}>Keep</button>
+              <button className="btn-solid dash-row-btn app-decline-yes" disabled={!!busy}
+                onClick={() => decide(s, "decline")}>{busy === s.id + "decline" ? "Declining…" : "Yes, decline"}</button>
+            </div>
+          ) : (
+            <div className="app-acts">
+              <button className="btn-ghost dash-row-btn app-decline" disabled={!!busy}
+                onClick={() => setConfirm(s.id)}>Decline</button>
+              <button className="btn-solid dash-row-btn app-accept" disabled={!!busy}
+                onClick={() => decide(s, "accept")}>{busy === s.id + "accept" ? "Accepting…" : "Accept"}</button>
+            </div>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
+// After accepting, the next step is the agreement: one press sends the SubSub
+// Standard Subcontractor Agreement on the account's standing terms. Not now
+// is a real answer; it can be sent from their card's Agreement tab later.
+function AcceptedAppModal({ sub, onClose, onOpen }) {
+  const [state, setState] = useState("ask");
+  const [err, setErr] = useState("");
+  const send = async () => {
+    setErr(""); setState("sending");
+    try { await api.issueAgreement(sub.id, { source: "subsub_standard" }); setState("sent"); }
+    catch (e) {
+      const code = e?.body?.error || e?.message || "no answer";
+      setErr(code === "already_issued" ? "An agreement is already out to them." : `That didn't send (${code}). Try again.`);
+      setState(code === "already_issued" ? "sent" : "ask");
+    }
+  };
+  return (
+    <Modal onClose={onClose}>
+      <div className="accepted-app">
+        <h2>{sub.company} is on your roster</h2>
+        {state === "sent" ? (
+          <p><CheckCircle2 size={16} /> The SubSub Standard Subcontractor Agreement went to {sub.company}. They sign it,
+            then you countersign from their card.</p>
+        ) : (
+          <p>Send them the SubSub Standard Subcontractor Agreement now? It uses your standing terms. They sign it, then
+            you countersign from their card.</p>
+        )}
+        {err && <p className="form-err">{err}</p>}
+        <div className="form-actions">
+          {state === "sent" ? (
+            <>
+              <button className="btn-ghost" onClick={onOpen}>Open their card</button>
+              <button className="btn-solid" onClick={onClose}>Done</button>
+            </>
+          ) : (
+            <>
+              <button className="btn-ghost aa-later" onClick={onClose} disabled={state === "sending"}>Not now</button>
+              <button className="btn-solid aa-send" onClick={send} disabled={state === "sending"}>
+                {state === "sending" ? "Sending…" : "Send the agreement"}</button>
+            </>
+          )}
         </div>
       </div>
     </Modal>
@@ -28362,7 +28496,7 @@ function ScheduleHero({ jobs, isOwner, onOpenJob, onGoCalendar, onGoJobs, latest
   );
 }
 
-function AdminDashboard({ onSeenApplicant = null, subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, onVisitOutcome = null, users = [], runsAccount = true, visits = [], unitWord = "Unit",
+function AdminDashboard({ onSeenApplicant = null, applications = [], onDecideApplication = null, subs, jobs, role, me, now, trades, accountId, subLimit, onGoAccount, onInvite, onAddSub, onGoJobs, onGoCalendar, onOpenJob, onGoContractors, onNewJob, onAssign, onRequestDocs, onOpenSub, onReviewDoc, onVerifyLicense, properties, onGoProperties, onAddProperty, onApproveJob, onDeclineJob, onVisitOutcome = null, users = [], runsAccount = true, visits = [], unitWord = "Unit",
   words = { one: "contractor", One: "Contractor", many: "contractors", Many: "Contractors" },
   invites = [], connectsOut = [], onOpenInvite, onOpenConnect,
   connectsIn = [], onRespondConnect, onReloadConnects, clientWork = null,
@@ -28742,6 +28876,12 @@ function AdminDashboard({ onSeenApplicant = null, subs, jobs, role, me, now, tra
       {/* Work OTHER accounts gave this one, led by what is waiting on it.
           Only a hireable account with client work gets one. */}
       {clientWork}
+
+      {/* 102. APPLICATIONS WAIT FOR A YES. A contractor who applied through
+          the public form is not on the roster until somebody here accepts. */}
+      {applications.length > 0 && onDecideApplication && (
+        <ApplicationsPanel apps={applications} onDecide={onDecideApplication} onOpen={onOpenSub} />
+      )}
 
       {/* A NEW CONTRACTOR ON THE ROSTER IS AN EVENT. They arrived through the
           public form or an accepted invite with nobody here pressing
@@ -43165,7 +43305,7 @@ function RelationshipModal({ sub, hiringWord = "Contractor", onSave, onClose }) 
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship, onDecideApplication = null }) {
   const ready = assignReady(sub);
   const payGaps = payBlockers(sub);
   const required = requiredDocsFor(sub.engagedAs, DOC_KINDS);
@@ -43196,6 +43336,9 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
   const pane = (id) => (tab === id ? "jt-on" : "jt-off");
   return (
     <div className="detail">
+      {sub.application === "pending" && onDecideApplication && (
+        <ApplicationsPanel apps={[sub]} onDecide={onDecideApplication} single />
+      )}
       <div className="detail-id">
         <div className="di-top">
           <h2>{sub.company}</h2>
@@ -48802,6 +48945,14 @@ button.mc-title:hover{text-decoration:underline}
 /* New on your roster: a green edge, because a contractor joining is good
    news, not something gone wrong. Its rows wrap so Dismiss and Open sit under
    the name on a phone. */
+.sec-apps{border:1px solid #f0d9a8;border-left:4px solid var(--amber);background:#fffaf0;border-radius:12px;padding:14px 16px;margin-bottom:18px}
+.sec-apps h3{margin-top:0}
+.sec-apps-one{margin:0 0 16px}
+.apps-note{margin:0 0 10px;color:var(--ink-soft);font-size:13.5px}
+.app-row{flex-wrap:wrap}
+.app-acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-left:auto}
+.app-ask{font-size:13px;font-weight:600}
+.accepted-app p{line-height:1.5}
 .sec-joined{border:1px solid #cfe5d6;border-left:4px solid var(--brand);background:#f3faf5;
   border-radius:13px;padding:14px 14px 6px}
 .sec-joined h3{margin-top:0}

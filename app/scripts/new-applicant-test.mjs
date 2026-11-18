@@ -17,6 +17,7 @@
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
 import { newApplicants, applicantLine, APPLICANT_DAYS } from "../shared/applicants.js";
+import { onRoster } from "../shared/roster.js";
 
 let pass = 0, fail = 0;
 const ck = (n, ok, d = "") => { ok ? pass++ : fail++; console.log(`${ok ? "  ok  " : "FAIL  "}${n}${d && !ok ? "  -- " + d : ""}`); };
@@ -86,6 +87,15 @@ ck("and nobody has looked yet", bay?.applicationSeenAt === null, String(bay?.app
 ck("so the dashboard rule lists it", newApplicants(subs).some((s) => s.company === "Bay Roofing"));
 ck("as an application", /Applied to join/.test(applicantLine(bay)));
 
+console.log("\n-- 102: it waits for a yes rather than landing on the roster --");
+ck("it is held off the roster (paused)", bay?.status === "paused" && !onRoster(bay?.status), String(bay?.status));
+ck("as a pending application", bay?.application === "pending", String(bay?.application));
+const rae = mails.find((m) => m.to[0] === "rae@bay.test");
+ck("the applicant is told it is being reviewed", /review it and let you know whether they accept/.test(rae?.text || ""), rae?.text);
+ck("with a link to sign in", /https:\/\/(outerhome|app)\.subsub\.work\//.test(rae?.text || ""), rae?.text);
+ck("and what to add", /Certificate of insurance[\s\S]*W-9[\s\S]*license number/.test(rae?.text || ""), rae?.text);
+ck("the account is asked to accept or decline", /accept or decline/.test(annMail?.subject || "") && /SubSub Standard Subcontractor Agreement/.test(annMail?.text || ""), annMail?.text);
+
 console.log("\n-- marking it seen --");
 const other = await call(`/api/subs/${bay.id}/application-seen`, { method: "POST", as: "u_zed", acct: "acc2" });
 ck("another account cannot mark it", other.status === 404 && other.body.error === "not_found", JSON.stringify(other));
@@ -96,6 +106,45 @@ subs = (await call("/api/subs")).body;
 bay = subs.find((s) => s.company === "Bay Roofing");
 ck("it comes back seen", !!bay?.applicationSeenAt, String(bay?.applicationSeenAt));
 ck("and drops off the dashboard", !newApplicants(subs).some((s) => s.company === "Bay Roofing"), JSON.stringify(bay));
+
+console.log("\n-- accepting and declining --");
+{
+  const otherAcc = await call(`/api/subs/${bay.id}/application`, { method: "POST", as: "u_zed", acct: "acc2", body: { decision: "accept" } });
+  ck("another account cannot decide it", otherAcc.status === 404, JSON.stringify(otherAcc));
+  const bad = await call(`/api/subs/${bay.id}/application`, { method: "POST", body: { decision: "maybe" } });
+  ck("a decision that is neither is refused", bad.status === 400 && bad.body.error === "bad_decision", JSON.stringify(bad));
+  const before = mails.length;
+  const ok = await call(`/api/subs/${bay.id}/application`, { method: "POST", body: { decision: "accept" } });
+  ck("accepting puts them on the roster", ok.status === 200 && ok.body.status === "active" && ok.body.application === "accepted", JSON.stringify(ok));
+  const again = await call(`/api/subs/${bay.id}/application`, { method: "POST", body: { decision: "decline" } });
+  ck("and a second press decides nothing", again.status === 409 && again.body.error === "not_pending" && again.body.state === "accepted", JSON.stringify(again));
+  const told2 = mails.slice(before).find((m) => m.to[0] === "rae@bay.test");
+  ck("the applicant hears they were accepted", /accepted your application/.test(told2?.subject || ""), told2?.subject);
+  const s2 = (await call("/api/subs")).body.find((x) => x.id === bay.id);
+  ck("the roster reads them as active and accepted", s2?.status === "active" && s2?.application === "accepted", JSON.stringify(s2));
+
+  await worker.fetch(new Request("https://api.subsub.work/api/apply/outerhome", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company: "Nope Paint", contact: "Ned", email: "ned@nope.test", categories: ["painting"] }),
+  }), env, { waitUntil() {} });
+  const nope = (await call("/api/subs")).body.find((x) => x.company === "Nope Paint");
+  ck("a second applicant is pending", nope?.application === "pending" && nope?.status === "paused", JSON.stringify(nope));
+  const b2 = mails.length;
+  const no = await call(`/api/subs/${nope.id}/application`, { method: "POST", body: { decision: "decline" } });
+  ck("declining ends it", no.status === 200 && no.body.status === "ended" && no.body.application === "declined", JSON.stringify(no));
+  const seats = db.prepare("SELECT COUNT(*) n FROM memberships WHERE account_id = 'acc' AND company_id = ? AND role = 'contractor'").get(nope.id).n;
+  ck("and takes away the seat applying gave them", seats === 0, String(seats));
+  const told3 = mails.slice(b2).find((m) => m.to[0] === "ned@nope.test");
+  ck("they are told kindly, with no reason", /aren't taking Nope Paint on right now/.test(told3?.text || ""), told3?.text);
+
+  const { readFileSync: rf } = await import("node:fs");
+  const { runCheck } = await import("./lib/check-sql.mjs");
+  const chk = runCheck(db);
+  ck("the invariant reads zero", chk.m102_inv_pending_on_roster === 0, String(chk.m102_inv_pending_on_roster));
+  db.exec(`INSERT INTO roster_applications(engagement_id,account_id,company_id,state) VALUES ('ghost','acc','x','pending')`);
+  ck("and counts a pending row nothing holds off the roster", runCheck(db).m102_inv_pending_on_roster === 1);
+  db.exec(`DELETE FROM roster_applications WHERE engagement_id = 'ghost'`);
+}
 
 console.log("\n-- the rule --");
 const now = Date.parse("2026-11-09T12:00:00Z");

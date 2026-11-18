@@ -253,6 +253,9 @@ export const api = {
   // The dashboard's "new on your roster" row, answered by looking.
   applicationSeen: (companyId) =>
     request(`/subs/${companyId}/application-seen`, { method: "POST" }),
+  // 102. Accept or decline a contractor who applied through the form.
+  decideApplication: (companyId, decision) =>
+    request(`/subs/${companyId}/application`, { method: "POST", body: JSON.stringify({ decision }) }),
   endEngagement: (companyId, status = "ended") =>
     request(`/subs/${companyId}/end`, { method: "POST", body: JSON.stringify({ status }) }),
 

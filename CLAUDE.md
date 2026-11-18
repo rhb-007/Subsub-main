@@ -16555,6 +16555,53 @@ refactor.
   fails six, ignoring the email setting fails two, and not opening the card
   fails two.
 
+
+- **A CONTRACTOR WHO APPLIES THROUGH THE FORM WAITS FOR A YES, AND THE
+  APPLICANT IS TOLD HOW TO SIGN IN AND WHAT TO ADD.** Reported as *"it just
+  automatically accepts them and puts them on your roster. Should give them the
+  options of declining"*, with *"better prompt them to send the standard SubSub
+  agreement"* and *"confirm a new subcontractor gets a welcome email with a link
+  to log in ... and what they need to add"*. Migration 102
+  (`roster_applications`).
+
+  **Only a form application on a NEW engagement waits.** An invite the
+  account sent is its own yes, staff adding somebody is staff's, and a company
+  already on this roster applying again is not a stranger. The engagement is
+  held at `paused`, which is what keeps them off the roster and unassignable
+  everywhere `onRoster` is read; the `pending` row is the reason, so the screen
+  says *applied* rather than *paused*. `engagements.status` has a CHECK, so a
+  new status value would have been a table rebuild. Without 102 they land on
+  the roster as before. `m102_inv_pending_on_roster` counts a pending row whose
+  engagement is not paused.
+
+  **`POST /api/subs/:companyId/application` {decision}** (admin or pm),
+  guarded on `state = 'pending'` in the UPDATE, so two presses decide once
+  (`not_pending` with the state). Accept is `active` and releases any held
+  job. Decline is `ended`, removes the seat applying gave them and revokes
+  invites, as removing somebody does. Both mark the dashboard row seen and
+  email the applicant (`applicationDecidedEmail`; a decline gives no reason,
+  because the account gave none). Adding back or removing a pending applicant
+  through the end route decides the application too, so a pending row never
+  outlives its pause.
+
+  **On screen:** *Applications to review* on the dashboard and the roster
+  page, and at the top of the applicant's card, each with Accept and Decline.
+  Decline asks once more on the row. Both are awaited and a refusal is named.
+  Accepting opens *Send the SubSub Standard Subcontractor Agreement* (the
+  standing terms) or *Not now*. An applicant is not listed under *Not on your
+  roster*. The account's email says they are not on the roster until accepted
+  and names the agreement.
+
+  **The emails.** The applicant's confirmation now says it is being reviewed,
+  carries the sign-in link (and that the other email is for choosing a
+  password), and lists what to add (`WHAT_TO_ADD`: certificate of insurance,
+  surety bond, W-9, license number, trades and area). A subcontractor
+  account's own welcome lists the same, and no longer names a plan.
+
+  `test:newapplicant` (40) and `test:applicationui` (25). Four mutations fire:
+  the applicant listed under Not on your roster, an optimistic decision, no
+  pause on apply, and the pending guard dropped.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

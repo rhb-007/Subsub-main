@@ -2701,3 +2701,17 @@ CREATE TABLE IF NOT EXISTS account_owners (
 );
 -- 100. The owner is always an admin of the account; the admin nobody else
 -- can remove or demote. (After the table, for SQLite's DROP COLUMN rewrite.)
+
+CREATE TABLE IF NOT EXISTS roster_applications (
+  engagement_id TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL,
+  company_id    TEXT NOT NULL,
+  state         TEXT NOT NULL DEFAULT 'pending',
+  applied_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  decided_at    TEXT,
+  decided_by    TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_roster_applications_account
+  ON roster_applications (account_id, state);
+-- 102: a form application waits here (pending) with its engagement paused
+-- until the account accepts or declines it.

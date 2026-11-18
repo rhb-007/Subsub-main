@@ -335,7 +335,9 @@ WITH spec(j) AS (SELECT
   -- 099. A second business on one login, and its discount.
   ',["m099_business_links","col","business_links",["id","account_a","account_b","created_by","created_at","discount_on","discount_at"]]' ||
   -- 100. One owner per account.
-  ',["m100_account_owners","col","account_owners",["account_id","user_id","set_at","set_by","note"]]') ||
+  ',["m100_account_owners","col","account_owners",["account_id","user_id","set_at","set_by","note"]]' ||
+  -- 102. A form application waits for the account to accept or decline it.
+  ',["m102_roster_applications","col","roster_applications",["engagement_id","account_id","company_id","state","applied_at","decided_at","decided_by"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -893,6 +895,12 @@ WITH inv(j) AS (SELECT '['
   || (',' || json_array('m100_inv_owner_not_admin', (SELECT COUNT(*) FROM account_owners ao
     WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.account_id = ao.account_id
                         AND m.user_id = ao.user_id AND m.role = 'admin'))))
+  -- 102. A pending application whose engagement is not held off the roster,
+  -- or a state the screen cannot draw.
+  || (',' || json_array('m102_inv_pending_on_roster', (SELECT COUNT(*) FROM roster_applications ra
+    LEFT JOIN engagements e ON e.id = ra.engagement_id
+    WHERE ra.state NOT IN ('pending','accepted','declined')
+       OR (ra.state = 'pending' AND (e.id IS NULL OR e.status <> 'paused')))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

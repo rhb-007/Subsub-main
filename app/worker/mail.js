@@ -374,18 +374,70 @@ export function linkAlso(html, link) {
   return html.replace(esc(link), `<a href="${esc(link)}" style="color:#1B4835">${esc(link)}</a>`);
 }
 
-export function applicationReceivedEmail({ companyName, contact, account }) {
+// What to add to an account so a hiring side can give you work. One list,
+// read by the application emails and the subcontractor welcome.
+export const WHAT_TO_ADD = `- Certificate of insurance
+- Surety bond
+- W-9
+- Your contractor license number
+- Your trades and the area you cover`;
+
+// The applicant's confirmation. It names how to sign in and what to add,
+// because the next move is theirs: a hiring side reviewing an application
+// reads the documents on it. `pending` (102) says it is waiting on a yes.
+export function applicationReceivedEmail({ companyName, contact, account, pending = false, signInLink = null }) {
   const who = account?.name || "the team";
+  const status = pending
+    ? `${who} has your application for ${companyName}. They'll review it and let you know whether they accept it.`
+    : `Thanks. ${who} has your application for ${companyName}.`;
+  const signIn = signInLink
+    ? `Sign in here to add your details:\n${signInLink}\nNo password yet? Use the other email we sent to choose one.`
+    : `Sign in to add your details.`;
   const text = `Hi ${contact || companyName},
 
-Thanks. ${who} has your application for ${companyName} and will be in touch.
+${status}
 
-If they take you on, you'll be asked for a certificate of insurance, a surety bond and a W-9. Having them ready is the fastest way to get work.
+${signIn}
+
+Then add:
+${WHAT_TO_ADD}
+
+Having these on file is the fastest way to be accepted and get work.
 
 -- ${who}
 
 ${NOREPLY}`;
-  return { subject: `We received your application to ${who}`, text, html: textToHtml(text, null) };
+  return { subject: `We received your application to ${who}`, text,
+    html: linkAlso(textToHtml(text, null), signInLink) };
+}
+
+// 102. The applicant hears the decision either way. A decline is said kindly
+// and gives no reason, because the account gave none.
+export function applicationDecidedEmail({ contact, companyName, account, accepted, signInLink }) {
+  const who = account?.name || "the team";
+  const text = accepted
+    ? `Hi ${contact || companyName},
+
+Good news: ${who} accepted ${companyName}'s application. You're on their roster and can be sent work.
+
+Sign in here:
+${signInLink}
+
+If you haven't yet, add:
+${WHAT_TO_ADD}
+
+-- ${who}
+
+${NOREPLY}`
+    : `Hi ${contact || companyName},
+
+Thank you for applying to ${who}. They aren't taking ${companyName} on right now.
+
+-- ${who}
+
+${NOREPLY}`;
+  const subject = accepted ? `${who} accepted your application` : `Your application to ${who}`;
+  return { subject, text, html: accepted ? linkAlso(textToHtml(text, null), signInLink) : textToHtml(text, null) };
 }
 
 // TOLD WHEN SOMEBODY JOINS YOUR ROSTER ON THEIR OWN. An application through
@@ -393,7 +445,7 @@ ${NOREPLY}`;
 // writes an engagement with nobody on this account pressing anything, so the
 // dashboard row alone was the first anybody heard of it. Sent to the
 // account's admins and project managers, by their own email setting.
-export function rosterJoinedEmail({ firstName, account, companyName, contact, via, kind, link }) {
+export function rosterJoinedEmail({ firstName, account, companyName, contact, via, kind, link, pending = false }) {
   const noun = hiresLabelFor(kind);
   const who = companyName || "A company";
   const how = via === "invite" ? `accepted your invitation and joined your ${noun} roster`
@@ -403,12 +455,15 @@ export function rosterJoinedEmail({ firstName, account, companyName, contact, vi
 
 ${who}${contact && contact !== companyName ? ` (${contact})` : ""} ${how}.
 
-Open their card to check their details and documents before giving them work:
+${pending
+    ? `They are not on your roster until you accept. Open their application to accept or decline it, and send them the SubSub Standard Subcontractor Agreement:`
+    : `Open their card to check their details and documents before giving them work:`}
 ${link}
 
 ${NOREPLY}`;
   const subject = via === "invite" ? `${who} joined your roster`
     : via === "staff" ? `${who} was added to your roster`
+    : pending ? `${who} applied to join your roster: accept or decline`
     : `${who} applied to join your roster`;
   return { subject, text, html: linkAlso(textToHtml(text, null), link) };
 }
@@ -430,7 +485,7 @@ ${NOREPLY}`;
 // whose password nobody knows is the dead end this exists to remove.
 // Sentences are not hard-wrapped here: the HTML keeps every newline, so a
 // wrap at 80 columns breaks a sentence in half in every mail client.
-export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword, viaGoogle }) {
+export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword, viaGoogle, kind = null }) {
   const app = "https://app.subsub.work";
   const steps = viaGoogle
     ? `To sign in, go to ${app} and press "Continue with Google" with ${email}.`
@@ -443,10 +498,15 @@ No email after ten minutes? Go to ${app}, press "Forgot password?" and enter ${e
       : `To sign in, go to ${app}, press "Forgot password?" and enter ${email} to choose a password.`;
   const text = `Hi ${firstName || "there"},
 
-Welcome to SubSub. ${companyName} is set up on ${planName}${planName === "Basic" ? " (free, no card)" : ""}.
+${kind === "subcontractor"
+    ? `Welcome to SubSub. ${companyName} is set up, free.`
+    : `Welcome to SubSub. ${companyName} is set up on ${planName}${planName === "Basic" ? " (free, no card)" : ""}.`}
 
 ${steps}
-
+${kind === "subcontractor" ? `
+Once you're in, add these so the people you work for can hire you:
+${WHAT_TO_ADD}
+` : ""}
 -- The SubSub team
 
 ${NOREPLY}`;

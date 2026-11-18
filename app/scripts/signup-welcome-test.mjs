@@ -335,7 +335,7 @@ try {
     // Read through a real email, not the helper: a helper that works and is
     // never called is the bug this checks for.
     const app = mailMod.applicationReceivedEmail({ companyName: "Bay", contact: "Rae", account: { name: "Acme", subdomain: "acme" } });
-    t.ck("and a real email's HTML is unwrapped", /If they take you on, you'll be asked for/.test(app.html), app.html.slice(0, 400));
+    t.ck("and a real email's HTML is unwrapped", /Having these on file is the fastest way to be accepted and get work\./.test(app.html), app.html.slice(0, 400));
     const msg = mailMod.messageEmail({ firstName: "Rae", who: "Dana", body: "Gate code 1234\nDog is friendly",
       link: "https://x.test/t", fromName: "Acme" });
     t.ck("a person's own message keeps every line break", msg.html.includes("Gate code 1234<br>Dog is friendly"), msg.html);

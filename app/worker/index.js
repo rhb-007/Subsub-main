@@ -8,7 +8,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { sendEmail, welcomeEmail, founderIntroEmail, demoBookedEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
+import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, demoBookedEmail, docRequestEmail, docFindingsEmail, workOrderIssuedEmail, applicationReceivedEmail,
   tenantInviteEmail, tenantInviteSms, customInviteEmail, withInviteLink,
   INVITE_LINK_TOKEN, tenantStatusEmail, tenantStatusSms, visitWhen, buildingNoticeEmail,
   subInviteEmail, subInviteSms, userInviteEmail, userInviteSms,
@@ -1051,7 +1051,7 @@ async function logActivity(env, accountId, userId, kind, text, meta) {
 // roster without anybody here pressing anything. Every admin and project
 // manager on the account, once per address, by their own email setting.
 // Never fails the caller: the engagement is written by the time this runs.
-async function notifyRosterJoined(env, { accountId, companyId, engagementId, via }) {
+async function notifyRosterJoined(env, { accountId, companyId, engagementId, via, pending = false }) {
   try {
     const account = await env.DB.prepare(
       `SELECT id, name, kind, subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
@@ -1070,7 +1070,7 @@ async function notifyRosterJoined(env, { accountId, companyId, engagementId, via
       if (seen.has(key)) continue;
       seen.add(key);
       const mail = rosterJoinedEmail({ firstName: String(u.name || "").split(" ")[0], account,
-        companyName: co.company, contact: co.contact, via, kind: account.kind, link });
+        companyName: co.company, contact: co.contact, via, kind: account.kind, link, pending });
       const result = await sendEmail(env, { to, subject: mail.subject, text: mail.text, html: mail.html });
       await logMail(env, { accountId, companyId, to, kind: "roster_joined", subject: mail.subject, result, sentBy: null });
       if (result.ok) sent++;
@@ -1518,7 +1518,7 @@ app.post("/api/signup", async (c) => {
   try {
     const welcome = welcomeEmail({ firstName: personName.split(/\s+/)[0], companyName: company, email,
       planName: plan === "scale" ? "Scale" : "Basic", needsConfirmation, hasPassword: !!chosen,
-      viaGoogle: !!google });
+      viaGoogle: !!google, kind });
     const sent = await sendEmail(c.env, { to: email, ...welcome });
     await logMail(c.env, { accountId, companyId: null, to: email, kind: "welcome",
       subject: welcome.subject, result: sent });
@@ -1618,6 +1618,7 @@ async function createApplication(env, account, body, note,
   let engagementId = (await env.DB.prepare(
     `SELECT id FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(account.id, companyId).first())?.id;
+  const newEngagement = !engagementId;
   if (!engagementId) {
     engagementId = uid();
     await env.DB.prepare(
@@ -1681,22 +1682,45 @@ async function createApplication(env, account, body, note,
   // `via` is what the dashboard says about it: an application through the
   // public form, or somebody accepting an invite this account sent.
   const via = boundCompanyId || /invite/i.test(note || "") ? "invite" : "form";
+
+  // 102. AN APPLICATION THROUGH THE FORM WAITS FOR A YES. Nobody on this
+  // account asked for it, so it must not land on the roster by itself: the
+  // account accepts or declines it. Held at 'paused', which is what keeps it
+  // off the roster and unassignable everywhere `onRoster` is read, with the
+  // pending row as the reason. Only a NEW engagement: somebody already on
+  // this roster applying again is not a stranger. An invite the account sent
+  // is its own yes. A database without 102 lands them as before.
+  let pending = false;
+  if (via === "form" && newEngagement) {
+    try {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO roster_applications (engagement_id, account_id, company_id, state)
+         VALUES (?, ?, ?, 'pending')`).bind(engagementId, account.id, companyId).run();
+      await env.DB.prepare(`UPDATE engagements SET status = 'paused' WHERE id = ?`).bind(engagementId).run();
+      pending = true;
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      console.warn("[apply] 102_roster_applications not applied - landed on the roster");
+    }
+  }
+
   await logEvent(env, account.id, user.id, "engagement.applied", engagementId,
-    { companyId, reused: !!company, via });
-  await notifyRosterJoined(env, { accountId: account.id, companyId, engagementId, via });
+    { companyId, reused: !!company, via, pending });
+  await notifyRosterJoined(env, { accountId: account.id, companyId, engagementId, via, pending });
 
   // Confirm it landed, and say what happens next. Public entry point, so a
   // failure here must never turn a successful application into an error.
   if (body.email) {
     const mail = applicationReceivedEmail({
-      companyName: body.company, contact: body.contact, account,
+      companyName: body.company, contact: body.contact, account, pending,
+      signInLink: `${accountOrigin(account)}/`,
     });
     const result = await sendEmail(env, { to: body.email, subject: mail.subject,
       text: mail.text, html: mail.html });
     await logMail(env, { accountId: account.id, companyId, to: body.email,
       kind: "application_received", subject: mail.subject, result, sentBy: null });
   }
-  return { companyId, engagementId, userId: user.id };
+  return { companyId, engagementId, userId: user.id, pending };
 }
 
 // A login for somebody who has just applied, set from the same form.
@@ -1780,11 +1804,12 @@ app.post("/api/apply/:subdomain", async (c) => {
   const password = String(body.password || "");
   if (password && password.length < 8) return c.json({ error: "weak_password" }, 400);
 
-  const { userId, companyId } = await createApplication(c.env, account, body,
+  const { userId, companyId, pending } = await createApplication(c.env, account, body,
     "Applied through the public application form.");
   // 093. The public form can land on a company this account already holds a
-  // job for (deduped by licence or email), so its holds go too.
-  await releaseHeldAssignments(c.env, { accountId: account.id, companyId });
+  // job for (deduped by license or email), so its holds go too -- unless the
+  // application is waiting on a yes (102), when accepting it releases them.
+  if (!pending) await releaseHeldAssignments(c.env, { accountId: account.id, companyId });
   // Same as the invited path. Applying already creates this person a
   // contractor membership on the account, so letting them choose a password
   // while they are here grants nothing the application did not already
@@ -8923,6 +8948,21 @@ app.get("/api/subs", async (c) => {
     if (!missingSchema(err)) throw err;
   }
 
+  // 102. An application through the form waiting on this account's yes.
+  // Carried as `application` ('pending', 'accepted' or 'declined'), null for
+  // everybody who never applied that way. A database without 102 reads null.
+  try {
+    const { results: appRows } = await c.env.DB.prepare(
+      `SELECT engagement_id, state FROM roster_applications WHERE account_id = ?`
+    ).bind(accountId).all();
+    const st = {};
+    for (const r of appRows || []) st[r.engagement_id] = r.state;
+    subs.forEach((sub) => { sub.application = st[sub.engagementId] || null; });
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    subs.forEach((sub) => { sub.application = null; });
+  }
+
   // What each company's paperwork says, so the roster can colour itself and
   // assignment can ask about the JOB'S date rather than today's. One query for
   // the whole roster: per-company would be a round trip each and this is the
@@ -9705,6 +9745,74 @@ app.post("/api/subs/:companyId/application-seen", requireRole("admin", "pm"), as
   return c.json({ ok: true, seenAt: new Date().toISOString() });
 });
 
+// 102. ACCEPT OR DECLINE AN APPLICATION. A contractor who applied through the
+// public form is held off the roster until somebody here says yes. Accepting
+// puts them on it (active) and releases any job held for them; declining
+// ends the engagement, takes away the seat applying gave them and revokes
+// any invite, the same as removing somebody, and tells them politely. Both
+// are guarded on the application still being pending, so two presses decide
+// it once.
+app.post("/api/subs/:companyId/application", requireRole("admin", "pm"), async (c) => {
+  const { accountId, userId } = c.get("auth");
+  const { companyId } = c.req.param();
+  const body = await c.req.json().catch(() => ({}));
+  const decision = body.decision === "accept" ? "accept" : body.decision === "decline" ? "decline" : null;
+  if (!decision) return c.json({ error: "bad_decision" }, 400);
+  const eng = await c.env.DB.prepare(
+    `SELECT id, status FROM engagements WHERE account_id = ? AND company_id = ?`
+  ).bind(accountId, companyId).first();
+  if (!eng) return c.json({ error: "not_found" }, 404);
+  const state = decision === "accept" ? "accepted" : "declined";
+  const moved = await c.env.DB.prepare(
+    `UPDATE roster_applications SET state = ?, decided_at = CURRENT_TIMESTAMP, decided_by = ?
+      WHERE engagement_id = ? AND state = 'pending'`
+  ).bind(state, userId, eng.id).run();
+  if (!(moved?.meta?.changes > 0)) {
+    const row = await c.env.DB.prepare(`SELECT state FROM roster_applications WHERE engagement_id = ?`)
+      .bind(eng.id).first();
+    return c.json({ error: "not_pending", state: row?.state || null }, 409);
+  }
+  const to = decision === "accept" ? "active" : "ended";
+  await c.env.DB.prepare(`UPDATE engagements SET status = ? WHERE id = ?`).bind(to, eng.id).run();
+  if (decision === "decline") {
+    await c.env.DB.prepare(
+      `DELETE FROM memberships WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
+    ).bind(accountId, companyId).run();
+    try {
+      await c.env.DB.prepare(
+        `UPDATE sub_invites SET revoked_at = CURRENT_TIMESTAMP
+          WHERE account_id = ? AND company_id = ? AND used_at IS NULL AND revoked_at IS NULL`
+      ).bind(accountId, companyId).run();
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  } else {
+    await releaseHeldAssignments(c.env, { accountId, companyId });
+  }
+  const account = await c.env.DB.prepare(
+    `SELECT id, name, kind, subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
+  const co = await c.env.DB.prepare(`SELECT company, contact, email FROM companies WHERE id = ?`)
+    .bind(companyId).first();
+  await logActivity(c.env, accountId, userId, `application_${state}`,
+    `${decision === "accept" ? "Accepted" : "Declined"} ${co?.company || "a contractor"}'s application`);
+  await logEvent(c.env, accountId, userId, `engagement.application_${state}`, eng.id, { companyId });
+  // Seen, so the dashboard row goes with the decision.
+  await logEvent(c.env, accountId, userId, "engagement.application_seen", eng.id, {});
+
+  // Tell the applicant. Never fails the decision, which is already recorded.
+  let emailed = false;
+  const to_ = realEmail(co?.email);
+  if (to_) {
+    try {
+      const mail = applicationDecidedEmail({ contact: co.contact, companyName: co.company, account,
+        accepted: decision === "accept", signInLink: `${accountOrigin(account)}/` });
+      const result = await sendEmail(c.env, { to: to_, subject: mail.subject, text: mail.text, html: mail.html });
+      await logMail(c.env, { accountId, companyId, to: to_, kind: `application_${state}`,
+        subject: mail.subject, result, sentBy: userId });
+      emailed = !!result?.ok;
+    } catch (err) { console.error("[application] decision email failed:", err?.message || err); }
+  }
+  return c.json({ ok: true, status: to, application: state, emailed });
+});
+
 app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
   const { companyId } = c.req.param();
@@ -9729,6 +9837,16 @@ app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
     ? await engagementLiveWork(c.env, accountId, companyId) : [];
 
   await c.env.DB.prepare(`UPDATE engagements SET status = ? WHERE id = ?`).bind(to, eng.id).run();
+  // 102. Adding back or removing somebody whose application was still
+  // pending decides it, so the pending row never outlives its pause.
+  if (to !== "paused") {
+    try {
+      await c.env.DB.prepare(
+        `UPDATE roster_applications SET state = ?, decided_at = CURRENT_TIMESTAMP, decided_by = ?
+          WHERE engagement_id = ? AND state = 'pending'`
+      ).bind(to === "active" ? "accepted" : "declined", userId, eng.id).run();
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
 
   let seatsRemoved = 0;
   let wasEmergency = false;
@@ -10101,6 +10219,7 @@ export function missingSchema(err) {
   // (063) and `inspection_sends` (056) also do -- so each is named in full
   // rather than by a prefix, and they sit above the older rules for the reason
   // the comment above gives.
+  if (/\broster_applications\b/i.test(m)) return "102_roster_applications";
   if (/\baccount_owners\b/i.test(m)) return "100_account_owners";
   if (/\bbusiness_links\b/i.test(m)) return "099_business_links";
   if (/\binspection_items\b/i.test(m)) return "096_inspection_items";
