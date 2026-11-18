@@ -137,6 +137,26 @@ console.log("\n-- accepting and declining --");
   const told3 = mails.slice(b2).find((m) => m.to[0] === "ned@nope.test");
   ck("they are told kindly, with no reason", /aren't taking Nope Paint on right now/.test(told3?.text || ""), told3?.text);
 
+  // A DECLINE IS NOT AN EVICTION FROM SUBSUB: they keep a free account of
+  // their own, on the company row they applied as, so the pack survives.
+  const homeRow = db.prepare("SELECT id, kind, plan, company_id FROM accounts WHERE company_id = ?").get(nope.id);
+  ck("they keep a free subcontractor account of their own", homeRow?.kind === "subcontractor" && homeRow?.plan === "basic" && no.body.home?.created === true, JSON.stringify({ homeRow, home: no.body.home }));
+  const seatAt = db.prepare("SELECT u.email, m.role FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.account_id = ?").all(homeRow?.id || "");
+  ck("and the person who applied is its admin", seatAt.length === 1 && seatAt[0].role === "admin" && /ned@nope\.test/i.test(seatAt[0].email), JSON.stringify(seatAt));
+  const pp = db.prepare("SELECT COUNT(*) n FROM passports WHERE company_id = ?").get(nope.id).n;
+  ck("with a Passport for the same company", pp === 1, String(pp));
+  ck("the email says the account is still theirs, with the sign-in link", /free SubSub account is still yours/.test(told3?.text || "") && /https:\/\/app\.subsub\.work\//.test(told3?.text || ""), told3?.text);
+  // Somebody who already has a seat somewhere has a home and gets no second one.
+  await worker.fetch(new Request("https://api.subsub.work/api/apply/outerhome", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ company: "Zed Gutters", contact: "Zed", email: "zed@x.test", categories: ["gutters"] }),
+  }), env, { waitUntil() {} });
+  const zedCo = (await call("/api/subs")).body.find((x) => x.company === "Zed Gutters");
+  const zedNo = await call(`/api/subs/${zedCo?.id}/application`, { method: "POST", body: { decision: "decline" } });
+  const zedHome = db.prepare("SELECT COUNT(*) n FROM accounts WHERE company_id = ?").get(zedCo?.id || "").n;
+  ck("somebody with a seat elsewhere is not given a second account", zedNo.status === 200 && zedHome === 0 && !zedNo.body.home, JSON.stringify({ zedHome, home: zedNo.body.home }));
+  ck("and names no plan or price", !/\$|Basic|Scale|upgrade|plan\b/i.test(told3?.text || ""), told3?.text);
+
   const { readFileSync: rf } = await import("node:fs");
   const { runCheck } = await import("./lib/check-sql.mjs");
   const chk = runCheck(db);

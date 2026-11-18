@@ -16602,6 +16602,27 @@ refactor.
   the applicant listed under Not on your roster, an optimistic decision, no
   pause on apply, and the pending guard dropped.
 
+
+- **A DECLINED APPLICANT KEEPS A FREE SUBSUB ACCOUNT OF THEIR OWN.** Asked for
+  as *"the declined subcontractor should still be able to have a login /
+  account, to invite general contractors and use it for their compliance pack
+  or convert themselves to a paid general contractor account"*. Applying gave
+  them a login whose only seat was the contractor seat on that roster, and
+  declining deletes it, so they signed in to nothing. `homeForDeclined` makes a
+  `subcontractor` account on Basic, named for the company, with every person
+  who lost that seat and has no other seat anywhere as its admin (the first is
+  the owner), **pointing at the company row they applied as** (not a new
+  `cmp_own_` row), so every document they uploaded and their Passport stay
+  theirs. Not made when an account already answers for that company, or when
+  the person has a seat elsewhere; it never fails the decline. From there they
+  have the compliance pack, Get your GCs, and Account -> Company to become a
+  general contractor. `addPackSender`'s own-company check reads
+  `accounts.company_id`, because that row is not `cmp_own_<id>`. The decline
+  email adds one sentence: *Your free SubSub account is still yours*, with
+  app.subsub.work, naming no plan or price. `test:newapplicant` (46); giving a
+  second account to somebody seated elsewhere fails one, and skipping the home
+  fails four.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

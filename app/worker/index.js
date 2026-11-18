@@ -9774,10 +9774,23 @@ app.post("/api/subs/:companyId/application", requireRole("admin", "pm"), async (
   }
   const to = decision === "accept" ? "active" : "ended";
   await c.env.DB.prepare(`UPDATE engagements SET status = ? WHERE id = ?`).bind(to, eng.id).run();
+  let home = null;
   if (decision === "decline") {
+    const seated = await c.env.DB.prepare(
+      `SELECT user_id FROM memberships WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
+    ).bind(accountId, companyId).all();
     await c.env.DB.prepare(
       `DELETE FROM memberships WHERE account_id = ? AND company_id = ? AND role = 'contractor'`
     ).bind(accountId, companyId).run();
+    // A DECLINE IS NOT AN EVICTION FROM SUBSUB. Applying gave them a login,
+    // and that seat was its only home, so without this they sign in to
+    // nothing. A free subcontractor account of their own, on the company row
+    // they applied as, keeps their documents, their compliance pack and the
+    // way to invite GCs; it can be turned into a hiring account later.
+    try {
+      home = await homeForDeclined(c.env, { companyId, engagementId: eng.id,
+        userIds: (seated?.results || []).map((r) => r.user_id) });
+    } catch (err) { console.error("[application] home account failed:", err?.message || err); }
     try {
       await c.env.DB.prepare(
         `UPDATE sub_invites SET revoked_at = CURRENT_TIMESTAMP
@@ -9803,15 +9816,58 @@ app.post("/api/subs/:companyId/application", requireRole("admin", "pm"), async (
   if (to_) {
     try {
       const mail = applicationDecidedEmail({ contact: co.contact, companyName: co.company, account,
-        accepted: decision === "accept", signInLink: `${accountOrigin(account)}/` });
+        accepted: decision === "accept", signInLink: `${accountOrigin(account)}/`,
+        homeLink: home ? `${APP_ORIGIN}/` : null });
       const result = await sendEmail(c.env, { to: to_, subject: mail.subject, text: mail.text, html: mail.html });
       await logMail(c.env, { accountId, companyId, to: to_, kind: `application_${state}`,
         subject: mail.subject, result, sentBy: userId });
       emailed = !!result?.ok;
     } catch (err) { console.error("[application] decision email failed:", err?.message || err); }
   }
-  return c.json({ ok: true, status: to, application: state, emailed });
+  return c.json({ ok: true, status: to, application: state, emailed, home });
 });
+
+// The free account a declined applicant keeps. Only for somebody left with
+// no seat anywhere, and only when no account already answers for that
+// company row: a company that is already somebody's own account is home
+// already. The account points at the row they applied as, so every document
+// they uploaded stays theirs. Never a second one: a retry finds the first.
+async function homeForDeclined(env, { companyId, engagementId, userIds }) {
+  if (!userIds.length) return null;
+  const owned = await env.DB.prepare(`SELECT id FROM accounts WHERE company_id = ?`).bind(companyId).first();
+  if (owned) return { accountId: owned.id, created: false };
+  const homeless = [];
+  for (const u of userIds) {
+    const any = await env.DB.prepare(`SELECT 1 FROM memberships WHERE user_id = ? LIMIT 1`).bind(u).first();
+    if (!any) homeless.push(u);
+  }
+  if (!homeless.length) return null;
+  const co = await env.DB.prepare(`SELECT company FROM companies WHERE id = ?`).bind(companyId).first();
+  const en = await env.DB.prepare(`SELECT categories FROM engagements WHERE id = ?`).bind(engagementId).first();
+  const name = String(co?.company || "My company").trim().slice(0, 80) || "My company";
+  const base = (name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 28)) || "sub";
+  let subdomain = null;
+  for (let i = 0; i < 6 && !subdomain; i++) {
+    const tail = Math.random().toString(36).slice(2, 7);
+    const s = validSubdomain(`${base}-${tail}`.replace(/--+/g, "-"));
+    if (s && !(await env.DB.prepare(`SELECT 1 FROM accounts WHERE subdomain = ?`).bind(s).first())) subdomain = s;
+  }
+  if (!subdomain) return null;
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO accounts (id, name, subdomain, kind, plan, billing, trades, use_default_mark)
+     VALUES (?, ?, ?, 'subcontractor', 'basic', 'monthly', ?, 1)`
+  ).bind(id, name, subdomain, en?.categories || "[]").run();
+  await env.DB.prepare(`UPDATE accounts SET company_id = ? WHERE id = ?`).bind(companyId, id).run();
+  for (const u of homeless) {
+    await env.DB.prepare(`INSERT INTO memberships (id, user_id, account_id, role) VALUES (?, ?, ?, 'admin')`)
+      .bind(uid(), u, id).run();
+  }
+  await setAccountOwner(env, id, homeless[0], { note: "kept after an application was declined" });
+  try { await recordAccountCreated(env, { accountId: id, plan: "basic", billing: "monthly", source: "system" }); } catch (err) { console.warn("home: created event", err?.message || err); }
+  try { await ensurePassport(env, companyId); } catch (err) { console.warn("home: passport", err?.message || err); }
+  return { accountId: id, created: true };
+}
 
 app.post("/api/subs/:companyId/end", requireRole("admin", "pm"), async (c) => {
   const { accountId, userId } = c.get("auth");
@@ -16561,7 +16617,13 @@ async function addPackSender(env, { accountId, userId, token, email }) {
     return { error: "sent_to_another_address" };
   }
   // Your own company sending you its own pack is not a contractor to hire.
-  if (share.company_id === ownCompanyId(accountId)) return { error: "own_company" };
+  // Read off the account rather than derived: a declined applicant's home
+  // account points at the company row they applied as, not cmp_own_<id>.
+  const mine = await env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`).bind(accountId).first()
+    .catch(() => null);
+  if (share.company_id === ownCompanyId(accountId) || (mine?.company_id && share.company_id === mine.company_id)) {
+    return { error: "own_company" };
+  }
   const have = await env.DB.prepare(
     `SELECT status FROM engagements WHERE account_id = ? AND company_id = ?`
   ).bind(accountId, share.company_id).first();

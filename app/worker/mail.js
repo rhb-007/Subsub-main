@@ -413,7 +413,7 @@ ${NOREPLY}`;
 
 // 102. The applicant hears the decision either way. A decline is said kindly
 // and gives no reason, because the account gave none.
-export function applicationDecidedEmail({ contact, companyName, account, accepted, signInLink }) {
+export function applicationDecidedEmail({ contact, companyName, account, accepted, signInLink, homeLink = null }) {
   const who = account?.name || "the team";
   const text = accepted
     ? `Hi ${contact || companyName},
@@ -432,12 +432,16 @@ ${NOREPLY}`
     : `Hi ${contact || companyName},
 
 Thank you for applying to ${who}. They aren't taking ${companyName} on right now.
-
+${homeLink ? `
+Your free SubSub account is still yours. Sign in to keep your compliance pack current, send it to other GCs and invite the GCs you work with:
+${homeLink}
+` : ""}
 -- ${who}
 
 ${NOREPLY}`;
   const subject = accepted ? `${who} accepted your application` : `Your application to ${who}`;
-  return { subject, text, html: accepted ? linkAlso(textToHtml(text, null), signInLink) : textToHtml(text, null) };
+  const link = accepted ? signInLink : homeLink;
+  return { subject, text, html: link ? linkAlso(textToHtml(text, null), link) : textToHtml(text, null) };
 }
 
 // TOLD WHEN SOMEBODY JOINS YOUR ROSTER ON THEIR OWN. An application through
