@@ -28574,9 +28574,16 @@ function AdminDashboard({ onSeenApplicant = null, applications = [], onDecideApp
   // Only approved work has trade slots. An unapproved request has its own
   // section above and must not also be counted as needing a contractor.
   const slots = jobs.filter(isLiveJob).flatMap((j) => j.trades.map((t) => ({ job: j, trade: t, a: j.assignments[t] })));
-  const open = slots.filter((s) => !s.a);
-  const pending = slots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
-  const declined = slots.filter((s) => s.a && s.a.status === "declined");
+  // WHAT STILL NEEDS SOMEBODY reads only work that can still take a
+  // contractor. `slots` keeps completed jobs, because the unrated list and the
+  // spend tile are about finished work too -- but a cancelled, completed,
+  // closed-with-no-work or on-hold job asking for a contractor under "Needs a
+  // contractor" offers an Assign the route refuses, which is how a cancelled
+  // demo job went on sitting in that list.
+  const liveSlots = slots.filter((s) => jobIsLive(s.job, dayKey()));
+  const open = liveSlots.filter((s) => !s.a);
+  const pending = liveSlots.filter((s) => s.a && s.a.status === "pending" && !s.a.auto);
+  const declined = liveSlots.filter((s) => s.a && s.a.status === "declined");
   // THE NEWEST VISIT ON EACH JOB, live or declined. A job collects superseded
   // windows behind the live one, and a declined window stops mattering the
   // moment somebody proposes the next -- so "is anything waiting on a time"
@@ -30925,7 +30932,7 @@ function PickJobSlot({ sub, jobs, allJobs, accountId, onPick, onNewJob, onNotify
   const ok = docsComplete(sub);
   const off = sub.unavailableDays || [];
   const rank = { free: 0, booked: 1, off: 2, unavailable: 3 };
-  const slots = jobs.filter(isLiveJob).flatMap((j) =>
+  const slots = jobs.filter((j) => isLiveJob(j) && jobIsLive(j, dayKey())).flatMap((j) =>
     j.trades
       .filter((t) => !j.assignments[t] && sub.categories.includes(t))
       .map((t) => ({ job: j, trade: t }))

@@ -17594,6 +17594,19 @@ refactor.
   ignoring what is stored, Save sending other keys, and the panel shown to a
   contractor seat.
 
+- **A CANCELLED JOB NO LONGER ASKS FOR A CONTRACTOR ON THE DASHBOARD.**
+  Reported with two cancelled jobs (a Zapier test and a demo) still under
+  *Needs a contractor*, each offering Assign. The dashboard built its slot
+  lists from `isLiveJob`, which only left out withdrawn, declined and
+  unapproved jobs. *Needs a contractor*, *No reply*, the declined list and the
+  *Unassigned trade slots* and awaiting-reply tiles now read `liveSlots`, the
+  slots of jobs `jobIsLive` says can still take a contractor: not cancelled,
+  completed, closed with no work, or on hold. `slots` itself is unchanged,
+  because the unrated list and the spend tile are about finished work too. The
+  assign-a-contractor-to-a-job picker on a contractor's card reads the same
+  rule. `test:dashended` (10) drives a live, a cancelled, a completed and a held
+  job; reverting to the old filter fails five assertions.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 
