@@ -1230,4 +1230,7 @@ export default {
   "Needed before you can pay them.": "Necesario antes de poder pagarles.",
   "Added or changed on their record.": "Agregado o cambiado en su registro.",
   "They signed your agreement. You countersign it.": "Firmaron su acuerdo. Usted lo refrenda.",
+  "My jobs": "Mis trabajos",
+  "See all my jobs": "Ver todos mis trabajos",
+  "Every job you have been offered, booked or finished, across every client": "Cada trabajo que le ofrecieron, reservó o terminó, con todos sus clientes",
 };

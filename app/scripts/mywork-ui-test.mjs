@@ -122,13 +122,13 @@ try {
 
     const badge = await page.evaluate(() => {
       const b = [...document.querySelectorAll("nav button")]
-        .find((x) => /^My Jobs/.test(x.innerText.trim()));
+        .find((x) => /^Dashboard/.test(x.innerText.trim()));
       return b ? b.innerText.replace(/\s+/g, " ").trim() : null;
     });
     // Three offers across three companies, and one job taken with no time on
     // it. One of the offers is local: a badge reading 1 is the bug this exists
     // to catch, and 3 is the old rule that ignored work nobody has a time for.
-    t.ck("the nav badge is on My Jobs", !!badge, String(badge));
+    t.ck("the nav badge is on Dashboard", !!badge, String(badge));
     t.ck("and counts everything waiting at every client",
       /\b4\b/.test(badge || ""), String(badge));
 
@@ -274,7 +274,7 @@ try {
       await page.evaluate(() => document.querySelectorAll(".jr-client").length === 0));
     const badge = await page.evaluate(() => {
       const b = [...document.querySelectorAll("nav button")]
-        .find((x) => /^My Jobs/.test(x.innerText.trim()));
+        .find((x) => /^Dashboard/.test(x.innerText.trim()));
       return b ? b.innerText.replace(/\s+/g, " ").trim() : null;
     });
     t.ck("the badge reads 1", /\b1\b/.test(badge || ""), String(badge));

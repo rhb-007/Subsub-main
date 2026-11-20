@@ -667,6 +667,10 @@ try {
     }];
     const { ctx, page, crashes } = await open("u_bay");
     await wait(3100);
+    // Quotes already sent are on My Jobs, the whole book.
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^My Jobs/.test(b.innerText.trim()))?.click());
+    await wait(500);
     const sent = await page.evaluate(() => {
       const r = document.querySelector(".qs-row");
       return r ? r.innerText.replace(/\s+/g, " ").trim() : null;

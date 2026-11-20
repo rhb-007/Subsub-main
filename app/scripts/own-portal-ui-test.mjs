@@ -225,8 +225,9 @@ try {
   t.ck("the top of the page says Sound Property Management", there.brand === "Sound Property Management",
     JSON.stringify(there.brand));
   t.ck("My Jobs is there, on their side", there.nav.some((x) => /^My Jobs/.test(x)), JSON.stringify(there.nav));
+  t.ck("and Dashboard is the first page in the nav", /^Dashboard/.test(there.nav.filter((x) => !/QR/.test(x))[0] || ""), JSON.stringify(there.nav));
   t.ck("and Get your GCs is there too", there.nav.some((x) => /Get your GCs/.test(x)), JSON.stringify(there.nav));
-  t.ck("it opens on My Jobs, working for Sound", /^My Jobs/.test(there.onNav) && /Sound Property Management/.test(there.who),
+  t.ck("it opens on the Dashboard, working for Sound", /^Dashboard/.test(there.onNav) && /Sound Property Management/.test(there.who),
     JSON.stringify({ on: there.onNav, who: there.who }));
   const back = await page.evaluate(() => [...document.querySelectorAll(".drawer-actions button")]
     .map((b) => b.innerText.replace(/\s+/g, " ").trim()));

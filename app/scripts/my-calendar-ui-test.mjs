@@ -311,7 +311,7 @@ try {
 
   console.log("\n-- the schedule sits above the numbers --");
   {
-    await nav(page, "My Jobs");
+    await nav(page, "Dashboard");
     await wait(900);
     const geom = await page.evaluate(() => {
       const sched = document.querySelector(".my-sched");

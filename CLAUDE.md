@@ -17607,6 +17607,29 @@ refactor.
   rule. `test:dashended` (10) drives a live, a cancelled, a completed and a held
   job; reverting to the old filter fails five assertions.
 
+- **A HIRED SEAT OPENS ON A DASHBOARD, AND MY JOBS IS THE WHOLE BOOK WITH
+  ITS FILTERS.** Asked for as *"For a subcontractor or handyman: My jobs should
+  be the dashboard, which should be the first option on the navigation; My jobs
+  should be its own page with all jobs, filtering and search."* My Jobs was
+  both: the greeting, the schedule, the tiles and the questions, then the
+  filter bar and every list under them.
+  - **`dashboard` is a portal pane and the first nav entry**, ahead of Inbox,
+    carrying the waiting-on-you count. It is where a contractor seat lands
+    (sign-in, a switch, Home, staff opening the seat). It holds change orders,
+    return visits, the greeting, MySchedule, waivers, the four tiles, Waiting on
+    you, unread messages, quotes asked and job requests, **unfiltered**,
+    because a narrowed list must not hide a question, and ends in *See all my
+    jobs*.
+  - **`jobs` is My Jobs**: a page head, the Jobs / Calendar tabs, the filter bar
+    and every list (requests, quotes, current and upcoming, quotes sent,
+    completed, declined). A job waiting on a time is listed in Current and
+    upcoming there too, since the dashboard is where it is asked.
+  - **A subcontractor account's own team is unchanged**: it has the hiring
+    dashboard, and client work goes through the client's dashboard.
+  `test:cardlines`, `test:myworkui`, `test:mycal`, `test:ownportal` and
+  `test:switchland` were moved to the new rule. Landing back on My Jobs fails
+  the dashboard's no-filter-bar check.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

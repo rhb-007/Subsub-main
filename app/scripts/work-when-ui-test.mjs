@@ -343,6 +343,10 @@ try {
   const { ctx, page } = await visitApp(browser, { host: "soundpm", webPort: WEB,
     seat: { userId: "u_juan", accountId: "acc_pm" }, viewport: { width: 1340, height: 1600 } });
   await wait(2900);
+  // Every job is on My Jobs; the dashboard holds only what is waiting.
+  await page.evaluate(() => [...document.querySelectorAll("nav button")]
+    .find((b) => /^My Jobs/.test(b.innerText.trim()))?.click());
+  await wait(500);
   await openCards(page);
 
   const all = await cards(page);
@@ -399,6 +403,9 @@ try {
     !!none && /time to be arranged/i.test(none.lead), `${none?.lead} | ${none?.note}`);
 
   console.log("\n-- and they have a schedule of their own --");
+  await page.evaluate(() => [...document.querySelectorAll("nav button")]
+    .find((b) => /^Dashboard/.test(b.innerText.trim()))?.click());
+  await wait(500);
   const s = await sched(page);
   t.ck("the panel is on the dashboard", s.panel === true, JSON.stringify(s));
   t.ck("headed as theirs", /your schedule/i.test(s.head || ""), s.head);
@@ -516,6 +523,10 @@ try {
 
   console.log("\n-- 061/064: the window can be answered from here, loudly --");
   {
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^My Jobs/.test(b.innerText.trim()))?.click());
+    await wait(500);
+    await openCards(page);
     const open = all.find((c) => /Sparking breaker/i.test(c.title));
     const mine = all.find((c) => /Unit 12 shower/i.test(c.title));
     const set = all.find((c) => /leaking sink/i.test(c.title));

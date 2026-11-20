@@ -2527,7 +2527,7 @@ export default function SubSub() {
   }, ...ev]);
   // White-label tenant branding — one GC per instance (outerhome.subsub.work)
 
-  const [pane, setPane] = useState("jobs"); // contractor portal pane
+  const [pane, setPane] = useState("dashboard"); // contractor portal pane
   // Bumped by "Report a problem" in the nav; the tenant screen opens its form
   // when it changes. A counter rather than a flag, so pressing it twice
   // opens the form twice.
@@ -2831,12 +2831,12 @@ export default function SubSub() {
   const homeTab = can("dashboard") ? "dashboard" : can("tenant") ? "tenant" : "portal";
   const homeTitle = homeTab === "dashboard" ? "Back to the dashboard"
     : homeTab === "tenant" ? "Back to your reports"
-    : "Back to my jobs";
+    : "Back to your dashboard";
   const goHome = () => {
     // Anything open belongs to the screen being left: a contractor's detail
     // modal, a half-opened menu, the mobile drawer. Home means home.
     setSelected(null); setAddMenu(false); setUserMenu(false); setMobileNav(false);
-    if (homeTab === "portal") setPane("jobs");
+    if (homeTab === "portal") setPane("dashboard");
     if (homeTab === "tenant") setHomeKey((k) => k + 1);
     setTab(homeTab);
   };
@@ -5501,7 +5501,7 @@ export default function SubSub() {
     setSwitcherOpen(false); setUserMenu(false); setMobileNav(false);
     setAuth({ userId: currentUserId, accountId });
     setCurrentAccountId(accountId);
-    setSelected(null); setPane("jobs");
+    setSelected(null); setPane("dashboard");
     // The first screen the role over there actually has. Keeping the current
     // tab lands a contractor seat on a screen it cannot see.
     if (seat && ROLES[seat.role]) setTab(ROLES[seat.role].can[0]);
@@ -5580,7 +5580,7 @@ export default function SubSub() {
     await hydrateAccount(r.accountId, r.actAsUserId);
     // A contractor seat lands on its own portal, which is the client's view
     // of the work; every other seat lands where an admin's would.
-    setPane("jobs");
+    setPane("dashboard");
     setTab(r.actAsRole === "contractor" && !r.standingIn ? ROLES.contractor.can[0] : ROLES.admin.can[0]);
     setLoggedIn(true);
     } finally { setSwitchingTo(null); }
@@ -6986,6 +6986,15 @@ export default function SubSub() {
           {/* 081. One inbox for every kind of seat. Amber with the dot when
               somebody is waiting on an answer, the same signal as every other
               thing waiting on this person. */}
+          {/* A hired seat's first entry is its dashboard, ahead of the
+              inbox, the same place a hiring account's sits. */}
+          {can("portal") && (
+            <button className={tab === "portal" && pane === "dashboard" ? "on" : ""}
+              onClick={() => { setPane("dashboard"); setTab("portal"); }}>
+              {tt("Dashboard")}
+              {crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
+            </button>
+          )}
           {can("inbox") && (
             <button className={tab === "inbox" ? "on" : ""} onClick={() => openInbox()} data-nav="inbox">
               {tt("Inbox")}{inbox.unread > 0 && <LiveCount n={inbox.unread} what="unread" />}
@@ -7099,7 +7108,6 @@ export default function SubSub() {
             <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
               {tt(label)}
-              {id === "jobs" && crewActCount > 0 && <LiveCount n={crewActCount} what="waiting on you" />}
               {/* Somebody is waiting on a yes or a no. Amber for the same
                   reason a job request is: it is theirs to answer and
                   nothing moves until they do. */}
@@ -8694,7 +8702,7 @@ export default function SubSub() {
           onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
-            setCurrentUserId(id); setPane("jobs");
+            setCurrentUserId(id); setPane("dashboard");
             setTab(ROLES[(m && m.role) || "contractor"].can[0]);
           }}
           currentUserId={currentUserId}
@@ -34450,16 +34458,16 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
     const k = crewAction(m, now)?.kind;
     return k === "confirm" || (k === "arrange" && !!onProposeVisit);
   });
-  const askKeys = new Set(timeAsks.map((m) => `${m.job.id}-${m.trade}`));
-  const fUpcoming = showing("upcoming")
-    ? upcoming.filter(keepM).filter((m) => !askKeys.has(`${m.job.id}-${m.trade}`)) : [];
+  // My Jobs is the whole book, so a job waiting on a time is listed there too;
+  // the dashboard is where it is asked.
+  const fUpcoming = showing("upcoming") ? upcoming.filter(keepM) : [];
   const fPast = showing("completed") ? past.filter(keepM) : [];
   const fDeclined = showing("declined") ? declined.filter(keepM) : [];
   const fOpenQuotes = showing("quotes") ? openQuotes.filter(keepQ) : [];
   const fSentQuotes = showing("quotes") ? sentQuotes.filter(keepQ) : [];
   const workClients = [...new Set([...all.map(clientOf), ...quotes.map((q) => q.accountName)].filter(Boolean))].sort();
   const workTotal = pending.length + upcoming.length + past.length + declined.length + openQuotes.length + sentQuotes.length;
-  const workShown = timeAsks.length + fPending.length + fUpcoming.length + fPast.length + fDeclined.length + fOpenQuotes.length + fSentQuotes.length;
+  const workShown = fPending.length + fUpcoming.length + fPast.length + fDeclined.length + fOpenQuotes.length + fSentQuotes.length;
   const narrowed = !!(wq.trim() || wClient || wShow);
 
   // MY JOBS IS TWO VIEWS OF ONE BOOK: the list of work, and the calendar that
@@ -34506,9 +34514,14 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
         </div>
       )}
 
-      {pane === "jobs" && (
+      {/* THE DASHBOARD IS WHAT NEEDS THIS CREW, AND MY JOBS IS THE WHOLE BOOK.
+          Asked for as "My jobs should be the dashboard, first on the
+          navigation, and My jobs its own page with all jobs, filtering and
+          search". So the questions waiting on them stay here, unfiltered,
+          because a narrowed list must not hide a question; every job, with
+          the filter bar, is on My Jobs. */}
+      {pane === "dashboard" && (
         <>
-          {jobTabs}
           {(changeOrders || []).filter((c) => c.status === "pending").length > 0 && (
             <section className="portal-sec">
               <h3><FilePlus2 size={15} />{" "}{tt("Change orders")}
@@ -34623,6 +34636,53 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
           )}
 
 
+          {timeAsks.length > 0 && (
+            <section className="dash-sec sec-yt" aria-label={tt("Waiting on you")}>
+              <h3><ActDot /><Bell size={15} />{" "}{tt("Waiting on you —")}{" "}{timeAsks.every((m) => crewAction(m, now)?.kind === "arrange")
+                  ? tt("set a time") : timeAsks.some((m) => crewAction(m, now)?.kind === "arrange") ? tt("confirm or set a time") : tt("confirm the time")}
+                <span className="sec-count amber">{timeAsks.length}</span></h3>
+              {timeAsks.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
+            </section>
+          )}
+
+          <UnreadMessages />
+
+          {/* Asked to price something, which is not the same as being offered
+              it. Above job requests because it is the earlier conversation --
+              and because a quote nobody sent is work that went elsewhere. */}
+          {openQuotes.length > 0 && (
+            <section className="dash-sec">
+              <h3><FileText size={15} />{" "}{tt("Asked to quote")}
+                <span className="sec-count amber">{openQuotes.length}</span></h3>
+              <p className="portal-sec-note">
+                {tt("Nothing is committed by answering. If they pick you, you get a work order at the price you gave and you still accept or decline it.")}
+              </p>
+              {quoteGroups(openQuotes).map((items) => (
+                <QuoteAskCard key={`${items[0].accountId}:${items[0].job.id}`} items={items}
+                  onAnswer={onAnswerQuote} />
+              ))}
+            </section>
+          )}
+
+          {pending.length > 0 && (
+            <section className="dash-sec">
+              <h3><Clock size={15} />{" "}{tt("Job requests")}{" "}<span className="sec-count amber">{pending.length}</span></h3>
+              {pending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} showActions />)}
+            </section>
+          )}
+
+          <div className="portal-alljobs">
+            <button type="button" className="btn-ghost" onClick={() => onGoPane?.("jobs")}>
+              <ClipboardList size={14} />{" "}{tt("See all my jobs")}{workTotal > 0 ? ` (${workTotal})` : ""}{" "}<ChevronRight size={14} />
+            </button>
+          </div>
+        </>
+      )}
+
+      {pane === "jobs" && (
+        <>
+          <PageHead title={tt("My jobs")} sub={tt("Every job you have been offered, booked or finished, across every client")} />
+          {jobTabs}
           {workTotal > 0 && (
             <FilterBar q={wq} onQ={setWq} placeholder={tt("Search job, address, trade, client…")}
               shown={workShown} total={workTotal}
@@ -34636,16 +34696,12 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
               ]} />
           )}
 
-          {timeAsks.length > 0 && (
-            <section className="dash-sec sec-yt" aria-label={tt("Waiting on you")}>
-              <h3><ActDot /><Bell size={15} />{" "}{tt("Waiting on you —")}{" "}{timeAsks.every((m) => crewAction(m, now)?.kind === "arrange")
-                  ? tt("set a time") : timeAsks.some((m) => crewAction(m, now)?.kind === "arrange") ? tt("confirm or set a time") : tt("confirm the time")}
-                <span className="sec-count amber">{timeAsks.length}</span></h3>
-              {timeAsks.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} />)}
+          {fPending.length > 0 && (
+            <section className="dash-sec">
+              <h3><Clock size={15} />{" "}{tt("Job requests")}{" "}<span className="sec-count amber">{fPending.length}</span></h3>
+              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} showActions />)}
             </section>
           )}
-
-          <UnreadMessages />
 
           {/* Asked to price something, which is not the same as being offered
               it. Above job requests because it is the earlier conversation --
@@ -34661,13 +34717,6 @@ function ContractorPortal({ weather = null, sub, jobs, pane, mine, elsewhere = [
                 <QuoteAskCard key={`${items[0].accountId}:${items[0].job.id}`} items={items}
                   onAnswer={onAnswerQuote} />
               ))}
-            </section>
-          )}
-
-          {fPending.length > 0 && (
-            <section className="dash-sec">
-              <h3><Clock size={15} />{" "}{tt("Job requests")}{" "}<span className="sec-count amber">{fPending.length}</span></h3>
-              {fPending.map((m) => <JobRequestCard key={`${m.job.id}-${m.trade}`} {...m} onRespond={onRespond} onViewWO={onViewWO} now={now} changeOrders={changeOrders} onRequestChange={onRequestChange} onGoClient={onGoClient} onAnswerVisit={onAnswerVisit} onProposeVisit={onProposeVisit} onSuggestSpan={onSuggestSpan} actAway={actAway} showActions />)}
             </section>
           )}
 
@@ -48699,6 +48748,8 @@ button.mc-title:hover{text-decoration:underline}
 .nv-n{display:inline-block;margin-left:6px;background:var(--line);color:var(--ink);font-size:11px;font-weight:800;padding:0 7px;border-radius:20px}
 .nv-n.amber{background:var(--amber);color:#fff}
 .jobs-view button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.portal-alljobs{display:flex;justify-content:center;margin:6px 0 22px}
+.portal-alljobs .btn-ghost{display:inline-flex;align-items:center;gap:6px;min-height:44px}
 /* Arrived at from the schedule or the grid: here, and then quiet again. */
 .job-card.landed{border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,107,74,.15)}
 /* Said to a screen reader, where three coloured dots say nothing at all. */

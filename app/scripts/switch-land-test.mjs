@@ -169,7 +169,10 @@ try {
       .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
     t.ck("the nav is the contractor's, not the admin's",
       nav.some((n) => /^My Jobs/.test(n)), JSON.stringify(nav));
-    t.ck("with no dashboard on it", !nav.some((n) => /^Dashboard/.test(n)),
+    // A hired seat has a Dashboard of its own now; what it must not have is
+    // the hiring side's screens.
+    t.ck("with none of the hiring account's screens on it",
+      !nav.some((n) => /^(Jobs|Calendar|Subcontractors|Contractors|Properties)\b/.test(n)),
       JSON.stringify(nav));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();

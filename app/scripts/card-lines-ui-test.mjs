@@ -503,6 +503,12 @@ try {
       const set = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
       set.call(sel, val); sel.dispatchEvent(new Event("change", { bubbles: true })); return true;
     }, v);
+    // The filter bar is on My Jobs, the whole book; the dashboard keeps the
+    // questions unfiltered.
+    t.ck("the dashboard has no filter bar", await page.evaluate(() => !document.querySelector(".fbar")));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^My Jobs/.test(b.innerText.trim()))?.click());
+    await wait(500);
     t.ck("My Jobs has a filter bar with the Work filter", await pick("reply"));
     await wait(300);
     cards = await read();
@@ -511,8 +517,15 @@ try {
     await wait(300);
     cards = await read();
     t.ck("Completed hides it", !cards.some((x) => /Gutter run/i.test(x.text)), JSON.stringify(cards.map((x) => x.text.slice(0, 30))));
-    t.ck("while the counts above stay whole", await page.evaluate(() =>
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^Dashboard/.test(b.innerText.trim()))?.click());
+    await wait(500);
+    t.ck("and the dashboard still lists the request, filter or not", (await read()).some((x) => /Gutter run/i.test(x.text)));
+    t.ck("while the counts there stay whole", await page.evaluate(() =>
       [...document.querySelectorAll(".dash-card")].some((c) => /^1\s*Job request/i.test(c.innerText.trim()))));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")]
+      .find((b) => /^My Jobs/.test(b.innerText.trim()))?.click());
+    await wait(500);
     await page.evaluate(() => document.querySelector(".fbar-clear")?.click());
     await wait(300);
     cards = await read();
