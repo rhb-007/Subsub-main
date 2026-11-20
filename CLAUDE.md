@@ -17630,6 +17630,18 @@ refactor.
   `test:switchland` were moved to the new rule. Landing back on My Jobs fails
   the dashboard's no-filter-bar check.
 
+- **MY ACCOUNT OPENS ON A TAB THE SEAT HAS, AND THAT IS THE PROFILE.**
+  Reported from a staff session in Outerhome's contractor seat: My account
+  drew Profile and Settings, neither lit, over an empty page. `AccountView`
+  takes the last pane anybody asked for (`openPane`), and a request made on
+  another seat (Compliance pack on the subcontractor account's own nav asks
+  for Pack & Passport) outlived the switch onto a seat that has only Profile
+  and Settings. A layout effect now opens Profile whenever the pane is not one
+  of this seat's tabs (a half counts as its parent tab), before anything is
+  painted. `test:ownportal` presses Compliance pack on Pacific, opens Sound's
+  side, then My account; dropping the fallback leaves both tabs unlit and
+  fails two assertions.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

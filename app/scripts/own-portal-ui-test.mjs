@@ -212,6 +212,12 @@ try {
     dashLink.some((x) => /Open Sound Property Management's dashboard/.test(x))
       && !dashLink.some((x) => /My Jobs/.test(x)), JSON.stringify(dashLink));
 
+  // Asks My account for Pack & Passport on Pacific, which the contractor seat
+  // on Sound does not have. That leftover request is what drew the reported
+  // empty My account (both tabs unlit, nothing under them).
+  await page.evaluate(() => [...document.querySelectorAll("nav button")]
+    .find((b) => /^Compliance pack/.test(b.innerText.trim()))?.click());
+  await wait(600);
   console.log("\n-- pressing it lands on Sound's side, under Sound's name --");
   await page.evaluate(() => document.querySelector(".drawer-actions .client-dash")?.click());
   await wait(2500);
@@ -233,6 +239,18 @@ try {
     .map((b) => b.innerText.replace(/\s+/g, " ").trim()));
   t.ck("and the way back to Pacific is in the drawer", back.some((x) => /Pacific apartment maintenance/.test(x)),
     JSON.stringify(back));
+
+  console.log("\n-- My account on that seat opens on the profile --");
+  await page.evaluate(() => [...document.querySelectorAll(".drawer-actions button")]
+    .find((b) => /^My account/.test(b.innerText.trim()))?.click());
+  await wait(700);
+  const acct = await page.evaluate(() => ({
+    tabs: [...document.querySelectorAll(".acct-tabs button")].map((b) => ({ t: b.innerText.trim(), on: b.classList.contains("on") })),
+    panels: document.querySelectorAll(".ss-main .settings-panel, .ss-main .portal-panel").length,
+  }));
+  t.ck("its tabs are Profile and Settings", acct.tabs.map((x) => x.t).join(",") === "Profile,Settings", JSON.stringify(acct.tabs));
+  t.ck("Profile is the open tab", acct.tabs.some((x) => x.t === "Profile" && x.on), JSON.stringify(acct.tabs));
+  t.ck("and the profile is drawn under it", acct.panels > 0, JSON.stringify(acct));
 
   t.ck("the page's own console is clean", logs.length === 0, logs.join(" | "));
   t.ck("and the harness saw no crash", crashes.length === 0, crashes.join(" | "));

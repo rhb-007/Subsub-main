@@ -25171,6 +25171,17 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   // plain value, so asking for the same pane twice opens it twice instead
   // of the second request doing nothing.
   useEffect(() => { if (openPane) setPane(openPane.pane); }, [openPane]);
+  // A PANE THIS SEAT DOES NOT HAVE OPENS THE PROFILE. A request left over from
+  // another seat (Company, Pack & Passport) on a contractor seat, which has
+  // Profile and Settings only, drew both tabs unlit over an empty page. The
+  // two halves count as their parent tab. Layout effect, so the empty page
+  // is never painted.
+  useLayoutEffect(() => {
+    const ids = panes.map(([id]) => id);
+    const has = ids.includes(pane) || (pane === "passport" && ids.includes("docs"))
+      || (pane === "forms" && ids.includes("branding"));
+    if (!has) setPane("profile");
+  });
   // POINTING, NOT ONLY LANDING: the raise form's "turn it on" goes to the
   // Company tab, and the switch is the third panel down it. Scroll and ring,
   // the rule the compliance pack's Manage already follows.
