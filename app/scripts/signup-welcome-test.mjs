@@ -189,7 +189,7 @@ try {
       t.ck("the reward is for an account that starts paying, never for a signup",
         /for each one that starts paying/.test(sb?.text || "") && !/sign(s|ed)? up\b[^.]*\$|\$[^.]*sign(s|ed)? up/i.test(sb?.text || ""));
       t.ck("it names GCs, property managers and portfolio managers, and where the link is",
-        /GC, property manager or portfolio manager/.test(sb?.text || "") && /Get your GCs on SubSub/.test(sb?.text || ""));
+        /GC, property manager or portfolio manager/.test(sb?.text || "") && /\+ Add a GC/.test(sb?.text || ""));
       t.ck("and the HTML carries it too", (sb?.html || "").includes(`Earn ${cash} per referral`) && (sb?.html || "").includes("starts paying"));
     }
     const words = (e) => (e?.text || "").split("Richard Braun\nFounder")[0].split(/\s+/).filter(Boolean).length;

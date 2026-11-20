@@ -133,7 +133,7 @@ import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sor
 import { TRADES } from "../shared/trades.js";
 import { claimPathToken, SENT_VIA, FREE_LINE, footerText } from "../shared/claim.js";
 import { passportPathSlug, PASSPORT_CTA, isSlug, passportGaps } from "../shared/passport.js";
-import { inviteText, smsHref, PREFERRED_SUB, isGcKind } from "../shared/referral.js";
+import { inviteText, smsHref, PREFERRED_SUB, isGcKind, SUB_CASH_CENTS } from "../shared/referral.js";
 import { SOURCE_PRESETS } from "../shared/crmsources.js";
 import { ANY_SOURCE } from "../shared/crmmap.js";
 import { newApplicants, applicantLine } from "../shared/applicants.js";
@@ -1099,6 +1099,18 @@ const notifyPrefs = (s) => s.notify || { email: true, sms: false };
 // one switch.
 const SMS_LIVE = false;
 const smsOff = (p) => (SMS_LIVE ? p : { ...p, sms: false, email: p.email || !!p.sms });
+// A SUBCONTRACTOR'S REFERRAL ENTRY SAYS WHAT IT IS AND WHAT IT PAYS, at the
+// owner's word: "+ Add a GC" with "Get paid $100" beside it. The figure is the
+// one the ledger pays, and the asterisk points at the condition the referral
+// page states: paid once that GC starts paying, never on signup.
+function AddGcLabel() {
+  return (
+    <span className="add-gc">
+      {tt("+ Add a GC")}{" "}
+      <span className="add-gc-pay">{tt("Get paid {amount}*", { amount: "$" + (SUB_CASH_CENTS / 100) })}</span>
+    </span>
+  );
+}
 const SmsSoon = () => (SMS_LIVE ? null : <span className="sms-soon">{tt("Coming soon")}</span>);
 const notifyLabel = (s) => {
   const n = notifyPrefs(s);
@@ -7106,7 +7118,7 @@ export default function SubSub() {
           {!can("portal") && ownWork && kindOf(account) === "subcontractor" && (
             <button className={tab === "portal" && pane === "refer" ? "on" : ""}
               onClick={() => { setPane("refer"); setTab("portal"); }}>
-              {tt("Get your GCs on SubSub")}
+              <AddGcLabel />
             </button>
           )}
           {can("portal") && [
@@ -7130,11 +7142,11 @@ export default function SubSub() {
                the page a GC connects from, so the two were one page under two
                names. The requests are on Passport, above the page itself. */
             /* 075. Where a sub brings the GCs they work for onto SubSub. */
-            ["refer", "Get your GCs on SubSub"],
+            ["refer", "+ Add a GC"],
           ].map(([id, label]) => (
             <button key={id} className={tab === "portal" && (pane === id || (id === "jobs" && JOB_PANES.includes(pane))) ? "on" : ""}
               onClick={() => { setPane(id); setTab("portal"); }}>
-              {tt(label)}
+              {id === "refer" ? <AddGcLabel /> : tt(label)}
               {/* Somebody is waiting on a yes or a no. Amber for the same
                   reason a job request is: it is theirs to answer and
                   nothing moves until they do. */}
@@ -31257,7 +31269,7 @@ function ReferScreen({ fromName }) {
   return (
     <div className="refer">
       <div className="page-head">
-        <h2>{isSub ? tt("Get your GCs on SubSub") : tt("Refer a GC")}</h2>
+        <h2>{isSub ? tt("Add a GC") : tt("Refer a GC")}</h2>
       </div>
       <section className="refer-hero">
         <div className="refer-earn">
@@ -48899,6 +48911,8 @@ button.mc-title:hover{text-decoration:underline}
 .nv-n.amber{background:var(--amber);color:#fff}
 .jobs-view button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .portal-alljobs{display:flex;justify-content:center;margin:6px 0 22px}
+.add-gc{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap}
+.add-gc-pay{display:inline-block;padding:1px 8px;border-radius:20px;background:#fdf3d8;color:#8a5a00;font-size:11px;font-weight:800;line-height:1.6}
 .pfe-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:4px 0 6px}
 .pfe-fld{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:13px;font-weight:700;color:var(--ink-soft)}
 .pfe-fld input{width:100%;min-width:0;box-sizing:border-box;height:44px;padding:0 12px;font-size:15px;font-weight:500;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px}

@@ -657,7 +657,7 @@ export function founderSubEmail({ firstName, companyName }) {
     "What made you sign up?",
     "What does a successful partnership with a GC or property manager look like to you?",
   ];
-  const refer = `Send a GC, property manager or portfolio manager your link from Get your GCs on SubSub. You get ${cash} for each one that starts paying.`;
+  const refer = `Send a GC, property manager or portfolio manager your link from + Add a GC in the menu. You get ${cash} for each one that starts paying.`;
   const text = `Hi ${firstName || "there"},
 
 I'm ${FOUNDER.name}, founder of SubSub. Thanks for setting up ${company}. SubSub is free for you, for good.

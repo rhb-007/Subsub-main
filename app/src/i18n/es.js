@@ -1235,4 +1235,7 @@ export default {
   "Every job you have been offered, booked or finished, across every client": "Cada trabajo que le ofrecieron, reservó o terminó, con todos sus clientes",
   "Coming soon": "Próximamente",
   "Email it to them": "Enviárselo por correo",
+  "+ Add a GC": "+ Agregar un GC",
+  "Get paid {amount}*": "Gane {amount}*",
+  "Add a GC": "Agregar un GC",
 };

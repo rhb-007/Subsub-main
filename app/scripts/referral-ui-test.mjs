@@ -125,12 +125,16 @@ try {
     await wait(2600);
     const items = await nav(page);
     t.ck("the subcontractor account's own app rendered", items.some((x) => /^Dashboard/.test(x)), JSON.stringify(items));
-    t.ck("and Get your GCs is in its own nav", items.some((x) => /^Get your GCs on SubSub/.test(x)), JSON.stringify(items));
+    t.ck("and + Add a GC is in its own nav", items.some((x) => /^\+ Add a GC/.test(x)), JSON.stringify(items));
+    // It says what it pays, and the figure is the one the ledger pays.
+    const { SUB_CASH_CENTS } = await import("../shared/referral.js");
+    const pay = await page.evaluate(() => [...document.querySelectorAll("nav button .add-gc-pay")].map((x) => x.innerText.trim())[0] || null);
+    t.ck("beside it, Get paid and the ledger's amount", pay === "Get paid $" + (SUB_CASH_CENTS / 100) + "*", String(pay));
     t.ck("but My Jobs is not", !items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
-    await page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^Get your GCs/.test(b.innerText.trim()))?.click());
+    await page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^\+ Add a GC/.test(b.innerText.trim()))?.click());
     await wait(1200);
     const r = await read(page);
-    t.ck("it opens the screen from the account itself", r.there && r.head === "Get your GCs on SubSub" && r.code === "K7Q2MXRB", JSON.stringify(r).slice(0, 300));
+    t.ck("it opens the screen from the account itself", r.there && r.head === "Add a GC" && r.code === "K7Q2MXRB", JSON.stringify(r).slice(0, 300));
     const extra = await page.evaluate(() => ({ hello: document.querySelectorAll(".dash-hello").length, who: document.querySelectorAll(".who-bar").length }));
     t.ck("and only the screen, with no second dashboard under it", extra.hello === 0 && extra.who === 0, JSON.stringify(extra));
     await ctx.close();
@@ -144,11 +148,11 @@ try {
     await wait(2600);
     const items = await nav(page);
     t.ck("the app rendered", items.length > 0, JSON.stringify(items));
-    t.ck("Get your GCs on SubSub is in the nav", items.some((x) => /^Get your GCs on SubSub/.test(x)), JSON.stringify(items));
-    await page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^Get your GCs/.test(b.innerText.trim()))?.click());
+    t.ck("Get your GCs on SubSub is in the nav", items.some((x) => /^\+ Add a GC/.test(x)), JSON.stringify(items));
+    await page.evaluate(() => [...document.querySelectorAll("nav button")].find((b) => /^\+ Add a GC/.test(b.innerText.trim()))?.click());
     await wait(1200);
     let r = await read(page);
-    t.ck("it opens the screen", r.there && r.head === "Get your GCs on SubSub", JSON.stringify(r).slice(0, 300));
+    t.ck("it opens the screen", r.there && r.head === "Add a GC", JSON.stringify(r).slice(0, 300));
     t.ck("with the code and the link", r.code === "K7Q2MXRB" && r.link === "https://subsub.work/gc?ref=K7Q2MXRB");
     t.ck("and a QR code of the link", r.qr);
     t.ck("the pre-written message carries the link and the company",
@@ -193,7 +197,7 @@ try {
     await wait(2600);
     const items = await nav(page);
     t.ck("the app rendered for a property manager", items.length > 0);
-    t.ck("there is no sub's entry in the nav", !items.some((x) => /^Get your GCs/.test(x)), JSON.stringify(items));
+    t.ck("there is no sub's entry in the nav", !items.some((x) => /^\+ Add a GC/.test(x)), JSON.stringify(items));
     await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /My account/.test(b.innerText))?.click());
     await wait(1000);
     const tabs = await page.evaluate(() => [...document.querySelectorAll("button")].map((b) => b.innerText.trim()).filter((x) => /^Refer a GC$/.test(x)));

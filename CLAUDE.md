@@ -17709,6 +17709,16 @@ refactor.
   390px (a label, at least 150px wide, the value not clipped); the old form
   fails six.
 
+- **A SUBCONTRACTOR'S REFERRAL ENTRY IS "+ ADD A GC", WITH "GET PAID $100*"
+  BESIDE IT.** Asked for in those words, replacing *Get your GCs on SubSub*,
+  on a subcontractor account's own nav and on a contractor seat's alike.
+  `AddGcLabel` draws both, and the figure comes off `SUB_CASH_CENTS`, the
+  amount the ledger pays. The asterisk points at the condition the screen it
+  opens states: paid once that GC starts paying, never on signup. The screen
+  is headed *Add a GC*. The founder note to a subcontractor and the /subs page
+  name the new entry. `test:referralui` reads the pay line off the nav, and
+  putting the old entry back fails four assertions.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

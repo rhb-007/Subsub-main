@@ -182,7 +182,7 @@ try {
   // gone. Get your GCs came off with it and went back at the owner's word: a
   // subcontractor refers GCs from its own account.
   t.ck("no My Jobs in the account's own nav", !items.some((x) => /^My Jobs/.test(x)), JSON.stringify(items));
-  t.ck("Get your GCs is on it", items.some((x) => /^Get your GCs on SubSub/.test(x)), JSON.stringify(items));
+  t.ck("Get your GCs is on it", items.some((x) => /^\+ Add a GC/.test(x)), JSON.stringify(items));
   t.ck("and no separate My calendar", !items.some((x) => /^My calendar/.test(x)), JSON.stringify(items));
 
   console.log("\n-- the client's dashboard is a link below My account --");
@@ -232,7 +232,7 @@ try {
     JSON.stringify(there.brand));
   t.ck("My Jobs is there, on their side", there.nav.some((x) => /^My Jobs/.test(x)), JSON.stringify(there.nav));
   t.ck("and Dashboard is the first page in the nav", /^Dashboard/.test(there.nav.filter((x) => !/QR/.test(x))[0] || ""), JSON.stringify(there.nav));
-  t.ck("and Get your GCs is there too", there.nav.some((x) => /Get your GCs/.test(x)), JSON.stringify(there.nav));
+  t.ck("and Get your GCs is there too", there.nav.some((x) => /\+ Add a GC/.test(x)), JSON.stringify(there.nav));
   t.ck("it opens on the Dashboard, working for Sound", /^Dashboard/.test(there.onNav) && /Sound Property Management/.test(there.who),
     JSON.stringify({ on: there.onNav, who: there.who }));
   const back = await page.evaluate(() => [...document.querySelectorAll(".drawer-actions button")]
@@ -312,7 +312,7 @@ try {
     // Get your GCs is the subcontractor's, with or without work; a GC refers
     // from Account -> Refer a GC instead.
     t.ck(`${kind}: Get your GCs ${kind === "subcontractor" ? "is" : "is not"} in the nav`,
-      its.some((x) => /^Get your GCs/.test(x)) === (kind === "subcontractor"), JSON.stringify(its));
+      its.some((x) => /^\+ Add a GC/.test(x)) === (kind === "subcontractor"), JSON.stringify(its));
     // No seat anywhere and no work: there is no client to link to, so none is
     // drawn rather than a link onto a refusal.
     const dl = await px.evaluate(() => document.querySelectorAll(".drawer-actions .client-dash").length);
