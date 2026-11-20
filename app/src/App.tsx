@@ -50,7 +50,7 @@ import { tt, uiLocale, useLang, setLang, getLang, useDocLang } from "./lib/i18n.
 // the browser and ordinary work on the server, or the other way round.
 import { HEALTH_HOSTS, LIGHTS, integrationLight } from "../shared/syshealth.js";
 import { severityOf, severityRank } from "../shared/emergency.js";
-import { counterpartLabel, MAX_PHOTOS as MSG_MAX_PHOTOS, EDIT_WINDOW_MS as MSG_EDIT_WINDOW_MS,
+import { counterpartLabel, MAX_PHOTOS as MSG_MAX_PHOTOS,
   looksLikeTime, jobSeedFrom } from "../shared/messaging.js";
 import { TENANT_PROBLEMS, tenantGroups, tenantWhere } from "../shared/tenantproblems.js";
 import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
@@ -40151,6 +40151,7 @@ const messageErrText = (e) => {
   if (code === "too_many_photos") return `At most ${MSG_MAX_PHOTOS} photos in one message.`;
   if (code === "empty") return "Write something or add a photo first.";
   if (code === "edit_window_closed") return "It's too late to change that one. Send a correction instead.";
+  if (code === "not_yours") return "That message isn't yours to change.";
   if (code === "not_found") return "That conversation isn't available to you.";
   if (code === IMPERSONATION_LAPSED || code === "impersonation_expired") return "This staff sign-in has run out. Sign in again from the banner.";
   if (code === "unauthenticated") return "You've been signed out. Sign in again and try once more.";
@@ -40223,6 +40224,7 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
   const [busy, setBusy] = useState(false);
   const [sendErr, setSendErr] = useState("");
   const [editing, setEditing] = useState(null);  // { id, text }
+  const [deleting, setDeleting] = useState(null); // { m, kind: 'everyone' | 'me' }
   const [urls, setUrls] = useState({});
   const [lightAt, setLightAt] = useState(null);
   const listRef = useRef(null);
@@ -40315,6 +40317,15 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
       setData((d) => ({ ...d, messages: d.messages.map((m) => m.id === message.id ? message : m) }));
       setEditing(null);
     } catch (e) { setSendErr(messageErrText(e)); }
+  };
+  // Delete asks first and is awaited: the message comes off the screen only
+  // once the server has removed it (or hidden it for this person).
+  const removeMessage = async (m) => {
+    await api.deleteMessage(m.id);
+    setData((d) => d ? { ...d, messages: d.messages.filter((x) => x.id !== m.id) } : d);
+    if (editing?.id === m.id) setEditing(null);
+    setDeleting(null);
+    onChange?.();
   };
 
   // 082. The job's live state, and the only doors that change it.
@@ -40425,7 +40436,8 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
           const m = it.m;
           const mine = m.authorSide === side;
           const own = m.authorUserId === me?.id;
-          const canEdit = own && Date.now() - Date.parse(m.createdAt) <= MSG_EDIT_WINDOW_MS && !!m.body;
+          const canEdit = own && !!m.body && !data.partyGone;
+          const delKind = own ? "everyone" : (!mine ? "me" : null);
           return (
             <div key={m.id} className={`msg ${mine ? "msg-mine" : "msg-theirs"}`} data-msg={m.id}>
               <div className="msg-meta">{own ? "You" : (m.authorName || (mine ? "Your team" : otherName))} · {msgTime(m.createdAt)}
@@ -40449,8 +40461,17 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
                   ))}
                 </div>
               )}
-              {canEdit && editing?.id !== m.id && (
-                <button className="msg-edit-btn" onClick={() => setEditing({ id: m.id, text: m.body })}>Edit</button>
+              {(canEdit || delKind) && editing?.id !== m.id && (
+                <div className="msg-acts">
+                  {canEdit && (
+                    <button className="msg-edit-btn" data-act="msg-edit"
+                      onClick={() => setEditing({ id: m.id, text: m.body })}><Pencil size={12} /> Edit</button>
+                  )}
+                  {delKind && (
+                    <button className="msg-edit-btn msg-del-btn" data-act="msg-delete"
+                      onClick={() => setDeleting({ m, kind: delKind })}><Trash2 size={12} /> Delete</button>
+                  )}
+                </div>
               )}
             </div>
           );
@@ -40458,6 +40479,14 @@ function ThreadPane({ threadId, me, onChange, onBack, onOpenJob, autoFocus = fal
       </div>
       {lightAt != null && (
         <PhotoLightbox photos={photoSet} urls={urls} at={lightAt} onAt={setLightAt} onClose={() => setLightAt(null)} />
+      )}
+      {deleting && (
+        <ConfirmRemove verb="Delete" what="message" name="this message"
+          consequence={deleting.kind === "everyone"
+            ? `It comes off this conversation for everybody, ${side === "home" ? (t.partyName || "them") : (t.accountName || "the office")} included. This can't be undone.`
+            : `It comes off your view of this conversation only. ${deleting.m.authorName || otherName} wrote it, so they still see it.`}
+          explain={messageErrText}
+          onConfirm={() => removeMessage(deleting.m)} onCancel={() => setDeleting(null)} />
       )}
       {data.partyGone ? (
         <p className="thr-gone"><Info size={15} /> {t.partyName || "They"} {t.kind === "crew" ? "are no longer on your roster" : "are no longer connected to this account"}, so nothing more can be sent. What was said stays here.</p>
@@ -52559,7 +52588,11 @@ button.job-insp:hover{border-color:#2f5577}
 .msg-theirs .msg-bubble{background:var(--card);border:1px solid var(--line);border-bottom-left-radius:4px}
 .msg-photos{display:flex;flex-wrap:wrap;gap:6px}
 .msg-photos .ph-thumb{width:96px;height:96px}
-.msg-edit-btn{border:0;background:none;padding:0;font:inherit;font-size:12px;color:var(--ink-soft);text-decoration:underline;cursor:pointer}
+.msg-acts{display:flex;gap:14px;margin-top:4px}
+.msg-mine .msg-acts{justify-content:flex-end}
+.msg-edit-btn{border:0;background:none;padding:4px 0;font:inherit;font-size:12px;color:var(--ink-soft);cursor:pointer;display:inline-flex;align-items:center;gap:4px;min-height:28px}
+.msg-edit-btn:hover{color:var(--ink);text-decoration:underline}
+.msg-del-btn:hover{color:var(--red)}
 .msg-edit textarea{width:min(420px,70vw);font:inherit;font-size:16px;padding:8px;border:1px solid var(--line);border-radius:10px}
 .msg-edit-acts{display:flex;gap:6px;justify-content:flex-end;margin-top:4px}
 .thr-gone{flex:none;display:flex;gap:8px;align-items:center;padding:12px 14px;margin:0;border-top:1px solid var(--line);color:var(--ink-soft);font-size:14px}

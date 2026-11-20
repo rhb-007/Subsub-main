@@ -371,6 +371,7 @@ export const api = {
   getThread: (id) => request(`/threads/${id}`),
   sendMessage: (id, body) => request(`/threads/${id}/messages`, { method: "POST", body: JSON.stringify(body) }),
   editMessage: (id, body) => request(`/messages/${id}`, { method: "PATCH", body: JSON.stringify({ body }) }),
+  deleteMessage: (id) => request(`/messages/${id}`, { method: "DELETE" }),
   uploadMessagePhoto: async (file) => uploadFile("message-photo", await shrinkPhoto(file)),
   messagePhotoBlob: async (threadId, messageId, index) => {
     const res = await fetch(`${API_BASE}/threads/${threadId}/photos/${messageId}/${index}`, { headers: await authHeaders() });

@@ -25,8 +25,8 @@
 export const THREAD_KINDS = ["tenant", "crew", "owner"];
 export const MAX_BODY = 4000;
 export const MAX_PHOTOS = 6;
-// The author may correct a typo for this long, and after it a message is the
-// record: nothing is ever deleted.
+// Kept for older callers only: a message is no longer locked after ten
+// minutes. Its author may edit or delete it at any time (mayEditMessage).
 export const EDIT_WINDOW_MS = 10 * 60 * 1000;
 // How long a message waits unread before its email goes. Long enough that a
 // conversation going back and forth in the app does not also fill an inbox,
@@ -128,10 +128,21 @@ export function validMessage(b, { keyPrefix = null } = {}) {
   return { body, photos };
 }
 
-export function mayEditMessage(msg, userId, nowMs = Date.now()) {
-  if (!msg || !userId || msg.authorUserId !== userId) return false;
-  const at = Date.parse(msg.createdAt);
-  return Number.isFinite(at) && nowMs - at <= EDIT_WINDOW_MS;
+// The author may edit their own words at any time, and the message says it
+// was edited. This replaced a ten-minute window, at the owner's word.
+export function mayEditMessage(msg, userId) {
+  return !!msg && !!userId && msg.authorUserId === userId;
+}
+
+// What Delete does to a message, from where the reader sits. The author's
+// delete removes it for everybody; a message from the other side is hidden
+// for the one person who pressed it; a teammate's message is neither, because
+// it was not written to them and it is not theirs.
+export function messageDeleteKind(msg, userId, side) {
+  if (!msg || !userId) return null;
+  if (msg.authorUserId === userId) return "everyone";
+  if (msg.authorSide && side && msg.authorSide !== side) return "me";
+  return null;
 }
 
 // What a thread is called from where the reader is sitting. The home side

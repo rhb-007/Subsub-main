@@ -2517,6 +2517,15 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS ix_messages_thread ON messages(thread_id, created_at);
 
+-- 103. A message somebody else wrote, deleted for one person only.
+CREATE TABLE IF NOT EXISTS message_hides (
+  message_id  TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+  user_id     TEXT NOT NULL REFERENCES users(id),
+  hidden_at   TEXT NOT NULL,
+  PRIMARY KEY (message_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS ix_message_hides_user ON message_hides(user_id);
+
 CREATE TABLE IF NOT EXISTS message_reads (
   thread_id    TEXT NOT NULL REFERENCES message_threads(id) ON DELETE CASCADE,
   user_id      TEXT NOT NULL REFERENCES users(id),

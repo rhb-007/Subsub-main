@@ -156,6 +156,19 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
     (MESSAGES[post[1]] = MESSAGES[post[1]] || []).push(m);
     return [201, { message: m }];
   }
+  const em = /^\/api\/messages\/([^/]+)$/.exec(path);
+  if (em && (method === "PATCH" || method === "DELETE")) {
+    sent.push({ path, method, body });
+    for (const k of Object.keys(MESSAGES)) {
+      const i = MESSAGES[k].findIndex((x) => x.id === em[1]);
+      if (i < 0) continue;
+      const m = MESSAGES[k][i];
+      if (method === "DELETE") { MESSAGES[k].splice(i, 1); return [200, { ok: true, deleted: m.authorUserId === who ? "everyone" : "me" }]; }
+      MESSAGES[k][i] = { ...m, body: body.body, editedAt: new Date().toISOString() };
+      return [200, { message: MESSAGES[k][i] }];
+    }
+    return [404, { error: "not_found" }];
+  }
   const vr = /^\/api\/visits\/([^/]+)\/respond$/.exec(path);
   if (vr && method === "POST") { sent.push({ path, body }); VISIT = { ...VISIT, status: "confirmed", managerAt: new Date().toISOString(), waitingOn: [] }; return [200, { ok: true }]; }
   if (path === "/api/jobs/j1/visits" && method === "POST") { sent.push({ path, body }); return [201, { ok: true }]; }
@@ -462,6 +475,62 @@ try {
     const rep = [...sent].reverse().find((x) => x.path === "/api/jobs");
     t.ck("and sending it names the conversation, through the real report", rep?.body?.fromThread?.id === "th1" && !!rep.body.reportDetail, JSON.stringify(rep?.body && { ft: rep.body.fromThread, rd: !!rep.body.reportDetail }));
     t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  // EDIT OR DELETE ANY MESSAGE. Asked for as "delete and edit if it's
+  // yours, delete if someone else wrote to you". Your own message carries
+  // Edit and Delete with no ten-minute limit; one from the other side carries
+  // Delete only, and the confirmation says it comes off your view alone.
+  console.log("\n-- editing and deleting a message --");
+  {
+    asTenant = false; reset();
+    MESSAGES.th1.push({ id: "m_own", threadId: "th1", authorUserId: "usr_r", authorName: "Richard Braun", authorSide: "home",
+      body: "Tuesday at nine", photos: [], createdAt: new Date(Date.now() - 86400000).toISOString(), editedAt: null });
+    const { ctx, page, crashes } = await visitApp(browser, { host: "x", webPort: WEB,
+      seat: { userId: "usr_r", accountId: "acc_x" }, viewport: { width: 1100, height: 1100 } });
+    await wait(2500);
+    await page.evaluate(() => document.querySelector('[data-nav="inbox"]')?.click());
+    await wait(800);
+    await clickText(page, ".ib-row", /Tess Nguyen/);
+    await wait(1000);
+    const acts = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-msg]")].map((m) => [m.dataset.msg,
+      [...m.querySelectorAll("[data-act]")].map((b) => b.dataset.act)])));
+    const a0 = await acts();
+    t.ck("your own message, a day old, has Edit and Delete", JSON.stringify(a0.m_own) === JSON.stringify(["msg-edit", "msg-delete"]), JSON.stringify(a0));
+    t.ck("their message has Delete and no Edit", JSON.stringify(a0.m1) === JSON.stringify(["msg-delete"]), JSON.stringify(a0));
+    await page.evaluate(() => document.querySelector('[data-msg="m_own"] [data-act="msg-edit"]')?.click());
+    await wait(300);
+    await page.evaluate(() => {
+      const ta = document.querySelector(".msg-edit textarea");
+      const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+      set.call(ta, "Tuesday at ten"); ta.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await clickText(page, ".msg-edit button", /^Save$/);
+    await wait(600);
+    const ed = await page.evaluate(() => document.querySelector('[data-msg="m_own"]')?.innerText || "");
+    t.ck("an edit saves and says it was edited", /Tuesday at ten/.test(ed) && /edited/.test(ed), ed);
+    t.ck("and went to the server", sent.some((x) => x.method === "PATCH" && x.path === "/api/messages/m_own" && x.body?.body === "Tuesday at ten"));
+    // Delete theirs: asks first, says they still see it, and goes only on yes.
+    await page.evaluate(() => document.querySelector('[data-msg="m1"] [data-act="msg-delete"]')?.click());
+    await wait(400);
+    const mt = await page.evaluate(() => document.querySelector(".modal")?.innerText || "");
+    t.ck("deleting their message asks first and says it is for you only", /your view/.test(mt) && /still see it/.test(mt), mt);
+    t.ck("nothing is sent before you agree", !sent.some((x) => x.method === "DELETE"));
+    await clickText(page, ".modal button", /^Delete$/);
+    await wait(700);
+    t.ck("agreeing deletes it", sent.some((x) => x.method === "DELETE" && x.path === "/api/messages/m1")
+      && !(await page.evaluate(() => !!document.querySelector('[data-msg="m1"]'))));
+    // Delete your own: for everybody.
+    await page.evaluate(() => document.querySelector('[data-msg="m_own"] [data-act="msg-delete"]')?.click());
+    await wait(400);
+    const mt2 = await page.evaluate(() => document.querySelector(".modal")?.innerText || "");
+    t.ck("deleting your own says it goes for everybody", /for everybody/.test(mt2) && /Tess Nguyen/.test(mt2), mt2);
+    await clickText(page, ".modal button", /^Delete$/);
+    await wait(700);
+    t.ck("and it is gone", sent.some((x) => x.method === "DELETE" && x.path === "/api/messages/m_own")
+      && !(await page.evaluate(() => !!document.querySelector('[data-msg="m_own"]'))));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
 

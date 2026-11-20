@@ -145,7 +145,7 @@ import {
 } from "./hostnames.js";
 import { setupCheck } from "./setup-check.js";
 import { PREF_IDS, NEEDS_PHONE, validNotice, noticeLive, sortNotices } from "../shared/tenanthome.js";
-import { THREAD_KINDS, TEAM_ROLES, threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage,
+import { THREAD_KINDS, TEAM_ROLES, threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage, messageDeleteKind,
   owesEmail, REPLY_QUIET_MS, replyAddress, tokenFromAddress, replyTextFrom,
   MAX_PHOTOS as MSG_MAX_PHOTOS } from "../shared/messaging.js";
 import PostalMime from "postal-mime";
@@ -757,7 +757,7 @@ const OWNER_ALLOWED = [
   [/^\/api\/threads\/[^/]+$/, ["GET"]],
   [/^\/api\/threads\/[^/]+\/messages$/, ["POST"]],
   [/^\/api\/threads\/[^/]+\/photos\/[^/]+\/\d+$/, ["GET"]],
-  [/^\/api\/messages\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/messages\/[^/]+$/, ["PATCH", "DELETE"]],
   [/^\/api\/message-contacts$/, ["GET"]],
   [/^\/api\/uploads\/message-photo\/.+$/, ["PUT"]],
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
@@ -834,7 +834,7 @@ const TENANT_ALLOWED = [
   [/^\/api\/threads\/[^/]+$/, ["GET"]],
   [/^\/api\/threads\/[^/]+\/messages$/, ["POST"]],
   [/^\/api\/threads\/[^/]+\/photos\/[^/]+\/\d+$/, ["GET"]],
-  [/^\/api\/messages\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/messages\/[^/]+$/, ["PATCH", "DELETE"]],
   [/^\/api\/message-contacts$/, ["GET"]],
   [/^\/api\/uploads\/message-photo\/.+$/, ["PUT"]],
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
@@ -8193,6 +8193,25 @@ async function threadForViewer(c, id) {
   return { thread: t, side, viewer, live };
 }
 
+// 103. The messages this person deleted for themselves. A database without
+// 103 hides nothing, rather than taking the conversation down with it.
+async function hiddenMessageIds(db, threadId, userId) {
+  try {
+    const { results } = await db.prepare(`SELECT h.message_id FROM message_hides h
+      JOIN messages m ON m.id = h.message_id WHERE m.thread_id = ? AND h.user_id = ?`).bind(threadId, userId).all();
+    return new Set((results || []).map((r) => r.message_id));
+  } catch (err) {
+    if (missingSchema(err)) return new Set();
+    throw err;
+  }
+}
+
+async function messageHidesExist(db) {
+  try {
+    return !!(await db.prepare(`SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'message_hides'`).first());
+  } catch { return false; }
+}
+
 const messageRowToJs = (m) => ({
   id: m.id, threadId: m.thread_id, authorUserId: m.author_user_id || null,
   authorName: m.author_name || null, authorSide: m.author_side, body: m.body || "",
@@ -8393,6 +8412,7 @@ app.get("/api/threads", async (c) => {
   const viewer = await messageViewer(c);
   const team = TEAM_ROLES.includes(viewer.role);
   try {
+    const hides = await messageHidesExist(c.env.DB);
     const { results } = await c.env.DB.prepare(
       `${THREAD_SELECT}
         WHERE EXISTS (SELECT 1 FROM messages mm WHERE mm.thread_id = t.id)
@@ -8430,11 +8450,14 @@ app.get("/api/threads", async (c) => {
           if (!owned.has(`${t.accountId}|${pid}`)) continue;
         }
       }
+      // 103. A message this person deleted for themselves is not their
+      // preview and not their unread count.
+      const nh = hides ? "AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = m.id AND h.user_id = ?3)" : "";
       const stats = await c.env.DB.prepare(
-        `SELECT (SELECT body FROM messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_body,
-                (SELECT author_side FROM messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_side,
-                (SELECT photos FROM messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_photos,
-                (SELECT COUNT(*) FROM messages m WHERE m.thread_id = ?1 AND m.author_side <> ?2
+        `SELECT (SELECT body FROM messages m WHERE thread_id = ?1 ${nh} ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_body,
+                (SELECT author_side FROM messages m WHERE thread_id = ?1 ${nh} ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_side,
+                (SELECT photos FROM messages m WHERE thread_id = ?1 ${nh} ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_photos,
+                (SELECT COUNT(*) FROM messages m WHERE m.thread_id = ?1 AND m.author_side <> ?2 ${nh}
                    AND m.created_at > COALESCE((SELECT read_at FROM message_reads WHERE thread_id = ?1 AND user_id = ?3), '')) AS unread`
       ).bind(t.id, side, viewer.userId).first();
       out.push({ ...t, side, unread: Number(stats?.unread || 0),
@@ -8651,7 +8674,9 @@ app.get("/api/threads/:id", async (c) => {
     const { results } = await c.env.DB.prepare(`SELECT m.*, u.name AS author_name FROM messages m
       LEFT JOIN users u ON u.id = m.author_user_id WHERE m.thread_id = ?
       ORDER BY m.created_at ASC, m.rowid ASC LIMIT 1000`).bind(r.thread.id).all();
-    const messages = (results || []).map(messageRowToJs);
+    // 103. What this person deleted for themselves is not drawn for them.
+    const hidden = await hiddenMessageIds(c.env.DB, r.thread.id, r.viewer.userId);
+    const messages = (results || []).filter((m) => !hidden.has(m.id)).map(messageRowToJs);
     await markThreadRead(c.env.DB, r.thread.id, r.viewer.userId, new Date().toISOString());
     // 082. The job's live state and history for a job thread; the jobs a
     // general thread turned into for the rest. Best effort: a context that
@@ -8693,8 +8718,10 @@ app.post("/api/threads/:id/messages", async (c) => {
   }
 });
 
-// A typo, for ten minutes, by whoever wrote it. The words only: a photo once
-// sent is part of what was said.
+// The author edits their own words, at any time, and the message says it was
+// edited. The words only: a photo once sent is changed by deleting the
+// message. While the other side is still there, because an edit to a
+// conversation nobody can answer any more is a change nobody can see.
 app.patch("/api/messages/:id", async (c) => {
   const viewer = await messageViewer(c);
   try {
@@ -8704,14 +8731,65 @@ app.patch("/api/messages/:id", async (c) => {
     const r = await threadForViewer(c, m.thread_id);
     if (r.error) return c.json({ error: r.error }, r.status);
     const msg = messageRowToJs(m);
-    if (msg.authorUserId !== viewer.userId) return c.json({ error: "not_found" }, 404);
-    if (!mayEditMessage(msg, viewer.userId)) return c.json({ error: "edit_window_closed" }, 409);
+    if (!mayEditMessage(msg, viewer.userId)) return c.json({ error: "not_yours" }, 403);
+    if (!r.live) return c.json({ error: "party_gone" }, 409);
     const b = await c.req.json().catch(() => ({}));
     const v = validMessage({ body: b.body, photos: parseJson(m.photos, []) });
     if (v.error) return c.json({ error: v.error, max: v.max }, 400);
     const now = new Date().toISOString();
     await c.env.DB.prepare(`UPDATE messages SET body = ?, edited_at = ? WHERE id = ?`).bind(v.body, now, m.id).run();
     return c.json({ message: { ...msg, body: v.body, editedAt: now } });
+  } catch (err) {
+    const migration = missingSchema(err);
+    if (migration) return c.json({ error: "migration_needed", migration }, 503);
+    throw err;
+  }
+});
+
+// DELETING A MESSAGE. The author's delete removes it for everybody, and the
+// event log keeps that it existed, what it said and who removed it, because a
+// thread about a job is part of its record. A message the other side wrote is
+// not this person's to remove from somebody else's screen, so their delete
+// hides it for them alone (103). A teammate's message is neither.
+app.delete("/api/messages/:id", async (c) => {
+  const viewer = await messageViewer(c);
+  try {
+    const m = await c.env.DB.prepare(`SELECT m.*, u.name AS author_name FROM messages m
+      LEFT JOIN users u ON u.id = m.author_user_id WHERE m.id = ?`).bind(c.req.param("id")).first();
+    if (!m) return c.json({ error: "not_found" }, 404);
+    const r = await threadForViewer(c, m.thread_id);
+    if (r.error) return c.json({ error: r.error }, r.status);
+    const msg = messageRowToJs(m);
+    const kind = messageDeleteKind(msg, viewer.userId, r.side);
+    if (!kind) return c.json({ error: "not_yours" }, 403);
+    const now = new Date().toISOString();
+    if (kind === "me") {
+      try {
+        await c.env.DB.prepare(`INSERT INTO message_hides (message_id, user_id, hidden_at) VALUES (?, ?, ?)
+          ON CONFLICT(message_id, user_id) DO NOTHING`).bind(m.id, viewer.userId, now).run();
+      } catch (err) {
+        if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "103_message_hides" }, 503);
+        throw err;
+      }
+      return c.json({ ok: true, deleted: "me", id: m.id });
+    }
+    // Hides go with the message; the foreign key says so, and a database
+    // without 103 has none to take.
+    try { await c.env.DB.prepare(`DELETE FROM message_hides WHERE message_id = ?`).bind(m.id).run(); }
+    catch (err) { if (!missingSchema(err)) throw err; }
+    await c.env.DB.prepare(`DELETE FROM messages WHERE id = ?`).bind(m.id).run();
+    // The thread sorts by its newest message, so it moves back to what is left.
+    const last = await c.env.DB.prepare(`SELECT MAX(created_at) AS at FROM messages WHERE thread_id = ?`)
+      .bind(m.thread_id).first();
+    if (last?.at) {
+      await c.env.DB.prepare(`UPDATE message_threads SET last_at = ? WHERE id = ?`).bind(last.at, m.thread_id).run()
+        .catch(() => {});
+    }
+    await logEvent(c.env, r.thread.accountId, viewer.userId, "message.deleted", m.id, {
+      threadId: m.thread_id, side: r.side, body: m.body || "", photos: parseJson(m.photos, []).length,
+      createdAt: m.created_at, staff: c.get("auth")?.impersonatedBy || null,
+    }).catch((err) => console.warn("[messages] delete not logged:", err?.message || err));
+    return c.json({ ok: true, deleted: "everyone", id: m.id });
   } catch (err) {
     const migration = missingSchema(err);
     if (migration) return c.json({ error: "migration_needed", migration }, 503);
@@ -10358,6 +10436,7 @@ export function missingSchema(err) {
   if (/\boccupied_units\b|\baccount_setup_fees\b/i.test(m)) return "084_unit_pricing";
   if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
+  if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";

@@ -17719,6 +17719,32 @@ refactor.
   name the new entry. `test:referralui` reads the pay line off the nav, and
   putting the old entry back fails four assertions.
 
+- **A MESSAGE CAN BE EDITED OR DELETED BY WHOEVER WROTE IT, AT ANY TIME, AND
+  DELETED FOR YOURSELF IF SOMEBODY ELSE WROTE IT.** Asked for as *"delete and
+  edit if it's yours, delete if someone else wrote to you"*. This reverses
+  081's "append-only, ten minutes to correct a typo, nothing ever deleted", at
+  the owner's word. Migration 103 (`message_hides`); `messageDeleteKind` in
+  `shared/messaging.js` is the rule.
+  - **Edit has no time limit**, and the message still says *edited*. It is
+    the author only (`not_yours`, 403, for anybody else) and only while the
+    other side is still there (`party_gone`).
+  - **The author's Delete removes it for everybody.** The row is deleted, the
+    thread's `last_at` moves back to what is left, and `message.deleted` in
+    the event log keeps what it said, who removed it and when, because a
+    thread about a job is part of its record.
+  - **Somebody else's message is deleted for you alone.** It is not yours to
+    take off the other side's screen, so it is a `message_hides` row for that
+    one person, and it drops out of their conversation, preview and unread
+    count. The author still sees it. **A teammate's message is neither**: it
+    was not written to you, and it is not yours.
+  - **Both ask first** (`ConfirmRemove`), saying which of the two it is, and
+    both are awaited: the message comes off only once the server agreed.
+  - **Without 103** your own Edit and Delete work, and deleting another
+    side's message answers `migration_needed` naming the file.
+  `test:messaging` (182) and `test:messagingui` (108). Three mutations fire:
+  the hidden filter dropped, a teammate allowed to delete, and Delete taken
+  off the other side's messages. **Paste 103** before the second kind works.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

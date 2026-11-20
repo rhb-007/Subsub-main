@@ -337,7 +337,9 @@ WITH spec(j) AS (SELECT
   -- 100. One owner per account.
   ',["m100_account_owners","col","account_owners",["account_id","user_id","set_at","set_by","note"]]' ||
   -- 102. A form application waits for the account to accept or decline it.
-  ',["m102_roster_applications","col","roster_applications",["engagement_id","account_id","company_id","state","applied_at","decided_at","decided_by"]]') ||
+  ',["m102_roster_applications","col","roster_applications",["engagement_id","account_id","company_id","state","applied_at","decided_at","decided_by"]]' ||
+  -- 103. A message from the other side deleted for one person only.
+  ',["m103_message_hides","col","message_hides",["message_id","user_id","hidden_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

@@ -33,7 +33,7 @@
 import { readFileSync } from "node:fs";
 import { makeD1, freshDb, makeR2 } from "./lib/d1-sqlite.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
-import { threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage, owesEmail,
+import { threadKey, partyShapeOk, sideOf, validMessage, mayEditMessage, messageDeleteKind, owesEmail,
   NOTIFY_AFTER_MS, EDIT_WINDOW_MS, looksLikeTime, jobSeedFrom, replyTextFrom, tokenFromAddress,
   REPLY_MARKER } from "../shared/messaging.js";
 
@@ -156,9 +156,13 @@ console.log("\n-- the rules, before any of it reaches a database --");
   ck("a photo alone is a message", !validMessage({ photos: [{ key: "acc1/message-photo/a.jpg" }] }, { keyPrefix: "acc1/message-photo/" }).error);
   const now = Date.now();
   const m = { authorUserId: "u", createdAt: new Date(now - 60000).toISOString() };
-  ck("the author may correct a typo", mayEditMessage(m, "u", now));
-  ck("nobody else may", !mayEditMessage(m, "v", now));
-  ck("and not after the window", !mayEditMessage({ ...m, createdAt: new Date(now - EDIT_WINDOW_MS - 1000).toISOString() }, "u", now));
+  ck("the author may correct a typo", mayEditMessage(m, "u"));
+  ck("nobody else may", !mayEditMessage(m, "v"));
+  ck("and still after ten minutes", mayEditMessage({ ...m, createdAt: new Date(now - EDIT_WINDOW_MS - 1000).toISOString() }, "u"));
+  const mm = { authorUserId: "u", authorSide: "home" };
+  ck("the author deletes for everybody", messageDeleteKind(mm, "u", "home") === "everyone");
+  ck("the other side deletes for themselves", messageDeleteKind(mm, "v", "party") === "me");
+  ck("a teammate may not delete it", messageDeleteKind(mm, "w", "home") === null);
   const old = new Date(now - NOTIFY_AFTER_MS - 1000).toISOString();
   ck("an unread message past the wait owes an email", owesEmail({ latestOtherAt: old, nowMs: now }));
   ck("not before the wait", !owesEmail({ latestOtherAt: new Date(now - 1000).toISOString(), nowMs: now }));
@@ -301,10 +305,40 @@ console.log("\n-- photos and corrections --");
   const [e1, er1] = await call(env, "t1", `/messages/${r1.message.id}`, { method: "PATCH", body: JSON.stringify({ body: "Here it is (under the sink)" }) });
   ck("the author corrects a typo", e1 === 200 && er1.message?.editedAt && er1.message.body.includes("under"));
   const [e2] = await call(env, "admin", `/messages/${r1.message.id}`, { method: "PATCH", body: JSON.stringify({ body: "changed" }) });
-  ck("nobody else may", e2 === 404, String(e2));
+  ck("nobody else may", e2 === 403, String(e2));
   db.exec(`UPDATE messages SET created_at = '2020-01-01T00:00:00.000Z' WHERE id = '${r1.message.id}'`);
   const [e3, er3] = await call(env, "t1", `/messages/${r1.message.id}`, { method: "PATCH", body: JSON.stringify({ body: "later" }) });
-  ck("and not after ten minutes", e3 === 409 && er3.error === "edit_window_closed");
+  ck("and still after ten minutes", e3 === 200 && er3.message?.body === "later", JSON.stringify(er3));
+
+  // Deleting. The office writes to the tenant; the tenant deletes it for
+  // themselves, and the office still sees it.
+  const [, o1] = await say(env, "admin", r1.thread.id, { body: "We'll send someone Tuesday" });
+  const [, o2] = await say(env, "admin", r1.thread.id, { body: "A second note" });
+  const read = async (who) => (await call(env, who, `/threads/${r1.thread.id}`))[1].messages.map((x) => x.id);
+  const [d1, dr1] = await call(env, "t1", `/messages/${o1.message.id}`, { method: "DELETE" });
+  ck("the tenant deletes the office's message for themselves", d1 === 200 && dr1.deleted === "me", JSON.stringify(dr1));
+  ck("it is gone from the tenant's view", !(await read("t1")).includes(o1.message.id));
+  ck("and still there for the office", (await read("admin")).includes(o1.message.id));
+  const [, lst] = await call(env, "t1", `/threads`);
+  const lt = (lst.threads || []).find((x) => x.id === r1.thread.id);
+  ck("their inbox preview skips it", lt && lt.lastBody === "A second note", JSON.stringify(lt));
+  const [d2, dr2] = await call(env, "t1", `/messages/${o2.message.id}`, { method: "DELETE" });
+  const [, lst2] = await call(env, "t1", `/threads`);
+  const lt2 = (lst2.threads || []).find((x) => x.id === r1.thread.id);
+  ck("the preview falls back past every hidden message", d2 === 200 && lt2?.lastBody === "later", JSON.stringify(lt2));
+  ck("and the office's preview is unchanged", ((await call(env, "admin", `/threads`))[1].threads || [])
+    .find((x) => x.id === r1.thread.id)?.lastBody === "A second note");
+  const [e4] = await call(env, "t1", `/messages/${o2.message.id}`, { method: "PATCH", body: JSON.stringify({ body: "mine now" }) });
+  ck("nobody edits a message they did not write", e4 === 403);
+
+  // The author deletes their own: gone for everybody, and logged.
+  const [d3, dr3] = await call(env, "t1", `/messages/${r1.message.id}`, { method: "DELETE" });
+  ck("the author deletes their own for everybody", d3 === 200 && dr3.deleted === "everyone", JSON.stringify(dr3));
+  ck("it is gone for the office too", !(await read("admin")).includes(r1.message.id));
+  const ev = db.prepare(`SELECT payload FROM events WHERE kind = 'message.deleted' AND subject_id = ?`).get(r1.message.id);
+  ck("the event log keeps what it said", ev && JSON.parse(ev.payload).body === "later", JSON.stringify(ev));
+  const [d4] = await call(env, "t2", `/messages/${o2.message.id}`, { method: "DELETE" });
+  ck("somebody not on the thread cannot delete anything", d4 === 404, String(d4));
 }
 
 console.log("\n-- the email --");
