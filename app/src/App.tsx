@@ -14035,15 +14035,19 @@ function CompanyEditFields({ co, onSave, onCancel }) {
   const problem = !f.company.trim() ? "A company needs a name." : "";
   return (
     <>
-      <div className="pf-adduser pf-adduser-grid">
-        <input placeholder="Company name" value={f.company} onChange={(e) => set("company", e.target.value)} />
-        <input placeholder="Contact name" value={f.contact} onChange={(e) => set("contact", e.target.value)} />
-        <input placeholder="Email" value={f.email} onChange={(e) => set("email", e.target.value)} />
-        <input placeholder="Phone" value={f.phone} onChange={(e) => set("phone", e.target.value)} />
-        <input placeholder="License #" value={f.license} onChange={(e) => set("license", e.target.value)} />
-        <input placeholder="UBI" value={f.ubi} onChange={(e) => set("ubi", e.target.value)} />
-        <input placeholder="City" value={f.city} onChange={(e) => set("city", e.target.value)} />
-        <input placeholder="ZIP" value={f.zip} onChange={(e) => set("zip", e.target.value)} />
+      {/* EVERY BOX HAS A LABEL ABOVE IT. Placeholders were the only labels,
+          so a filled box said "98372" with nothing saying ZIP, and the grid
+          squeezed eight boxes into a few letters each. */}
+      <div className="pfe-grid">
+        {[["company", "Company name"], ["contact", "Contact name"], ["email", "Email", "email"],
+          ["phone", "Phone", "tel"], ["license", "License number"], ["ubi", "UBI"],
+          ["city", "City"], ["zip", "ZIP"]].map(([k, label, type]) => (
+          <label key={k} className="pfe-fld">
+            <span>{label}</span>
+            <input type={type || "text"} value={f[k]} onChange={(e) => set(k, e.target.value)}
+              inputMode={k === "zip" || k === "ubi" ? "numeric" : undefined} />
+          </label>
+        ))}
       </div>
       {/* A disabled control with no reason beside it is indistinguishable
           from a broken one -- written down here already, and paid for again
@@ -48895,6 +48899,10 @@ button.mc-title:hover{text-decoration:underline}
 .nv-n.amber{background:var(--amber);color:#fff}
 .jobs-view button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .portal-alljobs{display:flex;justify-content:center;margin:6px 0 22px}
+.pfe-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px;margin:4px 0 6px}
+.pfe-fld{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:13px;font-weight:700;color:var(--ink-soft)}
+.pfe-fld input{width:100%;min-width:0;box-sizing:border-box;height:44px;padding:0 12px;font-size:15px;font-weight:500;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:10px}
+@media (max-width:560px){.pfe-grid{grid-template-columns:1fr}.pfe-fld input{font-size:16px}}
 .is-soon{opacity:.5;cursor:not-allowed}
 .is-soon input{cursor:not-allowed}
 .sms-soon{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:20px;background:var(--line);color:var(--ink-soft);font-size:11px;font-weight:700;vertical-align:1px}

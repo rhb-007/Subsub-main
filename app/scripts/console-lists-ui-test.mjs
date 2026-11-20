@@ -603,6 +603,23 @@ try {
   t.ck("for the row that was pressed", cw?.h2 === "Skagit Framing", cw?.h2);
   t.ck("with its detail", cw?.detail === true);
   t.ck("and its edit form, in the same window", cw?.edit === true);
+  // EVERY BOX CARRIES ITS LABEL AND IS WIDE ENOUGH TO READ. Reported with the
+  // Edit details boxes squeezed to "I", "F" and a cut-off email, with
+  // placeholders as the only labels.
+  for (const w of [820, 390]) {
+    await page.setViewport({ width: w, height: 1400 });
+    await wait(300);
+    const flds = await page.evaluate(() => [...document.querySelectorAll(".modal-co .pfe-open .pfe-fld")].map((l) => ({
+      label: (l.querySelector("span")?.innerText || "").trim(),
+      w: Math.round(l.querySelector("input")?.getBoundingClientRect().width || 0),
+      fits: (() => { const i = l.querySelector("input"); return !!i && i.scrollWidth <= i.clientWidth + 1; })(),
+    })));
+    t.ck(`${w}px: eight labeled boxes`, flds.length === 8 && flds.every((f) => f.label), JSON.stringify(flds.map((f) => f.label)));
+    t.ck(`${w}px: each at least 150px wide`, flds.length === 8 && flds.every((f) => f.w >= 150), JSON.stringify(flds.map((f) => f.w)));
+    t.ck(`${w}px: and the values show whole`, flds.length === 8 && flds.every((f) => f.fits), JSON.stringify(flds));
+  }
+  await page.setViewport({ width: 1180, height: 1400 });
+  await wait(300);
   // Every boxed section in the company window has space under it.
   const coTouch = await touchingSections(page, ".modal-co");
   t.ck("no two sections touch in the company window", coTouch.length === 0, JSON.stringify(coTouch));

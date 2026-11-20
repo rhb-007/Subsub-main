@@ -17700,6 +17700,15 @@ refactor.
   on their company row before this agreement; nothing reads that file as this
   agreement's signed copy.
 
+- **THE CONSOLE'S EDIT DETAILS FORM LABELS EVERY BOX.** Reported with a
+  company's Edit details squeezed to boxes reading *I*, *F* and a cut-off
+  email: eight inputs in a five-column grid, with placeholders as their only
+  labels, so a filled box said *98372* and nothing said ZIP.
+  `CompanyEditFields` draws `.pfe-fld` labels above 44px boxes, two columns
+  and one under 560px. `test:consolelists` measures all eight at 820px and
+  390px (a label, at least 150px wide, the value not clipped); the old form
+  fails six.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 
