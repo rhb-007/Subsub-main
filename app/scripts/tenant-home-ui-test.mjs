@@ -304,7 +304,7 @@ try {
     await wait(400);
     let acc = await read(page);
     t.ck("My account opens, with How we reach you as a tab",
-      JSON.stringify(acc.tabs) === JSON.stringify(["Profile", "How we reach you", "Emergency contact"])
+      JSON.stringify(acc.tabs) === JSON.stringify(["Profile", "How we reach you", "Emergency contact", "Settings"])
       && acc.tabOn === "How we reach you", JSON.stringify({ tabs: acc.tabs, on: acc.tabOn }));
     t.ck("preferred contact asks, naming the number on file",
       /Preferred contact/.test(acc.contact || "") && /Not chosen yet/.test(acc.contact || "") && /555-0188/.test(acc.contact || ""), String(acc.contact));

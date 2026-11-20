@@ -17675,6 +17675,31 @@ refactor.
   signed copy. **Not driven in a browser:** opening the card after a new add,
   because no suite saves the three-step add form.
 
+- **AN AGREEMENT NOBODY WAS EMAILED SAYS SO, AND ITS ONE BUTTON SENDS THE
+  FIRST EMAIL; TEXT MESSAGES ARE GRAY UNTIL SMS IS SET UP.** Reported with
+  King of Kings' card reading *Sent Oct 9 by Richard Braun · not emailed* over
+  Resend: *"this is currently the only way to send, needs to be corrected"*.
+  - **That row was issued before agreements were emailed**, so its event has
+    no `emailed` key. `agreementSends` carries `emailTried` and the line reads
+    *in SubSub only, before agreements were emailed*; a real failure still
+    says the email did not go, and no address says so.
+  - **With no email ever sent, the button is the primary Email it to them**,
+    and the route sends it as a first email, not *This is a reminder*
+    (`priorEmailed`). The event is marked `firstEmail`, and the line reads
+    Emailed rather than Resent. The next press is a reminder.
+  - **Text messages:** `SMS_LIVE = false` beside `notifyPrefs` is the one
+    switch. Every SMS choice (contractor and tenant notifications, the roster
+    form, the public application form, the tenant invite channels) is
+    disabled, gray, and labeled *Coming soon*. No send includes `sms` and
+    `smsOff` reads a stored text choice as off (email on if texts were the
+    only one), so no form is stuck unable to save.
+  `test:agreement` (161) and `test:agrterms` (44). Three mutations fire: the
+  reminder wording on a first email, the old *not emailed* line, and
+  `SMS_LIVE` back on. **Still open:** King of Kings' card also offers *View
+  their signed copy* while waiting for an upload, because a contract file was
+  on their company row before this agreement; nothing reads that file as this
+  agreement's signed copy.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

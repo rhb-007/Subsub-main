@@ -67,6 +67,7 @@ const STANDING = { ...defaultTerms(), governingState: "WA" };
 
 let issued = [];
 let calls = [];
+let LIVE = null;
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -79,9 +80,10 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === `/api/subs/${SUB.id}/documents/contract` && method === "POST") { calls.push(["doc", body]); return [200, { ok: true }]; }
   if (path === "/api/agreements/ag_1/countersign" && method === "POST") { calls.push(["countersign", body]); return [200, { ok: true }]; }
   if (path === "/api/notify/documents" && method === "POST") { calls.push(["docreq", body]); return [200, { ok: true, to: "rae@bay.test" }]; }
+  if (path === "/api/agreements/ag_old/resend" && method === "POST") { calls.push(["resend", body]); return [200, { ok: true, to: "rae@bay.test" }]; }
   if (path === `/api/subs/${SUB.id}/agreement`) {
     return [200, {
-      agreement: null,
+      agreement: LIVE,
       // Deliberately the SERVER's render of the standing terms, exactly as the
       // route sends it. If the modal drew this rather than re-rendering, the
       // preview would not move when a term does -- which is the bug.
@@ -313,6 +315,57 @@ try {
     t.ck("as their own paper, already signed, so nobody is emailed to sign it",
       calls[0]?.[1]?.source === "uploaded" && calls[0]?.[1]?.signedCopy === true, JSON.stringify(calls[0]?.[1]));
     t.ck("confirmed under the typed name", calls.find((c) => c[0] === "countersign")?.[1]?.typedName === "Richard Braun");
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
+  console.log("\n-- an agreement never emailed says so, and the button emails it --");
+  {
+    calls = [];
+    LIVE = { id: "ag_old", status: "sent", source: "uploaded", waitingOn: "sub_upload", issuedAt: "2026-10-09 10:00:00",
+      inForce: false, document: null,
+      sends: [{ kind: "issued", at: "2026-10-09 10:00:00", by: "Richard Braun", to: null, emailed: false, emailTried: false }] };
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
+    await wait(2200);
+    await openCard(page);
+    const line = await page.evaluate(() => (document.querySelector('.agr-sends [data-send="issued"]')?.innerText || "").replace(/\s+/g, " "));
+    t.ck("it does not claim an email failed", !/not emailed/.test(line) && /in SubSub only/.test(line), line);
+    const btn = await page.evaluate(() => {
+      const b = document.querySelector('.agr-panel [data-act="resend"]');
+      return b ? { t: b.innerText.trim(), solid: b.classList.contains("btn-solid") } : null;
+    });
+    t.ck("the button says it sends the first email, as the primary action",
+      btn?.t === "Email it to them" && btn?.solid === true, JSON.stringify(btn));
+    await page.evaluate(() => document.querySelector('.agr-panel [data-act="resend"]')?.click());
+    for (let n = 0; n < 30 && !calls.length; n++) await wait(150);
+    t.ck("and pressing it emails them", calls[0]?.[0] === "resend");
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+    LIVE = null;
+  }
+
+  console.log("\n-- text messages are coming soon, so they cannot be picked --");
+  {
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
+    await wait(2200);
+    await openCard(page);
+    await page.evaluate(() => document.querySelector('.modal .sd-tabs [data-tab="overview"]')?.click());
+    await wait(300);
+    await page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => /^Edit/.test(b.innerText.trim()))?.click());
+    await wait(700);
+    await page.evaluate(() => [...document.querySelectorAll(".modal button")].find((b) => /More details/i.test(b.innerText))?.click());
+    await wait(400);
+    const sms = await page.evaluate(() => {
+      const l = [...document.querySelectorAll(".notify-opt")].find((x) => /SMS/.test(x.innerText));
+      if (!l) return null;
+      const i = l.querySelector("input");
+      return { disabled: i.disabled, checked: i.checked, soon: /Coming soon/.test(l.innerText), op: getComputedStyle(l).opacity };
+    });
+    t.ck("the SMS option is on the form", !!sms, JSON.stringify(sms));
+    t.ck("grayed out, off, and says coming soon",
+      sms?.disabled === true && sms?.checked === false && sms?.soon === true && Number(sms?.op) < 0.8, JSON.stringify(sms));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

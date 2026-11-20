@@ -564,6 +564,37 @@ console.log("\n-- a copy both parties already signed: recorded, not sent, and on
   } finally { globalThis.fetch = realFetch; }
 }
 
+console.log("\n-- one issued before agreements were emailed gets a first email, not a reminder --");
+{
+  const db = seed();
+  db.exec(`UPDATE companies SET email='rae@bay.test' WHERE id='${SUB_CO}'`);
+  db.exec(`INSERT INTO agreements(id,account_id,company_id,source,status,issued_by,terms,parties)
+           VALUES ('a_old','${GC}','${SUB_CO}','uploaded','sent','u_gc','{}','{}')`);
+  // The issue event as it was written then: no emailed key at all.
+  db.exec(`INSERT INTO events(account_id,actor_id,kind,subject_id,payload,created_at)
+           VALUES ('${GC}','u_gc','agreement_issued','a_old','{"companyId":"${SUB_CO}","source":"uploaded"}','2026-10-09 10:00:00')`);
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/emails")) { sent.push(JSON.parse(init.body)); return new Response('{"id":"em"}', { status: 200 }); }
+    return realFetch(url, init);
+  };
+  const env = { ...ENV(db), RESEND_API_KEY: "re_test", MAIL_FROM: "SubSub <no-reply@subsub.work>" };
+  try {
+    const g = await call(env, `/api/subs/${SUB_CO}/agreement`);
+    const s0 = g.body.agreement?.sends?.[0];
+    ck("the old send reads as never tried, not as a failed email", s0 && s0.emailed === false && s0.emailTried === false,
+      JSON.stringify(s0));
+    const re = await call(env, `/api/agreements/a_old/resend`, { method: "POST" });
+    ck("pressing it emails them", re.status === 200 && sent.length === 1, `${re.status} ${sent.length}`);
+    ck("as the first email, not a reminder", !/Reminder/.test(sent[0]?.subject || "") && !/reminder/i.test(sent[0]?.text || ""),
+      sent[0]?.subject);
+    ck("and the record says so", re.body.agreement?.sends?.[1]?.firstEmail === true, JSON.stringify(re.body.agreement?.sends));
+    const re2 = await call(env, `/api/agreements/a_old/resend`, { method: "POST" });
+    ck("the next one is a reminder", re2.status === 200 && /Reminder/.test(sent[1]?.subject || ""), sent[1]?.subject);
+  } finally { globalThis.fetch = realFetch; }
+}
+
 console.log("\n-- declining, and withdrawing --");
 {
   const db = seed(); const env = ENV(db);

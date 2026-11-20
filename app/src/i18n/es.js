@@ -1233,4 +1233,6 @@ export default {
   "My jobs": "Mis trabajos",
   "See all my jobs": "Ver todos mis trabajos",
   "Every job you have been offered, booked or finished, across every client": "Cada trabajo que le ofrecieron, reservó o terminó, con todos sus clientes",
+  "Coming soon": "Próximamente",
+  "Email it to them": "Enviárselo por correo",
 };

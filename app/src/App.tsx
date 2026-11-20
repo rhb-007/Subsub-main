@@ -1092,6 +1092,14 @@ const acceptRate = (s) => {
 // How a contractor wants to receive system notifications. SMS is notification-
 // only — admins and PMs cannot send ad-hoc texts, just email.
 const notifyPrefs = (s) => s.notify || { email: true, sms: false };
+// TEXT MESSAGES ARE NOT SET UP YET, so every place a text can be picked is
+// drawn gray with "coming soon" and nothing chooses one. A stored choice of
+// texts reads as off; somebody who had texts only is shown email instead,
+// rather than a form that cannot be saved. The day SMS is live, this is the
+// one switch.
+const SMS_LIVE = false;
+const smsOff = (p) => (SMS_LIVE ? p : { ...p, sms: false, email: p.email || !!p.sms });
+const SmsSoon = () => (SMS_LIVE ? null : <span className="sms-soon">{tt("Coming soon")}</span>);
 const notifyLabel = (s) => {
   const n = notifyPrefs(s);
   if (n.email && n.sms) return "Email + SMS";
@@ -15241,7 +15249,7 @@ function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemove
     setBusy("send"); setErr("");
     try {
       const res = await api.resendTenantInvite(tenant.userId, {
-        channels: [...(ch.email ? ["email"] : []), ...(ch.sms && phoneOk ? ["sms"] : [])],
+        channels: [...(ch.email ? ["email"] : []), ...(ch.sms && phoneOk && SMS_LIVE ? ["sms"] : [])],
         ...(editing ? { subject: draft.subject, message: draft.message, sms: draft.sms } : {}),
       });
       setNote(sendSummary(res.sent, f.firstName.trim() || tenant.name));
@@ -15330,10 +15338,10 @@ function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemove
                   onChange={(e) => setCh((x) => ({ ...x, email: e.target.checked }))} />
                 <span>Email{hasEmail ? "" : " — needs an address"}</span>
               </label>
-              <label className={`tn-channel ${phoneOk ? "" : "is-off"}`}>
-                <input type="checkbox" checked={ch.sms && phoneOk} disabled={!phoneOk}
+              <label className={`tn-channel ${phoneOk && SMS_LIVE ? "" : "is-off"}`}>
+                <input type="checkbox" checked={ch.sms && phoneOk && SMS_LIVE} disabled={!phoneOk || !SMS_LIVE}
                   onChange={(e) => setCh((x) => ({ ...x, sms: e.target.checked }))} />
-                <span>Text message{phoneOk ? "" : " — needs a cell phone"}</span>
+                <span>Text message{!SMS_LIVE ? "" : phoneOk ? "" : " — needs a cell phone"} <SmsSoon /></span>
               </label>
             </div>
           </div>
@@ -15354,7 +15362,7 @@ function TenantEditor({ tenant, properties, unitWord, onClose, onSaved, onRemove
                   <textarea rows={10} value={draft.message}
                     onChange={(e) => setDraft((d) => ({ ...d, message: e.target.value }))} />
                 </label>
-                {ch.sms && phoneOk && (
+                {ch.sms && phoneOk && SMS_LIVE && (
                   <label className="fld">Text message
                     <textarea rows={3} value={draft.sms}
                       onChange={(e) => setDraft((d) => ({ ...d, sms: e.target.value }))} />
@@ -15457,7 +15465,7 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
       const res = await api.addTenant({
         propertyId: f.propertyId, firstName: f.firstName.trim(), lastName: f.lastName.trim(),
         email: f.email.trim(), phone: f.phone.trim(), unit: f.unit.trim(),
-        channels: [...(hasEmail ? ["email"] : []), ...((f.sms || !hasEmail) && phoneOk ? ["sms"] : [])],
+        channels: [...(hasEmail ? ["email"] : []), ...((f.sms || !hasEmail) && phoneOk && SMS_LIVE ? ["sms"] : [])],
       });
       const line = sendSummary(res.sent, res.name);
       if (andAnother) {
@@ -15522,10 +15530,10 @@ function TenantForm({ properties, unitWord, onCancel, onDone }) {
             <input type="checkbox" checked={hasEmail} readOnly disabled />
             <span>Email{hasEmail ? <> <b>always</b></> : " — needs an address"}</span>
           </label>
-          <label className={`tn-channel ${phoneOk ? "" : "is-off"}`}>
-            <input type="checkbox" checked={f.sms && phoneOk} disabled={!phoneOk}
+          <label className={`tn-channel ${phoneOk && SMS_LIVE ? "" : "is-off"}`}>
+            <input type="checkbox" checked={f.sms && phoneOk && SMS_LIVE} disabled={!phoneOk || !SMS_LIVE}
               onChange={(e) => set("sms", e.target.checked)} />
-            <span>Text message{phoneOk ? "" : " — needs a cell phone"}</span>
+            <span>Text message{!SMS_LIVE ? "" : phoneOk ? "" : " — needs a cell phone"} <SmsSoon /></span>
           </label>
         </div>
       </div>
@@ -20393,9 +20401,9 @@ function SubSignup({ brand, onSubmit, onBackToLogin, invite }) {
               <label className={`wl-check ${f.notifyEmail ? "on" : ""}`}>
                 <input type="checkbox" checked={f.notifyEmail}
                   onChange={(e) => set("notifyEmail", e.target.checked)} /> Email</label>
-              <label className={`wl-check ${f.notifySms ? "on" : ""}`}>
-                <input type="checkbox" checked={f.notifySms}
-                  onChange={(e) => set("notifySms", e.target.checked)} /> Text message</label>
+              <label className={`wl-check ${f.notifySms ? "on" : ""}${SMS_LIVE ? "" : " is-soon"}`}>
+                <input type="checkbox" checked={f.notifySms} disabled={!SMS_LIVE}
+                  onChange={(e) => set("notifySms", e.target.checked)} /> Text message <SmsSoon /></label>
             </div>
             <p className="wl-fine">Job offers and document reminders only. One-way messages — you
               reply inside your account, not to the text.</p>
@@ -25253,7 +25261,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     mailState: mySub.mailState || mySub.state || "", mailZip: mySub.mailZip || mySub.zip || "",
   } : null);
   const [aSaved, setASaved] = useState(false);
-  const [nf, setNf] = useState(mySub ? { ...notifyPrefs(mySub) } : { email: true, sms: false });
+  const [nf, setNf] = useState(mySub ? smsOff({ ...notifyPrefs(mySub) }) : { email: true, sms: false });
   const [nSaved, setNSaved] = useState(false);
   const [co, setCo] = useState(mySub?.company || "");
   const [lic, setLic] = useState(mySub?.license || "");
@@ -25273,7 +25281,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
   const [bErr, setBErr] = useState("");
   // A tenant's own notification choices. Defaults fill whatever the row has
   // not said yet, so an old row reads the same as a new one.
-  const [tn, setTn] = useState(() => ({ email: true, sms: false, statusChanges: true, ...(me?.notify || {}) }));
+  const [tn, setTn] = useState(() => smsOff({ email: true, sms: false, statusChanges: true, ...(me?.notify || {}) }));
   const [tnSaved, setTnSaved] = useState(false);
   const [tnBusy, setTnBusy] = useState(false);
   const [tnErr, setTnErr] = useState("");
@@ -25367,12 +25375,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                 <span className="no-sub">{me.email && !String(me.email).endsWith("@no-email.invalid") ? me.email : tt("no email on file")}</span>
               </span>
             </label>
-            <label className={`notify-opt ${tn.sms && me.phone ? "on" : ""}`}>
-              <input type="checkbox" checked={tn.sms} disabled={!tn.statusChanges || !me.phone}
+            <label className={`notify-opt ${tn.sms && me.phone ? "on" : ""}${SMS_LIVE ? "" : " is-soon"}`}>
+              <input type="checkbox" checked={tn.sms} disabled={!SMS_LIVE || !tn.statusChanges || !me.phone}
                 onChange={(e) => { setTn({ ...tn, sms: e.target.checked }); setTnSaved(false); setTnErr(""); }} />
               <Phone size={17} />
               <span className="no-txt">
-                <span className="no-name">{tt("Text message (SMS)")}</span>
+                <span className="no-name">{tt("Text message (SMS)")} <SmsSoon /></span>
                 <span className="no-sub">{me.phone || tt("no phone on file — ask your building manager to add one")}</span>
               </span>
             </label>
@@ -25452,12 +25460,12 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
                     <span className="no-sub">{mySub.email || tt("no email on file")}</span>
                   </span>
                 </label>
-                <label className={`notify-opt ${nf.sms ? "on" : ""}`}>
-                  <input type="checkbox" checked={nf.sms}
+                <label className={`notify-opt ${nf.sms ? "on" : ""}${SMS_LIVE ? "" : " is-soon"}`}>
+                  <input type="checkbox" checked={nf.sms} disabled={!SMS_LIVE}
                     onChange={(e) => { setNf({ ...nf, sms: e.target.checked }); setNSaved(false); }} />
                   <Phone size={17} />
                   <span className="no-txt">
-                    <span className="no-name">{tt("Text message (SMS)")}</span>
+                    <span className="no-name">{tt("Text message (SMS)")} <SmsSoon /></span>
                     <span className="no-sub">{mySub.phone || tt("no phone on file")}</span>
                   </span>
                 </label>
@@ -35313,7 +35321,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
           : r?.to ? `Sent in SubSub, but the email to ${r.to} didn't go. Use Resend to try again.`
           : `Sent in SubSub. ${sub.company} has no email on file, so nobody was emailed; they'll see it when they sign in.`);
       }
-      if (label === "resend") setNote(`Emailed to ${r?.to} again.`);
+      if (label === "resend") setNote(sends.some((x) => x.emailed) ? `Emailed to ${r?.to} again.` : `Emailed to ${r?.to}.`);
     }
     catch (e) {
       console.error(`[agreement] ${label} failed:`, e);
@@ -35486,11 +35494,13 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
           <li data-send="issued">
             <Send size={12} /> <b>Sent {stampDay(first?.at || ag.issuedAt)}</b>
             {first?.by ? ` by ${first.by}` : ""}
-            {first ? (first.emailed ? ` · emailed to ${first.to}` : " · not emailed") : ""}
+            {first ? (first.emailed ? ` · emailed to ${first.to}`
+              : first.emailTried ? (first.to ? ` · the email to ${first.to} didn't go` : " · not emailed: no email on file")
+              : " · in SubSub only, before agreements were emailed") : ""}
           </li>
           {resends.map((x, i) => (
             <li key={i} data-send="resent">
-              <RefreshCw size={12} /> Resent {stampDay(x.at)}{x.by ? ` by ${x.by}` : ""}
+              <RefreshCw size={12} /> {x.firstEmail ? "Emailed" : "Resent"} {stampDay(x.at)}{x.by ? ` by ${x.by}` : ""}
               {x.emailed ? ` · emailed to ${x.to}` : ""}
             </li>
           ))}
@@ -35508,10 +35518,13 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
               <Eye size={13} /> View their signed copy
             </button>
           )}
+          {/* Never emailed, this is the only way to reach them, so it is the
+              primary button and says it sends the first email. */}
           {canManage && ag.status === "sent" && (
-            <button className="btn-ghost sm" type="button" data-act="resend" disabled={busy}
+            <button className={`${sends.some((x) => x.emailed) ? "btn-ghost" : "btn-solid"} sm`} type="button" data-act="resend" disabled={busy}
               onClick={() => act(() => api.resendAgreement(ag.id), "resend")}>
-              <RefreshCw size={13} /> {busy ? "Sending…" : "Resend"}
+              {sends.some((x) => x.emailed) ? <RefreshCw size={13} /> : <Send size={13} />}{" "}
+              {busy ? "Sending…" : sends.some((x) => x.emailed) ? "Resend" : "Email it to them"}
             </button>
           )}
           {canManage && ag.waitingOn === "hiring_countersign" && (
@@ -44318,7 +44331,7 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
     city: existing.city || "", state: existing.state || "", zip2: existing.zip || "",
     license: existing.license || "", ubi: existing.ubi || "",
     propertyIds: existing.propertyIds || [],
-    notifyEmail: notifyPrefs(existing).email, notifySms: notifyPrefs(existing).sms,
+    notifyEmail: smsOff(notifyPrefs(existing)).email, notifySms: smsOff(notifyPrefs(existing)).sms,
     mailStreet: existing.mailStreet || "", mailCity: existing.mailCity || "",
     mailState: existing.mailState || "", mailZip: existing.mailZip || "",
     crews: existing.crews ? JSON.parse(JSON.stringify(existing.crews)) : [],
@@ -44866,10 +44879,10 @@ function SubForm({ onSubmit, onCancel, existing, openStep, properties, onConnect
               onChange={(e) => set("notifyEmail", e.target.checked)} />
             <Mail size={15} /><span className="no-name">Email</span>
           </label>
-          <label className={`notify-opt ${f.notifySms ? "on" : ""}`}>
-            <input type="checkbox" checked={f.notifySms}
+          <label className={`notify-opt ${f.notifySms ? "on" : ""}${SMS_LIVE ? "" : " is-soon"}`}>
+            <input type="checkbox" checked={f.notifySms} disabled={!SMS_LIVE}
               onChange={(e) => set("notifySms", e.target.checked)} />
-            <Phone size={15} /><span className="no-name">SMS</span>
+            <Phone size={15} /><span className="no-name">SMS <SmsSoon /></span>
           </label>
         </div>
         {!f.notifyEmail && !f.notifySms
@@ -48882,6 +48895,9 @@ button.mc-title:hover{text-decoration:underline}
 .nv-n.amber{background:var(--amber);color:#fff}
 .jobs-view button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
 .portal-alljobs{display:flex;justify-content:center;margin:6px 0 22px}
+.is-soon{opacity:.5;cursor:not-allowed}
+.is-soon input{cursor:not-allowed}
+.sms-soon{display:inline-block;margin-left:6px;padding:1px 8px;border-radius:20px;background:var(--line);color:var(--ink-soft);font-size:11px;font-weight:700;vertical-align:1px}
 .portal-alljobs .btn-ghost{display:inline-flex;align-items:center;gap:6px;min-height:44px}
 /* Arrived at from the schedule or the grid: here, and then quiet again. */
 .job-card.landed{border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,107,74,.15)}

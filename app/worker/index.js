@@ -15171,6 +15171,10 @@ async function agreementSends(env, id) {
         to: p.to || null,
         // Absent on rows written before this existed, when nothing was emailed.
         emailed: p.emailed === true,
+        // Whether an email was tried at all. A send from before agreements
+        // were emailed is "in SubSub only", not an email that failed.
+        emailTried: "emailed" in p,
+        firstEmail: p.firstEmail === true,
       };
     });
   } catch (err) {
@@ -15430,11 +15434,16 @@ app.post("/api/agreements/:id/resend", requireRole("admin", "pm"), async (c) => 
     if (row.status !== "sent") return c.json({ error: "not_waiting_on_them", status: row.status }, 409);
     const rl = await rateLimit(c.env, "agreement-resend", id, { limit: 3, windowMinutes: 60 });
     if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
-    const sent = await emailAgreement(c, row, { resend: true });
+    // AN AGREEMENT NOBODY WAS EVER EMAILED GETS ITS FIRST EMAIL, NOT A
+    // REMINDER. Agreements issued before they were emailed, or whose email
+    // failed, have only this button to reach the subcontractor, and "This is a
+    // reminder" about a message they never received reads as a mistake.
+    const priorEmailed = (await agreementSends(c.env, id)).some((x) => x.emailed);
+    const sent = await emailAgreement(c, row, { resend: priorEmailed });
     if (!sent.to) return c.json({ error: "no_email_on_file" }, 400);
     if (!sent.emailed) return c.json({ error: "send_failed", detail: sent.error }, 502);
     await logEvent(c.env, accountId, userId, "agreement_resent", id,
-      { companyId: row.company_id, to: sent.to, emailed: true });
+      { companyId: row.company_id, to: sent.to, emailed: true, firstEmail: !priorEmailed });
     return c.json({ ok: true, to: sent.to,
       agreement: agreementToJs(row, { document: renderStored(row),
         sends: await agreementSends(c.env, id) }) });
