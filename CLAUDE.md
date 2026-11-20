@@ -17642,6 +17642,39 @@ refactor.
   side, then My account; dropping the fallback leaves both tabs unlit and
   fails two assertions.
 
+- **THE AGREEMENT TAB ASKS WHICH AGREEMENT FIRST, AND EACH ANSWER FINISHES
+  THE JOB.** Asked for as *"first it should ask if you want to use the standard
+  SubSub agreement (view agreement) or use a custom agreement (already signed)
+  to upload ... if using SubSub agreement, edit variables of the agreement
+  there and send immediately along with a request for the other documents
+  required to set up the account and assign jobs"*.
+  - **The choice comes first**: *SubSub Standard Subcontractor Agreement*
+    (with View agreement) or *Our own agreement*. Nothing to edit is drawn
+    until it is answered.
+  - **SubSub's agreement opens its terms unfolded** (`SubTermsEditor
+    defaultOpen`), with Preview, and one **Send agreement and document
+    request** press. The request goes only after the agreement is issued, and
+    only for the required documents not on file (`requiredDocsFor`, so a
+    handyman is asked for the W-9 alone), with a box to leave it off. The note
+    says which of the two went.
+  - **Our own agreement is a copy both parties signed**: a file and a typed
+    name, then issue (`source: uploaded`, `signedCopy: true`, so nobody is
+    emailed to sign paper already signed), upload the contract, countersign.
+    *Not signed yet? Ask them to upload their signed copy* keeps the old path.
+  - **A hiring account uploading a signed copy advances only its own
+    agreement.** The upload route signed every account's waiting `uploaded`
+    agreement with that company, so one account's paper would have signed
+    another's form. Scoped when the uploader holds a live engagement.
+  - **A new contractor opens on this tab**, once the roster carries the
+    server's id (`openAfterAdd`), unless they were added mid-assignment.
+  - **The tab is never blank.** `if (!data) return null` hid a failed load,
+    which is what the screenshot showed; it now says loading or the error with
+    Try again.
+  `test:agrterms` (37) and `test:agreement` (156). Four mutations fire: no
+  document request, no `signedCopy`, the unscoped upload, and an emailed
+  signed copy. **Not driven in a browser:** opening the card after a new add,
+  because no suite saves the three-step add form.
+
 ## Working here`. A rename inside one function is scoped to that
   function's line range, and the diff is read back afterwards.
 

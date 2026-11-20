@@ -14871,15 +14871,24 @@ app.post("/api/subs/:companyId/documents/:kind", requireRole("admin", "pm", "con
   let signedFor = [];
   if (kind === "contract" && fileName) {
     try {
+      // A HIRING ACCOUNT UPLOADING A SIGNED COPY ADVANCES ITS OWN AGREEMENT
+      // ONLY. The paper it holds is between it and this company; reading the
+      // upload as the company signing every other account's form would sign
+      // agreements nobody here has seen.
+      const hiringSide = auth.role !== "contractor" && !!(await c.env.DB.prepare(
+        `SELECT 1 AS y FROM engagements WHERE account_id = ? AND company_id = ? AND status != 'ended' LIMIT 1`
+      ).bind(auth.accountId, companyId).first());
+      const scope = hiringSide ? ` AND account_id = ?` : "";
+      const args = hiringSide ? [companyId, auth.accountId] : [companyId];
       const { results: waiting } = await c.env.DB.prepare(
         `SELECT DISTINCT account_id FROM agreements
-          WHERE company_id = ? AND source = 'uploaded' AND status = 'sent'`).bind(companyId).all();
+          WHERE company_id = ? AND source = 'uploaded' AND status = 'sent'${scope}`).bind(...args).all();
       signedFor = (waiting || []).map((r) => r.account_id);
       await c.env.DB.prepare(
         `UPDATE agreements SET status = 'signed', signed_at = CURRENT_TIMESTAMP,
            signed_by = ?, file_name = ?
-         WHERE company_id = ? AND source = 'uploaded' AND status = 'sent'`
-      ).bind(auth.userId, fileName, companyId).run();
+         WHERE company_id = ? AND source = 'uploaded' AND status = 'sent'${scope}`
+      ).bind(auth.userId, fileName, ...args).run();
     } catch (err) {
       // A database without 052 has no agreements to advance, and an upload
       // must not fail for want of a table this route never needed before.
@@ -15342,11 +15351,17 @@ app.post("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c)
       JSON.stringify(full), JSON.stringify(parties), governingState, docSha256, userId).run();
 
     const row = await c.env.DB.prepare(`SELECT * FROM agreements WHERE id = ?`).bind(id).first();
-    let sent = { to: null, emailed: false, error: "send_failed" };
-    try { sent = await emailAgreement(c, row); }
-    catch (err) { console.error("[agreement] email on issue failed:", err?.message || err); }
+    // A copy BOTH PARTIES ALREADY SIGNED is recorded, not sent: emailing
+    // "please sign" about paper already signed is wrong news. The signed file
+    // is uploaded next and this account confirms it.
+    const signedCopy = source === "uploaded" && body.signedCopy === true;
+    let sent = { to: null, emailed: false, error: signedCopy ? "signed_copy" : "send_failed" };
+    if (!signedCopy) {
+      try { sent = await emailAgreement(c, row); }
+      catch (err) { console.error("[agreement] email on issue failed:", err?.message || err); }
+    }
     await logEvent(c.env, accountId, userId, "agreement_issued", id,
-      { companyId, source, templateVersion, to: sent.to, emailed: sent.emailed });
+      { companyId, source, templateVersion, to: sent.to, emailed: sent.emailed, signedCopy });
 
     return c.json({ ok: true, emailed: sent.emailed, to: sent.to, emailError: sent.error,
       agreement: agreementToJs(row, { document: renderStored(row),

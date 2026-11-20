@@ -528,6 +528,42 @@ console.log("\n-- an uploaded agreement is the other way to satisfy the same thi
     (await call(env, "/api/subs")).body.find((s) => s.id === SUB_CO)?.docState === "current");
 }
 
+console.log("\n-- a copy both parties already signed: recorded, not sent, and only ours moves --");
+{
+  const db = seed();
+  db.exec(`UPDATE companies SET email='rae@bay.test' WHERE id='${SUB_CO}'`);
+  const sent = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/emails")) { sent.push(JSON.parse(init.body)); return new Response('{"id":"em"}', { status: 200 }); }
+    return realFetch(url, init);
+  };
+  const env = { ...ENV(db), RESEND_API_KEY: "re_test", MAIL_FROM: "SubSub <no-reply@subsub.work>" };
+  try {
+    // Cascade has its own uploaded agreement out to the same company.
+    const theirs = await call(env, `/api/subs/${SUB_CO}/agreement`,
+      { method: "POST", seat: { u: "u_pm", a: "acc_pm" }, body: { source: "uploaded" } });
+    ck("another account's own-paper agreement is out", theirs.status === 200, `${theirs.status}`);
+    const before = sent.length;
+    const ours = await call(env, `/api/subs/${SUB_CO}/agreement`,
+      { method: "POST", body: { source: "uploaded", signedCopy: true } });
+    ck("a signed copy is recorded", ours.status === 200 && ours.body.agreement?.source === "uploaded", `${ours.status}`);
+    ck("and nobody is emailed to sign paper already signed", sent.length === before && ours.body.emailed === false,
+      `${sent.length - before} ${ours.body.emailed}`);
+    const up = await call(env, `/api/subs/${SUB_CO}/documents/contract`,
+      { method: "POST", body: { fileKey: "acc_gc/contract/1-signed.pdf", fileName: "signed.pdf" } });
+    ck("the hiring account uploads the signed copy", up.status === 200, `${up.status}`);
+    const mine = db.prepare(`SELECT status FROM agreements WHERE id = ?`).get(ours.body.agreement.id);
+    ck("which advances our agreement", mine.status === "signed", mine.status);
+    const other = db.prepare(`SELECT status FROM agreements WHERE account_id = 'acc_pm'`).get();
+    ck("and leaves Cascade's alone, since that paper was never shown to them",
+      other.status === "sent", other.status);
+    const cs = await call(env, `/api/agreements/${ours.body.agreement.id}/countersign`,
+      { method: "POST", body: { typedName: "Dana Ruiz" } });
+    ck("confirming it puts it in force", cs.status === 200 && cs.body.agreement?.inForce === true, `${cs.status}`);
+  } finally { globalThis.fetch = realFetch; }
+}
+
 console.log("\n-- declining, and withdrawing --");
 {
   const db = seed(); const env = ENV(db);

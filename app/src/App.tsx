@@ -3786,6 +3786,7 @@ export default function SubSub() {
         logEvent("sub_added", `Added ${sub.company}`);
         setAdding(false); setFinishingInvite(null);
         setBillingNote(`${sub.company} is on your roster. The link they were sent still works, and opening it signs them in to this record.`);
+        setOpenAfterAdd(made.companyId);
       } catch (e) {
         const code = e?.body?.error;
         setBillingNote(code === "already_accepted" ? "They accepted the invite in the meantime, so they are on your roster already."
@@ -3806,7 +3807,12 @@ export default function SubSub() {
     const companyId = existing ? existing.id : Date.now();
     // Server dedupes the same way (on license, then email) — local ids only
     // drift from the real ones for a brand-new company until the next hydrate.
-    persist("addSub", api.addSub(sub));
+    const goingBack = !!resumeAssign;
+    api.addSub(sub).then((made) => {
+      if (!made?.companyId || goingBack || !can("contractors")) return;
+      hydrateAccount(account.id, currentUserId, { quiet: true })
+        .then(() => setOpenAfterAdd(made.companyId)).catch(() => {});
+    }).catch((err) => console.error("[persist] addSub failed:", err));
     if (!existing) setCompanies((cs) => [{ ...co, id: companyId }, ...cs]);
     setEngagements((es) => [{
       id: "e" + Date.now(), accountId: account.id, companyId,
@@ -4543,6 +4549,19 @@ export default function SubSub() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subAsk, loggedIn, role, hydratedFor, currentAccountId, allSubs]);
+  // A CONTRACTOR JUST ADDED OPENS ON THEIR AGREEMENT TAB, which asks first
+  // whether to send SubSub's agreement (with the request for their missing
+  // documents) or record their own signed one. Opened once the roster carries
+  // the server's real id, which the agreement routes need.
+  const [openAfterAdd, setOpenAfterAdd] = useState(null);
+  useEffect(() => {
+    if (!openAfterAdd) return;
+    const sb = allSubs.find((x) => x.id === openAfterAdd);
+    if (!sb) return;
+    setOpenAfterAdd(null);
+    setTab("network");
+    setSelected({ ...sb, tab: "agreement" });
+  }, [openAfterAdd, allSubs]);
   // Split a flat patch and write each half to its own table.
   const patchSub = (companyId, patch) => {
     // propertyIds is an engagement field, but it lives in its own join table
@@ -8914,6 +8933,7 @@ export default function SubSub() {
             word={rosterWords(account).one}
             onEnd={(status) => endEngagement(selected.id, status)}
             onAgreementChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })}
+            onUploadDoc={uploadSubDoc} startTab={selected.tab || "overview"}
             jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
             onSetAuto={(on) => setAutoSchedule(selected.id, on)}
             onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
@@ -35169,8 +35189,8 @@ function SignAgreement({ agreement, myName, onClose, onDone }) {
 //
 // Reset is offered only when there is something to reset, because a control
 // that does nothing is a control somebody presses to find out.
-function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, onReset }) {
-  const [open, setOpen] = useState(false);
+function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, onReset, defaultOpen = false }) {
+  const [open, setOpen] = useState(defaultOpen);
   const changed = (fields || [])
     .filter((f) => f.kind !== "state")
     .filter((f) => String(terms[f.id] ?? "") !== String(base[f.id] ?? ""));
@@ -35202,8 +35222,13 @@ function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, on
   );
 }
 
-function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile }) {
+function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploadSigned = null }) {
   const [data, setData] = useState(null);
+  // Which agreement, asked first: SubSub's standard one, or their own paper
+  // that both parties already signed.
+  const [mode, setMode] = useState(null);
+  const [askDocs, setAskDocs] = useState(true);
+  const [file, setFile] = useState(null);
   const [note, setNote] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -35254,7 +35279,18 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile }) {
     }
   }, [data?.preview, data?.parties, terms]);
 
-  if (!data) return null;
+  // A load that has not answered, or failed, still draws the panel. Returning
+  // nothing here left the Agreement tab blank with the reason hidden.
+  if (!data) {
+    return (
+      <div className="portal-panel agr-panel">
+        <h4>Subcontractor agreement</h4>
+        {err ? <><div className="form-err">{err}</div>
+          <button type="button" className="btn-ghost sm" onClick={() => { setErr(""); load(); }}>Try again</button></>
+          : <p className="cx-sub">Loading…</p>}
+      </div>
+    );
+  }
   if (data.migration) {
     return (
       <div className="portal-panel agr-panel">
@@ -35320,36 +35356,121 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile }) {
           You haven't asked {sub.company} for one. Until you do, it isn't counted
           against their compliance.
         </p>
-        {/* THE OVERRIDE TRAVELLED AND NOTHING COULD SET IT. `mergeTerms(stored,
-            body.terms)` has taken a per-subcontractor override since the route
-            was written, the screen has been posting `terms` on issue since
-            then, and the only thing that ever wrote `terms` was the load --
-            so every send carried the account's standing terms back unchanged.
-            Correct pieces with no way in, which this product keeps producing
-            and which is why the entry point matters more than the mechanism.
-
-            Folded, because most accounts use one set for everybody and that is
-            the case that must stay one press. The count of what has been
-            changed rides on the toggle, so a modified set is never silently
-            modified -- the same rule the roster's filter panel follows. */}
-        {canManage && terms && (
-          <SubTermsEditor fields={data.fields} terms={terms} base={data.previewTerms}
-            company={sub.company} onSet={(id, v) => setTerms((t) => ({ ...t, [id]: v }))}
-            onReset={() => setTerms(data.previewTerms)} />
+        {/* ASKED FIRST: WHICH AGREEMENT. SubSub's standard form opens its
+            terms right there to edit and sends at once, with the request for
+            the documents still missing. Their own paper is a copy both
+            parties already signed, uploaded and recorded. */}
+        {canManage && !mode && (
+          <div className="agr-choice" role="group" aria-label="Which agreement">
+            <div className="agr-opt" data-opt="standard">
+              <b>SubSub Standard Subcontractor Agreement</b>
+              <span className="cx-sub">Your company and your terms filled in. Edit the terms for {sub.company}, then send it to sign.</span>
+              <div className="agr-opt-acts">
+                <button className="btn-solid sm" type="button" data-act="use-standard" onClick={() => setMode("standard")}>Use the SubSub agreement</button>
+                <button className="btn-ghost sm" type="button" data-act="view" onClick={() => setPreview(true)}><Eye size={13} /> View agreement</button>
+              </div>
+            </div>
+            <div className="agr-opt" data-opt="custom">
+              <b>Our own agreement</b>
+              <span className="cx-sub">Already signed by both of you? Upload the signed copy and it counts as in force.</span>
+              <div className="agr-opt-acts">
+                <button className="btn-ghost sm" type="button" data-act="use-custom" onClick={() => setMode("custom")}><Upload size={13} /> Upload a signed agreement</button>
+              </div>
+            </div>
+          </div>
         )}
-        {canManage && <div className="agr-actions">
-          <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}>
-            Read the SubSub agreement
-          </button>
-          <button className="btn-solid sm" type="button" disabled={busy}
-            onClick={() => act(() => api.issueAgreement(sub.id, { terms }), "issue")}>
-            Send SubSub's agreement
-          </button>
-          <button className="btn-ghost sm" type="button" disabled={busy}
-            onClick={() => act(() => api.issueAgreement(sub.id, { source: "uploaded" }), "issue")}>
-            I'll use my own
-          </button>
-        </div>}
+        {canManage && mode === "standard" && (() => {
+          const docsMissing = requiredDocsFor(sub.engagedAs, DOC_KINDS).filter((k) => k !== "contract" && !sub[k]);
+          return <>
+            {terms && (
+              <SubTermsEditor fields={data.fields} terms={terms} base={data.previewTerms} defaultOpen
+                company={sub.company} onSet={(id, v) => setTerms((t) => ({ ...t, [id]: v }))}
+                onReset={() => setTerms(data.previewTerms)} />
+            )}
+            {docsMissing.length > 0 && (
+              <label className="agr-askdocs">
+                <input type="checkbox" checked={askDocs} onChange={(e) => setAskDocs(e.target.checked)} />
+                <span>Also ask for what they still need to send before they can be assigned jobs: {docsMissing.map((k) => DOC_LABELS[k]).join(", ")}</span>
+              </label>
+            )}
+            <div className="agr-actions">
+              <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}><Eye size={13} /> Preview</button>
+              <button className="btn-solid sm" type="button" data-act="send-standard" disabled={busy}
+                onClick={async () => {
+                  setBusy(true); setErr(""); setNote("");
+                  let r = null;
+                  try { r = await api.issueAgreement(sub.id, { terms }); }
+                  catch (e) {
+                    setBusy(false);
+                    const code = e?.body?.error;
+                    setErr(code === "already_issued" ? "There is already an agreement with them." : "That didn't send. Try again in a moment.");
+                    return;
+                  }
+                  let docsLine = "";
+                  if (askDocs && docsMissing.length) {
+                    try { await api.sendDocRequest({ companyId: sub.id }); docsLine = " The request for their documents went too."; }
+                    catch (e) {
+                      docsLine = e?.body?.error === "no_email_on_file"
+                        ? " They have no email on file, so the document request didn't go."
+                        : " The document request didn't go; use Request docs to try again.";
+                    }
+                  }
+                  setNote((r?.emailed ? `Agreement emailed to ${r.to}.`
+                    : r?.to ? `Agreement sent in SubSub, but the email to ${r.to} didn't go. Use Resend to try again.`
+                    : `Agreement sent in SubSub. ${sub.company} has no email on file; they'll see it when they sign in.`) + docsLine);
+                  setMode(null); setBusy(false);
+                  await load(); onChanged?.();
+                }}>
+                <Send size={13} /> {busy ? "Sending…" : (askDocs && docsMissing.length ? "Send agreement and document request" : "Send agreement")}
+              </button>
+              <button className="btn-ghost sm" type="button" onClick={() => setMode(null)}>Back</button>
+            </div>
+          </>;
+        })()}
+        {canManage && mode === "custom" && (
+          <div className="agr-custom">
+            <label className="fld">
+              <span>The agreement, signed by both parties</span>
+              <input type="file" accept=".pdf,image/*" data-act="signed-file"
+                onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            </label>
+            <label className="fld">
+              <span>Type your full name to confirm both of you signed it</span>
+              <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={myName || "Your name"} autoComplete="off" />
+            </label>
+            {!typedNameMatches(typed, myName) && typed.trim() !== "" && (
+              <span className="cx-sub">That does not match {myName}, the name on your account.</span>
+            )}
+            <div className="agr-actions">
+              <button className="btn-solid sm" type="button" data-act="record-signed"
+                disabled={busy || !file || !onUploadSigned || !typedNameMatches(typed, myName)}
+                onClick={async () => {
+                  setBusy(true); setErr(""); setNote("");
+                  try {
+                    const r = await api.issueAgreement(sub.id, { source: "uploaded", signedCopy: true });
+                    await onUploadSigned(file);
+                    await api.countersignAgreement(r.agreement.id, typed);
+                    setNote("Recorded. Their signed agreement is on file and in force.");
+                    setMode(null); setFile(null); setTyped("");
+                  } catch (e) {
+                    const code = e?.body?.error;
+                    setErr(code === "already_issued" ? "There is already an agreement with them."
+                      : code === "name_mismatch" ? `Type your name exactly as it appears on your account: ${e.body.expected || myName}`
+                      : "That didn't save. Try again in a moment.");
+                  }
+                  setBusy(false);
+                  await load(); onChanged?.();
+                }}>
+                <Upload size={13} /> {busy ? "Saving…" : "Upload and record it"}
+              </button>
+              <button className="btn-ghost sm" type="button" disabled={busy}
+                onClick={() => act(() => api.issueAgreement(sub.id, { source: "uploaded" }), "issue")}>
+                Not signed yet? Ask them to upload their signed copy
+              </button>
+              <button className="btn-ghost sm" type="button" onClick={() => setMode(null)}>Back</button>
+            </div>
+          </div>
+        )}
       </>}
 
       {ag && <>
@@ -43422,7 +43543,7 @@ function RelationshipModal({ sub, hiringWord = "Contractor", onSave, onClose }) 
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship, onDecideApplication = null }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship, onDecideApplication = null, onUploadDoc = null, startTab = "overview" }) {
   const ready = assignReady(sub);
   const payGaps = payBlockers(sub);
   const required = requiredDocsFor(sub.engagedAs, DOC_KINDS);
@@ -43440,7 +43561,7 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
   // tab is the detail somebody opens the card to do one thing with. Panes are
   // hidden rather than unmounted, so half-typed notes and the agreement's
   // loaded state survive looking at another tab -- the job window's rule.
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(startTab);
   const compGaps = assignGaps(sub).length + pendingReviewDocs(sub).length + payGaps.length;
   const agWaiting = sub.agreement?.waitingOn === "hiring_countersign";
   const tabs = [
@@ -43781,7 +43902,8 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
           this account and this contractor, so it belongs on their card and
           nowhere else. */}
       <AgreementPanel sub={sub} canManage={canManage} myName={myName}
-        onChanged={onAgreementChanged} onViewFile={() => onReviewDoc(sub, "contract")} />
+        onChanged={onAgreementChanged} onViewFile={() => onReviewDoc(sub, "contract")}
+        onUploadSigned={onUploadDoc ? (f) => onUploadDoc(sub.id, "contract", f) : null} />
       </div>
 
       <div className={pane("crews")} data-pane="crews">
@@ -50739,6 +50861,13 @@ iframe.dv-frame{display:block}
 .agr-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .agr-row-note{flex:none}
 .agr-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.agr-choice{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+.agr-opt{display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--paper)}
+.agr-opt-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto;padding-top:6px}
+.agr-askdocs{display:flex;gap:10px;align-items:flex-start;margin:12px 0 4px;font-size:14px;line-height:1.4}
+.agr-askdocs input{width:18px;height:18px;flex:none;margin-top:1px}
+.agr-custom{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+@media (max-width:620px){.agr-choice{grid-template-columns:1fr}}
 /* The document. Read on a phone as often as on a desk, so it is measured in
    ch rather than px and the sections carry their own rhythm. */
 .agr-doc{margin:14px 0;padding:16px 18px;max-height:52vh;overflow-y:auto;

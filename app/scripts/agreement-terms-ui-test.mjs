@@ -66,12 +66,19 @@ const PARTIES = {
 const STANDING = { ...defaultTerms(), governingState: "WA" };
 
 let issued = [];
+let calls = [];
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === `/api/subs/${SUB.id}/agreement` && method === "POST") {
-    issued.push(body); return [200, { ok: true }];
+    issued.push(body); calls.push(["issue", body]);
+    return [200, { ok: true, emailed: !body.signedCopy, to: body.signedCopy ? null : "rae@bay.test",
+      agreement: { id: "ag_1", status: "sent", source: body.source || "subsub_standard" } }];
   }
+  if (path.startsWith("/api/uploads/") && method === "PUT") { calls.push(["upload", path]); return [200, { key: "acc_out/contract/x-signed.pdf" }]; }
+  if (path === `/api/subs/${SUB.id}/documents/contract` && method === "POST") { calls.push(["doc", body]); return [200, { ok: true }]; }
+  if (path === "/api/agreements/ag_1/countersign" && method === "POST") { calls.push(["countersign", body]); return [200, { ok: true }]; }
+  if (path === "/api/notify/documents" && method === "POST") { calls.push(["docreq", body]); return [200, { ok: true, to: "rae@bay.test" }]; }
   if (path === `/api/subs/${SUB.id}/agreement`) {
     return [200, {
       agreement: null,
@@ -121,6 +128,11 @@ const openCard = async (page) => {
   await page.evaluate(() => document.querySelector('.modal .sd-tabs [data-tab="agreement"]')?.click());
   await wait(400);
 };
+// Which agreement is asked first; the SubSub one opens its terms to edit.
+const chooseStandard = async (page) => {
+  await page.evaluate(() => document.querySelector('.agr-panel [data-act="use-standard"]')?.click());
+  await wait(400);
+};
 
 const overrideBox = (page) => page.evaluate(() => {
   const el = document.querySelector(".agr-over");
@@ -166,18 +178,22 @@ try {
         document.querySelector(".agr-panel")?.innerText || "")),
       (await page.evaluate(() => (document.querySelector(".agr-panel")?.innerText || "").slice(0, 90))));
 
+    // ASKED FIRST: which agreement. Nothing to edit until that is answered.
+    const choice = await page.evaluate(() => [...document.querySelectorAll(".agr-choice .agr-opt")].map((o) => o.dataset.opt));
+    t.ck("it asks first: SubSub's agreement or our own", JSON.stringify(choice) === '["standard","custom"]', JSON.stringify(choice));
+    t.ck("and no terms are drawn before choosing", !(await overrideBox(page)));
+    t.ck("the SubSub option can be read before choosing",
+      await page.evaluate(() => !!document.querySelector('.agr-opt[data-opt="standard"] [data-act="view"]')));
+    await chooseStandard(page);
     let box = await overrideBox(page);
     t.ck("the override section is there", !!box, String(box));
-    // Folded: most accounts use one set for everybody and that must stay one
-    // press.
-    t.ck("and starts folded", box?.open === false, JSON.stringify(box?.toggle));
+    // Choosing the SubSub agreement is choosing to edit its terms, so they
+    // are open rather than folded behind a toggle.
+    t.ck("and opens unfolded", box?.open === true, JSON.stringify(box?.toggle));
     t.ck("naming the contractor it is for", /Bay Roofing/.test(box?.toggle || ""), box?.toggle);
     t.ck("with nothing changed, it says nothing", !/changed/i.test(box?.toggle || ""), box?.toggle);
 
-    await page.evaluate(() => document.querySelector(".agr-over-tog")?.click());
-    await wait(350);
     box = await overrideBox(page);
-    t.ck("it opens", box?.open === true);
     // THE FIELDS ARE FULL SIZE. TermFields is the same grid Account -> Company
     // draws, and its inputs were bare browser boxes there: short, small type.
     // Measured, because only the computed box knows whether the rule fired.
@@ -210,8 +226,7 @@ try {
       seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
     await wait(2200);
     await openCard(page);
-    await page.evaluate(() => document.querySelector(".agr-over-tog")?.click());
-    await wait(350);
+    await chooseStandard(page);
 
     t.ck("the warranty field can be typed into", await setField(page, "Warranty on the work", 24));
     await wait(350);
@@ -226,7 +241,7 @@ try {
     // livePreview memo exists for -- the stub's own preview says three years,
     // so a modal drawing `data.preview` would still say three.
     await page.evaluate(() => [...document.querySelectorAll(".agr-panel button")]
-      .find((b) => /Read the SubSub agreement/i.test(b.innerText))?.click());
+      .find((b) => /^Preview$/i.test(b.innerText.trim()))?.click());
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".agr-doc")) break; }
     const doc = await page.evaluate(() => (document.querySelector(".agr-doc")?.innerText || "").replace(/\s+/g, " "));
     t.ck("the preview shows the document", /Warranty/i.test(doc), doc.slice(0, 80));
@@ -248,9 +263,17 @@ try {
     await page.keyboard.press("Escape").catch(() => {});
     await wait(500);
 
-    await page.evaluate(() => [...document.querySelectorAll(".agr-panel button")]
-      .find((b) => /Send SubSub's agreement/i.test(b.innerText))?.click());
-    for (let n = 0; n < 40 && !issued.length; n++) await wait(150);
+    calls = [];
+    t.ck("it offers to ask for the missing documents in the same press",
+      await page.evaluate(() => /IRS Form W-9/.test(document.querySelector(".agr-askdocs")?.innerText || "")
+        && document.querySelector(".agr-askdocs input")?.checked === true));
+    await page.evaluate(() => document.querySelector('.agr-panel [data-act="send-standard"]')?.click());
+    for (let n = 0; n < 40 && !calls.some((c) => c[0] === "docreq"); n++) await wait(150);
+    t.ck("sending also sends the document request, after the agreement",
+      calls.map((c) => c[0]).join(",") === "issue,docreq", JSON.stringify(calls.map((c) => c[0])));
+    t.ck("and says both went", await page.evaluate(() =>
+      /emailed to rae@bay\.test/i.test(document.querySelector(".agr-note")?.innerText || "")
+      && /request for their documents went/i.test(document.querySelector(".agr-note")?.innerText || "")));
     // THE HALF THAT WAS BROKEN. The body posted the standing terms back
     // unchanged, because nothing could write them.
     t.ck("issuing sends the changed term", issued[0]?.terms?.warrantyMonths === 24,
@@ -263,6 +286,37 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- our own agreement, signed by both, is uploaded and recorded --");
+  {
+    calls = [];
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
+    await wait(2200);
+    await openCard(page);
+    await page.evaluate(() => document.querySelector('.agr-panel [data-act="use-custom"]')?.click());
+    await wait(400);
+    const rec = () => page.evaluate(() => document.querySelector('[data-act="record-signed"]')?.disabled);
+    t.ck("Record is shut until there is a file and a name", (await rec()) === true);
+    const input = await page.$('[data-act="signed-file"]');
+    await input.uploadFile(join(app, "public", "favicon.svg"));
+    await page.evaluate(() => {
+      const i = [...document.querySelectorAll(".agr-custom input")].find((x) => x.type !== "file");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(i, "Richard Braun"); i.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await wait(300);
+    t.ck("and opens once both are there", (await rec()) === false);
+    await page.evaluate(() => document.querySelector('[data-act="record-signed"]')?.click());
+    for (let n = 0; n < 40 && !calls.some((c) => c[0] === "countersign"); n++) await wait(150);
+    t.ck("it records the paper, uploads it, then confirms it, in that order",
+      calls.map((c) => c[0]).join(",") === "issue,upload,doc,countersign", JSON.stringify(calls.map((c) => c[0])));
+    t.ck("as their own paper, already signed, so nobody is emailed to sign it",
+      calls[0]?.[1]?.source === "uploaded" && calls[0]?.[1]?.signedCopy === true, JSON.stringify(calls[0]?.[1]));
+    t.ck("confirmed under the typed name", calls.find((c) => c[0] === "countersign")?.[1]?.typedName === "Richard Braun");
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- and reset puts it back --");
   {
     issued = [];
@@ -270,8 +324,7 @@ try {
       seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
     await wait(2200);
     await openCard(page);
-    await page.evaluate(() => document.querySelector(".agr-over-tog")?.click());
-    await wait(350);
+    await chooseStandard(page);
     await setField(page, "Respond to a warranty call within", 12);
     await wait(350);
     t.ck("a change is counted", /1 changed/.test((await overrideBox(page))?.toggle || ""));
