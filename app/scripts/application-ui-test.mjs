@@ -12,6 +12,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TERM_FIELDS, defaultTerms } from "../shared/agreement.js";
 import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -46,6 +47,7 @@ const SUBS = [
 ];
 
 const asked = [];
+let agreementBody = null;
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct];
@@ -61,8 +63,14 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     return [200, { ok: true, status: d === "accept" ? "active" : "ended", application: d === "accept" ? "accepted" : "declined", emailed: true }];
   }
   m = path.match(/^\/api\/subs\/([^/]+)\/agreement$/);
-  if (m && method === "POST") { asked.push(`${m[1]}:agreement`); return [201, { ok: true, agreement: { id: "ag1", status: "sent" } }]; }
-  if (m) return [200, { agreement: null, previous: null }];
+  if (m && method === "POST") {
+    asked.push(`${m[1]}:agreement`);
+    agreementBody = typeof body === "string" ? JSON.parse(body || "{}") : body || {};
+    return [201, { ok: true, agreement: { id: "ag1", status: "sent" }, emailed: true, to: "ops@bayroofing.test" }];
+  }
+  if (m) return [200, { agreement: null, previous: null, fields: TERM_FIELDS,
+    previewTerms: { ...defaultTerms(), paymentDays: 45, governingState: "WA" } }];
+  if (path === "/api/notify/documents" && method === "POST") { asked.push("docreq"); return [200, { ok: true }]; }
   if (path === "/api/payouts/status") return [200, { status: "none", ready: false, requirements: [], configured: false }];
   if (["/api/jobs", "/api/invites", "/api/connect-requests", "/api/my-connect-requests",
     "/api/clients", "/api/visits", "/api/properties"].includes(path)) return [200, []];
@@ -114,10 +122,30 @@ try {
   t.ck("the row is gone", !(s?.rows || []).includes("Bay Roofing"), JSON.stringify(s?.rows));
   const modal = await page.evaluate(() => document.querySelector(".accepted-app")?.innerText || "");
   t.ck("the offer to send the agreement opens", /Bay Roofing is on your roster/.test(modal) && /SubSub Standard Subcontractor Agreement/.test(modal), modal);
-  await page.evaluate(() => document.querySelector(".accepted-app .aa-send")?.click());
-  await wait(700);
+  t.ck("it asks which agreement first", await page.evaluate(() =>
+    !!document.querySelector(".accepted-app [data-act=use-standard]") && !!document.querySelector(".accepted-app [data-act=use-custom]")
+    && !document.querySelector(".accepted-app [data-act=send-standard]")));
+  t.ck("and offers sending your own separately", /Sending yours separately/.test(modal), modal);
+  await page.evaluate(() => document.querySelector(".accepted-app [data-act=use-standard]")?.click());
+  await wait(300);
+  const grid = await page.evaluate(() => {
+    const el = [...document.querySelectorAll(".accepted-app .agr-field")].find((f) => /Pay approved invoices within/.test(f.innerText));
+    return el ? el.querySelector("input")?.value : null;
+  });
+  t.ck("the terms are shown in place, with the account's standing value", grid === "45", String(grid));
+  await page.evaluate(() => {
+    const el = [...document.querySelectorAll(".accepted-app .agr-field")].find((f) => /Pay approved invoices within/.test(f.innerText));
+    const inp = el.querySelector("input");
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(inp, "20");
+    inp.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await wait(200);
+  t.ck("an edited term counts as changed", await page.evaluate(() => /1 changed/.test(document.querySelector(".accepted-app .agr-over")?.innerText || "")));
+  await page.evaluate(() => document.querySelector(".accepted-app [data-act=send-standard]")?.click());
+  await wait(900);
   t.ck("sending posts the agreement", asked.includes("cmp_bay:agreement"), JSON.stringify(asked));
-  t.ck("and says it went", await page.evaluate(() => /went to Bay Roofing/.test(document.querySelector(".accepted-app")?.innerText || "")));
+  t.ck("with the edited term", agreementBody?.terms?.paymentDays === 20, JSON.stringify(agreementBody?.terms));
+  t.ck("and says it went", await page.evaluate(() => /emailed to ops@bayroofing.test/.test(document.querySelector(".accepted-app")?.innerText || "")));
   await page.evaluate(() => [...document.querySelectorAll(".accepted-app button")].find((b) => b.innerText === "Done")?.click());
   await wait(300);
 

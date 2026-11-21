@@ -7302,7 +7302,10 @@ export default function SubSub() {
       )}
 
       {acceptedApp && (
-        <AcceptedAppModal sub={acceptedApp} onClose={() => setAcceptedApp(null)}
+        <AcceptedAppModal sub={acceptedApp} myName={me?.name || ""}
+          onUploadSigned={(f) => uploadSubDoc(acceptedApp.id, "contract", f)}
+          onChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })}
+          onClose={() => setAcceptedApp(null)}
           onOpen={() => { const sb = acceptedApp; setAcceptedApp(null); setSelected(sb); }} />
       )}
 
@@ -14183,45 +14186,36 @@ function ApplicationsPanel({ apps, onDecide, onOpen = null, single = false }) {
   );
 }
 
-// After accepting, the next step is the agreement: one press sends the SubSub
-// Standard Subcontractor Agreement on the account's standing terms. Not now
-// is a real answer; it can be sent from their card's Agreement tab later.
-function AcceptedAppModal({ sub, onClose, onOpen }) {
-  const [state, setState] = useState("ask");
-  const [err, setErr] = useState("");
-  const send = async () => {
-    setErr(""); setState("sending");
-    try { await api.issueAgreement(sub.id, { source: "subsub_standard" }); setState("sent"); }
-    catch (e) {
-      const code = e?.body?.error || e?.message || "no answer";
-      setErr(code === "already_issued" ? "An agreement is already out to them." : `That didn't send (${code}). Try again.`);
-      setState(code === "already_issued" ? "sent" : "ask");
-    }
-  };
+// After accepting, the next step is the agreement, and it is THE SAME PANEL
+// their card's Agreement tab draws: which agreement first (SubSub's standard
+// one or your own), then SubSub's opens with its terms filled in from your
+// standing ones, each editable for this contractor, with a preview, before
+// anything is sent. One component, so the two doors cannot ask different
+// questions. Not now is a real answer; the tab is still there later.
+function AcceptedAppModal({ sub, myName, onUploadSigned, onChanged, onClose, onOpen }) {
+  const [done, setDone] = useState("");
   return (
-    <Modal onClose={onClose}>
+    <Modal onClose={onClose} wide>
       <div className="accepted-app">
         <h2>{sub.company} is on your roster</h2>
-        {state === "sent" ? (
-          <p><CheckCircle2 size={16} /> The SubSub Standard Subcontractor Agreement went to {sub.company}. They sign it,
-            then you countersign from their card.</p>
+        {done ? (
+          <p className="aa-done"><CheckCircle2 size={16} /> {done}</p>
         ) : (
-          <p>Send them the SubSub Standard Subcontractor Agreement now? It uses your standing terms. They sign it, then
-            you countersign from their card.</p>
+          <p>Next, the subcontractor agreement. Send the SubSub Standard Subcontractor Agreement, with your terms
+            filled in and editable for {sub.company}, or use your own.</p>
         )}
-        {err && <p className="form-err">{err}</p>}
+        {!done && (
+          <AgreementPanel sub={sub} canManage myName={myName} onChanged={onChanged}
+            onUploadSigned={onUploadSigned} onFinished={setDone} />
+        )}
         <div className="form-actions">
-          {state === "sent" ? (
+          {done ? (
             <>
               <button className="btn-ghost" onClick={onOpen}>Open their card</button>
               <button className="btn-solid" onClick={onClose}>Done</button>
             </>
           ) : (
-            <>
-              <button className="btn-ghost aa-later" onClick={onClose} disabled={state === "sending"}>Not now</button>
-              <button className="btn-solid aa-send" onClick={send} disabled={state === "sending"}>
-                {state === "sending" ? "Sending…" : "Send the agreement"}</button>
-            </>
+            <button className="btn-ghost aa-later" onClick={onClose}>Not now</button>
           )}
         </div>
       </div>
@@ -35246,7 +35240,7 @@ function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, on
   );
 }
 
-function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploadSigned = null }) {
+function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploadSigned = null, onFinished = null }) {
   const [data, setData] = useState(null);
   // Which agreement, asked first: SubSub's standard one, or their own paper
   // that both parties already signed.
@@ -35338,6 +35332,8 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
           : `Sent in SubSub. ${sub.company} has no email on file, so nobody was emailed; they'll see it when they sign in.`);
       }
       if (label === "resend") setNote(sends.some((x) => x.emailed) ? `Emailed to ${r?.to} again.` : `Emailed to ${r?.to}.`);
+      setBusy(false);
+      return true;
     }
     catch (e) {
       console.error(`[agreement] ${label} failed:`, e);
@@ -35396,9 +35392,9 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
             </div>
             <div className="agr-opt" data-opt="custom">
               <b>Our own agreement</b>
-              <span className="cx-sub">Already signed by both of you? Upload the signed copy and it counts as in force.</span>
+              <span className="cx-sub">Already signed by both of you? Upload the signed copy and it counts as in force. Sending yours separately? They upload it once signed.</span>
               <div className="agr-opt-acts">
-                <button className="btn-ghost sm" type="button" data-act="use-custom" onClick={() => setMode("custom")}><Upload size={13} /> Upload a signed agreement</button>
+                <button className="btn-ghost sm" type="button" data-act="use-custom" onClick={() => setMode("custom")}><Upload size={13} /> Use our own agreement</button>
               </div>
             </div>
           </div>
@@ -35439,9 +35435,11 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
                         : " The document request didn't go; use Request docs to try again.";
                     }
                   }
-                  setNote((r?.emailed ? `Agreement emailed to ${r.to}.`
-                    : r?.to ? `Agreement sent in SubSub, but the email to ${r.to} didn't go. Use Resend to try again.`
-                    : `Agreement sent in SubSub. ${sub.company} has no email on file; they'll see it when they sign in.`) + docsLine);
+                  const sentLine = (r?.emailed ? `The SubSub Standard Subcontractor Agreement was emailed to ${r.to}.`
+                    : r?.to ? `The agreement was sent in SubSub, but the email to ${r.to} didn't go. Use Resend on their card.`
+                    : `The agreement was sent in SubSub. ${sub.company} has no email on file; they'll see it when they sign in.`) + docsLine;
+                  setNote(sentLine);
+                  if (onFinished) { onFinished(sentLine + " They sign it, then you countersign from their card."); return; }
                   setMode(null); setBusy(false);
                   await load(); onChanged?.();
                 }}>
@@ -35475,6 +35473,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
                     await onUploadSigned(file);
                     await api.countersignAgreement(r.agreement.id, typed);
                     setNote("Recorded. Their signed agreement is on file and in force.");
+                    if (onFinished) { onFinished("Recorded. Their signed agreement is on file and in force."); return; }
                     setMode(null); setFile(null); setTyped("");
                   } catch (e) {
                     const code = e?.body?.error;
@@ -35488,8 +35487,11 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
                 <Upload size={13} /> {busy ? "Saving…" : "Upload and record it"}
               </button>
               <button className="btn-ghost sm" type="button" disabled={busy}
-                onClick={() => act(() => api.issueAgreement(sub.id, { source: "uploaded" }), "issue")}>
-                Not signed yet? Ask them to upload their signed copy
+                onClick={async () => {
+                  const ok = await act(() => api.issueAgreement(sub.id, { source: "uploaded" }), "issue");
+                  if (ok && onFinished) onFinished(`Noted that you're sending your own agreement. ${sub.company} is asked to upload their signed copy, then you countersign it from their card.`);
+                }}>
+                Sending yours separately? Ask them to upload their signed copy
               </button>
               <button className="btn-ghost sm" type="button" onClick={() => setMode(null)}>Back</button>
             </div>
@@ -49730,7 +49732,7 @@ a.meas-dl{text-decoration:none}
 .acg-cell.booked{background:#dbe8f2}
 
 /* notification preferences */
-.notify-opts{display:flex;flex-direction:column;gap:9px;margin-top:10px}
+.notify-opts{display:flex;flex-direction:column;gap:10px;margin-top:10px}
 .notify-opts.compact{flex-direction:row;gap:8px;margin-top:8px}
 .gcal-panel h4{display:flex;align-items:center;gap:7px}
 .gcal-landed{margin:6px 0 10px;padding:9px 12px;border-radius:9px;font-size:13.5px;line-height:1.4;border:1px solid}
@@ -52707,6 +52709,26 @@ button.job-insp:hover{border-color:#2f5577}
 .thr-act{display:inline-flex;align-items:center;gap:6px;min-height:40px}
 .thr-nudge{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:0 0 8px;padding:6px 10px;font-size:13px;
   color:var(--amber-ink);background:#fffaf0;border:1px solid #f0d9a8;border-radius:10px}
+/* ONE SIZE FOR EVERY FORM FIELD IN THE STAFF CONSOLE AND IN USER ADMIN.
+   Asked for as "make all forms on the entire admin console and user admin
+   normal size". The console grew its own field rules panel by panel (9px
+   padding at 13.5px, a role select at 11px uppercase in a pill), so its
+   controls read as a smaller product than the app beside them. Last in the
+   sheet so it outranks each of those by order as well as by specificity:
+   44px tall, 15px text (16px on a phone, so iPhone does not zoom), padding,
+   the line border and the card. A checkbox, radio, file or color input keeps
+   its own shape. The role select keeps its admin tint and loses the pill. */
+.pf-root :is(input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=color]):not([type=range]),select),
+.fld :is(input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=color]):not([type=range]),select),
+.agr-field :is(input:not([type=checkbox]):not([type=radio]),select){
+  min-height:44px;box-sizing:border-box;padding:10px 12px;font:500 var(--field-fs,15px) Inter,sans-serif;line-height:1.3;
+  border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink);
+  text-transform:none;letter-spacing:normal}
+.pf-root textarea,.fld textarea{box-sizing:border-box;padding:10px 12px;font:500 var(--field-fs,15px) Inter,sans-serif;line-height:1.45;
+  border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink)}
+.pf-root select.role-sel{border-radius:9px;min-width:170px}
+.pf-root select.role-sel.r-admin{border-color:#1f6b4a;color:#1f6b4a;background:#eef5f1}
+@media (max-width:560px){:root{--field-fs:16px}}
 
 `;
 // The dark theme is derived from the sheet above, a twin after each rule (see

@@ -492,6 +492,28 @@ try {
   t.ck("with the list still behind it", win?.list === true);
   t.ck("and the whole account inside it", win?.fee === true);
 
+  // EVERY FIELD IN THE CONSOLE IS THE NORMAL SIZE. Reported with the Plan
+  // panel's selects and the Team panel's role select circled: "make all forms
+  // on the entire admin console and user admin normal size". Read off every
+  // select and text input in the window, at two widths.
+  for (const [w, minFont] of [[1180, 15], [390, 16]]) {
+    await page.setViewport({ width: w, height: 900 });
+    await wait(250);
+    const fields = await page.evaluate(() => [...document.querySelectorAll(
+      ".modal-acct select, .modal-acct input:not([type=checkbox]):not([type=radio]):not([type=file])")]
+      .filter((el) => el.offsetParent)
+      .map((el) => { const cs = getComputedStyle(el); return { tag: el.tagName, h: Math.round(el.getBoundingClientRect().height),
+        f: parseFloat(cs.fontSize), up: cs.textTransform, role: el.classList.contains("role-sel") }; }));
+    t.ck(`the account window has fields to measure at ${w}px`, fields.length >= 4 && fields.some((x) => x.role), JSON.stringify(fields.length));
+    t.ck(`every one is at least 44px tall at ${w}px`, fields.length > 0 && fields.every((x) => x.h >= 44),
+      JSON.stringify(fields.filter((x) => x.h < 44)));
+    t.ck(`with ${minFont}px text at ${w}px`, fields.length > 0 && fields.every((x) => x.f >= minFont),
+      JSON.stringify(fields.filter((x) => x.f < minFont)));
+    t.ck(`and the role select is not tiny uppercase at ${w}px`, fields.filter((x) => x.role).every((x) => x.up === "none"));
+  }
+  await page.setViewport({ width: 1280, height: 1600 });
+  await wait(250);
+
   await page.evaluate(() => [...document.querySelectorAll(".modal-acct button")]
     .find((b) => /Delete account/.test(b.innerText))?.click());
   await wait(500);

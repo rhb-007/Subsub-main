@@ -16627,6 +16627,34 @@ refactor.
   second account to somebody seated elsewhere fails one, and skipping the home
   fails four.
 
+- **ACCEPTING AN APPLICANT OPENS THE AGREEMENT PANEL ITSELF, AND EVERY FORM
+  FIELD IN THE CONSOLE AND USER ADMIN IS 44PX.** Asked for as *"allow the user
+  to view the current default variables in place and edit those variables
+  prior to sending to newly accepted subcontractor"*, *"ask if you want to send
+  the standard SubSub subcontractor agreement or if you're sending your own
+  separately"*, and *"make all forms on the entire admin console and user
+  admin normal size"*.
+  - **`AcceptedAppModal` mounts `AgreementPanel`**, the same component as the
+    card's Agreement tab, so the two doors cannot ask different questions. It
+    asks which agreement first. SubSub's opens with every term filled in from
+    the standing ones, editable for this contractor, with Preview and the
+    document request. *Our own agreement* uploads a copy both signed, or, for
+    one being sent separately, *Sending yours separately? Ask them to upload
+    their signed copy*. `onFinished` closes the panel on the sentence that
+    says what happened. `act` now returns true on success, so a refused issue
+    never reads as sent.
+  - **One field rule, last in the sheet**: inside `.pf-root`, `.fld` and
+    `.agr-field`, every text input and select is at least 44px, 15px
+    (`--field-fs`, 16px under 560px so iPhone does not zoom), with padding,
+    the line border and the card. The console's Team role select keeps its
+    admin tint and is no longer 11px uppercase in a pill. The phone size is a
+    custom property, because the main selector's `:not()` chain outranks any
+    plain override in a media query, which the test caught.
+  `test:applicationui` (30) drives the choice, a term edited in place and the
+  edited term on the wire. `test:consolelists` (158) measures every field in
+  the account window at 1180px and 390px. Removing the rule reproduces the
+  screenshot (a 24px, 11px uppercase role select) and fails six.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
