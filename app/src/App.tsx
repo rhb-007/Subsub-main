@@ -27470,7 +27470,15 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
     }
     map.addControl(new lib.NavigationControl({ showCompass: false }), "top-right");
     map.touchZoomRotate.disableRotation();
-    const redraw = () => setTick((n) => n + 1);
+    // The view is written on the box too, so a check can read what the map
+    // is actually showing rather than trusting the call that set it.
+    const redraw = () => {
+      setTick((n) => n + 1);
+      if (box.current) {
+        const c = map.getCenter();
+        box.current.dataset.view = `${c.lat.toFixed(4)},${c.lng.toFixed(4)},${map.getZoom().toFixed(2)}`;
+      }
+    };
     map.on("move", redraw);
     map.on("resize", redraw);
     map.on("click", () => setPicked(null));
@@ -27527,8 +27535,17 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
       hqMarker.current = new lib.Marker({ element: el, anchor: "bottom" }).setLngLat([hq.lng, hq.lat]).addTo(map);
     }
     // The office is in the frame too, so the map answers "how far out".
-    const b = pinBounds(hq ? [...pins, { lat: hq.lat, lng: hq.lng }] : pins);
-    if (b) map.fitBounds(b, { padding: 64, maxZoom: 14, duration: 0 });
+    // One point is a box with no size, which fitBounds cannot zoom to: a
+    // lone place (the HQ with no jobs, or one pin and no HQ) opens on its
+    // area instead. With nothing to show, that area is the home area, set a
+    // little above the middle so the empty note under it does not cover it.
+    const pts = hq ? [...pins, { lat: hq.lat, lng: hq.lng }] : pins;
+    const b = pinBounds(pts);
+    if (b && (b[0][0] !== b[1][0] || b[0][1] !== b[1][1])) {
+      map.fitBounds(b, { padding: 64, maxZoom: 14, duration: 0 });
+    } else if (b) {
+      map.jumpTo({ center: b[0], zoom: pins.length ? 13 : 10, offset: pins.length ? [0, 0] : [0, -70] });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lib, pinsKey, failed, hq?.lat, hq?.lng, hqName]);
 
@@ -27562,7 +27579,7 @@ function PinMap({ pins, renderCard, pinLabel, pinTone, legend = null, emptyText,
         {full ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
       </button>
       {!lib && <div className="map-loading">Loading the map…</div>}
-      {lib && pins.length === 0 && <div className="map-empty">{emptyText}</div>}
+      {lib && pins.length === 0 && <div className="map-empty" role="status"><div className="map-empty-card"><MapIcon size={16} /><span>{emptyText}</span></div></div>}
       {open && (narrow || at) && (
         <div className={`map-card ${narrow ? "docked" : ""} ${picked ? "pinned" : ""}`}
           style={narrow ? undefined : { left: at.left, top: at.top }}
@@ -48879,7 +48896,11 @@ span.insp-cl-check{cursor:default}
 .map-key.hq{border-radius:3px;background:#111}
 .map-loading,.map-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:14px;color:var(--ink-soft);pointer-events:none}
-.map-empty{inset:auto 0 16px 0;height:auto}
+.map-empty{z-index:2}
+.map-empty-card{display:flex;align-items:center;gap:8px;max-width:min(340px,calc(100% - 32px));padding:12px 16px;
+  margin-top:70px;background:var(--card);color:var(--ink);font-size:14.5px;font-weight:600;line-height:1.35;
+  border:1px solid var(--line);border-radius:12px;box-shadow:0 6px 24px rgba(26,43,35,.16);text-align:left}
+.map-empty-card svg{flex:none;color:var(--brand)}
 .map-pin{display:flex;flex-direction:column;align-items:center;gap:2px;border:0;background:none;padding:0;cursor:pointer;
   font:inherit;min-width:44px;min-height:44px;justify-content:flex-end}
 .map-pin-dot{display:flex;align-items:center;justify-content:center;min-width:22px;height:22px;padding:0 4px;border-radius:11px;

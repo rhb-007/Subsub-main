@@ -80,6 +80,7 @@ const GC_JOBS = [
     address: "9 Done Rd", zip: "98105" }),
 ];
 let gcAsks = 0;
+let gcEmpty = false;
 const gcPoints = () => {
   gcAsks += 1;
   const pts = {
@@ -135,10 +136,11 @@ const api = serveApi({ port: API, routes: (path, method, body, headers) => {
   if (path === "/api/subs") return [200, isGc ? GC_SUBS : PM_SUBS];
   if (path === "/api/account-users") return [200, [{ id: A.user.id, name: "Rae Lane", email: "rae@x.test",
     phone: null, role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
-  if (path === "/api/jobs") return [200, isGc ? GC_JOBS : PM_JOBS];
+  if (path === "/api/jobs") return [200, isGc ? (gcEmpty ? GC_JOBS.filter((j) => j.id === "j_done") : GC_JOBS) : PM_JOBS];
   if (path === "/api/properties") return [200, isGc ? [] : PROPS];
   if (path === "/api/tenants") return [200, isGc ? [] : TENANTS];
-  if (path === "/api/map/points") return [200, isGc ? gcPoints() : pmPoints()];
+  if (path === "/api/map/points") return [200, isGc ? (gcEmpty ? { of: "jobs", points: {}, pending: [], noAddress: [],
+    hq: { lat: 47.59, lng: -122.30, precision: "address" }, hqState: "set" } : gcPoints()) : pmPoints()];
   if (path === "/api/my-work") return [200, { work: [] }];
   if (/^\/api\/jobs\/[^/]+\/trade-scope$/.test(path)) return [200, { scopes: {} }];
   return undefined;
@@ -348,6 +350,43 @@ try {
       !!c2 && c2.text.indexOf("2 tenants") > -1 && c2.text.indexOf("2 tenants") < c2.text.indexOf("1 open job"), c2?.text);
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
+  }
+
+
+  console.log("\n-- a general contractor with no current jobs: the map opens on home --");
+  {
+    gcEmpty = true;
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_gc", accountId: "acc_gc" }, viewport: { width: 1280, height: 1000 } });
+    await fakeTiles(page);
+    await wait(2600);
+    await nav(page, "^Jobs");
+    await wait(1000);
+    await pressView(page, ".jv-seg", "Map");
+    await wait(4000);
+    const m = await page.evaluate(() => {
+      const b = document.querySelector(".map-box"), h = document.querySelector(".map-hq"),
+        e = document.querySelector(".map-empty-card");
+      if (!b) return null;
+      const br = b.getBoundingClientRect(), hr = h?.getBoundingClientRect(), er = e?.getBoundingClientRect();
+      return { view: (b.dataset.view || "").split(",").map(Number), box: { l: br.left, t: br.top, w: br.width, h: br.height },
+        hq: hr && { cx: hr.left + hr.width / 2, bottom: hr.bottom }, empty: er && { cx: er.left + er.width / 2,
+          cy: er.top + er.height / 2, top: er.top, text: e.innerText } };
+    });
+    const [lat, lng, zoom] = m?.view || [];
+    t.ck("with no jobs, the map is centered on the company's HQ, not the country",
+      Math.abs(lat - 47.59) < 0.2 && Math.abs(lng + 122.30) < 0.2, JSON.stringify(m?.view));
+    t.ck("at the home area's zoom, not a street and not a continent", zoom >= 9 && zoom <= 11, String(zoom));
+    t.ck("the HQ is drawn on it", !!m?.hq && m.hq.cx > m.box.l && m.hq.cx < m.box.l + m.box.w, JSON.stringify(m?.hq));
+    t.ck("'no jobs' is a card in the middle of the map, not the footer", !!m?.empty
+      && /No current jobs/.test(m.empty.text)
+      && Math.abs(m.empty.cx - (m.box.l + m.box.w / 2)) < 4
+      && Math.abs(m.empty.cy - (m.box.t + m.box.h / 2)) < m.box.h * 0.2, JSON.stringify(m?.empty), );
+    t.ck("and the card does not sit over the HQ", !!m?.hq && !!m?.empty && m.hq.bottom <= m.empty.top + 2,
+      JSON.stringify({ hq: m?.hq, empty: m?.empty }));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+    gcEmpty = false;
   }
 
   console.log("\n-- a device that cannot draw a map --");

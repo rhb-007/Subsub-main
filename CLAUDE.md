@@ -16655,6 +16655,22 @@ refactor.
   the account window at 1180px and 390px. Removing the rule reproduces the
   screenshot (a 24px, 11px uppercase role select) and fails six.
 
+- **A MAP WITH NO CURRENT JOBS OPENS ON THE HQ'S AREA, AND SAYS SO IN THE
+  MIDDLE.** Reported with Jobs -> Map on Outerhome: gray, only the Your HQ
+  marker, and *No current jobs to show.* in the footer by the legend. With no
+  pins the fit ran over the HQ alone, a box with no size, which MapLibre
+  zooms to `maxZoom` (14), a street with nothing to see. One lone point (the
+  HQ with nothing else, or one pin and no HQ) now `jumpTo`s it: zoom 10 for
+  the home area with no pins, 13 for one pin, set 70px above the middle so
+  the note does not cover it. The note is a card in the middle of the map
+  (`.map-empty-card`), not a line at the foot. The map box carries
+  `data-view` (center and zoom) so a check reads what the map shows.
+  `test:mapui` drives a general contractor whose only job is finished.
+  Putting back the zero-size fit fails the zoom check (14), and putting
+  back the footer rule fails the middle check. **Not changed:** an account
+  with no jobs at all still gets *No jobs yet* instead of the views, map
+  included. **Still open:** coverage areas are not drawn on the map.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
