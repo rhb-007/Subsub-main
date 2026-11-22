@@ -16746,6 +16746,21 @@ refactor.
   `test:claim` read the composer by its old `export function` name and now
   reads the wrapped one. **Paste 104** before anything can be changed.
 
+- **CREW MEMBERS ARE ADDED FROM THE CONTRACTOR CARD'S CREWS TAB.** Reported
+  with North Pacific Exteriors' Crews tab on screen, one member listed and
+  nothing to press: the only way in was Edit, then step 1 of the three-step
+  form. The tab now has **Add a crew** (or **Add or edit crew members** once
+  there is one), which opens the same `MyCrews` editor a contractor uses for
+  their own crews, in place, with Cancel. It saves `crews` alone through
+  `PATCH /api/subs/:companyId`, awaited, and the card redraws only after the
+  server takes it. **It is offered only where that PATCH is taken**: a record
+  this account typed in, or staff standing in (`canEditCompany`, the same two
+  facts `SubForm`'s lock reads). A contractor with their own login gets no
+  button and the line *They keep their own crews on their SubSub account*,
+  because crews are on the shared company row. `test:subtabs` (27); offering
+  the button on their own record fails one assertion, and not redrawing after
+  the save fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

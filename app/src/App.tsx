@@ -8957,6 +8957,7 @@ export default function SubSub() {
             onEnd={(status) => endEngagement(selected.id, status)}
             onAgreementChanged={() => hydrateAccount(account.id, currentUserId, { quiet: true })}
             onUploadDoc={uploadSubDoc} startTab={selected.tab || "overview"}
+            onSaveCrews={async (crews) => { await api.patchSub(selected.id, { crews }); patchCompany(selected.id, { crews }); }}
             jobs={jobs} onSaveNotes={saveNotes} onRequestDocs={requestDocs}
             onSetAuto={(on) => setAutoSchedule(selected.id, on)}
             onAskAuto={() => { setAskingAuto(selected); setSelected(null); }}
@@ -37370,7 +37371,7 @@ function JobRequestCard({ job, trade, a, onRespond, showActions, past, onViewWO,
 // ---- Contractor: manage own crews ---------------------------------------
 // \`embedded\`: drawn as a tab of the roster page, which already carries the
 // page heading -- a second one under it is two titles for one screen.
-function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
+function MyCrews({ crews, onSave, saveErr = "", embedded = false, note = null, onCancel = null }) {
   const [list, setList] = useState(() => JSON.parse(JSON.stringify(crews.length ? crews : [{ id: "c1", name: "Crew 1", available: true, unavailableDays: [], members: [{ name: "", role: "" }] }])));
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -37400,9 +37401,9 @@ function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
     <div className="portal-panel">
       {/* Embedded on the roster page, the calendar is directly below; on a
           contractor seat's own My Crews it is under My Jobs. */}
-      <p className="panel-note">{embedded
+      <p className="panel-note">{note || (embedded
         ? tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar below.")
-        : tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs.")}</p>
+        : tt("Name each crew and list who's on it. Days off and pausing a crew are on the calendar under My Jobs."))}</p>
       <div className="crew-edit">
         {list.map((cr, ci) => (
           <div key={cr.id} className="crew-edit-card">
@@ -37430,6 +37431,7 @@ function MyCrews({ crews, onSave, saveErr = "", embedded = false }) {
           : <button className="btn-solid" disabled={!clean.length || busy} onClick={() => save(clean)}>
               <Check size={15} /> {busy ? tt("Saving…") : tt("Save crews")}
             </button>}
+        {onCancel && !saved && <button type="button" className="btn-ghost" disabled={busy} onClick={onCancel}>{tt("Cancel")}</button>}
       </div>
     </div>
     </>
@@ -43867,7 +43869,7 @@ function RelationshipModal({ sub, hiringWord = "Contractor", onSave, onClose }) 
   );
 }
 
-function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship, onDecideApplication = null, onUploadDoc = null, startTab = "overview" }) {
+function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, word, onAgreementChanged, onEnd, onSchedule, onSaveNotes, onEdit, onRequestDocs, onReviewDoc, onVerifyLicense, onSetAuto, onAskAuto, canEditCompany = true, canEngageHandyman = false, onChangeRelationship, onDecideApplication = null, onUploadDoc = null, startTab = "overview", onSaveCrews = null }) {
   const ready = assignReady(sub);
   const payGaps = payBlockers(sub);
   const required = requiredDocsFor(sub.engagedAs, DOC_KINDS);
@@ -43896,6 +43898,8 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
     { id: "notes", label: tt("Notes") },
   ];
   const pane = (id) => (tab === id ? "jt-on" : "jt-off");
+  const [crewEdit, setCrewEdit] = useState(false);
+  const [crewErr, setCrewErr] = useState("");
   return (
     <div className="detail">
       {sub.application === "pending" && onDecideApplication && (
@@ -44244,6 +44248,32 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
 
       <section>
         <h4><Users size={13} /> Crews &amp; members</h4>
+        {/* ADDED FROM THE CARD, NOT ONLY FROM EDIT. Crews are on the shared
+            company row, so this is offered exactly where the server would take
+            it: a record this account typed in, or staff standing in. A
+            contractor with their own login keeps their own crews, and the
+            card says so rather than offering a save that is refused. */}
+        {crewEdit && onSaveCrews ? (
+          <MyCrews embedded crews={sub.crews || []} saveErr={crewErr}
+            note={tt("Name each crew and list who's on it. Remove a name with the x.")}
+            onCancel={() => { setCrewEdit(false); setCrewErr(""); }}
+            onSave={async (next) => {
+              setCrewErr("");
+              try { await onSaveCrews(next); setCrewEdit(false); }
+              catch (e) { setCrewErr(e?.body?.error === "company_not_yours"
+                ? tt("They keep their own crews on their SubSub account, so nothing was saved.")
+                : tt("That did not save. Try again in a moment.")); throw e; }
+            }} />
+        ) : (
+        <>
+        {onSaveCrews && canEditCompany && (
+          <button type="button" className="btn-ghost crew-add-btn" data-crew-edit onClick={() => setCrewEdit(true)}>
+            <Plus size={14} /> {(sub.crews || []).length ? tt("Add or edit crew members") : tt("Add a crew")}
+          </button>
+        )}
+        {onSaveCrews && !canEditCompany && (
+          <p className="muted" data-crew-theirs>{tt("They keep their own crews on their SubSub account.")}</p>
+        )}
         {(sub.crews || []).length === 0 ? <p className="muted">No crews set.</p> : (
           <div className="crew-list">
             {sub.crews.map((cr) => {
@@ -44272,6 +44302,8 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
             {sub.rating ? <> — currently <strong>{sub.rating.toFixed(1)}</strong></> : null}
             {sub.ratedJobs ? ` across ${sub.ratedJobs} rated ${sub.ratedJobs === 1 ? "job" : "jobs"}` : ""}.
           </p>
+        )}
+        </>
         )}
       </section>
 
@@ -51981,6 +52013,7 @@ iframe.dv-frame{display:block}
 .pf-note{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5}
 .pf-act{font-size:13.5px;margin:6px 0;line-height:1.5}
 .pf-panel{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin-top:16px}
+.crew-add-btn{margin:0 0 12px}
 .pf-notice-group{margin-top:20px}
 .pf-notice-h{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);margin:0 0 8px}
 .pf-fig-bad{color:var(--red)}

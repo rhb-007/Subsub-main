@@ -63,11 +63,15 @@ const AGREEMENT = () => ({
 
 const calls = [];
 const web = serveApp({ dir: OUT, port: WEB });
-const api = serveApi({ port: API, routes: (path, method) => {
+const patched = [];
+const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
   if (path === "/api/account") return [200, acct()];
   if (path === "/api/account-users") return [200, USERS()];
-  if (path === "/api/subs") return [200, [SUB()]];
+  if (path === "/api/subs") return [200, [SUB(), { ...SUB(), id: "cmp_own", engagementId: "en_own",
+    company: "Orca Siding", answersForItself: true, hasPortal: true,
+    crews: [{ id: "c1", name: "Crew 1", members: [{ name: "Ana", role: "Lead" }] }] }]];
+  if (path === "/api/subs/cmp_h" && method === "PATCH") { patched.push(body); return [200, { ok: true }]; }
   if (path === "/api/subs/cmp_h/agreement" && method === "GET") return [200, AGREEMENT()];
   if (path === "/api/agreements/ag1/resend" && method === "POST") {
     calls.push("resend");
@@ -190,10 +194,52 @@ try {
   t.ck("and the resend is listed under the first send",
     r?.sends?.length === 2 && /^Resent Oct 20/.test(r.sends[1]), JSON.stringify(r?.sends));
 
+  // CREW MEMBERS ARE ADDED FROM THE CREWS TAB. Reported from a card whose
+  // Crews tab listed one member with nothing to press. The save goes to the
+  // same PATCH the Edit form uses, and only where that PATCH is taken.
+  await tab(page, "crews"); await wait(300);
+  const cr0 = await page.evaluate(() => ({
+    btn: (document.querySelector(".modal [data-crew-edit]")?.innerText || "").trim() }));
+  t.ck("the Crews tab offers to add a crew", /Add a crew/.test(cr0.btn), JSON.stringify(cr0));
+  await page.evaluate(() => document.querySelector(".modal [data-crew-edit]")?.click());
+  await wait(300);
+  await page.evaluate(() => {
+    const el = document.querySelector('.modal .crew-edit .member-row input');
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set.call(el, "Juan Valdez");
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await wait(150);
+  await page.evaluate(() => [...document.querySelectorAll(".modal .crew-edit ~ .panel-actions button, .modal .panel-actions button")]
+    .find((b) => /Save crews/.test(b.innerText || ""))?.click());
+  await wait(800);
+  t.ck("saving sends the crew to the contractor's record",
+    patched[0]?.crews?.[0]?.members?.[0]?.name === "Juan Valdez", JSON.stringify(patched));
+  const cr1 = await page.evaluate(() => ({
+    members: [...document.querySelectorAll(".modal .crew-card .m-name")].map((x) => x.innerText.trim()),
+    editor: !!document.querySelector(".modal .crew-edit") }));
+  t.ck("and the card lists the new member, with the editor closed",
+    cr1.members.includes("Juan Valdez") && !cr1.editor, JSON.stringify(cr1));
+  const cr2 = await page.evaluate(() => (document.querySelector(".modal [data-crew-edit]")?.innerText || "").trim());
+  t.ck("with crews on file the button adds or edits members", /Add or edit crew members/.test(cr2), cr2);
+
   await tab(page, "notes"); await wait(300);
   const n = await shown(page);
   t.ck("Notes draws only the notes", JSON.stringify(n?.panes) === '["notes"]'
     && await page.evaluate(() => document.querySelector(".modal .notes-area")?.offsetParent !== null));
+  // A contractor who answers for themselves keeps their own crews: no button,
+  // and a line saying so, because the server refuses the save.
+  await page.keyboard.press("Escape");
+  await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
+  await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll(".grid .card")].find((x) => /Orca Siding/.test(x.innerText || ""))?.click());
+  await wait(900);
+  await tab(page, "crews"); await wait(300);
+  const own = await page.evaluate(() => ({
+    name: document.querySelector(".modal .detail-id h2")?.innerText || "",
+    btn: !!document.querySelector(".modal [data-crew-edit]"),
+    theirs: !!document.querySelector(".modal [data-crew-theirs]") }));
+  t.ck("a contractor with their own login: the card opened", /Orca Siding/.test(own.name), JSON.stringify(own));
+  t.ck("and it offers no crew editor, saying they keep their own", !own.btn && own.theirs, JSON.stringify(own));
   await ctx.close();
 
   // THE STEP BAR ON A PHONE. Reported with the Add form on step 2: three
