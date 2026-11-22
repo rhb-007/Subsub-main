@@ -24853,7 +24853,10 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               and it was the fifth panel down inside another one. */}
           {isDocs && <>
           <div className="mydocs">
-            {DOC_KINDS.map((k) => {
+            {/* The agreement is not one document, it is one per company, so it
+                is not a row here: each sits under Agreements below, named for
+                the company it is with. A copy already on file stays visible. */}
+            {DOC_KINDS.filter((k) => k !== "contract" || (loaded?.docs || {}).contract).map((k) => {
               const d = (loaded?.docs || {})[k];
               const today = new Date().toISOString().slice(0, 10);
               // The same light, from the same place as the dashboard card:
@@ -24926,7 +24929,12 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               -- it is the hiring contractor's own form -- so it is not a row
               in the grid above. It is here rather than on its own screen
               because submitting documents is the moment it gets answered. */}
-          <MyAgreements myName={myName} />
+          <MyAgreements myName={myName} onUploadSigned={loaded?.companyId ? async (file) => {
+            const { key } = await api.uploadFile("contract", file);
+            await api.uploadDocument(loaded.companyId, "contract", key, file.name);
+            const fresh = await api.myCompany();
+            setLoaded(fresh); setF((x) => ({ ...x, docs: fresh.docs }));
+          } : null} />
           <MyWaivers myName={myName} />
 
           {/* And sending them, which is the thing they are actually asked to
@@ -35771,10 +35779,11 @@ function StandardTermsPanel({ myName }) {
   );
 }
 
-function MyAgreements({ myName }) {
+function MyAgreements({ myName, onUploadSigned = null }) {
   const [rows, setRows] = useState(null);
   const [open, setOpen] = useState(null);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
 
   const load = async () => {
     try { setRows(await api.myAgreements()); }
@@ -35797,7 +35806,7 @@ function MyAgreements({ myName }) {
     <div className="portal-panel agr-panel">
       <h4>{tt("Agreements")}{waiting.length > 0 && <span className="agr-badge">{waiting.length}</span>}</h4>
       <p className="cx-sub">
-        {tt("An agreement is between you and one company, so each of them asks separately — and plenty never ask at all. Only the ones who have sent you one appear here.")}
+        {tt("Agreements the companies you work for have sent you. Each one is with that company only.")}
       </p>
       {err && <div className="form-err">{err}</div>}
       <ul className="agr-rows">
@@ -35807,8 +35816,11 @@ function MyAgreements({ myName }) {
               {/* WHO IS THIS FOR is the whole question when the answer is a
                   different company every row. */}
               <b>{r.accountName}</b>
+              <span className="agr-row-kind">{r.source === "uploaded" ? tt("Their own agreement") : tt("SubSub Standard Subcontractor Agreement")}</span>
               <span className="cx-sub">
-                {agreementStateText(r, { subName: "You", hiringName: r.accountName })}
+                {r.waitingOn === "sub_upload" ? tt("Sign their copy, then upload it here.")
+                  : r.waitingOn === "sub_sign" ? tt("Waiting for you to sign.")
+                  : agreementStateText(r, { subName: "You", hiringName: r.accountName })}
               </span>
             </div>
             {r.waitingOn === "sub_sign" && (
@@ -35816,15 +35828,24 @@ function MyAgreements({ myName }) {
                 {tt("Read and sign")}
               </button>
             )}
-            {r.waitingOn === "sub_upload" && (
-              // Points at the row that actually does something. Uploading the
-              // signed copy IS signing it, and the grid above is where that
-              // upload lives -- there is no document here to sign, because
-              // this one is theirs rather than SubSub's.
-              <span className="cx-sub agr-row-note">
-                {tt("Sign their paper copy, then upload it as the signed agreement above")}
-              </span>
-            )}
+            {r.waitingOn === "sub_upload" && (onUploadSigned ? (
+              // Uploading the signed copy IS signing it, and it belongs on this
+              // company's row: the agreement is with them and nobody else.
+              <label className={`btn-solid sm agr-upload ${busy === r.id ? "is-busy" : ""}`}>
+                <Upload size={13} /> {busy === r.id ? tt("Uploading…") : tt("Upload signed copy")}
+                <input type="file" hidden disabled={!!busy} onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  setBusy(r.id); setErr("");
+                  try { await onUploadSigned(file); await load(); }
+                  catch (ex) { console.error("[my-agreements] upload failed:", ex); setErr(tt("That didn't upload. Try again in a moment.")); }
+                  setBusy("");
+                }} />
+              </label>
+            ) : (
+              <span className="cx-sub agr-row-note">{tt("Sign their paper copy and upload it under Compliance pack")}</span>
+            ))}
             {r.waitingOn === null && r.document && (
               <button className="btn-ghost sm" type="button" onClick={() => setOpen(r)}>{tt("View")}</button>
             )}
@@ -50945,6 +50966,8 @@ iframe.dv-frame{display:block}
   min-width:18px;height:18px;padding:0 5px;margin-left:8px;border-radius:9px;
   background:var(--warn,#b45309);color:#fff;font-size:11px;font-weight:700;line-height:1}
 .agr-rows{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
+.agr-row-kind{display:block;font-size:12.5px;font-weight:600;color:var(--ink-soft);margin:1px 0 2px}
+.agr-upload{display:inline-flex;align-items:center;gap:6px;cursor:pointer;flex:none}
 .agr-row{display:flex;align-items:center;gap:12px;padding:10px 12px;
   border:1px solid var(--line);border-radius:9px;background:var(--paper)}
 .agr-row.agr-todo{border-color:var(--warn,#b45309)}

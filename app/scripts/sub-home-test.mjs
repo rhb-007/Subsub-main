@@ -680,8 +680,10 @@ try {
       /\d+ days? left/i.test(r(/surety bond/i).note || ""), JSON.stringify(r(/surety bond/i)));
     t.ck("and what to do about it", /renew it/i.test(r(/surety bond/i).note || ""),
       JSON.stringify(r(/surety bond/i)));
-    t.ck("never added is red", /tone-red/.test(r(/subcontractor agreement/i).cls || ""),
-      JSON.stringify(r(/subcontractor agreement/i)));
+    // An agreement is one per company, so a never-added one is not a row
+    // here: each lives under Agreements, named for its company.
+    t.ck("an agreement never added is not a row in the documents", !rows.some((x) => /agreement/i.test(x.label || "")),
+      JSON.stringify(rows.map((x) => x.label)));
     // A blank expiry means does not expire, never unknown.
     t.ck("no expiry means green, not amber", /tone-green/.test(r(/W-9/i).cls || ""),
       JSON.stringify(r(/W-9/i)));
@@ -700,9 +702,6 @@ try {
     // no shelf life, which is the same mistake `docs.js` refuses in colour.
     t.ck("and a blank expiry says so in words",
       /does not expire/i.test(r(/W-9/i).exp || ""), JSON.stringify(r(/W-9/i)));
-    t.ck("nothing on file has nothing to show",
-      /—|-/.test((r(/subcontractor agreement/i).exp || "").replace(/expires/i, "")),
-      JSON.stringify(r(/subcontractor agreement/i)));
 
     // Left-justified, which is a claim about four rows and not about one.
     // `.mydoc` is `justify-content:space-between` with three children, so
@@ -720,9 +719,9 @@ try {
         exp: Math.round(d.querySelector(".mydoc-exp").getBoundingClientRect().left),
       })));
     t.ck("every label starts at the same x",
-      cols.length === 4 && new Set(cols.map((c) => c.label)).size === 1, JSON.stringify(cols));
+      cols.length === 3 && new Set(cols.map((c) => c.label)).size === 1, JSON.stringify(cols));
     t.ck("and so does every date, so they read as a table",
-      cols.length === 4 && new Set(cols.map((c) => c.exp)).size === 1, JSON.stringify(cols));
+      cols.length === 3 && new Set(cols.map((c) => c.exp)).size === 1, JSON.stringify(cols));
     t.ck("with the dates to the right of the labels",
       cols.every((c) => c.exp > c.label), JSON.stringify(cols));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));

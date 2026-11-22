@@ -263,11 +263,13 @@ export function waitingOn(agreement) {
 
 export function agreementStateText(agreement, { subName = "They", hiringName = "They" } = {}) {
   if (!agreement) return "No agreement has been sent.";
+  // "You" leads a sentence and is "you" inside one.
+  const mid = subName === "You" ? "you" : subName;
   switch (agreement.status) {
     case "sent":
       return agreement.source === "uploaded"
-        ? `Waiting for ${subName} to upload a signed agreement.`
-        : `Waiting for ${subName} to sign.`;
+        ? `Waiting for ${mid} to upload a signed agreement.`
+        : `Waiting for ${mid} to sign.`;
     case "signed": return `${subName} signed it. Waiting for ${hiringName} to countersign.`;
     case "countersigned": return "Signed by both parties.";
     case "declined": return `${subName} declined to sign it.`;

@@ -16671,6 +16671,28 @@ refactor.
   with no jobs at all still gets *No jobs yet* instead of the views, map
   included. **Still open:** coverage areas are not drawn on the map.
 
+- **A SUBCONTRACTOR'S AGREEMENTS ARE ONE ROW PER COMPANY, AND THE PAPER
+  COPY IS UPLOADED ON THAT COMPANY'S ROW.** Reported with the Compliance pack
+  tab on screen: the Agreements note (*An agreement is between you and one
+  company, so each of them asks separately, and plenty never ask at all...*)
+  was "too complicated and doesn't make any sense", and "each agreement should
+  be attached to the subcontractor".
+  - **The note is one plain line**: *Agreements the companies you work for
+    have sent you. Each one is with that company only.*
+  - **The document list carries no generic "Signed subcontractor agreement"
+    row** unless a signed copy is already on file. One row could not say which
+    company it was for, and an agreement is always with one company.
+  - **Each agreement row names its company and which form it is**: *SubSub
+    Standard Subcontractor Agreement* or *Their own agreement*. A company's
+    own agreement is signed on paper, and **Upload signed copy** is on its
+    row. It uses the same two calls as the document list, so the server still
+    advances it to signed. The row used to say "upload it as the signed
+    agreement above", which pointed at a row that no longer exists.
+  - *Waiting for You to sign* is now *you*, mid-sentence (`agreementStateText`).
+  `test:myagrui` (11): putting the generic row back fails one assertion, and
+  taking the upload off the row fails four. `test:subhome` was moved to the
+  new rule, and its 4 failures about the city picker predate this change.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
