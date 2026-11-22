@@ -26,6 +26,7 @@ import { DOC_KINDS, DOC_LABELS, PAY_ONLY_KINDS } from "../shared/docs.js";
 import { requiredDocsFor } from "../shared/engaged.js";
 import { REPLY_MARKER } from "../shared/messaging.js";
 import { hiresLabelFor } from "../shared/hires.js";
+import { noticeVars, noticeByKey, renderNotice, NOTICE_SUBJECT_MAX } from "../shared/notices.js";
 import { SMS_INCLUDED_SCALE } from "../shared/smsquota.js";
 export { DOC_KINDS, DOC_LABELS };
 // The schedule and the checklist come from shared/doccheck.js, which is the one
@@ -70,7 +71,7 @@ export function missingDocs(company, docReview, engagedAs = null) {
 
 // ---- Templates ------------------------------------------------------------
 
-export function docRequestEmail({ company, contact, docReview, job, trade, account, engagedAs = null, loginLink = null }) {
+function docRequestEmailRaw({ company, contact, docReview, job, trade, account, engagedAs = null, loginLink = null }) {
   const missing = missingDocs(company, docReview, engagedAs);
   const who = account?.name || "our team";
   // With no SubSub login yet, the way in is their invite link: choose a
@@ -147,7 +148,7 @@ ${NOREPLY}`;
 // status -- but a subcontractor reading "your certificate of insurance was
 // rejected" goes looking for a new policy, and what is wanted is an endorsement.
 // The words follow the findings.
-export function docFindingsEmail({ company, contact, account, kind, review, note }) {
+function docFindingsEmailRaw({ company, contact, account, kind, review, note }) {
   const who = account?.name || "our team";
   const name = DOC_LABELS[kind] || "your document";
   const inline = (DOC_LABELS[kind] || "document").toLowerCase();
@@ -188,7 +189,7 @@ ${NOREPLY}`;
 // would buy a yes from somebody who had not understood that jobs land
 // already accepted, and the first surprise booking would cost more trust
 // than the feature is worth.
-export function autoScheduleRequestEmail({ company, contact, account, note }) {
+function autoScheduleRequestEmailRaw({ company, contact, account, note }) {
   const who = account?.name || "our team";
   // The link lands ON the switch (Job Settings, Availability tab, rung).
   const autoLink = `https://${portalUrl(account?.subdomain)}/?open=auto-schedule`;
@@ -217,7 +218,7 @@ ${NOREPLY}`;
 // only way they found it was opening the app for some other reason. Sent when
 // it is issued and again when the hiring account presses Resend, so the card
 // can say when it went and how many times.
-export function agreementSentEmail({ company, contact, account, source = "subsub_standard", resend = false, issuedOn = null }) {
+function agreementSentEmailRaw({ company, contact, account, source = "subsub_standard", resend = false, issuedOn = null }) {
   const who = account?.name || "our team";
   const link = docsLink(account?.subdomain);
   const own = source === "uploaded";
@@ -256,7 +257,7 @@ ${NOREPLY}`;
 //
 // `daysOut` is the milestone this was sent at: 30, 14, 3, 0, or -1 for
 // "lapsed, and there is booked work over it".
-export function docExpiryEmail({ company, contact, kind, expiresOn, daysOut, account, jobs = [] }) {
+function docExpiryEmailRaw({ company, contact, kind, expiresOn, daysOut, account, jobs = [] }) {
   const who = account?.name || "our team";
   const name = { insurance: "insurance certificate", bond: "bond",
     contract: "signed contract", w9: "W-9" }[kind] || kind;
@@ -301,7 +302,7 @@ ${NOREPLY}`;
 //
 // The street address is NOT here. Until they are picked they need the area, not
 // the door; the account has not chosen to hand them a property.
-export function overflowPostEmail({ company, contact, account, job, trade, severity, split, expiresAt, scope }) {
+function overflowPostEmailRaw({ company, contact, account, job, trade, severity, split, expiresAt, scope }) {
   const who = account?.name || "A SubSub account";
   const urgent = severity === "911" || severity === "urgent";
   const where = [job?.area, job?.zip].filter(Boolean).join(" ");
@@ -337,7 +338,7 @@ ${NOREPLY}`;
 // "Sent via SubSub" -- the line is the attribution, the link is the way in.
 // There is no parameter that leaves the footer off, on purpose: no plan
 // removes it.
-export function workOrderIssuedEmail({ company, contact, job, trade, woNumber, account, respondBy,
+function workOrderIssuedEmailRaw({ company, contact, job, trade, woNumber, account, respondBy,
   claimLink = null }) {
   const who = account?.name || "our team";
   const text = `Hi ${contact || company.company},
@@ -385,7 +386,7 @@ export const WHAT_TO_ADD = `- Certificate of insurance
 // The applicant's confirmation. It names how to sign in and what to add,
 // because the next move is theirs: a hiring side reviewing an application
 // reads the documents on it. `pending` (102) says it is waiting on a yes.
-export function applicationReceivedEmail({ companyName, contact, account, pending = false, signInLink = null }) {
+function applicationReceivedEmailRaw({ companyName, contact, account, pending = false, signInLink = null }) {
   const who = account?.name || "the team";
   const status = pending
     ? `${who} has your application for ${companyName}. They'll review it and let you know whether they accept it.`
@@ -413,7 +414,7 @@ ${NOREPLY}`;
 
 // 102. The applicant hears the decision either way. A decline is said kindly
 // and gives no reason, because the account gave none.
-export function applicationDecidedEmail({ contact, companyName, account, accepted, signInLink, homeLink = null }) {
+function applicationDecidedEmailRaw({ contact, companyName, account, accepted, signInLink, homeLink = null }) {
   const who = account?.name || "the team";
   // The first name, because this is the one email that has to be personal.
   const first = String(contact || "").trim().split(/\s+/)[0] || companyName || "there";
@@ -459,11 +460,13 @@ ${NOREPLY}`;
 // writes an engagement with nobody on this account pressing anything, so the
 // dashboard row alone was the first anybody heard of it. Sent to the
 // account's admins and project managers, by their own email setting.
-export function rosterJoinedEmail({ firstName, account, companyName, contact, via, kind, link, pending = false }) {
+function rosterJoinedEmailRaw({ firstName, account, companyName, contact, via, kind, link, pending = false }) {
   const noun = hiresLabelFor(kind);
   const who = companyName || "A company";
   const how = via === "invite" ? `accepted your invitation and joined your ${noun} roster`
     : via === "staff" ? `was added to your ${noun} roster by SubSub support`
+    : via === "connect" ? `accepted your request to connect and is on your ${noun} roster`
+    : via === "claim" ? `set up a SubSub login from a work order you sent`
     : `applied to join your ${noun} roster`;
   const text = `Hi ${firstName || "there"},
 
@@ -477,6 +480,8 @@ ${link}
 ${NOREPLY}`;
   const subject = via === "invite" ? `${who} joined your roster`
     : via === "staff" ? `${who} was added to your roster`
+    : via === "connect" ? `${who} accepted your request to connect`
+    : via === "claim" ? `${who} is now on SubSub`
     : pending ? `${who} applied to join your roster: accept or decline`
     : `${who} applied to join your roster`;
   return { subject, text, html: linkAlso(textToHtml(text, null), link) };
@@ -486,7 +491,7 @@ ${NOREPLY}`;
 // certificate, a bond, a W-9, a license number, or your agreement signed.
 // A signed agreement is not in force until this account countersigns it,
 // so that one says so and asks for it.
-export function docUploadedEmail({ firstName, companyName, kind, label, link, licenseNumber = null }) {
+function docUploadedEmailRaw({ firstName, companyName, kind, label, link, licenseNumber = null }) {
   const who = companyName || "A company on your roster";
   const what = kind === "agreement" ? "signed your subcontractor agreement"
     : kind === "license" ? `added their license number${licenseNumber ? ` (${licenseNumber})` : ""}`
@@ -526,7 +531,7 @@ ${NOREPLY}`;
 // whose password nobody knows is the dead end this exists to remove.
 // Sentences are not hard-wrapped here: the HTML keeps every newline, so a
 // wrap at 80 columns breaks a sentence in half in every mail client.
-export function welcomeEmail({ firstName, companyName, email, planName, needsConfirmation, hasPassword, viaGoogle, kind = null }) {
+function welcomeEmailRaw({ firstName, companyName, email, planName, needsConfirmation, hasPassword, viaGoogle, kind = null }) {
   const app = "https://app.subsub.work";
   const steps = viaGoogle
     ? `To sign in, go to ${app} and press "Continue with Google" with ${email}.`
@@ -609,7 +614,7 @@ function founderHtml(inner) {
 const founderSubject = (firstName) => `${firstName ? `${firstName}, a` : "A"} quick hello from SubSub's founder`;
 const founderEnvelope = () => ({ replyTo: FOUNDER.email, fromName: `${FOUNDER.name} at SubSub` });
 
-export function founderIntroEmail({ firstName, companyName, kind }) {
+function founderIntroEmailRaw({ firstName, companyName, kind }) {
   if (kind === "subcontractor") return founderSubEmail({ firstName, companyName });
   const sub = hiresLabelFor(kind);          // "subcontractor" or "contractor"
   const subs = `${sub}s`;
@@ -649,7 +654,7 @@ ${founderSignatureText()}`;
 // cannot promise what the ledger does not pay, and earned when the account
 // they bring STARTS PAYING, never when it signs up -- the reward is written
 // at that account's first paid invoice.
-export function founderSubEmail({ firstName, companyName }) {
+function founderSubEmailRaw({ firstName, companyName }) {
   const company = companyName || "your company";
   const cash = `$${Math.round(SUB_CASH_CENTS / 100)}`;
   const asks = [
@@ -684,7 +689,7 @@ ${founderSignatureText()}`;
 // the one the person should read, so it says the time in their own zone, the
 // link to join, and how to move it. The calendar invite itself comes from the
 // host's Google Calendar, which is already SubSub's address.
-export function demoBookedEmail({ name, start, end, timeZone, meetingUrl }) {
+function demoBookedEmailRaw({ name, start, end, timeZone, meetingUrl }) {
   const tz = timeZone || "America/Los_Angeles";
   const at = new Date(start);
   let when;
@@ -741,7 +746,7 @@ Need another time? Reply to the calendar invite or pick one at https://subsub.wo
 // a fresh application and went unopened. One predicate decides which wording
 // runs and which screen renders (`inviteKnownEnough` in the Worker), because
 // the email and the page disagreeing about it is the whole bug.
-export function subInviteEmail({ contact, companyName, account, link, known = false, quote = null }) {
+function subInviteEmailRaw({ contact, companyName, account, link, known = false, quote = null }) {
   const who = account?.name || "A general contractor";
   // Sent with a quote request. What they are asked to price leads, because it
   // is the reason to open the link, and answering happens in SubSub.
@@ -806,7 +811,7 @@ ${NOREPLY}`;
 //
 // The hook is the expiry. Anybody can attach a PDF -- what an attachment can
 // never do is tell you in eight months that the cover it showed has lapsed.
-export function docPackEmail({ company, contact, note, link, days, kinds = [] }) {
+function docPackEmailRaw({ company, contact, note, link, days, kinds = [] }) {
   const who = company || "A subcontractor";
   const what = kinds.length
     ? kinds.map((k) => `  - ${DOC_LABELS[k] || k}`).join("\n")
@@ -841,7 +846,7 @@ ${NOREPLY}`;
 // silence. Whoever was added found out by being told, and got in by noticing
 // a link on the sign-in screen that did not say it was for them. This is the
 // third of the three invites and it completes the set.
-export function userInviteEmail({ name, account, role, invitedBy, link, welcome = false }) {
+function userInviteEmailRaw({ name, account, role, invitedBy, link, welcome = false }) {
   const who = account?.name || "your team";
   // The owner of an account SubSub set up for them. "Somebody added you" is
   // the wrong news for a company that has never heard of the product: this is
@@ -901,7 +906,7 @@ export function subInviteSms({ companyName, account, link, known = false, quote 
     + `Set up your account and upload your insurance and license here: ${link}`;
 }
 
-export function tenantInviteEmail({ firstName, account, propertyName, unit, link }) {
+function tenantInviteEmailRaw({ firstName, account, propertyName, unit, link }) {
   const who = account?.name || "your building manager";
   const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
   const text = `Hi ${firstName || "there"},
@@ -984,7 +989,7 @@ export function visitWhen(v) {
     ? `, ${clock12(v.start_time || v.startTime)}${(v.end_time || v.endTime) ? `–${clock12(v.end_time || v.endTime)}` : ""}` : "";
   return `${niceDate(v.date)}${win}`;
 }
-export function tenantStatusEmail({ firstName, account, title, stage, link, detail }) {
+function tenantStatusEmailRaw({ firstName, account, title, stage, link, detail }) {
   const who = account?.name || "Your building manager";
   const what = stageWords(stage, detail);
   const text = `Hi ${firstName || "there"},
@@ -1010,7 +1015,7 @@ Turn these off under My account. ${NOREPLY}`;
 // there. The notice itself is the message, so it is quoted whole rather than
 // summarised: "the water is off on Tuesday from 9 to 1" is exactly the line
 // somebody needs and a paraphrase would lose the hours.
-export function buildingNoticeEmail({ firstName, account, propertyName, title, body, endsOn, important, link }) {
+function buildingNoticeEmailRaw({ firstName, account, propertyName, title, body, endsOn, important, link }) {
   const who = account?.name || "Your building manager";
   const until = endsOn ? `\n(Up until ${endsOn}.)` : "";
   const text = `Hi ${firstName || "there"},
@@ -1131,7 +1136,7 @@ export const brandedHtml = textToHtml;
 // names the amount and the through date, since a waiver is only ever for a
 // payment and up to a day -- one that does not say which is one nobody can
 // check against their own books.
-export function waiverRequestEmail({ toName, fromName, kindTitle, conditional, amount,
+function waiverRequestEmailRaw({ toName, fromName, kindTitle, conditional, amount,
   through, job, link, uploadOnly = false, stateName = null }) {
   const who = fromName || "A customer";
   const how = uploadOnly
@@ -1183,11 +1188,28 @@ export function fromWithName(from, name = "SubSub") {
   return `${name} <${f}>`;
 }
 
-export async function sendEmail(env, { to, subject, text, html, replyTo, fromName }) {
+export async function sendEmail(env, { to, subject, text, html, replyTo, fromName, notice: tag }) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM) {
     return { ok: false, error: "mail_not_configured" };
   }
   if (!to) return { ok: false, error: "no_recipient" };
+  // What staff saved for this notice on the console. Off product-wide is a
+  // refusal the caller logs like any other, so the mail log says WHY nothing
+  // went rather than going quiet. New words replace the subject or the body;
+  // a template that cannot be read leaves the default, because a notice
+  // nobody can read is worse than one in our standard words.
+  if (tag?.kind) {
+    const saved = await noticeSetting(env, tag.kind);
+    if (saved) {
+      if (saved.enabled === 0 && !noticeByKey(tag.kind)?.required) return { ok: false, error: "notice_off" };
+      if (saved.subject) subject = renderNotice(saved.subject, tag.vars).slice(0, NOTICE_SUBJECT_MAX);
+      if (saved.body) {
+        text = renderNotice(saved.body, tag.vars);
+        if (tag.tail && !text.includes(tag.tail)) text = `${text.replace(/\s+$/, "")}\n\n${tag.tail}`;
+        html = textToHtml(text, tag.vars?.link || null);
+      }
+    }
+  }
 
   let res, body;
   try {
@@ -1230,7 +1252,7 @@ export async function sendEmail(env, { to, subject, text, html, replyTo, fromNam
 // So the email says that plainly, and it says what accepting hands over.
 // A contractor who cannot tell the difference between this and a signup
 // will read it as more paperwork and leave it.
-export function connectRequestEmail({ account, company, message, link }) {
+function connectRequestEmailRaw({ account, company, message, link }) {
   const who = account?.name || "A contractor";
   const text = `Hi ${company?.contact || "there"},
 
@@ -1288,7 +1310,7 @@ export function workOrderIssuedSms({ job, trade, woNumber, account, respondBy, c
 // they are hearing from us in the first line, because the second most likely
 // reaction to an unexpected email is "who is this". Short: they did not ask
 // for a newsletter, they asked for a certificate.
-export function docRenewedEmail({ company, contact, kind, expiresOn, link, days }) {
+function docRenewedEmailRaw({ company, contact, kind, expiresOn, link, days }) {
   const who = company || "A subcontractor";
   const what = DOC_LABELS[kind] || kind;
   const text = `Hello,
@@ -1308,7 +1330,7 @@ You're getting this because ${contact ? `${contact} at ${who}` : who} sent you t
 // It points at the screen rather than pasting eighty lines of HTML into an
 // email: nobody copies code cleanly out of an email on a phone, and the panel
 // has a Copy button and a preview.
-export function embedNudgeEmail({ name, accountName, subdomain, subs }) {
+function embedNudgeEmailRaw({ name, accountName, subdomain, subs }) {
   const text = `Hi ${name || "there"},
 
 You have ${subs} contractors on ${accountName}. To get the next ones without chasing, let them apply from your website: they fill in a form and land on your Contractors screen for you to approve.
@@ -1330,7 +1352,7 @@ Copy the code from My account > Branding > Website forms, or share the hosted fo
 // as a person, so "Hi Documents" is what this used to say. A plain "Hello"
 // is right for all of them. What the reader needs is which companies sent
 // paperwork and what it is, so those are the subject and the first line.
-export function docInboxEmail({ senders = [], count, link, days }) {
+function docInboxEmailRaw({ senders = [], count, link, days }) {
   const names = (Array.isArray(senders) ? senders : []).map((x) => String(x || "").trim()).filter(Boolean);
   const n = Math.max(Number(count) || 0, names.length);
   const shown = names.slice(0, 3);
@@ -1371,7 +1393,7 @@ No account needed. The link lasts ${days} days.
 // The counts are in the message because an owner reading on a phone decides
 // from them whether to open it tonight or on Monday, and "0 flagged" is the
 // commonest and best answer this product can give them.
-export function inspectionReportEmail({ firstName, account, kindLabel, propertyName,
+function inspectionReportEmailRaw({ firstName, account, kindLabel, propertyName,
   unit, walkedOn, tenantName, rooms, flagged, link }) {
   const who = account?.name || "your property manager";
   const place = [propertyName, unit ? `Unit ${unit}` : null].filter(Boolean).join(", ");
@@ -1402,7 +1424,7 @@ ${NOREPLY}`;
 // nothing opens until they say yes, and the email says so in those words,
 // because "somebody wants your tax form" is the sentence a careful person
 // stops at.
-export function passportAccessRequestEmail({ company, contact, accountName, requesterName, message, link }) {
+function passportAccessRequestEmailRaw({ company, contact, accountName, requesterName, message, link }) {
   const who = accountName || "A company";
   const text = `Hi ${contact || company?.company || "there"},
 
@@ -1418,7 +1440,7 @@ ${NOREPLY}`;
 }
 
 // The answer, to the person who asked.
-export function passportAccessDecisionEmail({ firstName, companyName, approved, link }) {
+function passportAccessDecisionEmailRaw({ firstName, companyName, approved, link }) {
   const sub = companyName || "The subcontractor";
   const text = approved
     ? `Hi ${firstName || "there"},
@@ -1445,7 +1467,7 @@ ${NOREPLY}`;
 
 // The licence running out, at 30, 7 and 0 days. The date is the state
 // register's own, never one the sub typed, and the email says which register.
-export function licenseExpiryEmail({ company, contact, number, expiresOn, daysOut, registry, link }) {
+function licenseExpiryEmailRaw({ company, contact, number, expiresOn, daysOut, registry, link }) {
   const reg = registry || "the state";
   const lapsed = daysOut <= 0;
   const lead = lapsed
@@ -1471,7 +1493,7 @@ ${NOREPLY}`;
 // 080. Everything waiting on one person, in one email. Sent nightly while an
 // item stands (see app/shared/remind.js), so a crew with three jobs to time
 // gets one message rather than three, and the subject says how many.
-export function actionReminderEmail({ firstName, lines = [], link, fromName }) {
+function actionReminderEmailRaw({ firstName, lines = [], link, fromName }) {
   const n = lines.length;
   const text = `Hi ${firstName || "there"},
 
@@ -1533,7 +1555,7 @@ ${reason}
   return { subject: "Your reply didn't reach SubSub", text, html: textToHtml(text) };
 }
 
-export function messageNotifyEmail({ firstName, threads = [], link, fromName }) {
+function messageNotifyEmailRaw({ firstName, threads = [], link, fromName }) {
   const n = threads.reduce((k, t) => k + (t.count || 1), 0);
   const quote = (s) => {
     const one = String(s || "").replace(/\s+/g, " ").trim();
@@ -1557,3 +1579,82 @@ Replies to this email aren't read; answer in the app.`;
     : `${n} new messages`;
   return { subject, text, html: textToHtml(text, link) };
 }
+
+// Saved notice settings, read once a minute per isolate rather than once per
+// email: a sweep that sends two hundred reminders asks D1 once. A save on the
+// console clears it in that isolate (forgetNoticeSettings); elsewhere it is at
+// most a minute behind. A database without 104 has no table, which reads as
+// nothing saved: every notice goes out in its standard words.
+let noticeCache = null;
+let noticeCacheAt = 0;
+export function forgetNoticeSettings() { noticeCache = null; noticeCacheAt = 0; }
+export async function noticeSettings(env) {
+  if (noticeCache && Date.now() - noticeCacheAt < 60000) return noticeCache;
+  const map = new Map();
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT kind, enabled, subject, body, updated_at, updated_by FROM notice_settings`).all();
+    for (const r of results || []) map.set(r.kind, r);
+  } catch (err) {
+    if (!/no such table/i.test(String(err?.message || err))) console.error("[notices] read failed:", err?.message || err);
+  }
+  noticeCache = map;
+  noticeCacheAt = Date.now();
+  return map;
+}
+async function noticeSetting(env, kind) {
+  if (!env?.DB) return null;
+  return (await noticeSettings(env)).get(kind) || null;
+}
+
+// EVERY COMPOSER ABOVE THAT IS A SUBSUB NOTICE IS TAGGED WITH ITS KEY, so
+// sendEmail can apply what staff saved on the console's Notifications screen:
+// switched off product-wide, or new words. The tag carries the values the
+// composer was given, which are what a saved template's {{placeholders}}
+// read. The list is shared/notices.js; test:notices requires every entry to
+// be wrapped here.
+function notice(key, fn) {
+  return (args, ...rest) => {
+    const m = fn(args, ...rest);
+    if (m && typeof m === "object" && !m.notice) {
+      m.notice = { kind: key, vars: noticeVars(args) };
+      // THE FOOTER IS NOT A SETTING, and new words from the console are not
+      // a way round it: a work order says how it was sent whatever its body
+      // says, so the line rides along under any saved words.
+      if (key === "wo_issued") m.notice.tail = footerText(args?.claimLink || null);
+    }
+    return m;
+  };
+}
+export const rosterJoinedEmail = notice("roster_joined", rosterJoinedEmailRaw);
+export const applicationReceivedEmail = notice("application_received", applicationReceivedEmailRaw);
+export const applicationDecidedEmail = notice("application_decided", applicationDecidedEmailRaw);
+export const subInviteEmail = notice("sub_invite", subInviteEmailRaw);
+export const userInviteEmail = notice("user_invite", userInviteEmailRaw);
+export const connectRequestEmail = notice("connect_request", connectRequestEmailRaw);
+export const docRequestEmail = notice("doc_request", docRequestEmailRaw);
+export const docFindingsEmail = notice("doc_findings", docFindingsEmailRaw);
+export const docUploadedEmail = notice("doc_uploaded", docUploadedEmailRaw);
+export const docExpiryEmail = notice("doc_expiry", docExpiryEmailRaw);
+export const licenseExpiryEmail = notice("license_expiry", licenseExpiryEmailRaw);
+export const docPackEmail = notice("doc_pack", docPackEmailRaw);
+export const docRenewedEmail = notice("doc_renewed", docRenewedEmailRaw);
+export const docInboxEmail = notice("doc_inbox", docInboxEmailRaw);
+export const agreementSentEmail = notice("agreement_sent", agreementSentEmailRaw);
+export const autoScheduleRequestEmail = notice("auto_schedule_request", autoScheduleRequestEmailRaw);
+export const workOrderIssuedEmail = notice("wo_issued", workOrderIssuedEmailRaw);
+export const overflowPostEmail = notice("overflow_post", overflowPostEmailRaw);
+export const actionReminderEmail = notice("action_reminder", actionReminderEmailRaw);
+export const tenantInviteEmail = notice("tenant_invite", tenantInviteEmailRaw);
+export const tenantStatusEmail = notice("tenant_status", tenantStatusEmailRaw);
+export const buildingNoticeEmail = notice("building_notice", buildingNoticeEmailRaw);
+export const messageNotifyEmail = notice("message_notify", messageNotifyEmailRaw);
+export const welcomeEmail = notice("welcome", welcomeEmailRaw);
+export const founderIntroEmail = notice("founder_intro", founderIntroEmailRaw);
+export const founderSubEmail = notice("founder_sub", founderSubEmailRaw);
+export const demoBookedEmail = notice("demo_booked", demoBookedEmailRaw);
+export const embedNudgeEmail = notice("embed_nudge", embedNudgeEmailRaw);
+export const passportAccessRequestEmail = notice("passport_access_request", passportAccessRequestEmailRaw);
+export const passportAccessDecisionEmail = notice("passport_access_decision", passportAccessDecisionEmailRaw);
+export const waiverRequestEmail = notice("waiver_request", waiverRequestEmailRaw);
+export const inspectionReportEmail = notice("inspection_report", inspectionReportEmailRaw);

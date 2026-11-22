@@ -16693,6 +16693,59 @@ refactor.
   taking the upload off the row fails four. `test:subhome` was moved to the
   new rule, and its 4 failures about the city picker predate this change.
 
+- **EVERY EMAIL SUBSUB SENDS IS ON THE CONSOLE'S NOTIFICATIONS SCREEN: HOW
+  MANY WENT AND FAILED, AN OFF SWITCH, AND NEW WORDS.** Reported as a new
+  subcontractor (T&V Sons Construction) signing up to Outerhome with no email
+  to the account, and asked for as one place to see every notification and
+  edit each one. Migration 104 (`notice_settings`), `app/shared/notices.js`.
+  - **The list is `NOTICES`**: 32 emails by key, each with its composer, area,
+    audience, when it is sent, a sample, and the `email_log` kinds that record
+    it. A person's own message, an invite in an account's own words, and texts
+    are left out, because their words are somebody's. `test:notices` requires
+    every entry to render from its sample and be tagged with its own key.
+  - **Every listed composer in `mail.js` is wrapped** (`notice(key, fn)`), and
+    the message it returns carries `notice: {kind, vars}`. `sendEmail` takes
+    that tag and applies what staff saved, so the change happens in one place.
+    Every call site passes it (`notice: mail.notice`, or a spread). Off is a
+    refusal, `notice_off`, which the caller logs like any other, so the mail
+    log says why nothing went. New words are templates over the composer's own
+    arguments: `{{firstName}}`, `{{account.name}}`, lists joined with commas.
+    A saved body rebuilds the HTML, logo included. The settings are read once
+    a minute per isolate, and a save clears that isolate's copy. **Without 104
+    every email goes out in its standard words.**
+  - **What cannot be done:** switch off an invite (`required_notice`), because
+    the email is the only way in; save an invite's body without `{{link}}`
+    (`link_required`); or use a value the email does not have
+    (`unknown_placeholder`, by name), because a sentence with a hole in it is
+    read and believed. **A work order keeps its "Sent via SubSub" line and
+    claim link under any saved words**, because the footer is not a setting.
+  - **The screen**: Notifications in the console's nav, for any staff member.
+    Each email is a row grouped by area, showing sent and failed in the last
+    30 days, Off, New words, or *Not in the mail log*. A row opens a window
+    with the last failure and its error, the on/off switch, subject and body
+    (*Start from the standard words* fills them), the values as chips, a live
+    preview with the sample, and **Send me a test**, which still sends while
+    the email is off. Only a superadmin changes anything; Save waits for a
+    change and a reason, every change is audited, and *Back to the standard
+    words* deletes the row. A standard staff member sees the same window with
+    nothing to change.
+  - **Two ways onto a roster emailed nobody, and now they do:** a contractor
+    accepting the account's connect request (`via: "connect"`), and a
+    contractor claiming a login from a work order (`via: "claim"`), through the
+    same `notifyRosterJoined` the form, invites and staff adds already use.
+  - **Not found: why T&V Sons' signup sent nothing.** The apply form and
+    invites both send `roster_joined` to every admin and pm whose email
+    setting is on, and log it. The screen now shows that kind's sends and
+    failures, so the next one is visible. A signup through `get-started.html`
+    is the sub's own account and lands on nobody's roster, so it emails no
+    account by design.
+  `test:notices` (97) and `test:noticesui` (23). Eight mutations fire, each on
+  its own assertion: saved words ignored, off ignored, an invite switched off,
+  the composers untagged, the connect email dropped, the work order footer
+  dropped, Save not waiting for a reason, and the invite switch enabled.
+  `test:claim` read the composer by its old `export function` name and now
+  reads the wrapped one. **Paste 104** before anything can be changed.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

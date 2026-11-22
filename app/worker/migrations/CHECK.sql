@@ -339,7 +339,9 @@ WITH spec(j) AS (SELECT
   -- 102. A form application waits for the account to accept or decline it.
   ',["m102_roster_applications","col","roster_applications",["engagement_id","account_id","company_id","state","applied_at","decided_at","decided_by"]]' ||
   -- 103. A message from the other side deleted for one person only.
-  ',["m103_message_hides","col","message_hides",["message_id","user_id","hidden_at"]]') ||
+  ',["m103_message_hides","col","message_hides",["message_id","user_id","hidden_at"]]' ||
+  -- 104. Staff's settings for each email SubSub sends: off, or new words.
+  ',["m104_notice_settings","col","notice_settings",["kind","enabled","subject","body","updated_at","updated_by"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

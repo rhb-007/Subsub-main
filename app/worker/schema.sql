@@ -2526,6 +2526,16 @@ CREATE TABLE IF NOT EXISTS message_hides (
 );
 CREATE INDEX IF NOT EXISTS ix_message_hides_user ON message_hides(user_id);
 
+-- 104. Staff's settings for each email SubSub sends.
+CREATE TABLE IF NOT EXISTS notice_settings (
+  kind        TEXT PRIMARY KEY,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  subject     TEXT,
+  body        TEXT,
+  updated_at  TEXT NOT NULL,
+  updated_by  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS message_reads (
   thread_id    TEXT NOT NULL REFERENCES message_threads(id) ON DELETE CASCADE,
   user_id      TEXT NOT NULL REFERENCES users(id),

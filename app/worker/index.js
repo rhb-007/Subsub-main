@@ -18,6 +18,9 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
   waiverRequestEmail, portalUrl, passportAccessRequestEmail, passportAccessDecisionEmail,
   licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail,
   agreementSentEmail, rosterJoinedEmail, docUploadedEmail } from "./mail.js";
+import * as MAIL from "./mail.js";
+import { NOTICES, noticeByKey, noticePlaceholders, unknownPlaceholders, renderNotice, noticeVars,
+  noticeNeedsLink, NOTICE_SUBJECT_MAX, NOTICE_BODY_MAX } from "../shared/notices.js";
 import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
 import { REMIND_AFTER_HOURS, ESCALATE_AFTER_HOURS, dueStep, itemKey, reminderLine,
   parseWhen, latestOf } from "../shared/remind.js";
@@ -1072,7 +1075,7 @@ async function notifyRosterJoined(env, { accountId, companyId, engagementId, via
       seen.add(key);
       const mail = rosterJoinedEmail({ firstName: String(u.name || "").split(" ")[0], account,
         companyName: co.company, contact: co.contact, via, kind: account.kind, link, pending });
-      const result = await sendEmail(env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+      const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
       await logMail(env, { accountId, companyId, to, kind: "roster_joined", subject: mail.subject, result, sentBy: null });
       if (result.ok) sent++;
     }
@@ -1122,7 +1125,7 @@ async function notifyDocUploaded(env, { companyId, kind, exceptAccountId = null,
         seen.add(key);
         const mail = docUploadedEmail({ firstName: String(u.name || "").split(" ")[0], companyName: co.company,
           kind: nk, label: docNotifyLabel(nk), link, licenseNumber });
-        const result = await sendEmail(env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+        const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
         await logMail(env, { accountId, companyId, to, kind: `doc_uploaded_${nk}`, subject: mail.subject, result, sentBy: null });
         if (result.ok) sent++;
       }
@@ -1767,7 +1770,7 @@ async function createApplication(env, account, body, note,
       companyName: body.company, contact: body.contact, account, pending,
       signInLink: `${accountOrigin(account)}/`,
     });
-    const result = await sendEmail(env, { to: body.email, subject: mail.subject,
+    const result = await sendEmail(env, { to: body.email, notice: mail.notice, subject: mail.subject,
       text: mail.text, html: mail.html });
     await logMail(env, { accountId: account.id, companyId, to: body.email,
       kind: "application_received", subject: mail.subject, result, sentBy: null });
@@ -3386,7 +3389,7 @@ async function deliverSubInvite(env, { row, account, accountId, userId, reason =
   if (email) {
     const mail = subInviteEmail({ contact: row.contact, companyName: row.company_name, account, link, known,
       quote: quoteInviteWords(reason) });
-    mailResult = await sendEmail(env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
+    mailResult = await sendEmail(env, { to: email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(env, { accountId, companyId: null, to: email, kind: "sub_invite",
       subject: mail.subject, result: mailResult, sentBy: userId });
   }
@@ -4396,6 +4399,10 @@ app.post("/api/claim/:token/verify", async (c) => {
     await logActivity(c.env, account.id, user.id, "sub_claimed",
       `${company.company} joined SubSub from ${wo.wo_number}`);
   }
+  // Told by email too: a contractor on the roster now has a login, so the
+  // work order they claimed from is answered by somebody. Not when the
+  // company already had one, because nothing new happened for this account.
+  if (!already) await notifyRosterJoined(c.env, { accountId: account.id, companyId: company.id, via: "claim" });
   return c.json({ ok: true, attributed, ...claimSessionReply(sess, account, user.id) });
 });
 
@@ -4839,7 +4846,7 @@ app.post("/api/referrals/invites", requireRole("admin", "pm", "contractor"), asy
       room--; sent++;
       const known = await c.env.DB.prepare(`SELECT 1 AS yes FROM users WHERE lower(email) = ?`).bind(to).first();
       if (known) continue;
-      const res = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, replyTo: me?.email || undefined });
+      const res = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, replyTo: me?.email || undefined });
       await logMail(c.env, { accountId: c.get("auth").accountId, companyId: who.companyId || null, to,
         kind: "referral_invite", subject: mail.subject, result: res, sentBy: userId }).catch(() => {});
       if (res?.ok) await c.env.DB.prepare(`UPDATE referral_invites SET emailed = 1 WHERE id = ?`).bind(id).run();
@@ -5782,7 +5789,7 @@ async function askToConnect(c, co, { via, message }) {
   const mail = connectRequestEmail({ account, company: co, message, link });
   let mailResult = null, smsResult = null;
   if (co.email) {
-    mailResult = await sendEmail(c.env, { to: co.email, subject: mail.subject, text: mail.text, html: mail.html });
+    mailResult = await sendEmail(c.env, { to: co.email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(c.env, { accountId, companyId: co.id, to: co.email, kind: "connect_request",
       subject: mail.subject, result: mailResult, sentBy: userId });
   }
@@ -6296,6 +6303,9 @@ app.post("/api/my-connect-requests/:id/respond", async (c) => {
   await logEvent(c.env, row.account_id, userId, "engagement.connected", engagementId, { companyId });
   await logActivity(c.env, row.account_id, null, "connect_accepted",
     `${await companyName(c.env.DB, companyId)} accepted the connection`);
+  // The asking account was told nothing by email: the dashboard row was the
+  // first anybody heard that the company they asked had said yes.
+  await notifyRosterJoined(c.env, { accountId: row.account_id, companyId, engagementId, via: "connect" });
   return c.json({ ok: true, status: "accepted", engagementId });
 });
 
@@ -6545,7 +6555,7 @@ async function inviteAccountUser(c, { accountId, user, role, invitedBy, welcome 
     link: userInviteUrl(account, token), welcome,
   });
   const link = userInviteUrl(account, token);
-  const result = await sendEmail(c.env, { to: email, subject: mail.subject, text: mail.text, html: mail.html });
+  const result = await sendEmail(c.env, { to: email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
   await logMail(c.env, { accountId, companyId: null, to: email, kind: "user_invite",
     subject: mail.subject, result, sentBy: invitedBy?.id || null });
 
@@ -7986,7 +7996,7 @@ app.post("/api/notices", requireRole("admin", "pm"), async (c) => {
       const m = buildingNoticeEmail({ firstName: String(t.name || "").split(" ")[0], account,
         propertyName: property.name, title: v.title, body: v.body, endsOn: v.endsOn,
         important: v.important, link });
-      const result = await sendEmail(c.env, { to, subject: m.subject, text: m.text, html: m.html });
+      const result = await sendEmail(c.env, { to, notice: m.notice, subject: m.subject, text: m.text, html: m.html });
       await logMail(c.env, { accountId: auth.accountId, to, kind: "building_notice",
         subject: m.subject, result, sentBy: auth.userId });
       if (result?.ok) emailed++; else notEmailed++;
@@ -9964,7 +9974,7 @@ app.post("/api/subs/:companyId/application", requireRole("admin", "pm"), async (
       const mail = applicationDecidedEmail({ contact: co.contact, companyName: co.company, account,
         accepted: decision === "accept", signInLink: `${accountOrigin(account)}/`,
         homeLink: home ? `${APP_ORIGIN}/` : null });
-      const result = await sendEmail(c.env, { to: to_, subject: mail.subject, text: mail.text, html: mail.html });
+      const result = await sendEmail(c.env, { to: to_, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
       await logMail(c.env, { accountId, companyId, to: to_, kind: `application_${state}`,
         subject: mail.subject, result, sentBy: userId });
       emailed = !!result?.ok;
@@ -10369,7 +10379,7 @@ async function issueTenantInvite(c, auth, t) {
           firstName: t.first || t.name, account: t.account,
           propertyName: t.property.name, unit: t.unit, link,
         });
-    const res = await sendEmail(c.env, { to: t.email, subject: mail.subject, text: mail.text, html: mail.html });
+    const res = await sendEmail(c.env, { to: t.email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     out.email = res.ok ? "sent" : (res.error || "failed");
     await logMail(c.env, { accountId: auth.accountId, to: t.email, kind: "tenant_invite",
       subject: mail.subject, result: res, sentBy: auth.userId });
@@ -10437,6 +10447,7 @@ export function missingSchema(err) {
   if (/\bthread_job_links\b/i.test(m)) return "082_thread_job_links";
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
+  if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
@@ -11788,7 +11799,7 @@ async function notifyTenant(c, jobId, stage, detail = null) {
     const sentBy = c.get("auth")?.userId ?? null;
     if (prefs.email && email) {
       const m = tenantStatusEmail({ firstName, account, title: job.title, stage, link, detail });
-      const result = await sendEmail(c.env, { to: email, subject: m.subject, text: m.text, html: m.html });
+      const result = await sendEmail(c.env, { to: email, notice: m.notice, subject: m.subject, text: m.text, html: m.html });
       await logMail(c.env, { accountId: job.account_id, to: email, kind: "tenant_status",
         subject: m.subject, result, sentBy });
     }
@@ -14160,7 +14171,7 @@ app.post("/api/jobs/:jobId/assign", requireRole("admin", "pm"), async (c) => {
       if (to) {
         const mail = workOrderIssuedEmail({ company: co, contact: co.contact, job, trade,
           woNumber, account, respondBy, claimLink });
-        const result = await sendEmail(c.env, { to, subject: mail.subject,
+        const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject,
           text: mail.text, html: mail.html });
         await logMail(c.env, { accountId, companyId, to, kind: "wo_issued",
           subject: mail.subject, result, sentBy: userId });
@@ -15222,7 +15233,7 @@ async function emailAgreement(c, row, { resend = false } = {}) {
   if (!to) return { to: null, emailed: false, error: "no_email_on_file" };
   const mail = agreementSentEmail({ company: co, contact: co.contact, account: acct,
     source: row.source, resend, issuedOn: row.issued_at });
-  const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+  const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
   await logMail(c.env, { accountId: row.account_id, companyId: row.company_id, to,
     kind: resend ? "agreement_resent" : "agreement_sent", subject: mail.subject, result,
     sentBy: c.get("auth")?.userId || null });
@@ -21910,7 +21921,7 @@ app.post("/api/my-passport/access/:id", requireRole("admin", "pm", "contractor")
   if ((mv.to === "approved" || mv.to === "declined") && req.requester_email) {
     const mail = passportAccessDecisionEmail({ firstName: String(req.requester_name || "").split(/\s+/)[0],
       companyName: co?.company, approved: mv.to === "approved", link: passportUrl(pp?.slug) || "https://app.subsub.work" });
-    const result = await sendEmail(c.env, { to: req.requester_email, subject: mail.subject, text: mail.text, html: mail.html });
+    const result = await sendEmail(c.env, { to: req.requester_email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(c.env, { accountId: req.account_id, companyId: who.companyId, to: req.requester_email,
       kind: "passport_access_decision", subject: mail.subject, result, sentBy: userId });
   }
@@ -22157,7 +22168,7 @@ app.post("/api/passport/:slug/access", requireRole("admin", "pm"), async (c) => 
     const link = "https://app.subsub.work/?open=passport";
     const mail = passportAccessRequestEmail({ company: co, contact: co.contact, accountName: who.acct.name,
       requesterName: me?.name, message, link });
-    const result = await sendEmail(c.env, { to: co.email, subject: mail.subject, text: mail.text, html: mail.html });
+    const result = await sendEmail(c.env, { to: co.email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(c.env, { accountId, companyId: who.row.company_id, to: co.email,
       kind: "passport_access_request", subject: mail.subject, result, sentBy: userId });
   }
@@ -22433,7 +22444,7 @@ async function docExpirySweep(env) {
         company: d, contact: d.contact, kind: d.kind, expiresOn: d.expires_on,
         daysOut: due, account, jobs: booked || [],
       });
-      const result = await sendEmail(env, { to: d.email, subject: mail.subject, text: mail.text, html: mail.html });
+      const result = await sendEmail(env, { to: d.email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
       await logMail(env, { accountId, companyId: d.company_id, to: d.email,
         kind: "doc_expiry", subject: mail.subject, result });
       if (result.ok) {
@@ -22521,7 +22532,7 @@ async function licenseReminderSweep(env) {
         daysOut: Math.max(0, daysBetween(today, expiresOn)),
         registry: st === "WA" ? "Washington L&I" : st ? `${stateName(st)}'s licensing board` : null,
         link: passportUrl(pp?.slug) || "https://app.subsub.work/?open=passport" });
-      const result = await sendEmail(env, { to: co.email, subject: mail.subject, text: mail.text, html: mail.html });
+      const result = await sendEmail(env, { to: co.email, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
       await logMail(env, { accountId: own?.id || null, companyId: co.id, to: co.email,
         kind: "license_expiry", subject: mail.subject, result });
       if (result.ok) {
@@ -22709,7 +22720,7 @@ async function emailMessageNow(env, thread, message, nowMs = Date.now()) {
         body: message.body, photoCount: (message.photos || []).length,
         link: `${accountOrigin(account)}/?open=inbox&thread=${thread.id}`, fromName: account?.name,
         canReply: !!token });
-      const result = await sendEmail(env, { to, subject: m.subject, text: m.text, html: m.html,
+      const result = await sendEmail(env, { to, notice: m.notice, subject: m.subject, text: m.text, html: m.html,
         ...(token ? { replyTo: replyAddress(token, domain) } : {}) });
       await logMail(env, { accountId: viewer.accountId, to, kind: "message", subject: m.subject, result });
       if (result?.ok) emailed++;
@@ -22937,7 +22948,7 @@ app.post("/api/inbound/resend", async (c) => {
     console.warn("[inbound] reply refused:", out.rejected);
     if (out.notify && out.to) {
       const m = messageReplyRefusedEmail(out.rejected);
-      await sendEmail(c.env, { to: out.to, subject: m.subject, text: m.text, html: m.html }).catch(() => null);
+      await sendEmail(c.env, { to: out.to, notice: m.notice, subject: m.subject, text: m.text, html: m.html }).catch(() => null);
     }
   }
   // Answered 200 whatever happened to the reply, so a refusal is not retried.
@@ -23007,7 +23018,7 @@ async function messageNotifySweep(env, nowMs = Date.now()) {
     const link = `${accountOrigin(account)}/?open=inbox${o.threads.length === 1 ? `&thread=${o.threads[0].id}` : ""}`;
     const m = messageNotifyEmail({ firstName: String(user.name || "").split(" ")[0], threads: o.threads,
       link, fromName: account?.name });
-    const result = await sendEmail(env, { to, subject: m.subject, text: m.text, html: m.html });
+    const result = await sendEmail(env, { to, notice: m.notice, subject: m.subject, text: m.text, html: m.html });
     await logMail(env, { accountId: o.accountId, to, kind: "message_notify", subject: m.subject, result });
     if (result?.ok) emailed++; else skipped++;
   }
@@ -23206,7 +23217,7 @@ async function actionReminderSweep(env, nowMs = Date.now()) {
   for (const p of people.values()) {
     const mail = actionReminderEmail({ firstName: String(p.name || "").split(" ")[0],
       lines: p.items.map((x) => x.line), link: `${accountOrigin(p.account)}/`, fromName: p.account.name });
-    const result = await sendEmail(env, { to: p.to, subject: mail.subject, text: mail.text, html: mail.html });
+    const result = await sendEmail(env, { to: p.to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(env, { accountId: p.account.id, to: p.to, kind: "action_reminder",
       subject: mail.subject, result, sentBy: null });
     if (result.ok) {
@@ -24376,7 +24387,7 @@ app.post("/api/jobs/:jobId/overflow", requireRole("admin", "pm"), async (c) => {
         split: overflowSplit(valueCents, OVERFLOW_FEE_BPS), expiresAt,
         scope: b.scope || "",
       });
-      const result = await sendEmail(c.env, { to: st.co.email, subject: mail.subject,
+      const result = await sendEmail(c.env, { to: st.co.email, notice: mail.notice, subject: mail.subject,
         text: mail.text, html: mail.html });
       await logMail(c.env, { accountId, companyId: cand.id, to: st.co.email,
         kind: "overflow_post", subject: mail.subject, result, sentBy: userId });
@@ -27161,6 +27172,182 @@ async function auditPlatform(env, staff, accountId, kind, text, meta) {
 }
 
 // ---------------------------------------------------------------------------
+// 104. Notifications: every email SubSub sends, on one console screen
+// ---------------------------------------------------------------------------
+// Staff can see each one, whether it is going out (sent and failed in the
+// last 30 days, read off email_log, and the last error), switch it off
+// product-wide, and replace its words. The list is shared/notices.js; the
+// standard words are the composers in mail.js, run on each notice's sample.
+// What staff saved is applied in sendEmail, so there is one place it happens.
+// Any staff may read; only a superadmin changes anything, with a reason, and
+// every change is audited.
+function noticeDefault(n) {
+  try {
+    const m = MAIL[n.composer](n.sample);
+    return { subject: m.subject, text: m.text };
+  } catch (err) {
+    return { subject: "", text: "", error: String(err?.message || err) };
+  }
+}
+
+app.get("/api/platform/notices", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  let saved = new Map();
+  try {
+    const { results } = await c.env.DB.prepare(
+      `SELECT n.kind, n.enabled, n.subject, n.body, n.updated_at, u.name AS updated_by_name
+         FROM notice_settings n LEFT JOIN users u ON u.id = n.updated_by`).all();
+    for (const r of results || []) saved.set(r.kind, r);
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    saved = null;
+  }
+  const kinds = [...new Set(NOTICES.flatMap((n) => n.logKinds))];
+  const counts = new Map();
+  if (kinds.length) {
+    const { results } = await c.env.DB.prepare(
+      `SELECT kind,
+              SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+              SUM(CASE WHEN status <> 'sent' AND COALESCE(error, '') NOT LIKE 'notice_off%' THEN 1 ELSE 0 END) AS failed,
+              SUM(CASE WHEN COALESCE(error, '') LIKE 'notice_off%' THEN 1 ELSE 0 END) AS off,
+              MAX(CASE WHEN status = 'sent' THEN at END) AS last_sent
+         FROM email_log
+        WHERE at >= datetime('now', '-30 days') AND kind IN (${kinds.map(() => "?").join(",")})
+        GROUP BY kind`).bind(...kinds).all();
+    for (const r of results || []) counts.set(r.kind, r);
+    for (const k of kinds) {
+      const last = await c.env.DB.prepare(
+        `SELECT error, at FROM email_log WHERE kind = ? AND status <> 'sent'
+           AND COALESCE(error, '') NOT LIKE 'notice_off%' ORDER BY at DESC LIMIT 1`).bind(k).first();
+      if (last && counts.has(k)) counts.get(k).last_error = last;
+    }
+  }
+  const stamp = (t) => (t ? `${String(t).replace(" ", "T")}${/Z$|[+-]\d\d:?\d\d$/.test(t) ? "" : "Z"}` : null);
+  const notices = NOTICES.map((n) => {
+    const row = saved?.get(n.key) || null;
+    let sent = 0, failed = 0, off = 0, lastSent = null, lastError = null;
+    for (const k of n.logKinds) {
+      const r = counts.get(k);
+      if (!r) continue;
+      sent += r.sent || 0; failed += r.failed || 0; off += r.off || 0;
+      if (r.last_sent && (!lastSent || r.last_sent > lastSent)) lastSent = r.last_sent;
+      if (r.last_error && (!lastError || r.last_error.at > lastError.at)) lastError = r.last_error;
+    }
+    return {
+      key: n.key, label: n.label, group: n.group, audience: n.audience, when: n.when,
+      required: !!n.required, recorded: n.logKinds.length > 0,
+      placeholders: noticePlaceholders(n.key), sampleVars: noticeVars(n.sample),
+      standard: noticeDefault(n),
+      enabled: row ? row.enabled !== 0 : true,
+      subject: row?.subject || null, body: row?.body || null,
+      updatedAt: stamp(row?.updated_at), updatedBy: row?.updated_by_name || null,
+      last30: { sent, failed, off, lastSent: stamp(lastSent),
+        lastError: lastError ? { error: lastError.error, at: stamp(lastError.at) } : null },
+    };
+  });
+  return c.json({ notices, migrated: saved !== null,
+    mailConfigured: !!(c.env.RESEND_API_KEY && c.env.MAIL_FROM) });
+});
+
+// The words a template would produce, with the sample. Nothing is saved.
+app.post("/api/platform/notices/:key/preview", async (c) => {
+  const { error } = await requireStaff(c);
+  if (error) return error;
+  const n = noticeByKey(c.req.param("key"));
+  if (!n) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const std = noticeDefault(n);
+  const vars = noticeVars(n.sample);
+  const bad = unknownPlaceholders(n.key, b.subject, b.body);
+  return c.json({
+    subject: b.subject ? renderNotice(b.subject, vars) : std.subject,
+    text: b.body ? renderNotice(b.body, vars) : std.text,
+    unknown: bad,
+  });
+});
+
+app.put("/api/platform/notices/:key", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  const n = noticeByKey(c.req.param("key"));
+  if (!n) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const reason = String(b.reason || "").trim().slice(0, 300);
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+  const enabled = b.enabled === false ? 0 : 1;
+  if (!enabled && n.required) return c.json({ error: "required_notice" }, 409);
+  const subject = String(b.subject || "").trim() || null;
+  const body = String(b.body || "").replace(/\r\n/g, "\n").trim() || null;
+  if (subject && subject.length > NOTICE_SUBJECT_MAX) return c.json({ error: "subject_too_long", max: NOTICE_SUBJECT_MAX }, 400);
+  if (body && body.length > NOTICE_BODY_MAX) return c.json({ error: "body_too_long", max: NOTICE_BODY_MAX }, 400);
+  const unknown = unknownPlaceholders(n.key, subject, body);
+  if (unknown.length) return c.json({ error: "unknown_placeholder", unknown }, 400);
+  if (body && noticeNeedsLink(n.key) && !/\{\{\s*link\s*\}\}/.test(body)) {
+    return c.json({ error: "link_required" }, 400);
+  }
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO notice_settings (kind, enabled, subject, body, updated_at, updated_by)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(kind) DO UPDATE SET enabled = excluded.enabled, subject = excluded.subject,
+         body = excluded.body, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+      .bind(n.key, enabled, subject, body, new Date().toISOString(), staff.userId).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "104_notice_settings" }, 503);
+    throw err;
+  }
+  MAIL.forgetNoticeSettings();
+  await auditPlatform(c.env, staff, null, "notice_changed",
+    `${staff.name} changed the "${n.label}" email (${enabled ? "on" : "off"}${subject || body ? ", new words" : ""}): ${reason}`,
+    { key: n.key, enabled: !!enabled, subject, body, reason });
+  return c.json({ ok: true, key: n.key, enabled: !!enabled, subject, body });
+});
+
+app.delete("/api/platform/notices/:key", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const denied = requireSuperadmin(c, staff);
+  if (denied) return denied;
+  const n = noticeByKey(c.req.param("key"));
+  if (!n) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  const reason = String(b.reason || "").trim().slice(0, 300);
+  if (!reason) return c.json({ error: "reason_required" }, 400);
+  try {
+    await c.env.DB.prepare(`DELETE FROM notice_settings WHERE kind = ?`).bind(n.key).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ ok: true, key: n.key, reset: true });
+    throw err;
+  }
+  MAIL.forgetNoticeSettings();
+  await auditPlatform(c.env, staff, null, "notice_reset",
+    `${staff.name} put the "${n.label}" email back to the standard words: ${reason}`, { key: n.key, reason });
+  return c.json({ ok: true, key: n.key, reset: true });
+});
+
+// A copy to the staff member pressing it, with the sample and the words as
+// they would be sent. Sent even when the notice is off, because checking the
+// words before switching it back on is exactly when somebody wants one.
+app.post("/api/platform/notices/:key/test", async (c) => {
+  const { error, staff } = await requireStaff(c);
+  if (error) return error;
+  const n = noticeByKey(c.req.param("key"));
+  if (!n) return c.json({ error: "not_found" }, 404);
+  if (!realEmail(staff.email)) return c.json({ error: "no_email" }, 400);
+  const b = await c.req.json().catch(() => ({}));
+  const std = noticeDefault(n);
+  const vars = noticeVars(n.sample);
+  const subject = `[Test] ${b.subject ? renderNotice(b.subject, vars) : std.subject}`;
+  const text = b.body ? renderNotice(b.body, vars) : std.text;
+  const result = await sendEmail(c.env, { to: staff.email, subject, text, html: MAIL.brandedHtml(text, vars.link || null) });
+  if (!result.ok) return c.json({ error: result.error, detail: result.detail || null }, 502);
+  return c.json({ ok: true, to: staff.email });
+});
+
+// ---------------------------------------------------------------------------
 // 099. A second business on one login
 // ---------------------------------------------------------------------------
 // A general contractor that also manages buildings is two businesses, kept as
@@ -29083,7 +29270,7 @@ app.post("/api/notify/documents", requireRole("admin", "pm"), async (c) => {
   // The same function the preview used, so what was reviewed on screen is what
   // goes out -- including which of the two mails it is.
   const { mail, template } = docMailFor(ctx);
-  const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+  const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
   // Logged under its own kind, because "we told them what was wrong with their
   // certificate" and "we asked them for documents" are different events and the
   // console counts both.
@@ -29152,7 +29339,7 @@ app.post("/api/notify/auto-schedule", requireRole("admin", "pm"), async (c) => {
 
   const note = String(b.note || "").trim().slice(0, 400);
   const mail = autoScheduleRequestEmail({ ...ctx, note });
-  const result = await sendEmail(c.env, { to, subject: mail.subject, text: mail.text, html: mail.html });
+  const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
   await logMail(c.env, { accountId, companyId: ctx.company.id, to, kind: "auto_schedule_request",
     subject: mail.subject, result, sentBy: userId });
 

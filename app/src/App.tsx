@@ -11055,6 +11055,8 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
     // 075. Referrals: the acquisition metric any staff member reads, and the
     // ledger only finance can move.
     ["referrals", "Referrals", Gift],
+    // 104. Every email SubSub sends. Any staff reads it; a superadmin edits.
+    ["notifications", "Notifications", Bell],
     ...(isSuper ? [["health", "Health", Activity]] : []),
   ];
   const [navOpen, setNavOpen] = useState(false);
@@ -12416,6 +12418,7 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
 
         {/* ===== HEALTH ===== */}
         {screen === "referrals" && !openId && <PlatformReferrals admin={admin} />}
+        {screen === "notifications" && !openId && <PlatformNotices admin={admin} />}
 
         {screen === "health" && !openId && isSuper && (
           <>
@@ -31407,6 +31410,229 @@ function ReferScreen({ fromName }) {
 // referrers. Money moves only with finance access -- approve, then mark paid
 // with a reference; void with a reason -- and the buttons are not drawn for
 // anybody the route would refuse.
+// ---- 104. Notifications ---------------------------------------------------
+// Every email SubSub sends on its own, on one console screen: whether it is
+// going out (sent and failed in the last 30 days, and the last error), off
+// product-wide, or in new words. Any staff member reads it; only a superadmin
+// changes anything, with a reason. Each person's own email setting in My
+// account still decides whether they get it at all.
+const NOTICE_ERR = {
+  reason_required: "Say why you're changing it.",
+  required_notice: "This one can't be switched off: it is the only way the person gets in.",
+  link_required: "Keep {{link}} in the body: it is the only way the person gets in.",
+  subject_too_long: "That subject is too long.",
+  body_too_long: "That body is too long.",
+  migration_needed: "Paste migration 104 first.",
+  forbidden: "Only a superadmin can change notifications.",
+  mail_not_configured: "Mail isn't configured, so nothing can be sent.",
+  no_email: "Your staff login has no email address to send the test to.",
+};
+const noticeErrText = (e) => {
+  const code = e?.body?.error;
+  if (code === "unknown_placeholder") return `These aren't values this email has: ${(e.body.unknown || []).map((x) => `{{${x}}}`).join(", ")}.`;
+  return NOTICE_ERR[code] || (code ? `That didn't work (${code}).` : "That didn't work. Try again.");
+};
+function PlatformNotices({ admin }) {
+  const [data, setData] = useState(null);
+  const [q, setQ] = useState("");
+  const [group, setGroup] = useState("");
+  const [state, setState] = useState("");
+  const [openKey, setOpenKey] = useState(null);
+  const load = useCallback(() => {
+    api.platform.notices().then(setData).catch(() => setData({ notices: [], failed: true }));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  const all = data?.notices || [];
+  const groups = [...new Set(all.map((n) => n.group))];
+  const rows = all.filter((n) => (!group || n.group === group)
+    && (!state || (state === "off" ? !n.enabled : state === "edited" ? !!(n.subject || n.body)
+      : state === "failing" ? n.last30.failed > 0 : true))
+    && matchesQuery(q, n.label, n.audience, n.when, n.key));
+  const open = all.find((n) => n.key === openKey) || null;
+  return (
+    <>
+      <div className="pf-head"><div><h2>Notifications</h2>
+        <p className="pf-sub">Every email SubSub sends on its own. Switch one off for every account, or change its words. Each person still picks their own email settings in My account.</p></div></div>
+      {data?.failed && <div className="pf-panel pf-warn-panel">Couldn't load notifications. <a onClick={load}>Try again</a></div>}
+      {data && !data.failed && !data.mailConfigured && (
+        <div className="pf-panel pf-warn-panel" data-notice-mailoff><AlertTriangle size={14} /> Mail isn't configured on the API, so no email is going out at all.</div>
+      )}
+      {data && !data.failed && !data.migrated && (
+        <div className="pf-panel pf-note-panel" data-notice-unmigrated>Paste migration 104 before anything here can be changed. Every email is going out in its standard words.</div>
+      )}
+      <FilterBar q={q} onQ={setQ} placeholder="Search notifications…" shown={rows.length} total={all.length}
+        onClear={() => { setQ(""); setGroup(""); setState(""); }}
+        filters={[
+          { id: "group", label: "Areas", value: group, onChange: setGroup, options: groups.map((g) => [g, g]) },
+          { id: "state", label: "States", value: state, onChange: setState,
+            options: [["off", "Switched off"], ["edited", "New words"], ["failing", "Failures in 30 days"]] },
+        ]} />
+      {!data && <p className="pf-note">Loading…</p>}
+      {groups.filter((g) => rows.some((n) => n.group === g)).map((g) => (
+        <section key={g} className="pf-notice-group">
+          <h3 className="pf-notice-h">{g}</h3>
+          <div className="pf-rows">
+            {rows.filter((n) => n.group === g).map((n) => (
+              <button type="button" key={n.key} data-notice={n.key}
+                className={`pf-row ${n.enabled ? "" : "muted"} ${n.last30.failed ? "warn" : ""}`}
+                onClick={() => setOpenKey(n.key)}>
+                <span className="pf-row-name"><b>{n.label}</b><span className="pf-sub">{n.audience}</span></span>
+                <span className="pf-row-tags">
+                  {!n.enabled && <span className="pf-status canceled" data-tag="off">Off</span>}
+                  {(n.subject || n.body) && <span className="pf-comp-tag" data-tag="edited">New words</span>}
+                  {n.required && <span className="pf-sub">Always sent</span>}
+                </span>
+                <span className="pf-row-figs">
+                  {n.recorded ? (
+                    <>
+                      <span><b>{n.last30.sent}</b> sent</span>
+                      <span className={n.last30.failed ? "pf-fig-bad" : ""}><b>{n.last30.failed}</b> failed</span>
+                    </>
+                  ) : <span className="pf-sub">Not in the mail log</span>}
+                </span>
+                <ChevronRight size={16} className="pf-row-chev" />
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+      {open && <NoticeEditor n={open} canEdit={admin.role === "superadmin"} migrated={data?.migrated}
+        onClose={() => setOpenKey(null)} onSaved={load} />}
+    </>
+  );
+}
+
+function NoticeEditor({ n, canEdit, migrated, onClose, onSaved }) {
+  const [enabled, setEnabled] = useState(n.enabled);
+  const [subject, setSubject] = useState(n.subject || "");
+  const [body, setBody] = useState(n.body || "");
+  const [reason, setReason] = useState("");
+  const [preview, setPreview] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const bodyRef = useRef(null);
+  const dirty = enabled !== n.enabled || subject.trim() !== (n.subject || "") || body.trim() !== (n.body || "");
+  const fmtAt = (t) => (t ? new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(() => {
+      api.platform.noticePreview(n.key, { subject, body })
+        .then((p) => { if (live) setPreview(p); }).catch(() => { if (live) setPreview(null); });
+    }, 300);
+    return () => { live = false; clearTimeout(t); };
+  }, [n.key, subject, body]);
+  const insert = (ph) => {
+    const tok = `{{${ph}}}`;
+    const el = bodyRef.current;
+    if (!el) { setBody((b) => b + tok); return; }
+    const at = el.selectionStart ?? body.length;
+    setBody(body.slice(0, at) + tok + body.slice(el.selectionEnd ?? at));
+  };
+  const run = async (what, fn) => {
+    setBusy(what); setErr(""); setMsg("");
+    try { await fn(); } catch (e) { setErr(noticeErrText(e)); } finally { setBusy(""); }
+  };
+  const save = () => run("save", async () => {
+    await api.platform.saveNotice(n.key, { enabled, subject, body, reason });
+    setReason(""); setMsg("Saved. It applies to the next one sent."); onSaved();
+  });
+  const reset = () => run("reset", async () => {
+    await api.platform.resetNotice(n.key, reason);
+    setSubject(""); setBody(""); setEnabled(true); setReason("");
+    setMsg("Back to the standard words, switched on."); onSaved();
+  });
+  const test = () => run("test", async () => {
+    const r = await api.platform.testNotice(n.key, { subject, body });
+    setMsg(`Test sent to ${r.to}.`);
+  });
+  const l = n.last30;
+  return (
+    <Modal wide className="notice-modal" onClose={onClose}>
+      <div className="pf-head"><div><h2>{n.label}</h2>
+        <p className="pf-sub">To: {n.audience}. Sent when: {n.when}</p></div></div>
+      <p className="notice-stats" data-notice-stats>
+        {n.recorded
+          ? <>Last 30 days: <b>{l.sent}</b> sent{l.lastSent ? `, last ${fmtAt(l.lastSent)}` : ""} · <b className={l.failed ? "pf-fig-bad" : ""}>{l.failed}</b> failed{l.off ? ` · ${l.off} not sent because it was off` : ""}</>
+          : "This email isn't recorded in the mail log, so there is no count to show."}
+      </p>
+      {l.lastError && <p className="notice-err" data-notice-lasterr><AlertTriangle size={13} /> Last failure {fmtAt(l.lastError.at)}: {l.lastError.error}</p>}
+      {n.updatedAt && <p className="pf-sub">Last changed {fmtAt(n.updatedAt)}{n.updatedBy ? ` by ${n.updatedBy}` : ""}.</p>}
+      {!canEdit && <p className="pf-note" data-notice-readonly>Only a superadmin can change notifications.</p>}
+
+      <label className="notice-switch">
+        <input type="checkbox" checked={enabled} disabled={!canEdit || n.required}
+          onChange={(e) => setEnabled(e.target.checked)} />
+        <span><b>Send this email</b>{n.required
+          ? <span className="pf-sub"> Always sent: it carries the only way in.</span>
+          : !enabled ? <span className="pf-sub"> Off for every account. The mail log will say it was off.</span> : null}</span>
+      </label>
+
+      <div className="notice-grid">
+        <div className="notice-edit">
+          <label className="fld">Subject
+            <input value={subject} disabled={!canEdit} placeholder={n.standard.subject}
+              onChange={(e) => setSubject(e.target.value)} />
+            <span className="fld-note">Blank keeps the standard subject.</span>
+          </label>
+          <label className="fld">Body
+            <textarea ref={bodyRef} rows={12} value={body} disabled={!canEdit}
+              placeholder="Blank keeps the standard words. Press Start from the standard words to edit them."
+              onChange={(e) => setBody(e.target.value)} />
+          </label>
+          {canEdit && (
+            <div className="notice-tools">
+              <button type="button" className="btn-ghost" data-notice-start
+                onClick={() => { setBody(n.standard.text); if (!subject) setSubject(n.standard.subject); }}>
+                Start from the standard words</button>
+            </div>
+          )}
+          <div className="notice-ph">
+            <span className="pf-sub">Values you can use (tap to add):</span>
+            <div className="notice-ph-list">
+              {n.placeholders.map((ph) => (
+                <button type="button" key={ph} className="chip" disabled={!canEdit} title={n.sampleVars[ph] || ""}
+                  onClick={() => insert(ph)}>{`{{${ph}}}`}</button>
+              ))}
+            </div>
+            <span className="fld-note">The standard words change with the situation (an invite versus an application, a document still missing). Your words are the same every time, with these values filled in.</span>
+          </div>
+        </div>
+        <div className="notice-preview" data-notice-preview>
+          <div className="pf-sub">Preview, with sample values</div>
+          {preview?.unknown?.length > 0 && (
+            <p className="notice-err">Not values this email has: {preview.unknown.map((x) => `{{${x}}}`).join(", ")}</p>
+          )}
+          <div className="notice-prev-subj"><b>{preview?.subject ?? n.standard.subject}</b></div>
+          <pre className="notice-prev-body">{preview?.text ?? n.standard.text}</pre>
+        </div>
+      </div>
+
+      {canEdit && (
+        <div className="notice-foot">
+          <label className="fld">Why are you changing it?
+            <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Required, kept in the audit log" />
+          </label>
+          {err && <div className="login-err" role="alert"><AlertTriangle size={13} /> {err}</div>}
+          {msg && <div className="login-ok" role="status">{msg}</div>}
+          <div className="notice-acts">
+            <button className="btn-solid" disabled={!dirty || !reason.trim() || !!busy || migrated === false}
+              onClick={save} data-notice-save>{busy === "save" ? "Saving…" : "Save"}</button>
+            <button className="btn-ghost" disabled={!!busy} onClick={test} data-notice-test>
+              <Send size={14} /> {busy === "test" ? "Sending…" : "Send me a test"}</button>
+            {(n.subject || n.body || !n.enabled) && (
+              <button className="btn-ghost" disabled={!reason.trim() || !!busy} onClick={reset} data-notice-reset>
+                <RotateCcw size={14} /> Back to the standard words</button>
+            )}
+          </div>
+          {!dirty && !msg && <p className="pf-sub">Change something above to save it.</p>}
+          {dirty && !reason.trim() && <p className="pf-sub">Say why before saving.</p>}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function PlatformReferrals({ admin }) {
   const [data, setData] = useState(null);
   const [acq, setAcq] = useState(null);
@@ -51755,6 +51981,27 @@ iframe.dv-frame{display:block}
 .pf-note{font-size:12.5px;color:var(--ink-soft);margin:10px 0 0;line-height:1.5}
 .pf-act{font-size:13.5px;margin:6px 0;line-height:1.5}
 .pf-panel{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin-top:16px}
+.pf-notice-group{margin-top:20px}
+.pf-notice-h{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-soft);margin:0 0 8px}
+.pf-fig-bad{color:var(--red)}
+.pf-warn-panel{border-color:var(--amber);background:color-mix(in srgb,var(--amber) 10%,var(--card));display:flex;gap:8px;align-items:center}
+.pf-note-panel{background:var(--paper)}
+.notice-modal .pf-head{margin-bottom:6px}
+.notice-stats{margin:4px 0;font-size:14px}
+.notice-err{color:var(--red);font-size:13px;display:flex;gap:6px;align-items:center;margin:6px 0}
+.notice-switch{display:flex;gap:10px;align-items:flex-start;margin:14px 0;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.notice-switch input{width:20px;height:20px;margin-top:1px;flex:none}
+.notice-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.notice-edit textarea{width:100%;min-height:220px;font:14px/1.5 inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
+.notice-tools{margin:6px 0 10px}
+.notice-ph-list{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.notice-ph-list .chip{font:12px ui-monospace,Menlo,monospace}
+.notice-preview{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--paper);min-width:0}
+.notice-prev-subj{margin:8px 0;font-size:14px;overflow-wrap:anywhere}
+.notice-prev-body{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.55 inherit;margin:0;max-height:420px;overflow:auto}
+.notice-foot{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
+.notice-acts{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+@media (max-width:760px){.notice-grid{grid-template-columns:1fr}}
 /* A folded log. Shut, it is a row you read past; open, an ordinary panel.
    The three at the bottom of the account drawer all grow forever, and open
    by default they pushed the plan and the seats -- the things somebody came

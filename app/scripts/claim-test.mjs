@@ -450,7 +450,7 @@ try {
   {
     // Nothing reads a plan, a flag or a brand before drawing it. A Scale
     // account is white-labelled; that changes colours, never this line.
-    const fns = [MAIL.match(/export function workOrderIssuedEmail[\s\S]{0,2500}?\n}/)?.[0] || "",
+    const fns = [MAIL.match(/function workOrderIssuedEmailRaw[\s\S]{0,2500}?\n}/)?.[0] || "",
       MAIL.match(/export function workOrderIssuedSms[\s\S]{0,1200}?\n}/)?.[0] || ""];
     ck("both senders append it unconditionally",
       /footerText\(claimLink\)/.test(fns[0]) && /footerSms\(claimLink\)/.test(fns[1]));

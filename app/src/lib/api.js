@@ -1060,6 +1060,16 @@ export const api = {
     attribution: (id) => request(`/platform/accounts/${encodeURIComponent(id)}/attribution`),
     // 075. The referral ledger, the referrers, and new hiring accounts per
     // existing one by week and metro. Moving a reward is finance access only.
+    // 104. Every email SubSub sends: whether it is going out, off, new words.
+    notices: () => request("/platform/notices"),
+    noticePreview: (key, body) =>
+      request(`/platform/notices/${encodeURIComponent(key)}/preview`, { method: "POST", body: JSON.stringify(body) }),
+    saveNotice: (key, body) =>
+      request(`/platform/notices/${encodeURIComponent(key)}`, { method: "PUT", body: JSON.stringify(body) }),
+    resetNotice: (key, reason) =>
+      request(`/platform/notices/${encodeURIComponent(key)}`, { method: "DELETE", body: JSON.stringify({ reason }) }),
+    testNotice: (key, body) =>
+      request(`/platform/notices/${encodeURIComponent(key)}/test`, { method: "POST", body: JSON.stringify(body) }),
     referrals: () => request("/platform/referrals"),
     referralAcquisition: (weeks = 12) => request(`/platform/referrals/acquisition?weeks=${weeks}`),
     rewardAction: (id, body) =>
