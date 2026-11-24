@@ -341,7 +341,8 @@
     "test:unclaimed": "node scripts/unclaimed-test.mjs",
     "test:hostnamesweep": "node --no-warnings scripts/hostname-sweep-test.mjs",
     "test:docreqlogin": "node --no-warnings scripts/doc-request-login-test.mjs",
-    "test:myagrui": "node --no-warnings scripts/my-agreements-ui-test.mjs"
+    "test:myagrui": "node --no-warnings scripts/my-agreements-ui-test.mjs",
+    "test:sitesecurity": "node --no-warnings scripts/site-security-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

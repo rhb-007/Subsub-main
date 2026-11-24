@@ -16761,6 +16761,30 @@ refactor.
   the button on their own record fails one assertion, and not redrawing after
   the save fails two.
 
+- **SUBSUB.WORK FORCES HTTPS AND SENDS HSTS, BECAUSE A STATIC SITE SERVED
+  "AS ASKED" ANSWERS PLAIN HTTP.** Reported as *"make subsub.work secure,
+  currently it's not"*. The pages themselves were clean (no `http://` script,
+  image or form anywhere but the localhost API fallback), so the "Not secure" a
+  browser drew was the connection: the site was an assets-only Worker with no
+  redirect and no HSTS. `site-worker.js` at the root is now the site's `main`,
+  with `run_worker_first`, and the files still come through the `ASSETS`
+  binding, filtered by `.assetsignore` (which names no `.js`, so the Worker is
+  never published). It sends plain HTTP to the same page over HTTPS with a 301,
+  sends `www.subsub.work` to `subsub.work`, and puts HSTS (one year) plus
+  `nosniff`, a referrer policy, `X-Frame-Options`, a Permissions-Policy and a
+  CSP of `upgrade-insecure-requests; frame-ancestors 'self'` on every answer.
+  **HSTS has no `includeSubDomains` and no `preload`**, deliberately: both are
+  promises about hosts this file does not serve, and a preload is close to
+  impossible to take back. **The CSP names no script sources**, because a wrong
+  script policy blanks pages silently and this site loads the Google tag, Cal
+  and inline scripts. `test:sitesecurity` (22) drives the Worker, and
+  `deploy-site.yml` now asks the live site over HTTP for a redirect and over
+  HTTPS for HSTS after every deploy. Dropping the HTTP redirect fails three.
+  **Not verified here:** the live site, which this environment cannot reach;
+  the deploy's own check is the test. Turning on Cloudflare's *Always Use
+  HTTPS* for the zone is a belt-and-braces setting on top of this, not needed
+  for it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

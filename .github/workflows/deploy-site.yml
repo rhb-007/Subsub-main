@@ -48,6 +48,8 @@ on:
       - "check/**"
       - "handyman-limits/**"
       - "wrangler.jsonc"
+      - "site-worker.js"
+      - "app/scripts/site-security-test.mjs"
       - ".assetsignore"
       - "app/scripts/site-assets-test.mjs"
       - ".github/workflows/deploy-site.yml"
@@ -100,6 +102,11 @@ jobs:
         working-directory: app
         run: npm run test:siteassets
 
+      # The front door: HTTP and www redirected, HSTS and headers on every page.
+      - name: The site's front door
+        working-directory: app
+        run: npm run test:sitesecurity
+
       # The site's own static checks: every link resolves, the footer is on
       # every page, the structured data matches what a reader sees.
       - name: The site's own checks
@@ -151,6 +158,29 @@ jobs:
             exit 1
           fi
           echo "subsub.work serves the site and keeps the repository private."
+
+      # "Not secure" is what a browser draws when the site answers over plain
+      # HTTP. So the live site is asked over HTTP and must redirect to HTTPS,
+      # and over HTTPS it must carry HSTS. Retried, like the step above.
+      - name: The live site forces HTTPS
+        if: steps.creds.outputs.ready == 'true'
+        run: |
+          ok=0
+          for i in 1 2 3 4 5 6; do
+            loc=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 15 "http://subsub.work/pricing")
+            hsts=$(curl -sI --max-time 15 "https://subsub.work/" | grep -i '^strict-transport-security:' | tr -d '\r')
+            echo "try $i: http://subsub.work/pricing -> $loc; $hsts"
+            case "$loc" in 301\ https://subsub.work/pricing*|308\ https://subsub.work/pricing*) redir=1 ;; *) redir=0 ;; esac
+            if [ "$redir" = "1" ] && [ -n "$hsts" ]; then ok=1; break; fi
+            sleep 10
+          done
+          if [ "$ok" != "1" ]; then
+            echo "::error::subsub.work does not force HTTPS (got '$loc', HSTS '$hsts')."
+            exit 1
+          fi
+          www=$(curl -s -o /dev/null -w "%{http_code} %{redirect_url}" --max-time 15 "https://www.subsub.work/" || true)
+          echo "https://www.subsub.work/ -> $www (only checked, not required: www may have no DNS record)"
+          echo "subsub.work redirects HTTP to HTTPS and sends HSTS."
 
       # The Google tag is in every page in the repository (test:discover), but
       # only the live page says whether it reached subsub.work: a deploy that

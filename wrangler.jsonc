@@ -1,7 +1,14 @@
 {
   "name": "subsub-main",
   "compatibility_date": "2026-09-17",
+  // site-worker.js answers first: plain HTTP and www are redirected, and every
+  // page gets HSTS and the security headers. The files themselves still come
+  // from the repository root through the ASSETS binding, filtered by
+  // .assetsignore.
+  "main": "site-worker.js",
   "assets": {
-    "directory": "./"
+    "directory": "./",
+    "binding": "ASSETS",
+    "run_worker_first": true
   }
 }
