@@ -249,6 +249,7 @@ export default {
   "more below.": "más abajo.",
   " — ask the office when they want you.": " — pregunte a la oficina cuándo lo necesitan.",
   "Jobs": "Trabajos",
+  "Workbench": "Mesa de trabajo",
   "Action needed.": "Se necesita acción.",
   "You can't be assigned jobs until you upload:": "No le pueden asignar trabajos hasta que suba:",
   "Your": "Su",

@@ -7023,7 +7023,7 @@ export default function SubSub() {
           <div className="ws-switch" role="tablist" aria-label="Workspace">
             <button role="tab" data-ws="jobs" aria-selected={!crmWs} className={!crmWs ? "on" : ""}
               onClick={() => { if (crmWs) setTab(lastJobsTab.current || "dashboard"); }}>
-              <Briefcase size={16} /> {tt("Jobs")}
+              <Briefcase size={16} /> {tt("Workbench")}
             </button>
             <button role="tab" data-ws="crm" aria-selected={crmWs} className={crmWs ? "on" : ""}
               onClick={() => { if (!crmWs) { setCrmPane("dashboard"); setTab("appointments"); } }}>

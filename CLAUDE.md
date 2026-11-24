@@ -16980,8 +16980,9 @@ refactor.
   calendar of appointments and a call-center dashboard where a lead is made
   first and booked second. Migration 107 (`sales_leads`, `sales_lead_links`),
   `app/shared/leads.js`.
-  - **A switch above the nav, Jobs | CRM** (`.ws-switch`), for a seat that has
-    both. Jobs is everything that was there; CRM swaps the menu for its own
+  - **A switch above the nav, Workbench | CRM** (`.ws-switch`), for a seat
+    that has both. It said *Jobs* until the owner renamed it, because the Jobs
+    nav entry under it said the same word. Workbench is everything that was there; CRM swaps the menu for its own
     pages: Dashboard, Leads, Appointments, Calendar, Follow-ups. The tab id is
     still `appointments`, because the call-center role and its allowlist name
     it. Switching back returns to the last Jobs page. A call-center seat has

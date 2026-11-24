@@ -406,6 +406,8 @@ try {
       && !nav.some((l) => /^(CRM \/ Sales|Leads|Appointments|Follow-ups)$/.test(l)), nav.join(" | "));
     const ws = await page.evaluate(() => [...document.querySelectorAll(".ws-switch [data-ws]")].map((b) => `${b.dataset.ws}:${b.getAttribute("aria-selected")}`));
     t.ck("a Jobs / CRM switch, on Jobs", ws.join() === "jobs:true,crm:false", ws.join());
+    const wsText = await page.evaluate(() => [...document.querySelectorAll(".ws-switch [data-ws]")].map((b) => b.textContent.trim()));
+    t.ck("the switch reads Workbench | CRM", wsText.join("|") === "Workbench|CRM", wsText.join("|"));
     await click(page, '[data-ws="crm"]');
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-crm-dash]")) break; }
     const crmNav = await navLabels(page);
