@@ -16968,6 +16968,8 @@ refactor.
   **Not verified:** the consent wording has not been read by a lawyer. **Still
   open:** a live dialer and recording, texting homeowners, and showing
   follow-ups due on the nav.
+  **106 is pasted on the live database** (30 columns across the two tables,
+  confirmed by the owner).
 
 ## Working here
 
