@@ -17069,7 +17069,7 @@ refactor.
     events carry, and that the busy check covers sales appointments.
   `test:gcalsales` (54), `test:gcalui` (35), `test:salesapptui` (81). Twelve
   mutations fire, each on its own assertion. **Not verified here:** a live
-  Google round trip. **Paste 108** before the sales calendar works.
+  Google round trip. **108 is pasted on the live database** (5 and 5 columns, confirmed by the owner).
 
 ## Working here
 
