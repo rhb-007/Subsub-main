@@ -16865,7 +16865,7 @@ refactor.
   for every decision maker to be there when there is a second person. Only
   when an address was given and the box is left ticked.
 
-  `test:appointments` (55) and `test:appointmentsui` (36). The mutations fire:
+  `test:salesappt` (55) and `test:salesapptui` (36). The mutations fire:
   - the call center allowed an outcome: 3 server, 1 browser;
   - converting twice: 2;
   - the clash check: 1;
