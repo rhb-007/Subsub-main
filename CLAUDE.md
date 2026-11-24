@@ -16744,7 +16744,7 @@ refactor.
   the composers untagged, the connect email dropped, the work order footer
   dropped, Save not waiting for a reason, and the invite switch enabled.
   `test:claim` read the composer by its old `export function` name and now
-  reads the wrapped one. **Paste 104** before anything can be changed.
+  reads the wrapped one. **104 is pasted on the live database** (confirmed by the owner).
 
 - **CREW MEMBERS ARE ADDED FROM THE CONTRACTOR CARD'S CREWS TAB.** Reported
   with North Pacific Exteriors' Crews tab on screen, one member listed and
