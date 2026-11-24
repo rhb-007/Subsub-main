@@ -2560,6 +2560,46 @@ CREATE TABLE IF NOT EXISTS sales_appointments (
 CREATE INDEX IF NOT EXISTS ix_sales_appointments_day ON sales_appointments(account_id, date);
 CREATE INDEX IF NOT EXISTS ix_sales_appointments_rep ON sales_appointments(rep_user_id, date);
 
+-- 106. CRM / Sales: consent and activity (shared/salescrm.js).
+CREATE TABLE IF NOT EXISTS sales_consents (
+  appointment_id    TEXT PRIMARY KEY REFERENCES sales_appointments(id) ON DELETE CASCADE,
+  account_id        TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  email             INTEGER NOT NULL,
+  phone             INTEGER NOT NULL,
+  text              INTEGER NOT NULL,
+  record_call       INTEGER,
+  script_version    TEXT NOT NULL,
+  captured_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+  captured_at       TEXT NOT NULL,
+  reminder_sent_for TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_sales_consents_account ON sales_consents(account_id);
+
+CREATE TABLE IF NOT EXISTS sales_activities (
+  id              TEXT PRIMARY KEY,
+  account_id      TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  appointment_id  TEXT NOT NULL REFERENCES sales_appointments(id) ON DELETE CASCADE,
+  kind            TEXT NOT NULL,
+  body            TEXT,
+  direction       TEXT,
+  outcome         TEXT,
+  channel         TEXT,
+  due_date        TEXT,
+  assignee_id     TEXT REFERENCES users(id) ON DELETE SET NULL,
+  done_at         TEXT,
+  done_by         TEXT REFERENCES users(id) ON DELETE SET NULL,
+  file_key        TEXT,
+  file_name       TEXT,
+  file_type       TEXT,
+  file_size       INTEGER,
+  record_consent  INTEGER,
+  reminded_at     TEXT,
+  created_by      TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_sales_activities_appt ON sales_activities(appointment_id, created_at);
+CREATE INDEX IF NOT EXISTS ix_sales_activities_due ON sales_activities(account_id, kind, due_date);
+
 -- 104. Staff's settings for each email SubSub sends.
 CREATE TABLE IF NOT EXISTS notice_settings (
   kind        TEXT PRIMARY KEY,

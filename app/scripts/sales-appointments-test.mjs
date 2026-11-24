@@ -90,6 +90,7 @@ const booking = (over = {}) => ({
   address: { street: "1204 N Pine St", city: "Tacoma", state: "wa", zip: "98406" },
   second: { firstName: "Alex", lastName: "Ruiz", relationship: "Spouse", phone: "2535550143", attends: true },
   date: DAY, time: "10:00", minutes: 90, repId: "u_rep", notes: "Dog in the yard.",
+  consent: { email: true, phone: true, text: false, record: true },
   ...over,
 });
 
@@ -142,15 +143,17 @@ try {
     ck("stored with the homeowner, the address and the second person",
       row?.first_name === "Dana" && row?.zip === "98406" && JSON.parse(row?.second || "{}").relationship === "Spouse");
     ck("and who booked it", row?.created_by === "u_cc");
-    ck("the homeowner is emailed a confirmation", b.confirmation?.sent === true && sent.length === 1
-      && [].concat(sent[0].to).includes("dana@home.test") && /Your estimate is booked: Tuesday, December 7 at 10:00 AM/.test(sent[0].subject),
-      JSON.stringify({ c: b.confirmation, s: sent[0]?.subject }));
-    ck("in the account's name", /Outerhome/.test(sent[0]?.from || "") && /The Outerhome team/.test(sent[0]?.text || ""), sent[0]?.from);
+    const home = () => sent.filter((m) => /Your estimate is booked/.test(m.subject));
+    ck("the homeowner is emailed a confirmation", b.confirmation?.sent === true && home().length === 1
+      && [].concat(home()[0].to).includes("dana@home.test") && /Your estimate is booked: Tuesday, December 7 at 10:00 AM/.test(home()[0].subject),
+      JSON.stringify({ c: b.confirmation, s: home()[0]?.subject }));
+    ck("in the account's name", /Outerhome/.test(home()[0]?.from || "") && /The Outerhome team/.test(home()[0]?.text || ""), home()[0]?.from);
     ck("and the mail log records it",
       db.prepare(`SELECT COUNT(*) AS n FROM email_log WHERE kind = 'appointment_booked'`).get().n === 1);
     const [, b2] = await json(await call(env, "/api/appointments", { method: "POST",
-      body: booking({ homeowner: { ...booking().homeowner, email: "" }, emailHomeowner: false, time: "14:00" }) }));
-    ck("no confirmation when asked not to", b2.confirmation?.sent === false && sent.length === 1, JSON.stringify(b2.confirmation));
+      body: booking({ homeowner: { ...booking().homeowner, email: "" }, emailHomeowner: false, time: "14:00",
+        consent: { email: false, phone: true, text: false } }) }));
+    ck("no confirmation when asked not to", b2.confirmation?.sent === false && home().length === 1, JSON.stringify(b2.confirmation));
 
     const [lst, list] = await json(await call(env, "/api/appointments"));
     ck("it lists the account's appointments and the reps", lst === 200 && list.appointments?.length === 2

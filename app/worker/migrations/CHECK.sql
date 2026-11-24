@@ -343,7 +343,10 @@ WITH spec(j) AS (SELECT
   -- 104. Staff's settings for each email SubSub sends: off, or new words.
   ',["m104_notice_settings","col","notice_settings",["kind","enabled","subject","body","updated_at","updated_by"]]' ||
   -- 105. Sales appointments booked by the call center, before a job.
-  ',["m105_sales_appointments","col","sales_appointments",["id","account_id","status","direction","services","details","home","first_name","last_name","phone","street","city","state","zip","second","date","time","minutes","rep_user_id","job_id","created_by","status_at"]]') ||
+  ',["m105_sales_appointments","col","sales_appointments",["id","account_id","status","direction","services","details","home","first_name","last_name","phone","street","city","state","zip","second","date","time","minutes","rep_user_id","job_id","created_by","status_at"]]' ||
+  -- 106. CRM / Sales: consent to follow up, and activity on an appointment.
+  ',["m106_sales_consents","col","sales_consents",["appointment_id","account_id","email","phone","text","record_call","script_version","captured_by","captured_at","reminder_sent_for"]]' ||
+  ',["m106_sales_activities","col","sales_activities",["id","account_id","appointment_id","kind","body","direction","outcome","channel","due_date","assignee_id","done_at","done_by","file_key","file_name","file_type","file_size","record_consent","reminded_at","created_by","created_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -849,50 +852,50 @@ WITH inv(j) AS (SELECT '['
   -- 084. An occupied count above the building's own units is billed as more
   -- homes than the building has; the route refuses one, and a negative one.
   || (',' || json_array('m084_inv_occupied_over_units', (SELECT COUNT(*) FROM properties
-    WHERE occupied_units IS NOT NULL AND (occupied_units < 0 OR occupied_units > COALESCE(units, 0)))))
+    WHERE occupied_units IS NOT NULL AND (occupied_units < 0 OR occupied_units > COALESCE(units, 0))))
   -- 085. A cached point is a place or an honest "could not place it", never
   -- half of one: a pin with a latitude and no longitude lands on the equator.
-  || (',' || json_array('m085_inv_geocode_half', (SELECT COUNT(*) FROM geocodes
+  || ',' || json_array('m085_inv_geocode_half', (SELECT COUNT(*) FROM geocodes
     WHERE (precision = 'none') <> (lat IS NULL OR lng IS NULL)
-       OR (lat IS NULL) <> (lng IS NULL))))
+       OR (lat IS NULL) <> (lng IS NULL)))
   -- 087. An account with no 'created' row has no start to its subscription
   -- history and is missing from the console's signup count. Reads non-zero
   -- until 087 is pasted and stays zero after, because the signup route and the
   -- console's account create both write one.
-  || (',' || json_array('m087_inv_account_no_created', (SELECT COUNT(*) FROM accounts a
+  || ',' || json_array('m087_inv_account_no_created', (SELECT COUNT(*) FROM accounts a
     WHERE NOT EXISTS (SELECT 1 FROM subscription_events e
-                       WHERE e.account_id = a.id AND e.kind = 'created'))))
+                       WHERE e.account_id = a.id AND e.kind = 'created')))
   -- 092. An inspection whose job is raised and every room answered, still a
   -- draft, and never reopened. Reads non-zero until 092 is pasted and zero
   -- after, because raising the job now finishes the walk.
-  || (',' || json_array('m092_inv_raised_still_draft', (SELECT COUNT(*) FROM inspections i
+  || ',' || json_array('m092_inv_raised_still_draft', (SELECT COUNT(*) FROM inspections i
     WHERE i.status = 'draft' AND i.job_id IS NOT NULL
       AND EXISTS (SELECT 1 FROM inspection_rooms r WHERE r.inspection_id = i.id)
       AND NOT EXISTS (SELECT 1 FROM inspection_rooms r WHERE r.inspection_id = i.id AND r.status = 'unchecked')
-      AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'inspection.reopened' AND e.subject_id = i.id))))
+      AND NOT EXISTS (SELECT 1 FROM events e WHERE e.kind = 'inspection.reopened' AND e.subject_id = i.id)))
   -- 093. A hold that says it was released has either the work order it became
   -- or the reason the assign route refused it, never neither.
-  || (',' || json_array('m093_inv_held_released_nothing', (SELECT COUNT(*) FROM held_assignments
-    WHERE released_at IS NOT NULL AND work_order_id IS NULL AND release_error IS NULL)))
+  || ',' || json_array('m093_inv_held_released_nothing', (SELECT COUNT(*) FROM held_assignments
+    WHERE released_at IS NOT NULL AND work_order_id IS NULL AND release_error IS NULL))
   -- 101. A second business still wearing the first one's page titles. Reads
   -- non-zero until 101 is pasted and zero after, because making a second
   -- business no longer copies them.
-  || (',' || json_array('m101_inv_linked_titles_copied', (SELECT COUNT(*) FROM business_links l
+  || ',' || json_array('m101_inv_linked_titles_copied', (SELECT COUNT(*) FROM business_links l
     JOIN accounts a ON a.id = l.account_a JOIN accounts b ON b.id = l.account_b
     WHERE json_valid(a.theme) AND json_valid(b.theme)
       AND ((json_extract(b.theme, '$.signInTitle') IS NOT NULL
             AND json_extract(b.theme, '$.signInTitle') = json_extract(a.theme, '$.signInTitle'))
         OR (json_extract(b.theme, '$.applyTitle') IS NOT NULL
-            AND json_extract(b.theme, '$.applyTitle') = json_extract(a.theme, '$.applyTitle'))))))
+            AND json_extract(b.theme, '$.applyTitle') = json_extract(a.theme, '$.applyTitle')))))
   -- 096. A checklist item with a condition the screen cannot draw, or a
   -- negative cost.
-  || (',' || json_array('m096_inv_bad_item', (SELECT COUNT(*) FROM inspection_items
+  || ',' || json_array('m096_inv_bad_item', (SELECT COUNT(*) FROM inspection_items
     WHERE (condition IS NOT NULL AND condition NOT IN ('ok','nc','nsc','np','nsp','nr','rp','na'))
        OR (condition = 'na' AND cost_cents IS NOT NULL)
-       OR cost_cents < 0)))
+       OR cost_cents < 0))
   -- 099. An account in two pairs (a on one, b on another), or a discount
   -- recorded on an account that is in neither side of its own row.
-  || (',' || json_array('m099_inv_bad_link', (SELECT COUNT(*) FROM business_links l
+  || ',' || json_array('m099_inv_bad_link', (SELECT COUNT(*) FROM business_links l
     WHERE l.account_a = l.account_b
        OR EXISTS (SELECT 1 FROM business_links o WHERE o.id <> l.id
                    AND (o.account_a IN (l.account_a, l.account_b) OR o.account_b IN (l.account_a, l.account_b)))
@@ -900,13 +903,18 @@ WITH inv(j) AS (SELECT '['
   -- 100. An owner who is not an admin of the account they own.
   || (',' || json_array('m100_inv_owner_not_admin', (SELECT COUNT(*) FROM account_owners ao
     WHERE NOT EXISTS (SELECT 1 FROM memberships m WHERE m.account_id = ao.account_id
-                        AND m.user_id = ao.user_id AND m.role = 'admin'))))
+                        AND m.user_id = ao.user_id AND m.role = 'admin')))
   -- 102. A pending application whose engagement is not held off the roster,
   -- or a state the screen cannot draw.
-  || (',' || json_array('m102_inv_pending_on_roster', (SELECT COUNT(*) FROM roster_applications ra
+  || ',' || json_array('m102_inv_pending_on_roster', (SELECT COUNT(*) FROM roster_applications ra
     LEFT JOIN engagements e ON e.id = ra.engagement_id
     WHERE ra.state NOT IN ('pending','accepted','declined')
-       OR (ra.state = 'pending' AND (e.id IS NULL OR e.status <> 'paused')))))
+       OR (ra.state = 'pending' AND (e.id IS NULL OR e.status <> 'paused'))))
+  -- 106. A call recording kept without the homeowner's agreement to be
+  -- recorded, or an activity kind the screen cannot draw.
+  || ',' || json_array('m106_inv_recording_no_consent', (SELECT COUNT(*) FROM sales_activities
+    WHERE kind NOT IN ('note','call','follow_up','recording')
+       OR (kind = 'recording' AND (record_consent IS NOT 1 OR file_key IS NULL)))))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

@@ -55,10 +55,19 @@ const appt = (id, extra = {}) => ({
   date: DAY, time: "10:30", minutes: 90, repId: "u_rep", repName: "Marcus Hill", notes: null,
   outcomeNote: null, jobId: null, createdBy: "u_cc", createdByName: "Cara Call", ...extra,
 });
-let APPTS = [appt("ap_1"), appt("ap_sat", { status: "sat", date: key(-2), homeowner: { firstName: "Hal", lastName: "Stone", phone: "2535550101", email: "" },
+let APPTS = [appt("ap_1", { consent: { email: false, phone: true, text: true, record: null } }),
+  appt("ap_sat", { status: "sat", date: key(-2), consent: { email: false, phone: false, text: false, record: false },
+  homeowner: { firstName: "Hal", lastName: "Stone", phone: "2535550101", email: "" },
   services: ["roofing", "gutters"], details: { roofing: { material: "Asphalt shingle", age: "Over 20 years", leaks: "Yes", stories: "2" },
     gutters: { scope: "Whole home", stories: "2" } } })];
-const posted = [], patched = [], jobsPosted = [];
+const posted = [], patched = [], jobsPosted = [], actsPosted = [], fuPatched = [];
+let ACTS = [];
+let FUS = [
+  { id: "fu_1", kind: "follow_up", appointmentId: "ap_1", body: "Call back about financing", dueDate: key(-1), channel: "call",
+    assigneeId: "u_admin", assigneeName: "Richard Braun", who: "Gale Fern", doneAt: null, createdAt: "2026-11-01T10:00:00Z" },
+  { id: "fu_2", kind: "follow_up", appointmentId: "ap_1", body: "Text the brochure", dueDate: key(3), channel: "text",
+    assigneeId: "u_rep", assigneeName: "Marcus Hill", who: "Gale Fern", doneAt: null, createdAt: "2026-11-01T10:00:00Z" },
+];
 const USERS = [
   { id: "u_admin", name: "Richard Braun", email: "rb@outerhome.test", phone: null, role: "admin", subId: null,
     propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
@@ -70,7 +79,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account") return [200, { ...ACC, user: { ...ACC.user, id: SEAT.userId, role: SEAT.role } }];
   if (path === "/api/appointments" && method === "GET") {
     if (ACC !== GC) return [403, { error: "no_appointments_for_this_account" }];
-    return [200, { appointments: APPTS, reps: REPS }];
+    return [200, { appointments: APPTS, reps: REPS, team: REPS, crmReady: true }];
   }
   if (path === "/api/appointments" && method === "POST") {
     posted.push(body);
@@ -78,6 +87,22 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     APPTS = [a, ...APPTS];
     return [201, { appointment: a, confirmation: { sent: !!body.homeowner?.email, reason: null } }];
   }
+  const am = path.match(/^\/api\/appointments\/([^/]+)\/activities$/);
+  if (am && method === "GET") {
+    return [200, { activities: ACTS.filter((x) => x.appointmentId === am[1]), consent: APPTS.find((a) => a.id === am[1])?.consent || null, team: REPS }];
+  }
+  if (am && method === "POST") {
+    actsPosted.push({ id: am[1], body });
+    const a = { id: `act_${actsPosted.length}`, appointmentId: am[1], ...body, createdByName: "Richard Braun", createdAt: new Date().toISOString() };
+    ACTS = [a, ...ACTS];
+    return [201, { activity: a }];
+  }
+  const fm = path.match(/^\/api\/appointments\/([^/]+)\/activities\/([^/]+)$/);
+  if (fm && method === "PATCH") {
+    fuPatched.push({ id: fm[2], body });
+    return [200, { activity: { ...(FUS.find((x) => x.id === fm[2]) || {}), doneAt: body.done ? new Date().toISOString() : null } }];
+  }
+  if (path === "/api/sales-followups") return [200, { followUps: FUS }];
   const pm = path.match(/^\/api\/appointments\/([^/]+)$/);
   if (pm && method === "PATCH") {
     patched.push({ id: pm[1], body });
@@ -145,12 +170,12 @@ try {
     const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB, seat: SEAT });
     for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".appt-view")) break; }
     const nav = await navLabels(page);
-    t.ck("the menu is Appointments and nothing else on the account",
-      nav.includes("Appointments") && !nav.some((l) => /^(Dashboard|Jobs|Subcontractors|Contractors|Calendar|Properties)$/.test(l)),
+    t.ck("the menu is CRM / Sales and nothing else on the account",
+      nav.includes("CRM / Sales") && !nav.some((l) => /^(Dashboard|Jobs|Subcontractors|Contractors|Calendar|Properties)$/.test(l)),
       nav.join(" | "));
     if (process.env.DBG) console.log(await page.evaluate(() => document.body.innerText.slice(0, 1500)), crashes);
     const head = await page.evaluate(() => document.querySelector(".appt-view .dash-hello h2")?.innerText || "");
-    t.ck("and it lands on the Appointments page", /^Appointments/.test(head.trim()), head);
+    t.ck("and it lands on the CRM / Sales page", /^CRM \/ Sales/.test(head.trim()), head);
     t.ck("which lists what is booked", (await page.$$("[data-appt]")).length === 1);
 
     await click(page, "[data-new-appt]");
@@ -159,6 +184,9 @@ try {
     let ns = await nextState(page);
     t.ck("Next waits for inbound or outbound, and says so", ns.disabled === true && /Still needed/.test(ns.why), JSON.stringify(ns));
     await click(page, '[data-direction="outbound"]');
+    const recAsk = await page.evaluate(() => document.querySelector('[data-consent="record"]')?.innerText || "");
+    t.ck("the call step asks before recording, in words to read out", /may be recorded/.test(recAsk), recAsk);
+    await page.evaluate(() => [...document.querySelectorAll('[data-consent="record"] .chip')].find((b) => b.innerText.trim() === "They agreed")?.click());
     await setField(page, "How did they hear", "Door knocking");
     await next(page);
     t.ck("then asks which services", (await stepNow(page)) === "services");
@@ -200,6 +228,18 @@ try {
       el.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await setField(page, "ZIP", "98406");
+    await wait(150);
+    const cblock = await page.evaluate(() => ({
+      text: document.querySelector("[data-consent-block]")?.innerText || "",
+      qs: [...document.querySelectorAll("[data-consent-block] [data-consent]")].map((x) => x.dataset.consent) }));
+    t.ck("the homeowner step asks permission to follow up by email, phone and text",
+      cblock.qs.join() === "email,phone,text" && /STOP/.test(cblock.text), JSON.stringify(cblock));
+    ns = await nextState(page);
+    t.ck("and Next waits for those answers, naming the first", ns.disabled === true && /email them/.test(ns.why), JSON.stringify(ns));
+    const answer = (id, v) => page.evaluate((i, val) =>
+      document.querySelector(`[data-consent-block] [data-consent="${i}"] [data-answer="${val}"]`)?.click(), id, String(v));
+    await answer("email", true); await answer("phone", true); await answer("text", false);
+    await wait(150);
     await next(page);
     t.ck("then the second decision maker", (await stepNow(page)) === "decider");
     ns = await nextState(page);
@@ -236,6 +276,8 @@ try {
       && sent.details?.windows?.issues?.join() === "Drafts,Fogging between panes"
       && sent.second?.relationship === "Spouse" && sent.second?.attends === true
       && sent.repId === "u_rep" && sent.time === "13:30" && sent.emailHomeowner === true, JSON.stringify(sent));
+    t.ck("and the follow-up answers", sent.consent?.email === true && sent.consent?.phone === true
+      && sent.consent?.text === false && sent.consent?.record === true, JSON.stringify(sent.consent));
     const after = await page.evaluate(() => ({ flash: document.querySelector(".appt-flash")?.innerText || "",
       detail: !!document.querySelector("[data-detail]"),
       sets: [...document.querySelectorAll("[data-set]")].map((b) => b.dataset.set),
@@ -256,17 +298,44 @@ try {
   {
     SEAT = { userId: "u_admin", accountId: "acc_gc", role: "admin" };
     const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB, seat: SEAT });
-    for (let n = 0; n < 40; n++) { await wait(200); if ((await navLabels(page)).includes("Appointments")) break; }
+    for (let n = 0; n < 40; n++) { await wait(200); if ((await navLabels(page)).includes("CRM / Sales")) break; }
     const nav = await navLabels(page);
-    t.ck("the admin has Appointments beside the rest", nav.includes("Appointments") && nav.includes("Jobs"), nav.join(" | "));
-    await clickText(page, "nav.tabs button", "^Appointments");
+    t.ck("the admin has CRM / Sales beside the rest, not Appointments", nav.includes("CRM / Sales") && nav.includes("Jobs")
+      && !nav.includes("Appointments"), nav.join(" | "));
+    await clickText(page, "nav.tabs button", "^CRM / Sales");
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".appt-view")) break; }
     const needs = await page.evaluate(() => document.querySelector("[data-needs-outcome]")?.innerText || "");
     t.ck("an appointment gone by with no outcome is called out", /has gone by/.test(needs), needs);
     await click(page, "[data-needs-outcome]");
     await wait(300);
     await click(page, '[data-appt="ap_sat"]');
+    await wait(500);
+    // 106. The activity panel, on a homeowner who said no to everything.
+    const chips = await page.evaluate(() => [...document.querySelectorAll("[data-activity] [data-chip]")].map((x) => `${x.dataset.chip}:${x.className.split(" ").pop()}`));
+    t.ck("the appointment shows what they agreed to", chips.join() === "email:no,phone:no,text:no,record:no", chips.join());
+    await click(page, '[data-act="call"]');
+    await wait(150);
+    const callF = await page.evaluate(() => ({ out: document.querySelector('[data-call-dir="outbound"]')?.disabled,
+      inb: document.querySelector('[data-call-dir="inbound"]')?.disabled, note: !!document.querySelector("[data-no-call]") }));
+    t.ck("an outbound call can't be logged for somebody who said no to calls", callF.out === true && callF.inb === false && callF.note,
+      JSON.stringify(callF));
+    await click(page, '[data-act="follow_up"]');
+    await wait(150);
+    const ch = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-channels] [data-channel]")].map((b) => [b.dataset.channel, b.disabled])));
+    t.ck("a follow-up offers only channels they agreed to", ch.call === true && ch.email === true && ch.text === true && ch.visit === false,
+      JSON.stringify(ch));
+    await click(page, '[data-act="recording"]');
+    await wait(150);
+    t.ck("and no recording, because they said no to it", !!(await page.$("[data-no-record]")) && !(await page.$("[data-recording-file]")));
+    await click(page, '[data-act="note"]');
+    await wait(150);
+    await setVal(page, '[data-act-form="note"] textarea', "Wants to think about metal.");
+    await wait(100);
+    await click(page, "[data-act-save]");
     await wait(400);
+    const noteNow = await page.evaluate(() => [...document.querySelectorAll('[data-activity] [data-item="note"]')].map((x) => x.innerText).join(" | "));
+    t.ck("a note is saved and shows on the timeline", actsPosted.some((x) => x.id === "ap_sat" && x.body.kind === "note"
+      && /think about metal/.test(x.body.body)) && /think about metal/.test(noteNow), noteNow);
     const d = await page.evaluate(() => ({ sets: [...document.querySelectorAll("[data-set]")].map((b) => b.dataset.set),
       convert: !!document.querySelector("[data-convert]") }));
     t.ck("the office may record the outcome", d.sets.includes("sold") && d.sets.includes("lost") && d.sets.includes("no_show"), JSON.stringify(d.sets));
@@ -305,6 +374,33 @@ try {
     const jb = jobsPosted[0] || {};
     t.ck("and saving it sends the appointment with the job", jb.fromAppointment === "ap_sat"
       && jb.trades?.join() === "roofing,gutters" && /Hal Stone/.test(jb.client || ""), JSON.stringify(jb).slice(0, 300));
+    // Back to the section for the other two tabs.
+    await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
+    await wait(200);
+    await clickText(page, "nav.tabs button", "^CRM / Sales");
+    for (let n = 0; n < 20; n++) { await wait(200); if (await page.$("[data-crm-tab]")) break; }
+    const tabs = await page.evaluate(() => [...document.querySelectorAll("[data-crm-tab]")].map((b) => b.innerText.replace(/\s+/g, " ").trim()));
+    t.ck("the section is three tabs, with the follow-ups due counted", tabs.length === 3 && /^Appointments/.test(tabs[0])
+      && /^Follow-ups 1$/.test(tabs[1]) && /^Contacts 3$/.test(tabs[2]), tabs.join(" | "));
+    const pipe = await page.evaluate(() => [...document.querySelectorAll("[data-pipe]")].map((b) => `${b.dataset.pipe}:${b.querySelector("b")?.innerText}`));
+    t.ck("the pipeline counts each stage", pipe.includes("scheduled:1") && pipe.includes("confirmed:1") && pipe.length === 6, pipe.join());
+    await click(page, '[data-crm-tab="followups"]');
+    await wait(300);
+    const mine = await page.$$eval("[data-fu]", (xs) => xs.map((x) => x.dataset.fu));
+    t.ck("Follow-ups opens on the ones owed by me", mine.join() === "fu_1", mine.join());
+    const late = await page.evaluate(() => document.querySelector('[data-fu="fu_1"] .crm-fu-state')?.innerText || "");
+    t.ck("and an overdue one says so", /Overdue/.test(late), late);
+    await click(page, '[data-whose="all"]');
+    await wait(150);
+    t.ck("everybody's shows the rest", (await page.$$("[data-fu]")).length === 2);
+    await click(page, '[data-fu="fu_1"] [data-fu-done]');
+    await wait(400);
+    t.ck("Done ticks it off and it leaves the list", fuPatched.some((x) => x.id === "fu_1" && x.body.done === true)
+      && (await page.$$("[data-fu]")).length === 1, JSON.stringify(fuPatched));
+    await click(page, '[data-crm-tab="contacts"]');
+    await wait(300);
+    const people = await page.$$eval("[data-contact]", (xs) => xs.map((x) => x.innerText.split("\n")[0]));
+    t.ck("Contacts lists each homeowner once", people.length === 3, people.join(" | "));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -316,7 +412,7 @@ try {
     for (let n = 0; n < 40; n++) { await wait(200); if ((await navLabels(page)).includes("Dashboard")) break; }
     const nav = await navLabels(page);
     t.ck("the screen opened", nav.includes("Dashboard"), nav.join(" | "));
-    t.ck("and it has no Appointments", !nav.includes("Appointments"), nav.join(" | "));
+    t.ck("and it has no CRM / Sales", !nav.includes("CRM / Sales") && !nav.includes("Appointments"), nav.join(" | "));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

@@ -508,6 +508,69 @@ The ${account?.name || "team"} team`;
   return { subject: `Your estimate is booked: ${when}`, text, html: textToHtml(text, null) };
 }
 
+// 106. CRM / SALES. The sales manager an estimate was booked for, the person
+// a follow-up was handed to, the follow-ups due today, and the homeowner the
+// day before their estimate -- the last only when they agreed to email.
+function appointmentAssignedEmailRaw({ firstName, bookedBy, who, services = [], when, address, link, reassigned = false }) {
+  const what = services.length ? services.join(", ").toLowerCase() : "an estimate";
+  const text = `Hi ${firstName || "there"},
+
+${bookedBy || "Your team"} ${reassigned ? "moved an estimate to you" : "booked an estimate for you"}: ${who || "a homeowner"}, ${what}.
+
+${when}
+${address || ""}
+
+Open it for the call notes and what they're looking for:
+${link}
+
+${NOREPLY}`;
+  return { subject: `${reassigned ? "Moved to you" : "New estimate"}: ${who || "homeowner"}, ${when}`, text, html: textToHtml(text, null) };
+}
+
+function followUpAssignedEmailRaw({ firstName, assignedBy, who, what, due, channel, link }) {
+  const text = `Hi ${firstName || "there"},
+
+${assignedBy || "Your team"} gave you a follow-up with ${who || "a homeowner"}${channel ? ` (${String(channel).toLowerCase()})` : ""}, due ${due}:
+
+${what}
+
+${link}
+
+${NOREPLY}`;
+  return { subject: `Follow-up for you: ${who || "homeowner"}, due ${due}`, text, html: textToHtml(text, null) };
+}
+
+function followUpDueEmailRaw({ firstName, items = [], link }) {
+  const lines = items.slice(0, 10).map((i) => `- ${i.who}: ${i.what}${i.overdue ? ` (overdue, was due ${i.due})` : ""}`).join("\n");
+  const more = items.length > 10 ? `\nand ${items.length - 10} more` : "";
+  const text = `Hi ${firstName || "there"},
+
+${items.length === 1 ? "You have a follow-up due today:" : `You have ${items.length} follow-ups due:`}
+
+${lines}${more}
+
+${link}
+
+${NOREPLY}`;
+  return { subject: items.length === 1 ? `Follow-up due: ${items[0]?.who || "homeowner"}` : `${items.length} follow-ups due`,
+    text, html: textToHtml(text, null) };
+}
+
+function appointmentReminderEmailRaw({ firstName, account, services = [], when, address, repName }) {
+  const what = services.length ? services.join(", ").toLowerCase() : "your project";
+  const text = `Hi ${firstName || "there"},
+
+A reminder that your free estimate for ${what} is tomorrow:
+
+${when}
+${address || ""}
+
+${repName ? `${repName} will` : "One of our team will"} see the home and go over options with you. Need a different time? Just call us.
+
+The ${account?.name || "team"} team`;
+  return { subject: `Reminder: your estimate is ${when}`, text, html: textToHtml(text, null) };
+}
+
 // TOLD WHEN A COMPANY ON YOUR ROSTER ADDS TO ITS COMPLIANCE PACK: a
 // certificate, a bond, a W-9, a license number, or your agreement signed.
 // A signed agreement is not in force until this account countersigns it,
@@ -1649,6 +1712,10 @@ function notice(key, fn) {
 }
 export const rosterJoinedEmail = notice("roster_joined", rosterJoinedEmailRaw);
 export const appointmentBookedEmail = notice("appointment_booked", appointmentBookedEmailRaw);
+export const appointmentAssignedEmail = notice("appointment_assigned", appointmentAssignedEmailRaw);
+export const followUpAssignedEmail = notice("followup_assigned", followUpAssignedEmailRaw);
+export const followUpDueEmail = notice("followup_due", followUpDueEmailRaw);
+export const appointmentReminderEmail = notice("appointment_reminder", appointmentReminderEmailRaw);
 export const applicationReceivedEmail = notice("application_received", applicationReceivedEmailRaw);
 export const applicationDecidedEmail = notice("application_decided", applicationDecidedEmailRaw);
 export const subInviteEmail = notice("sub_invite", subInviteEmailRaw);

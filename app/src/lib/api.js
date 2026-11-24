@@ -386,6 +386,20 @@ export const api = {
   listAppointments: () => request("/appointments"),
   createAppointment: (body) => request("/appointments", { method: "POST", body: JSON.stringify(body) }),
   patchAppointment: (id, body) => request(`/appointments/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  // 106. CRM / Sales: the activity on an appointment, and the follow-ups owed.
+  listApptActivities: (id) => request(`/appointments/${encodeURIComponent(id)}/activities`),
+  addApptActivity: (id, body) => request(`/appointments/${encodeURIComponent(id)}/activities`, { method: "POST", body: JSON.stringify(body) }),
+  patchApptActivity: (id, actId, body) => request(`/appointments/${encodeURIComponent(id)}/activities/${encodeURIComponent(actId)}`,
+    { method: "PATCH", body: JSON.stringify(body) }),
+  listFollowUps: () => request("/sales-followups"),
+  uploadCallRecording: (file) => putFile(`/uploads/call-recording/${encodeURIComponent(file.name)}`, file),
+  apptRecordingBlob: async (id, actId) => {
+    const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}/activities/${encodeURIComponent(actId)}/file`,
+      { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`recording_${res.status}`);
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || "", size: blob.size };
+  },
 
   listInspections: () => request("/inspections"),
   createInspection: (body) => request("/inspections", { method: "POST", body: JSON.stringify(body) }),

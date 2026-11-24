@@ -41,7 +41,7 @@ import {
   Map as MapIcon,
   Crown,
   PhoneIncoming,
-  PhoneOutgoing,
+  PhoneOutgoing, Mic, CalendarClock,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -59,6 +59,8 @@ import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
 import { SERVICES as APPT_SERVICES, SERVICE_QUESTIONS, HOME_QUESTIONS, SOURCES as APPT_SOURCES,
   STATUSES as APPT_STATUSES, CALLCENTER_STATUSES, DEFAULT_MINUTES as APPT_MINUTES, takesAppointments,
   validAppointment, repClashes, jobSeedFromAppointment, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
+  contactsFrom, AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -2866,7 +2868,7 @@ export default function SubSub() {
     : role === "callcenter" ? "appointments" : "portal";
   const homeTitle = homeTab === "dashboard" ? "Back to the dashboard"
     : homeTab === "tenant" ? "Back to your reports"
-    : homeTab === "appointments" ? "Back to appointments"
+    : homeTab === "appointments" ? "Back to CRM / Sales"
     : "Back to your dashboard";
   const goHome = () => {
     // Anything open belongs to the screen being left: a contractor's detail
@@ -4569,6 +4571,25 @@ export default function SubSub() {
     } catch { return null; }
   });
   const subAimed = useRef(false);
+  // 106. Arriving from a CRM email: ?open=appointment&id=<id> opens that
+  // appointment, ?open=followups the Follow-ups tab. Held until signed in.
+  const [crmAsk, setCrmAsk] = useState(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("open") === "appointment" && q.get("id")) return { appointment: q.get("id") };
+      if (q.get("open") === "followups") return { pane: "followups" };
+    } catch { /* no address to read */ }
+    return null;
+  });
+  const crmAimed = useRef(false);
+  useEffect(() => {
+    if (!crmAsk || crmAimed.current || !loggedIn || !can("appointments")) return;
+    if (hydratedFor !== currentAccountId) return;
+    crmAimed.current = true;
+    window.history.replaceState(null, "", window.location.pathname);
+    setTab("appointments");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crmAsk, loggedIn, role, hydratedFor, currentAccountId]);
   useEffect(() => {
     if (!subAsk || subAimed.current || !loggedIn || !can("contractors")) return;
     if (hydratedFor !== currentAccountId) return;
@@ -7123,7 +7144,7 @@ export default function SubSub() {
           )}
           {can("appointments") && (
             <button className={tab === "appointments" ? "on" : ""} data-nav="appointments" onClick={() => setTab("appointments")}>
-              Appointments
+              CRM / Sales
             </button>
           )}
           {can("uniforms") && (
@@ -8809,7 +8830,7 @@ export default function SubSub() {
       )}
 
       {tab === "appointments" && can("appointments") && (
-        <AppointmentsView role={role}
+        <AppointmentsView role={role} meId={currentUserId} ask={crmAsk} onAskUsed={() => setCrmAsk(null)}
           onOpenJob={can("jobs") ? (id) => openJob(id) : null}
           onConvert={can("jobs") ? (a, after) => {
             const seed = jobSeedFromAppointment(a);
@@ -29615,6 +29636,8 @@ const APPT_STEPS = [
 // Which step a missing answer is on, so Next can say what it is waiting for.
 const apptStepOf = (field) => {
   const [head] = String(field).split(".");
+  if (field === "consent.record") return "call";
+  if (head === "consent") return "homeowner";
   if (head === "direction") return "call";
   if (head === "services") return "services";
   if (APPT_SERVICES.some((s) => s.id === head)) return "details";
@@ -29628,6 +29651,8 @@ const APPT_FIELD_WORDS = {
   "address.city": "the city", "address.state": "the state", "address.zip": "a 5-digit ZIP",
   "second.firstName": "the second person's first name", "second.relationship": "how they are related",
   "second.attends": "whether they will be at the appointment", date: "a date", time: "a time",
+  "consent.email": "whether we may email them", "consent.phone": "whether we may call them",
+  "consent.text": "whether we may text them",
 };
 function apptFieldWords(field) {
   if (APPT_FIELD_WORDS[field]) return APPT_FIELD_WORDS[field];
@@ -29651,9 +29676,54 @@ const apptRefusalText = (e) => {
   if (code === "outcome_recorded") return "This appointment already has an outcome, so only the office can change it.";
   if (code === "already_a_job") return "This appointment is already a job.";
   if (code === "forbidden") return "You don't have access to do that.";
+  if (code === "consent_needs_email") return "They agreed to email but there's no email address. Add one, or mark email No.";
+  if (code === "consent_needs_phone") return "They agreed to calls or texts but there's no 10-digit number.";
+  if (code === "no_call_consent") return "They haven't agreed to phone follow-up, so an outbound call can't be logged. Edit the appointment if they've since said yes.";
+  if (code === "no_channel_consent") return `They haven't agreed to be contacted by ${e.body.channel === "text" ? "text" : e.body.channel === "email" ? "email" : "phone"}. Pick a channel they agreed to.`;
+  if (code === "no_recording_consent") return "They said no to being recorded, so a recording can't be kept.";
+  if (code === "recording_consent_required") return "Tick that they agreed to the recording first.";
+  if (code === "recording_not_uploaded" || code === "not_audio") return "That file isn't an audio recording.";
+  if (code === "too_big") return "That recording is over 50 MB.";
+  if (code === "bad_assignee") return "That person isn't on the team here.";
+  if (code === "note_required" || code === "follow_up_required") return "Write something first.";
+  if (code === "due_required") return "Pick a due date.";
   if (!e?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
   return `That didn't save (${code || e.status}). Try again.`;
 };
+
+// 106. A yes or no to one channel, with the words read out above it.
+function ConsentQ({ id, label, ask, value, onChange, note = null, disableYes = false }) {
+  return (
+    <div className="appt-q crm-consent-q" data-consent={id}>
+      <div className="appt-q-label">{label}<span className="appt-req"> *</span></div>
+      <p className="crm-script">"{ask}"</p>
+      <div className="chips">
+        {[[true, "Yes"], [false, "No"]].map(([v, l]) => (
+          <button type="button" key={l} className={`chip ${value === v ? "on" : ""}`} aria-pressed={value === v}
+            data-answer={String(v)} disabled={v === true && disableYes} onClick={() => onChange(value === v ? null : v)}>{l}</button>
+        ))}
+      </div>
+      {note && <p className="fld-note">{note}</p>}
+    </div>
+  );
+}
+
+// What a homeowner agreed to, at a glance. A channel with no answer on file
+// reads "not asked", never yes.
+function ConsentChips({ consent }) {
+  const row = [...CONSENT_CHANNELS.map((c) => [c.id, c.label, consent?.[c.id]]),
+    ["record", "Recording", consent?.record]];
+  return (
+    <div className="crm-chips" data-consent-chips>
+      {row.map(([id, label, v]) => (
+        <span key={id} className={`crm-chip ${v === true ? "yes" : v === false ? "no" : "unk"}`} data-chip={id}>
+          {v === true ? <Check size={12} /> : v === false ? <X size={12} /> : null}
+          {label}: {v === true ? "yes" : v === false ? "no" : "not asked"}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 function ApptQuestion({ q, value, onChange }) {
   if (q.type === "choice" || q.type === "multi") {
@@ -29692,6 +29762,7 @@ const apptBlank = () => ({
   decidesAlone: null,
   second: { firstName: "", lastName: "", relationship: "", phone: "", email: "", attends: null },
   date: "", time: "", minutes: APPT_MINUTES, repId: "", notes: "", emailHomeowner: true,
+  consent: { email: null, phone: null, text: null, record: null },
 });
 
 function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCancel }) {
@@ -29700,6 +29771,8 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
     source: existing.source || "", repId: existing.repId || "", notes: existing.notes || "",
     decidesAlone: !existing.second,
     second: existing.second ? { ...apptBlank().second, ...existing.second } : apptBlank().second,
+    consent: existing.consent ? { email: existing.consent.email, phone: existing.consent.phone,
+      text: existing.consent.text, record: existing.consent.record } : apptBlank().consent,
   } : apptBlank());
   const [step, setStep] = useState(existing ? "review" : "call");
   const [saving, setSaving] = useState(false);
@@ -29714,10 +29787,14 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
     home: f.home, homeowner: f.homeowner, address: f.address,
     second: f.decidesAlone === false ? f.second : null,
     date: f.date, time: f.time, minutes: Number(f.minutes) || APPT_MINUTES, repId: f.repId || null,
-    notes: f.notes || null,
+    notes: f.notes || null, consent: f.consent,
   });
   const check = validAppointment(body());
-  const missing = check.ok ? [] : (check.missing || [check.field]);
+  // 106. Consent is part of a complete booking: email, phone and text answered.
+  const cCheck = validConsent(f.consent, { email: f.homeowner.email, phone: String(f.homeowner.phone || "").replace(/\D/g, "") });
+  const missing = [...(check.ok ? [] : (check.missing || [check.field])), ...(cCheck.ok ? cCheck.missing : [cCheck.field])];
+  const setConsent = (patch) => setF((x) => ({ ...x, consent: { ...x.consent, ...patch },
+    ...(patch.email === false ? { emailHomeowner: false } : patch.email === true ? { emailHomeowner: true } : {}) }));
   const missingOn = (id) => missing.filter((m) => apptStepOf(m) === id)
     .concat(id === "decider" && f.decidesAlone === null ? ["decider"] : []);
   const idx = APPT_STEPS.findIndex((s) => s.id === step);
@@ -29734,8 +29811,8 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
       const payload = { ...body(), allowClash: allowClash || undefined };
       const res = existing
         ? await api.patchAppointment(existing.id, payload)
-        : await api.createAppointment({ ...payload, emailHomeowner: f.emailHomeowner });
-      onSaved(res.appointment, res.confirmation || null);
+        : await api.createAppointment({ ...payload, emailHomeowner: f.emailHomeowner && f.consent.email === true });
+      onSaved(res.appointment, res.confirmation || null, res);
     } catch (e) {
       setErr(apptRefusalText(e));
       if (e?.body?.error === "incomplete") setStep(apptStepOf(e.body.field));
@@ -29770,6 +29847,17 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
                 </button>
               ))}
             </div>
+          </div>
+          <div className="appt-q crm-consent-q" data-consent="record">
+            <div className="appt-q-label">Recording this call? Ask first</div>
+            <p className="crm-script">"{RECORD_ASK}"</p>
+            <div className="chips">
+              {[[true, "They agreed"], [false, "They said no"], [null, "Not recording"]].map(([v, l]) => (
+                <button type="button" key={l} className={`chip ${f.consent.record === v ? "on" : ""}`} aria-pressed={f.consent.record === v}
+                  data-answer={String(v)} onClick={() => setConsent({ record: v })}>{l}</button>
+              ))}
+            </div>
+            {f.consent.record === false && <p className="appt-warn" role="note">Stop recording now. A recording of this call can't be kept.</p>}
           </div>
           <label className="fld">How did they hear about us?
             <select value={f.source} onChange={(e) => set({ source: e.target.value })}>
@@ -29830,6 +29918,16 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
             <label className="fld">Email <span className="fld-note">for the confirmation</span>
               <input type="email" value={f.homeowner.email} onChange={(e) => setIn("homeowner", { email: e.target.value })} /></label>
           </div>
+          <section className="crm-consent" data-consent-block>
+            <h4>Permission to follow up</h4>
+            <p className="fld-note">Read each question to them as written, and mark what they say. Nobody is emailed, called or texted about this project without a yes.</p>
+            {CONSENT_CHANNELS.map((c) => (
+              <ConsentQ key={c.id} id={c.id} label={c.label} ask={c.ask} value={f.consent[c.id]}
+                onChange={(v) => setConsent({ [c.id]: v })}
+                disableYes={c.id === "email" && !f.homeowner.email.trim()}
+                note={c.id === "email" && !f.homeowner.email.trim() ? "Add their email above to mark yes." : null} />
+            ))}
+          </section>
           <h4>Where the work is</h4>
           <div className="appt-grid">
             <label className="fld appt-wide">Street address<span className="appt-req"> *</span>
@@ -29926,9 +30024,11 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
               placeholder="Gate code, dog in the yard, best number to call…" /></label>
           {!existing && (
             <label className="appt-check">
-              <input type="checkbox" checked={f.emailHomeowner} disabled={!f.homeowner.email}
-                onChange={(e) => set({ emailHomeowner: e.target.checked })} />
-              {f.homeowner.email ? `Email ${f.homeowner.email} a confirmation` : "No email given, so no confirmation is sent"}
+              <input type="checkbox" checked={f.emailHomeowner && f.consent.email === true} disabled={!f.homeowner.email || f.consent.email !== true}
+                data-confirm-email onChange={(e) => set({ emailHomeowner: e.target.checked })} />
+              {!f.homeowner.email ? "No email given, so no confirmation is sent"
+                : f.consent.email !== true ? "They didn't agree to email, so no confirmation is sent"
+                : `Email ${f.homeowner.email} a confirmation`}
             </label>
           )}
         </div>
@@ -29985,6 +30085,7 @@ function ApptSummary({ a, repName }) {
         <dt>The home</dt><dd>{HOME_QUESTIONS.filter((q) => a.home?.[q.id] != null)
           .map((q) => `${q.label.replace(/\?$/, "")}: ${a.home[q.id]}`).join(" · ") || "—"}</dd>
         {a.notes ? (<><dt>Notes</dt><dd>{a.notes}</dd></>) : null}
+        <dt>Follow-up</dt><dd><ConsentChips consent={a.consent} /></dd>
       </dl>
     </div>
   );
@@ -29994,8 +30095,17 @@ function ApptStatusChip({ status }) {
   return <span className={`tn-chip appt-st appt-st-${status}`} data-status={status}>{APPT_STATUSES[status]?.label || status}</span>;
 }
 
-function AppointmentsView({ role, onConvert, onOpenJob }) {
+function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob }) {
   const sales = role === "admin" || role === "pm";
+  // 106. Three halves of one section: the appointments, the follow-ups that
+  // are owed on them, and the homeowners behind them.
+  const [pane, setPane] = useState(ask?.pane === "followups" ? "followups" : "appointments");
+  const [followUps, setFollowUps] = useState(null);
+  const loadFollowUps = async () => {
+    try { setFollowUps((await api.listFollowUps()).followUps || []); }
+    catch (e) { setFollowUps(e?.body?.error === "migration_needed" ? { migration: e.body.migration } : []); }
+  };
+  useEffect(() => { loadFollowUps(); }, []);
   const [data, setData] = useState(null);
   const [loadErr, setLoadErr] = useState("");
   const [flow, setFlow] = useState(null);         // null | "new" | appointment
@@ -30016,6 +30126,19 @@ function AppointmentsView({ role, onConvert, onOpenJob }) {
   useEffect(() => { load(); }, []);
   const list = data?.appointments || [];
   const reps = data?.reps || [];
+  const team = data?.team || reps;
+  // Opened from an email: the appointment it named, once the list is here.
+  useEffect(() => {
+    if (!ask || !data) return;
+    if (ask.appointment && list.some((a) => a.id === ask.appointment)) { setPane("appointments"); setOpen(ask.appointment); }
+    if (ask.pane === "followups") setPane("followups");
+    onAskUsed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask, data]);
+  const openFollowUps = Array.isArray(followUps) ? followUps : [];
+  const dueNow = openFollowUps.filter((x) => ["due", "overdue"].includes(followUpState(x, dayKey()))).length;
+  const contacts = useMemo(() => contactsFrom(list), [list]);
+  const counts = Object.fromEntries(Object.keys(APPT_STATUSES).map((k) => [k, list.filter((a) => a.status === k).length]));
   const today = dayKey();
   const shown = list.filter((a) => {
     if (when === "upcoming" && (a.date < today || !APPT_STATUSES[a.status]?.open)) return false;
@@ -30038,13 +30161,40 @@ function AppointmentsView({ role, onConvert, onOpenJob }) {
 
   return (
     <main className="ss-main appt-view">
-      <PageHead title="Appointments"
-        sub={sales ? "Homeowners booked for an estimate. Record how each one went, and turn a sale into a job."
-          : "Book homeowners for a free estimate on inbound and outbound calls."}>
+      <PageHead title="CRM / Sales"
+        sub={sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
+          : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
         <button className="btn-solid" data-new-appt onClick={() => setFlow("new")}><PhoneCall size={16} /> New appointment</button>
       </PageHead>
       {flash && <p className="appt-flash" role="status">{flash}</p>}
       {loadErr && <p className="form-err" role="alert">{loadErr}</p>}
+      {data && data.crmReady === false && (
+        <p className="appt-warn" role="note" data-crm-migration>Follow-up consent, notes and follow-ups aren't set up on this database yet. Run migration 106_sales_crm.</p>
+      )}
+      <div className="seg-tabs crm-tabs" role="tablist">
+        {[["appointments", "Appointments", list.length], ["followups", "Follow-ups", dueNow || null], ["contacts", "Contacts", contacts.length]].map(([id, l, n]) => (
+          <button key={id} role="tab" data-crm-tab={id} aria-selected={pane === id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>
+            {l}{n != null && n !== 0 ? <>{" "}<span className={`nv-n ${id === "followups" ? "due" : ""}`}>{n}</span></> : null}
+          </button>
+        ))}
+      </div>
+      {pane === "followups" && (
+        <CrmFollowUps list={followUps} meId={meId} onOpen={(apptId) => { setPane("appointments"); setOpen(apptId); }}
+          onDone={(id) => setFollowUps((xs) => Array.isArray(xs) ? xs.filter((x) => x.id !== id) : xs)} />
+      )}
+      {pane === "contacts" && (
+        <CrmContacts contacts={contacts} byId={Object.fromEntries(list.map((a) => [a.id, a]))}
+          onOpen={(apptId) => { setPane("appointments"); setOpen(apptId); }} />
+      )}
+      {pane === "appointments" && (<>
+      <div className="crm-pipe" data-pipeline>
+        {["scheduled", "confirmed", "sat", "sold", "lost", "no_show"].map((k) => (
+          <button key={k} type="button" data-pipe={k} className={`crm-pipe-st ${st === k ? "on" : ""}`}
+            onClick={() => { setSt(st === k ? "" : k); setWhen("all"); }}>
+            <b>{counts[k] || 0}</b><span>{APPT_STATUSES[k].label}</span>
+          </button>
+        ))}
+      </div>
       {sales && needsOutcome > 0 && when !== "outcome" && (
         <button className="appt-needs" data-needs-outcome onClick={() => setWhen("outcome")}>
           <ActDot /> {needsOutcome === 1 ? "1 appointment has gone by" : `${needsOutcome} appointments have gone by`} with no outcome recorded
@@ -30078,22 +30228,24 @@ function AppointmentsView({ role, onConvert, onOpenJob }) {
           </li>
         ))}
       </ul>
+      </>)}
 
       {flow && (
         <Modal onClose={() => setFlow(null)} wide>
           <CallFlow existing={flow === "new" ? null : flow} reps={reps} appointments={list}
             onCancel={() => setFlow(null)}
-            onSaved={(a, conf) => {
-              upsert(a); setFlow(null); setOpen(a.id);
-              setFlash(flow === "new"
+            onSaved={(a, conf, res) => {
+              upsert(a); setFlow(null); setOpen(a.id); setPane("appointments");
+              setFlash((flow === "new"
                 ? `Booked ${a.homeowner.firstName} ${a.homeowner.lastName} for ${apptWhenText(a.date, a.time)}.${conf?.sent ? " A confirmation was emailed." : ""}`
-                : "Appointment saved.");
+                : "Appointment saved.")
+                + (res?.consentRecorded === false ? ` Their follow-up answers weren't saved: run migration ${res.migration || "106_sales_crm"}.` : ""));
             }} />
         </Modal>
       )}
       {current && !flow && (
         <Modal onClose={() => setOpen(null)} wide>
-          <AppointmentDetail a={current} reps={reps} sales={sales}
+          <AppointmentDetail a={current} reps={reps} team={team} sales={sales} onFollowUpsChanged={loadFollowUps}
             onEdit={() => setFlow(current)} onSaved={upsert} onClose={() => setOpen(null)}
             onConvert={sales && onConvert ? () => { setOpen(null); onConvert(current, () => load()); } : null}
             onOpenJob={onOpenJob} />
@@ -30103,7 +30255,7 @@ function AppointmentsView({ role, onConvert, onOpenJob }) {
   );
 }
 
-function AppointmentDetail({ a, reps, sales, onEdit, onSaved, onConvert, onOpenJob }) {
+function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConvert, onOpenJob, onFollowUpsChanged }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState(a.outcomeNote || "");
@@ -30131,6 +30283,7 @@ function AppointmentDetail({ a, reps, sales, onEdit, onSaved, onConvert, onOpenJ
       </div>
       <ApptSummary a={a} repName={repName} />
       {a.createdByName && <p className="note">Booked by {a.createdByName}.</p>}
+      <CrmActivity appt={a} team={team} onFollowUpsChanged={onFollowUpsChanged} />
       {a.jobId ? (
         <div className="appt-job" data-job>
           <CheckCircle2 size={16} /> This sale is a job now.
@@ -30159,6 +30312,276 @@ function AppointmentDetail({ a, reps, sales, onEdit, onSaved, onConvert, onOpenJ
           <button className="btn-solid" data-convert onClick={onConvert}>Sold — create the job</button>
         )}
       </div>
+    </div>
+  );
+}
+
+// 106. What has been said to a homeowner and what is owed next: notes, logged
+// calls, follow-ups and call recordings, newest first. Every gate here is the
+// route's own (shared/salescrm.js): an outbound call, a follow-up by a channel
+// and a recording each need the homeowner's yes, and the form says so before
+// the press rather than after it.
+function CrmActivity({ appt, team = [], onFollowUpsChanged }) {
+  const [d, setD] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [mode, setMode] = useState("");
+  const [f, setF] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const load = async () => {
+    try { setD(await api.listApptActivities(appt.id)); setLoadErr(""); }
+    catch (e) {
+      setLoadErr(e?.body?.error === "migration_needed"
+        ? `Notes and follow-ups aren't set up on this database yet. Run migration ${e.body.migration || "106_sales_crm"}.`
+        : "Couldn't load the activity. Close this and open it again.");
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [appt.id]);
+  const consent = d?.consent ?? appt.consent ?? null;
+  const people = d?.team || team;
+  const start = (m) => {
+    setErr(""); setMode(m);
+    setF(m === "call" ? { direction: "inbound", outcome: "" }
+      : m === "follow_up" ? { body: "", dueDate: dayKey(), channel: mayUse(consent, "phone") ? "call" : "visit", assigneeId: "" }
+      : m === "recording" ? { file: null, agreed: consent?.record === true } : { body: "" });
+  };
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      let body;
+      if (mode === "recording") {
+        const up = await api.uploadCallRecording(f.file);
+        body = { kind: "recording", fileKey: up.key, fileName: f.file.name, fileType: up.type || f.file.type, fileSize: up.size,
+          consentConfirmed: !!f.agreed, body: f.body || null };
+      } else body = { kind: mode, ...f };
+      const r = await api.addApptActivity(appt.id, body);
+      setD((x) => ({ ...(x || {}), activities: [r.activity, ...(x?.activities || [])] }));
+      setMode("");
+      if (mode === "follow_up") onFollowUpsChanged?.();
+    } catch (e) { setErr(apptRefusalText(e)); }
+    finally { setBusy(false); }
+  };
+  const tick = async (act) => {
+    try {
+      const r = await api.patchApptActivity(appt.id, act.id, { done: !act.doneAt });
+      setD((x) => ({ ...x, activities: x.activities.map((y) => (y.id === act.id ? r.activity : y)) }));
+      onFollowUpsChanged?.();
+    } catch (e) { setErr(apptRefusalText(e)); }
+  };
+  const chOk = (ch) => !FOLLOW_CHANNELS[ch].needs || mayUse(consent, FOLLOW_CHANNELS[ch].needs);
+  const ready = mode === "note" ? !!f.body?.trim()
+    : mode === "call" ? !!f.outcome && (f.direction === "inbound" || mayUse(consent, "phone"))
+    : mode === "follow_up" ? !!f.body?.trim() && !!f.dueDate && chOk(f.channel)
+    : mode === "recording" ? !!f.file && !!f.agreed && consent?.record !== false : false;
+  const today = dayKey();
+  return (
+    <section className="crm-activity" data-activity>
+      <div className="crm-act-head">
+        <h4>Activity</h4>
+        <ConsentChips consent={consent} />
+      </div>
+      {loadErr && <p className="form-err" role="alert">{loadErr}</p>}
+      {!loadErr && (
+        <div className="crm-act-btns">
+          {[["note", "Add a note", StickyNote], ["call", "Log a call", Phone], ["follow_up", "Add a follow-up", CalendarClock],
+            ["recording", "Attach a recording", Mic]].map(([m, l, Icon]) => (
+            <button key={m} type="button" className={`btn-ghost ${mode === m ? "on" : ""}`} data-act={m} onClick={() => (mode === m ? setMode("") : start(m))}>
+              <Icon size={15} /> {l}</button>
+          ))}
+        </div>
+      )}
+      {mode && (
+        <div className="crm-act-form" data-act-form={mode}>
+          {mode === "note" && (
+            <label className="fld">Note<textarea rows={3} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
+          )}
+          {mode === "call" && (<>
+            <div className="chips">
+              {[["inbound", "They called us"], ["outbound", "We called them"]].map(([v, l]) => (
+                <button type="button" key={v} className={`chip ${f.direction === v ? "on" : ""}`} aria-pressed={f.direction === v}
+                  data-call-dir={v} disabled={v === "outbound" && !mayUse(consent, "phone")}
+                  onClick={() => setF({ ...f, direction: v })}>{l}</button>
+              ))}
+            </div>
+            {!mayUse(consent, "phone") && <p className="fld-note" data-no-call>They haven't agreed to phone follow-up, so only a call they made can be logged.</p>}
+            <div className="chips">
+              {CALL_OUTCOMES.map((o) => (
+                <button type="button" key={o} className={`chip ${f.outcome === o ? "on" : ""}`} aria-pressed={f.outcome === o}
+                  onClick={() => setF({ ...f, outcome: o })}>{o}</button>
+              ))}
+            </div>
+            <label className="fld">What was said <span className="fld-note">optional</span>
+              <textarea rows={2} value={f.body || ""} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
+          </>)}
+          {mode === "follow_up" && (<>
+            <label className="fld">What needs doing<textarea rows={2} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })}
+              placeholder="Send the metal roof pricing, call back about financing…" /></label>
+            <div className="appt-grid">
+              <label className="fld">Due<input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} /></label>
+              <label className="fld">For
+                <select value={f.assigneeId} onChange={(e) => setF({ ...f, assigneeId: e.target.value })} data-assignee>
+                  <option value="">Me</option>
+                  {people.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                </select></label>
+            </div>
+            <div className="chips" data-channels>
+              {Object.entries(FOLLOW_CHANNELS).map(([k, c]) => (
+                <button type="button" key={k} className={`chip ${f.channel === k ? "on" : ""}`} aria-pressed={f.channel === k}
+                  data-channel={k} disabled={!chOk(k)} title={chOk(k) ? "" : "They haven't agreed to this"}
+                  onClick={() => setF({ ...f, channel: k })}>{c.label}</button>
+              ))}
+            </div>
+            {Object.keys(FOLLOW_CHANNELS).some((k) => !chOk(k)) && (
+              <p className="fld-note">Grayed-out channels are ones they didn't agree to.</p>
+            )}
+          </>)}
+          {mode === "recording" && (<>
+            {consent?.record === false ? (
+              <p className="appt-warn" role="note" data-no-record>They said no to being recorded, so a recording of this call can't be kept.</p>
+            ) : (<>
+              <label className="fld">Recording <span className="fld-note">audio, up to 50 MB</span>
+                <input type="file" accept={AUDIO_TYPES.join(",")} data-recording-file
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setErr(file && file.size > MAX_RECORDING_BYTES ? "That recording is over 50 MB." : "");
+                    setF({ ...f, file: file && file.size <= MAX_RECORDING_BYTES ? file : null });
+                  }} /></label>
+              <label className="appt-check"><input type="checkbox" checked={!!f.agreed} data-recording-agreed
+                onChange={(e) => setF({ ...f, agreed: e.target.checked })} />
+                They agreed at the start of the call to be recorded</label>
+              <label className="fld">Note <span className="fld-note">optional</span>
+                <input value={f.body || ""} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
+            </>)}
+          </>)}
+          {err && <p className="form-err" role="alert">{err}</p>}
+          <div className="form-actions">
+            <button type="button" className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            <button type="button" className="btn-solid" data-act-save disabled={!ready || busy} onClick={save}>{busy ? "Saving…" : "Save"}</button>
+          </div>
+        </div>
+      )}
+      {!mode && err && <p className="form-err" role="alert">{err}</p>}
+      {d && !d.activities?.length && !mode && <p className="note">Nothing logged yet.</p>}
+      <ul className="crm-timeline">
+        {(d?.activities || []).map((x) => {
+          const fs = followUpState(x, today);
+          return (
+            <li key={x.id} className={`crm-item crm-${x.kind} ${fs ? `fu-${fs}` : ""}`} data-item={x.kind}>
+              <div className="crm-item-head">
+                <b>{x.kind === "call" ? `${x.direction === "outbound" ? "Called them" : "They called"} · ${x.outcome}`
+                  : x.kind === "follow_up" ? `Follow-up${x.channel ? ` by ${FOLLOW_CHANNELS[x.channel]?.label.toLowerCase()}` : ""} · due ${apptWhenText(x.dueDate)}`
+                  : x.kind === "recording" ? "Call recording" : "Note"}</b>
+                <span className="crm-item-meta">{x.createdByName || "Somebody"} · {stampDay(x.createdAt)}</span>
+              </div>
+              {x.body && <p className="crm-item-body">{x.body}</p>}
+              {x.kind === "follow_up" && (
+                <div className="crm-fu-row">
+                  <span>For {x.assigneeName || "nobody"}</span>
+                  {fs === "overdue" && <span className="crm-fu-late">Overdue</span>}
+                  <label className="appt-check"><input type="checkbox" checked={!!x.doneAt} data-fu-done onChange={() => tick(x)} />
+                    {x.doneAt ? `Done${x.doneByName ? ` by ${x.doneByName}` : ""}` : "Mark done"}</label>
+                </div>
+              )}
+              {x.kind === "recording" && x.file && <CallRecording apptId={appt.id} act={x} />}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+// A recording's bytes need an Authorization header, so they are fetched once
+// and played from a blob, the way every other file here is.
+function CallRecording({ apptId, act }) {
+  const [url, setUrl] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let gone = false, made = null;
+    api.apptRecordingBlob(apptId, act.id).then((r) => { made = r.url; if (!gone) setUrl(r.url); })
+      .catch(() => { if (!gone) setFailed(true); });
+    return () => { gone = true; if (made) URL.revokeObjectURL(made); };
+  }, [apptId, act.id]);
+  if (failed) return <p className="note">This recording couldn't be opened.</p>;
+  return (
+    <div className="crm-rec">
+      {url ? <audio controls src={url} preload="metadata" data-audio /> : <span className="note">Loading the recording…</span>}
+      {url && <a href={url} download={act.file?.name || "recording"} target="_blank" rel="noopener noreferrer">Download</a>}
+    </div>
+  );
+}
+
+// Every follow-up still to do, oldest due first, with the ones due today or
+// overdue marked. Mine first is the default, because that is the list a person
+// works from.
+function CrmFollowUps({ list, meId, onOpen, onDone }) {
+  const [whose, setWhose] = useState("mine");
+  const [err, setErr] = useState("");
+  if (list && !Array.isArray(list)) {
+    return <p className="appt-warn" role="note">Follow-ups aren't set up on this database yet. Run migration {list.migration || "106_sales_crm"}.</p>;
+  }
+  if (!list) return <p className="note">Loading…</p>;
+  const today = dayKey();
+  const shown = list.filter((x) => whose === "all" || x.assigneeId === meId);
+  const done = async (x) => {
+    setErr("");
+    try { await api.patchApptActivity(x.appointmentId, x.id, { done: true }); onDone(x.id); }
+    catch (e) { setErr(apptRefusalText(e)); }
+  };
+  return (
+    <div className="crm-fus" data-followups>
+      <div className="seg-tabs sm">
+        {[["mine", "Mine"], ["all", "Everybody's"]].map(([k, l]) => (
+          <button key={k} className={whose === k ? "on" : ""} data-whose={k} onClick={() => setWhose(k)}>{l}</button>
+        ))}
+      </div>
+      {err && <p className="form-err" role="alert">{err}</p>}
+      {!shown.length && <p className="note">{whose === "mine" ? "Nothing owed by you." : "No follow-ups owed."}</p>}
+      <ul className="appt-list">
+        {shown.map((x) => {
+          const fs = followUpState(x, today);
+          return (
+            <li key={x.id} className={`crm-fu fu-${fs}`} data-fu={x.id}>
+              <button type="button" className="appt-row" onClick={() => onOpen(x.appointmentId)}>
+                <span className="appt-row-when"><b>{apptWhenText(x.dueDate).replace(/^(\w+), /, "$1 · ")}</b>
+                  <span className={`crm-fu-state ${fs}`}>{fs === "overdue" ? "Overdue" : fs === "due" ? "Due today" : "Upcoming"}</span></span>
+                <span className="appt-row-main"><b>{x.who}</b><span>{x.body}</span></span>
+                <span className="appt-row-side"><span className="appt-row-rep">{FOLLOW_CHANNELS[x.channel]?.label || ""} · {x.assigneeName || "nobody"}</span></span>
+              </button>
+              <button type="button" className="btn-ghost crm-fu-done" data-fu-done onClick={() => done(x)}><Check size={14} /> Done</button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// The homeowners behind this account's appointments, one per phone number.
+// Built from the account's own list, so nothing here reaches past it.
+function CrmContacts({ contacts, byId, onOpen }) {
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const shown = contacts.filter((c) => !needle || [c.firstName, c.lastName, c.phone, c.email, c.address?.city, c.address?.street]
+    .join(" ").toLowerCase().includes(needle) || (needle.replace(/\D/g, "").length >= 3 && c.phone.includes(needle.replace(/\D/g, ""))));
+  return (
+    <div className="crm-contacts" data-contacts>
+      <FilterBar q={q} onQ={setQ} placeholder="Search name, phone, email…" shown={shown.length} total={contacts.length}
+        onClear={() => setQ("")} filters={[]} />
+      {!contacts.length && <p className="note">Homeowners show up here once an appointment is booked.</p>}
+      <ul className="appt-list">
+        {shown.map((c) => (
+          <li key={c.key}>
+            <button type="button" className="appt-row crm-contact" data-contact={c.key} onClick={() => onOpen(c.latestId)}>
+              <span className="appt-row-main"><b>{c.firstName} {c.lastName}</b>
+                <span>{formatPhone(c.phone)}{c.email ? ` · ${c.email}` : ""}{c.address?.city ? ` · ${c.address.city}` : ""}</span>
+                <ConsentChips consent={c.consent} /></span>
+              <span className="appt-row-side"><ApptStatusChip status={byId[c.latestId]?.status || c.latestStatus} />
+                <span className="appt-row-rep">{c.appointments.length === 1 ? "1 appointment" : `${c.appointments.length} appointments`}</span></span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -53732,6 +54155,47 @@ button.job-insp:hover{border-color:#2f5577}
 .appt-set{min-height:40px}
 .appt-job{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:#e6f2ec;color:#1d5740;font-weight:600}
 .appt-note-save{align-self:flex-start;margin-top:6px}
+/* 106. CRM / Sales: consent, activity, follow-ups and contacts. */
+.crm-tabs{margin:0 0 14px}
+.crm-tabs .nv-n.due{background:#b5442e;color:#fff}
+.crm-consent{display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px}
+.crm-consent h4{margin:0}
+.crm-script{margin:0;padding:8px 12px;border-left:3px solid var(--brand);background:var(--paper);border-radius:0 8px 8px 0;font-size:14px;font-style:italic}
+.crm-chips{display:flex;flex-wrap:wrap;gap:6px}
+.crm-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:999px;font:600 12px Inter,sans-serif}
+.crm-chip.yes{background:#e6f2ec;color:#1d5740}
+.crm-chip.no{background:#f8e6e2;color:#8e3422}
+.crm-chip.unk{background:var(--paper);color:var(--ink-soft);border:1px dashed var(--line)}
+.crm-pipe{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:0 0 12px}
+@media (max-width:620px){.crm-pipe{grid-template-columns:repeat(3,minmax(0,1fr))}}
+.crm-pipe-st{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);cursor:pointer;text-align:left;font:500 12.5px Inter,sans-serif;min-height:56px}
+.crm-pipe-st b{font-size:20px}
+.crm-pipe-st span{color:var(--ink-soft)}
+.crm-pipe-st.on{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand) inset}
+.crm-activity{display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px}
+.crm-act-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.crm-act-head h4{margin:0;font-size:15px}
+.crm-act-btns{display:flex;flex-wrap:wrap;gap:8px}
+.crm-act-btns .btn-ghost{display:inline-flex;align-items:center;gap:6px;min-height:44px}
+.crm-act-btns .btn-ghost.on{border-color:var(--brand);color:var(--brand)}
+.crm-act-form{display:flex;flex-direction:column;gap:10px;padding:12px;border-radius:10px;background:var(--paper)}
+.crm-timeline{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.crm-item{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+.crm-item.fu-overdue{border-color:#e0a99b}
+.crm-item-head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px;font-size:14px}
+.crm-item-meta{color:var(--ink-soft);font-size:12.5px}
+.crm-item-body{margin:6px 0 0;font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+.crm-fu-row{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:8px;font-size:13px;color:var(--ink-soft)}
+.crm-fu-late{color:#8e3422;font-weight:700}
+.crm-rec{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:8px}
+.crm-rec audio{max-width:100%;width:320px}
+.crm-fus{display:flex;flex-direction:column;gap:10px}
+.crm-fu{display:flex;gap:8px;align-items:stretch}
+.crm-fu .appt-row{flex:1 1 auto;min-width:0}
+.crm-fu-done{flex:none;display:inline-flex;align-items:center;gap:4px;min-height:44px}
+.crm-fu-state.overdue{color:#8e3422;font-weight:700}
+.crm-fu-state.due{color:#8a5a12;font-weight:700}
+.crm-contact .crm-chips{margin-top:6px}
 
 `;
 // The dark theme is derived from the sheet above, a twin after each rule (see

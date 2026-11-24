@@ -21,6 +21,8 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
 import * as MAIL from "./mail.js";
 import { validAppointment, repClashes, STATUSES as APPT_STATUSES, CALLCENTER_STATUSES,
   BOOKING_ROLES, SALES_ROLES, takesAppointments, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, MAX_RECORDING_BYTES,
+  FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { NOTICES, noticeByKey, noticePlaceholders, unknownPlaceholders, renderNotice, noticeVars,
   noticeNeedsLink, NOTICE_SUBJECT_MAX, NOTICE_BODY_MAX } from "../shared/notices.js";
 import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
@@ -864,6 +866,11 @@ const CALLCENTER_ALLOWED = [
   [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
   [/^\/api\/appointments$/, ["GET", "POST"]],
   [/^\/api\/appointments\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/appointments\/[^/]+\/activities$/, ["GET", "POST"]],
+  [/^\/api\/appointments\/[^/]+\/activities\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/appointments\/[^/]+\/activities\/[^/]+\/file$/, ["GET"]],
+  [/^\/api\/sales-followups$/, ["GET"]],
+  [/^\/api\/uploads\/call-recording\/.+$/, ["PUT"]],
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
   [/^\/api\/me\/avatar$/, ["PATCH"]],
   [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
@@ -10484,6 +10491,7 @@ export function missingSchema(err) {
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
+  if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
   if (/\bsales_appointments\b/i.test(m)) return "105_sales_appointments";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
@@ -22331,6 +22339,18 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
     await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
     return c.json({ key, size: body.byteLength, type });
   }
+  // 106. A call recording: audio only, served back with nosniff, never a page.
+  if (kind === "call-recording") {
+    if (!AUDIO_TYPES.includes(type)) return c.json({ error: "not_audio", type }, 415);
+    const declared = Number(c.req.header("Content-Length") || 0);
+    if (declared > MAX_RECORDING_BYTES) return c.json({ error: "too_big", max: MAX_RECORDING_BYTES }, 413);
+    const body = await c.req.arrayBuffer();
+    if (body.byteLength > MAX_RECORDING_BYTES) return c.json({ error: "too_big", max: MAX_RECORDING_BYTES }, 413);
+    if (body.byteLength === 0) return c.json({ error: "empty" }, 400);
+    const key = `${accountId}/${kind}/${uid()}-${safeFileName(fileName)}`;
+    await c.env.FILES.put(key, body, { httpMetadata: { contentType: type } });
+    return c.json({ key, size: body.byteLength, type });
+  }
   if (kind === "measurement-doc") {
     if (!MEASURE_TYPES.has(type)) return c.json({ error: "not_a_document", type }, 415);
     const declared = Number(c.req.header("Content-Length") || 0);
@@ -27450,7 +27470,7 @@ function apptRowToJs(r) {
 // with nothing to do.
 async function apptAccount(c) {
   const { accountId } = c.get("auth");
-  const acct = await c.env.DB.prepare(`SELECT id, name, kind, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
+  const acct = await c.env.DB.prepare(`SELECT id, name, kind, subdomain, hostname_status FROM accounts WHERE id = ?`).bind(accountId).first();
   if (!acct || !takesAppointments(acct.kind)) return { error: c.json({ error: "no_appointments_for_this_account", kind: acct?.kind || null }, 403) };
   return { acct };
 }
@@ -27481,7 +27501,9 @@ app.get("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
   return apptMigrationGuard(c, async () => {
     const { results } = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.account_id = ? ORDER BY a.date DESC, a.time DESC LIMIT 1000`)
       .bind(acct.id).all();
-    return c.json({ appointments: (results || []).map(apptRowToJs), reps: await apptReps(c.env, acct.id) });
+    const consents = await apptConsents(c.env, acct.id);
+    return c.json({ appointments: (results || []).map((r) => withConsent(apptRowToJs(r), consents)),
+      reps: await apptReps(c.env, acct.id), team: await crmTeam(c.env, acct.id), crmReady: consents !== null });
   });
 });
 
@@ -27527,6 +27549,10 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
   const chk = validAppointment(b);
   if (!chk.ok) return c.json({ error: chk.error, field: chk.field, missing: chk.missing || undefined }, 400);
   const v = { ...chk.value, allowClash: b.allowClash === true };
+  // 106. Asking is part of the booking: email, phone and text each answered.
+  const cc = validConsent(b.consent, { email: v.homeowner.email, phone: v.homeowner.phone });
+  if (!cc.ok) return c.json({ error: cc.error, field: cc.field }, 400);
+  if (cc.missing.length) return c.json({ error: "incomplete", field: cc.missing[0], missing: cc.missing }, 400);
   return apptMigrationGuard(c, async () => {
     const refused = await apptCheckRep(c, acct, v, null);
     if (refused) return refused;
@@ -27546,9 +27572,15 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
       `Booked an estimate for ${who} (${v.services.map(serviceLabel).join(", ")}) on ${apptWhenText(v.date, v.time)}`, { appointmentId: id });
     try { await logEvent(c.env, acct.id, userId, "appointment.booked", id, { direction: v.direction, services: v.services }); }
     catch (err) { console.warn("[appointments] event:", err?.message || err); }
+    const consentSaved = await saveConsent(c.env, { accountId: acct.id, appointmentId: id, consent: cc.value, userId, prior: null });
+    // A confirmation is an email, so it goes only to somebody who said yes to email.
     const confirmation = b.emailHomeowner === false ? { sent: false, reason: "not_asked" }
+      : !cc.value.email ? { sent: false, reason: "no_email_consent" }
       : await apptConfirmEmail(c, acct, v, row?.rep_name || null, userId, id);
-    return c.json({ appointment: apptRowToJs(row), confirmation }, 201);
+    const repTold = v.repId ? await notifyApptRep(c.env, { acct, row, actorId: userId, reassigned: false }) : null;
+    const consents = await apptConsents(c.env, acct.id, id);
+    return c.json({ appointment: withConsent(apptRowToJs(row), consents), confirmation, repTold,
+      consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) }, 201);
   });
 });
 
@@ -27589,6 +27621,14 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
         if (refused) return refused;
       }
     }
+    // Checked before anything is written, so a refused answer saves nothing.
+    let ccPatch = null;
+    if ("consent" in b) {
+      const ho = v ? v.homeowner : cur.homeowner;
+      ccPatch = validConsent(b.consent, { email: ho.email, phone: ho.phone });
+      if (!ccPatch.ok) return c.json({ error: ccPatch.error, field: ccPatch.field }, 400);
+      if (ccPatch.missing.length) return c.json({ error: "incomplete", field: ccPatch.missing[0], missing: ccPatch.missing }, 400);
+    }
     const outcome = sales && "outcomeNote" in b ? (String(b.outcomeNote || "").trim().slice(0, 2000) || null) : cur.outcomeNote;
     if (v) {
       await c.env.DB.prepare(
@@ -27608,6 +27648,14 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
          WHERE id = ? AND account_id = ? AND job_id IS NULL`).bind(status, outcome, status, cur.id, acct.id).run();
     }
     const after = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ?`).bind(cur.id).first();
+    // 106. Consent can be answered or changed on an edit; every change is an
+    // event, so what they agreed to and when stays readable after it moves.
+    let consentSaved = null;
+    if (ccPatch) {
+      const prior = (await apptConsents(c.env, acct.id, cur.id))?.get(cur.id) || null;
+      consentSaved = await saveConsent(c.env, { accountId: acct.id, appointmentId: cur.id, consent: ccPatch.value, userId, prior });
+    }
+    if (v && v.repId && v.repId !== cur.repId) await notifyApptRep(c.env, { acct, row: after, actorId: userId, reassigned: !!cur.repId });
     if (status !== cur.status) {
       const who = `${cur.homeowner.firstName} ${cur.homeowner.lastName}`;
       await logActivity(c.env, acct.id, userId, "appointment_status",
@@ -27615,8 +27663,309 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
       try { await logEvent(c.env, acct.id, userId, "appointment.status", cur.id, { from: cur.status, to: status }); }
       catch (err) { console.warn("[appointments] event:", err?.message || err); }
     }
-    return c.json({ appointment: apptRowToJs(after) });
+    const consents = await apptConsents(c.env, acct.id, cur.id);
+    return c.json({ appointment: withConsent(apptRowToJs(after), consents),
+      ...(consentSaved ? { consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) } : {}) });
   });
+});
+
+// ---------------------------------------------------------------------------
+// 106. CRM / Sales: consent and activity on an appointment.
+// shared/salescrm.js holds the rules.
+// ---------------------------------------------------------------------------
+
+// The consents on file, by appointment id. null for a database without 106,
+// so the list still loads and says so.
+async function apptConsents(env, accountId, appointmentId = null) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT sc.*, u.name AS captured_by_name FROM sales_consents sc LEFT JOIN users u ON u.id = sc.captured_by
+        WHERE sc.account_id = ?${appointmentId ? " AND sc.appointment_id = ?" : ""}`)
+      .bind(...(appointmentId ? [accountId, appointmentId] : [accountId])).all();
+    return new Map((results || []).map((r) => [r.appointment_id, consentOf(r)]));
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+const withConsent = (a, consents) => ({ ...a, consent: consents?.get(a.id) || null });
+
+async function saveConsent(env, { accountId, appointmentId, consent, userId, prior }) {
+  const same = prior && ["email", "phone", "text", "record"].every((k) => prior[k] === consent[k]);
+  if (same) return { recorded: true, unchanged: true };
+  const n = (v) => (v === true ? 1 : v === false ? 0 : null);
+  try {
+    await env.DB.prepare(
+      `INSERT INTO sales_consents (appointment_id, account_id, email, phone, text, record_call, script_version, captured_by, captured_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(appointment_id) DO UPDATE SET email = excluded.email, phone = excluded.phone, text = excluded.text,
+         record_call = excluded.record_call, script_version = excluded.script_version,
+         captured_by = excluded.captured_by, captured_at = excluded.captured_at`)
+      .bind(appointmentId, accountId, n(consent.email), n(consent.phone), n(consent.text), n(consent.record),
+        CONSENT_VERSION, userId || null, new Date().toISOString()).run();
+  } catch (err) {
+    if (missingSchema(err)) return { recorded: false, migration: "106_sales_crm" };
+    throw err;
+  }
+  try {
+    await logEvent(env, accountId, userId, "appointment.consent", appointmentId, {
+      version: CONSENT_VERSION, to: { email: consent.email, phone: consent.phone, text: consent.text, record: consent.record },
+      from: prior ? { email: prior.email, phone: prior.phone, text: prior.text, record: prior.record } : null });
+  } catch (err) { console.warn("[crm] consent event:", err?.message || err); }
+  return { recorded: true };
+}
+
+// Everybody on the team a follow-up may go to: the people who book and the
+// people who sell. Never a guest or a contractor.
+async function crmTeam(env, accountId) {
+  const { results } = await env.DB.prepare(
+    `SELECT u.id, u.name, m.role FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.account_id = ? AND m.role IN ('admin', 'pm', 'callcenter') ORDER BY u.name`).bind(accountId).all();
+  const seen = new Set();
+  return (results || []).filter((u) => !seen.has(u.id) && seen.add(u.id)).map((u) => ({ id: u.id, name: u.name, role: u.role }));
+}
+
+const crmLink = (acct, id) => `${accountOrigin(acct)}/?open=appointment&id=${encodeURIComponent(id)}`;
+
+// The sales manager an estimate was booked for or moved to, told by email by
+// their own setting. Not when they booked it themselves. Never fails the caller.
+async function notifyApptRep(env, { acct, row, actorId, reassigned }) {
+  try {
+    if (!row?.rep_user_id || row.rep_user_id === actorId) return { sent: false, reason: "self" };
+    const rep = await env.DB.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(row.rep_user_id).first();
+    const to = realEmail(rep?.email);
+    if (!to) return { sent: false, reason: "no_email" };
+    if (!notifyOf(rep).email) return { sent: false, reason: "email_off" };
+    const actor = actorId ? await env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(actorId).first() : null;
+    const a = apptRowToJs(row);
+    const mail = MAIL.appointmentAssignedEmail({ firstName: String(rep.name || "").split(" ")[0], bookedBy: actor?.name || null,
+      who: `${a.homeowner.firstName} ${a.homeowner.lastName}`, services: a.services.map(serviceLabel),
+      when: apptWhenText(a.date, a.time), address: `${a.address.street}, ${a.address.city}, ${a.address.state} ${a.address.zip}`,
+      link: crmLink(acct, a.id), reassigned });
+    const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(env, { accountId: acct.id, companyId: null, to, kind: "appointment_assigned", subject: mail.subject, result, sentBy: actorId || null });
+    return { sent: !!result.ok };
+  } catch (err) {
+    console.error("[crm] rep notify failed:", err?.message || err);
+    return { sent: false, reason: "send_failed" };
+  }
+}
+
+function activityRowToJs(r) {
+  return {
+    id: r.id, appointmentId: r.appointment_id, kind: r.kind, body: r.body || null,
+    direction: r.direction || null, outcome: r.outcome || null, channel: r.channel || null,
+    dueDate: r.due_date || null, assigneeId: r.assignee_id || null, assigneeName: r.assignee_name || null,
+    doneAt: r.done_at || null, doneByName: r.done_by_name || null,
+    file: r.file_key ? { name: r.file_name, type: r.file_type, size: r.file_size } : null,
+    createdBy: r.created_by || null, createdByName: r.created_by_name || null, createdAt: r.created_at,
+  };
+}
+const ACT_SELECT = `SELECT s.*, au.name AS assignee_name, cb.name AS created_by_name, db.name AS done_by_name
+  FROM sales_activities s LEFT JOIN users au ON au.id = s.assignee_id
+  LEFT JOIN users cb ON cb.id = s.created_by LEFT JOIN users db ON db.id = s.done_by`;
+
+async function crmGuard(c, fn) {
+  try { return await fn(); }
+  catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: missingSchema(err) || "106_sales_crm" }, 503);
+    throw err;
+  }
+}
+
+async function apptOfAccount(c, acct) {
+  return c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ? AND a.account_id = ?`).bind(c.req.param("id"), acct.id).first();
+}
+
+app.get("/api/appointments/:id/activities", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmGuard(c, async () => {
+    const row = await apptOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const { results } = await c.env.DB.prepare(`${ACT_SELECT} WHERE s.appointment_id = ? AND s.account_id = ?
+      ORDER BY s.created_at DESC, s.rowid DESC`).bind(row.id, acct.id).all();
+    const consents = await apptConsents(c.env, acct.id, row.id);
+    return c.json({ activities: (results || []).map(activityRowToJs), consent: consents?.get(row.id) || null,
+      team: await crmTeam(c.env, acct.id) });
+  });
+});
+
+app.post("/api/appointments/:id/activities", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return crmGuard(c, async () => {
+    const row = await apptOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const consents = await apptConsents(c.env, acct.id, row.id);
+    if (consents === null) return c.json({ error: "migration_needed", migration: "106_sales_crm" }, 503);
+    const consent = consents.get(row.id) || null;
+    const team = await crmTeam(c.env, acct.id);
+    const chk = validActivity(b, { consent, accountId: acct.id, assignees: team.map((u) => u.id) });
+    if (!chk.ok) return c.json({ error: chk.error, ...(chk.channel ? { channel: chk.channel } : {}) }, 400);
+    const v = chk.value;
+    const id = uid();
+    const assignee = v.kind === "follow_up" ? (v.assigneeId || userId) : null;
+    await c.env.DB.prepare(
+      `INSERT INTO sales_activities (id, account_id, appointment_id, kind, body, direction, outcome, channel, due_date,
+         assignee_id, file_key, file_name, file_type, file_size, record_consent, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, acct.id, row.id, v.kind, v.body || null, v.direction || null, v.outcome || null, v.channel || null,
+        v.dueDate || null, assignee, v.fileKey || null, v.fileName || null, v.fileType || null, v.fileSize || null,
+        v.kind === "recording" ? 1 : null, userId, new Date().toISOString()).run();
+    try { await logEvent(c.env, acct.id, userId, `appointment.${v.kind}`, row.id, { activityId: id }); }
+    catch (err) { console.warn("[crm] event:", err?.message || err); }
+    let told = null;
+    if (v.kind === "follow_up" && assignee !== userId) {
+      told = await notifyFollowUp(c.env, { acct, appt: apptRowToJs(row), v, assigneeId: assignee, actorId: userId });
+    }
+    const after = await c.env.DB.prepare(`${ACT_SELECT} WHERE s.id = ?`).bind(id).first();
+    return c.json({ activity: activityRowToJs(after), ...(told ? { told } : {}) }, 201);
+  });
+});
+
+async function notifyFollowUp(env, { acct, appt, v, assigneeId, actorId }) {
+  try {
+    const u = await env.DB.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(assigneeId).first();
+    const to = realEmail(u?.email);
+    if (!to) return { sent: false, reason: "no_email" };
+    if (!notifyOf(u).email) return { sent: false, reason: "email_off" };
+    const actor = await env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(actorId).first();
+    const mail = MAIL.followUpAssignedEmail({ firstName: String(u.name || "").split(" ")[0], assignedBy: actor?.name || null,
+      who: `${appt.homeowner.firstName} ${appt.homeowner.lastName}`, what: v.body, due: apptWhenText(v.dueDate),
+      channel: FOLLOW_CHANNELS[v.channel]?.label || null, link: crmLink(acct, appt.id) });
+    const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(env, { accountId: acct.id, companyId: null, to, kind: "followup_assigned", subject: mail.subject, result, sentBy: actorId });
+    return { sent: !!result.ok };
+  } catch (err) {
+    console.error("[crm] follow-up notify failed:", err?.message || err);
+    return { sent: false, reason: "send_failed" };
+  }
+}
+
+// Ticking a follow-up done, or undoing it. The only change an activity takes.
+app.patch("/api/appointments/:id/activities/:actId", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b.done !== "boolean") return c.json({ error: "bad_request" }, 400);
+  return crmGuard(c, async () => {
+    const act = await c.env.DB.prepare(`SELECT * FROM sales_activities WHERE id = ? AND appointment_id = ? AND account_id = ?`)
+      .bind(c.req.param("actId"), c.req.param("id"), acct.id).first();
+    if (!act) return c.json({ error: "not_found" }, 404);
+    if (act.kind !== "follow_up") return c.json({ error: "not_a_follow_up" }, 409);
+    await c.env.DB.prepare(`UPDATE sales_activities SET done_at = ?, done_by = ? WHERE id = ?`)
+      .bind(b.done ? new Date().toISOString() : null, b.done ? userId : null, act.id).run();
+    const after = await c.env.DB.prepare(`${ACT_SELECT} WHERE s.id = ?`).bind(act.id).first();
+    return c.json({ activity: activityRowToJs(after) });
+  });
+});
+
+// A recording's bytes. Never by key and never cached, like every file here.
+app.get("/api/appointments/:id/activities/:actId/file", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmGuard(c, async () => {
+    const act = await c.env.DB.prepare(`SELECT * FROM sales_activities WHERE id = ? AND appointment_id = ? AND account_id = ?`)
+      .bind(c.req.param("actId"), c.req.param("id"), acct.id).first();
+    if (!act || act.kind !== "recording" || !act.file_key) return c.json({ error: "not_found" }, 404);
+    const obj = await c.env.FILES?.get(act.file_key);
+    if (!obj) return c.json({ error: "no_file" }, 404);
+    return new Response(obj.body, { headers: {
+      "Content-Type": AUDIO_TYPES.includes(act.file_type) ? act.file_type : "application/octet-stream",
+      "Content-Disposition": `inline; filename="${String(act.file_name || "recording").replace(/[^\w.\-]/g, "_")}"`,
+      "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    } });
+  });
+});
+
+// Every follow-up still to do on the account, oldest due first, with who it is
+// about, so the Follow-ups tab and the nav count read one answer.
+app.get("/api/sales-followups", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmGuard(c, async () => {
+    const { results } = await c.env.DB.prepare(
+      `SELECT s.*, au.name AS assignee_name, cb.name AS created_by_name, NULL AS done_by_name,
+              a.first_name, a.last_name, a.phone, a.date AS appt_date, a.status AS appt_status
+         FROM sales_activities s JOIN sales_appointments a ON a.id = s.appointment_id
+         LEFT JOIN users au ON au.id = s.assignee_id LEFT JOIN users cb ON cb.id = s.created_by
+        WHERE s.account_id = ? AND s.kind = 'follow_up' AND s.done_at IS NULL
+        ORDER BY s.due_date ASC, s.created_at ASC LIMIT 500`).bind(acct.id).all();
+    return c.json({ followUps: (results || []).map((r) => ({ ...activityRowToJs(r),
+      who: `${r.first_name} ${r.last_name}`, phone: r.phone, apptDate: r.appt_date, apptStatus: r.appt_status })) });
+  });
+});
+
+// Nightly: each follow-up due today or overdue is emailed to whoever it is
+// for, once (reminded_at is written before the send); and each homeowner who
+// agreed to email is reminded the day before their estimate, once per booked
+// time (reminder_sent_for). `nowMs` is a parameter so a test can set the day.
+export async function salesCrmSweep(env, nowMs = Date.now()) {
+  try { await env.DB.prepare(`SELECT 1 FROM sales_activities LIMIT 1`).first(); }
+  catch (err) { if (missingSchema(err)) return { skipped: "106 not migrated" }; throw err; }
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  const tomorrow = new Date(nowMs + 86400000).toISOString().slice(0, 10);
+  let followUps = 0, reminders = 0;
+
+  const { results: due } = await env.DB.prepare(
+    `SELECT s.id, s.account_id, s.body, s.due_date, COALESCE(s.assignee_id, s.created_by) AS uid_,
+            a.first_name, a.last_name, ac.name AS acct_name, ac.subdomain, ac.hostname_status, ac.kind
+       FROM sales_activities s JOIN sales_appointments a ON a.id = s.appointment_id JOIN accounts ac ON ac.id = s.account_id
+      WHERE s.kind = 'follow_up' AND s.done_at IS NULL AND s.reminded_at IS NULL AND s.due_date <= ?`).bind(today).all();
+  const byUser = new Map();
+  for (const r of due || []) {
+    if (!r.uid_) continue;
+    const k = `${r.account_id}|${r.uid_}`;
+    if (!byUser.has(k)) byUser.set(k, []);
+    byUser.get(k).push(r);
+  }
+  for (const [k, rows] of byUser) {
+    const [accountId, userId] = k.split("|");
+    for (const r of rows) await env.DB.prepare(`UPDATE sales_activities SET reminded_at = ? WHERE id = ?`).bind(new Date(nowMs).toISOString(), r.id).run();
+    const u = await env.DB.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(userId).first();
+    const to = realEmail(u?.email);
+    if (!to || !notifyOf(u).email) continue;
+    const acct = { id: accountId, name: rows[0].acct_name, subdomain: rows[0].subdomain, hostname_status: rows[0].hostname_status, kind: rows[0].kind };
+    const mail = MAIL.followUpDueEmail({ firstName: String(u.name || "").split(" ")[0],
+      items: rows.map((r) => ({ who: `${r.first_name} ${r.last_name}`, what: r.body, due: apptWhenText(r.due_date), overdue: r.due_date < today })),
+      link: `${accountOrigin(acct)}/?open=followups` });
+    const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
+    await logMail(env, { accountId, companyId: null, to, kind: "followup_due", subject: mail.subject, result, sentBy: null });
+    if (result.ok) followUps += 1;
+  }
+
+  const { results: appts } = await env.DB.prepare(
+    `SELECT a.*, r.name AS rep_name, cb.name AS created_by_name, ac.name AS acct_name, ac.kind AS acct_kind, ac.subdomain, ac.hostname_status
+       FROM sales_appointments a JOIN sales_consents sc ON sc.appointment_id = a.id JOIN accounts ac ON ac.id = a.account_id
+       LEFT JOIN users r ON r.id = a.rep_user_id LEFT JOIN users cb ON cb.id = a.created_by
+      WHERE a.date = ? AND a.status IN ('scheduled', 'confirmed') AND a.job_id IS NULL AND sc.email = 1
+        AND a.email IS NOT NULL AND a.email <> ''
+        AND (sc.reminder_sent_for IS NULL OR sc.reminder_sent_for <> a.date || ' ' || a.time)`).bind(tomorrow).all();
+  for (const row of appts || []) {
+    const to = realEmail(row.email);
+    if (!to) continue;
+    await env.DB.prepare(`UPDATE sales_consents SET reminder_sent_for = ? WHERE appointment_id = ?`).bind(`${row.date} ${row.time}`, row.id).run();
+    const a = apptRowToJs(row);
+    const acct = { id: row.account_id, name: row.acct_name, kind: row.acct_kind };
+    const mail = MAIL.appointmentReminderEmail({ firstName: a.homeowner.firstName, account: acct, services: a.services.map(serviceLabel),
+      when: apptWhenText(a.date, a.time), address: `${a.address.street}, ${a.address.city}, ${a.address.state} ${a.address.zip}`,
+      repName: row.rep_name || null });
+    const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html, fromName: acct.name });
+    await logMail(env, { accountId: acct.id, companyId: null, to, kind: "appointment_reminder", subject: mail.subject, result, sentBy: null });
+    if (result.ok) reminders += 1;
+  }
+  return { followUps, reminders };
+}
+
+app.get("/api/cron/sales-crm", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) {
+    return c.json({ error: "forbidden" }, 403);
+  }
+  return c.json(await salesCrmSweep(c.env));
 });
 
 // ---------------------------------------------------------------------------
@@ -30182,7 +30531,8 @@ export default {
          ["retouch", retouchSweep],
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
-         ["unit-billing", unitBillingSweep], ["linked-discount", linkedDiscountSweep], ["bbb", bbbSweep]]
+         ["unit-billing", unitBillingSweep], ["linked-discount", linkedDiscountSweep], ["bbb", bbbSweep],
+         ["sales-crm", salesCrmSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep],
          ["held", heldSweep], ["gcal", gcalSweep]];
 

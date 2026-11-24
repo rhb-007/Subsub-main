@@ -16892,6 +16892,83 @@ refactor.
   - A route for an appointment the homeowner wants moved by text.
   - **105 is pasted on the live database** (28 columns, confirmed by the owner).
 
+- **APPOINTMENTS ARE NOW "CRM / SALES": ITS OWN SECTION WITH APPOINTMENTS,
+  FOLLOW-UPS AND CONTACTS, CONSENT TO FOLLOW UP ASKED IN THE SCRIPT, AND THE
+  TEAM TOLD BY EMAIL.** Asked for as *"call appointments CRM / Sales (I don't
+  want to confuse this section with actual work order appointments) ... a
+  lightweight CRM including user notification emails call recording etc. ...
+  ask for consent to follow up by email, phone, and text."* Migration 106
+  (`sales_consents`, `sales_activities`), `app/shared/salescrm.js`.
+  - **The nav entry and the page are "CRM / Sales".** The internal tab id stays
+    `appointments`, because the call-center role, the allowlist and the tests
+    all name it, and a visit to a job is still called an appointment
+    everywhere else.
+  - **Consent is part of a complete booking.** On the Homeowner step the script
+    reads three questions out word for word (`CONSENT_CHANNELS`): email, phone
+    calls, and texts. The text question carries "Message and data rates may
+    apply ... reply STOP", because the TCPA wants express written consent for
+    texts. Each must be answered yes or no, or Next and the route both refuse
+    (`incomplete`, naming it). A yes to email with no address is refused
+    (`consent_needs_email`). Each answer is stored with `CONSENT_VERSION`,
+    who captured it and when, and every change is an `appointment.consent`
+    event carrying the old answers.
+  - **Recording consent is asked on the Call step**: *They agreed*, *They said
+    no* or *Not recording*. It is not required, because most calls are not
+    recorded, and null means nobody asked, which is not a no. Several states
+    need every party's consent to record, so a no stops a recording from ever
+    being kept.
+  - **The answers decide what is sent.** The confirmation and the day-before
+    reminder go only to a homeowner who said yes to email. An outbound call is
+    logged only for somebody who agreed to calls (`no_call_consent`). A
+    follow-up by call, email or text needs that channel's yes
+    (`no_channel_consent`). A recording needs the uploader to confirm they
+    agreed (`recording_consent_required`) and is refused outright after a no.
+    An appointment booked before 106 has no consent on file, which reads as
+    *not asked*, never as yes. The screen greys out what the route would
+    refuse and says why before the press.
+  - **Activity on each appointment:** notes, logged calls (direction and
+    outcome), follow-ups (what, due date, channel, who it is for, ticked done)
+    and call recordings. It is append-only except for ticking a follow-up
+    done.
+  - **Call recording is an uploaded audio file**, through the checked
+    `call-recording` upload kind: audio types only, 50 MB, served back with
+    `nosniff` and never cached. `m106_inv_recording_no_consent` counts a
+    recording kept without the agreement. **There is no live call recording or
+    dialer**, because SubSub has no telephony provider (SMS is not live
+    either). That needs Twilio or similar, and it is a separate build.
+  - **Emails, all on the console's Notifications screen:**
+    - `appointment_assigned`: the sales manager an estimate is booked for or
+      moved to, never when they booked it themselves;
+    - `followup_assigned`: whoever a follow-up is handed to;
+    - `followup_due`: the nightly digest of follow-ups due or overdue, once
+      each (`reminded_at` is written before the send);
+    - `appointment_reminder`: the homeowner the day before, only with email
+      consent, once per booked time (`reminder_sent_for`), so a reschedule
+      sends a new one.
+    Every email except the homeowner's follows each person's email setting.
+    The links open the appointment (`?open=appointment&id=`) or the
+    Follow-ups tab (`?open=followups`).
+  - **The three tabs:**
+    - Appointments: the list, plus a pipeline strip counting each stage.
+      Pressing a stage filters the list.
+    - Follow-ups: what is owed. It opens on *Mine*, and the tab counts the ones
+      due today or overdue.
+    - Contacts: each homeowner once per phone number, with what they agreed to.
+      It is built from this account's own appointments and reaches nothing
+      else.
+  - **A call-center seat reaches the activity routes, the follow-ups list and
+    the recording upload**, and still nothing else (`CALLCENTER_ALLOWED`). Any
+    other upload kind is refused.
+  - **Without 106**, booking still works and the reply and screen say the
+    answers were not kept, naming the file. The activity panel names it too,
+    and the sweep skips.
+  `test:salescrm` (64) and `test:salesapptui` (52). Seven server mutations and
+  two browser ones fire, each on its own assertion. `test:salesappt` now books
+  with consent. `test:seatgate` has one failure that predates this change.
+  **Not verified:** the consent wording has not been read by a lawyer. **Still
+  open:** a live dialer and recording, texting homeowners, and showing
+  follow-ups due on the nav.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
