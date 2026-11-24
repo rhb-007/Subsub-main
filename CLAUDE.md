@@ -17013,8 +17013,8 @@ refactor.
   - **`POST /api/v1/leads`** takes leads from an integration, Lead or Prospect
     only, a duplicate answered 200 with `duplicate: true`.
   `test:crmleads` (63) and `test:salesapptui` (77). Ten mutations fire, each on
-  its own assertion. **107 needs pasting**; until then every appointment screen
-  works and the CRM says leads are not set up yet.
+  its own assertion. **107 is pasted on the live database** (19 and 4 columns,
+  confirmed by the owner).
 
 ## Working here
 
