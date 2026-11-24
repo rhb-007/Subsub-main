@@ -303,6 +303,7 @@
     "test:postman": "node --no-warnings scripts/postman-test.mjs",
     "test:integstartui": "node --no-warnings scripts/integ-start-ui-test.mjs",
     "test:gcalui": "node --no-warnings scripts/gcal-ui-test.mjs",
+    "test:gcalsales": "node --no-warnings scripts/gcal-sales-test.mjs",
     "test:assignref": "node --no-warnings scripts/assign-refused-test.mjs",
     "test:handycapui": "node --no-warnings scripts/handycap-ui-test.mjs",
     "test:staffwrite": "node --no-warnings scripts/staffwrite-test.mjs",

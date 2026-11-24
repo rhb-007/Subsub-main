@@ -87,6 +87,7 @@ const USERS = [
 ];
 
 const web = serveApp({ dir: OUT, port: WEB });
+let CAL_BUSY = false;
 const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path.startsWith("/api/account-by-subdomain/")) return [200, ACC];
   if (path === "/api/account") return [200, { ...ACC, user: { ...ACC.user, id: SEAT.userId, role: SEAT.role } }];
@@ -96,6 +97,8 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   }
   if (path === "/api/appointments" && method === "POST") {
     posted.push(body);
+    // 108. The sales manager's own Google Calendar shows them busy, once.
+    if (CAL_BUSY && !body.allowClash) { CAL_BUSY = false; return [409, { error: "rep_calendar_busy", repName: "Marcus Hill" }]; }
     const a = appt("ap_new", { ...body, status: "scheduled", repName: REPS.find((r) => r.id === body.repId)?.name || null });
     APPTS = [a, ...APPTS];
     return [201, { appointment: a, confirmation: { sent: !!body.homeowner?.email, reason: null } }];
@@ -326,8 +329,26 @@ try {
     const rev = await page.evaluate(() => document.querySelector("[data-review]")?.innerText.replace(/\s+/g, " ") || "");
     t.ck("which reads back the call", /Dana Ruiz/.test(rev) && /Alex.*Spouse.*will be there/.test(rev)
       && /Window replacement/.test(rev) && /About how many windows: 14/.test(rev) && /1:30 PM/.test(rev), rev);
+    // 108. The server answers that the sales manager's Google Calendar shows
+    // them busy: the form goes back to the time, says so, and books only once
+    // Book anyway is ticked.
+    CAL_BUSY = true;
     await click(page, "[data-book]");
     await wait(600);
+    const busy = await page.evaluate(() => ({ box: document.querySelector("[data-calbusy]")?.innerText || "" }));
+    t.ck("a sales manager busy on their Google Calendar sends the form back to the time, saying so",
+      (await stepNow(page)) === "schedule" && /Marcus Hill's Google Calendar shows them busy then/.test(busy.box), JSON.stringify(busy));
+    await next(page);
+    const blocked = await page.evaluate(() => document.querySelector("[data-book]")?.disabled);
+    t.ck("and Book waits for Book anyway", blocked === true, String(blocked));
+    await page.evaluate(() => { const b = [...document.querySelectorAll("button")].find((x) => x.innerText.trim() === "Back"); b?.click(); });
+    await wait(200);
+    await page.evaluate(() => document.querySelector("[data-calbusy] input")?.click());
+    await wait(150);
+    await next(page);
+    await click(page, "[data-book]");
+    await wait(600);
+    t.ck("ticked, it books, saying to book anyway", posted.length === 2 && posted[1].allowClash === true, JSON.stringify(posted.map((x) => x.allowClash)));
     const sent = posted[0] || {};
     t.ck("Book sends what was answered", sent.direction === "outbound" && sent.source === "Door knocking"
       && sent.services?.join() === "roofing,windows" && sent.details?.windows?.count === 14

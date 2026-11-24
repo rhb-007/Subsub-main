@@ -618,17 +618,22 @@ body.nav-open{overflow:hidden}
       <ul>
         <li><strong>Create and manage its own calendar</strong>
         (<code>calendar.app.created</code>). SubSub makes one calendar called
-        &ldquo;SubSub Jobs&rdquo; and adds, moves and removes your SubSub appointments on it. It
+        &ldquo;SubSub Jobs&rdquo; and adds, moves and removes your SubSub appointments on it. If
+        you are a sales manager on an account that uses SubSub's CRM, it makes a second calendar
+        called &ldquo;SubSub Sales&rdquo; for the sales appointments booked for you, which you can
+        turn off on its own. It
         cannot read, change or delete any other calendar or any event you made yourself.</li>
         <li><strong>See when you are busy</strong> (<code>calendar.freebusy</code>). SubSub sees
         only the times your main calendar is busy &mdash; never event titles, descriptions,
-        attendees or locations. We use it for one thing: not proposing a job time that clashes
-        with something already in your calendar.</li>
+        attendees or locations. We use it for one thing: not proposing a job time, or booking a
+        sales appointment for you, that clashes with something already in your calendar.</li>
       </ul>
-      <p>We store the Google address you connected, an encrypted refresh token so the sync keeps working, the identifier of the
-      SubSub Jobs calendar, and the identifiers of the events we created there. We do not store
+      <p>We store the Google address you connected, an encrypted refresh token so the sync keeps working, the identifiers of the
+      SubSub Jobs and SubSub Sales calendars, and the identifiers of the events we created there. We do not store
       your busy times; they are checked when a time is being proposed and then discarded. Events we
-      write carry the job, the trade, the address and who the work is for, and no phone numbers.</p>
+      write carry the job, the trade, the address and who the work is for, and no phone numbers.
+      Sales appointment events carry the work being estimated, the address and the homeowner's
+      first name and last initial, and no phone number or email.</p>
       <p>We do not sell Google user data, share it with anyone other than the service providers who
       host SubSub, use it for advertising, or use it to train machine-learning models. People are
       never given access to it except where you ask us for support, for security, or where the law
@@ -637,7 +642,7 @@ body.nav-open{overflow:hidden}
       adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google
       API Services User Data Policy</a>, including the Limited Use requirements.</p>
       <p>You can disconnect at any time from My account &rarr; Settings, which deletes the SubSub
-      Jobs calendar and the stored token, or remove SubSub's access at
+      Jobs and SubSub Sales calendars and the stored token, or remove SubSub's access at
       <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
 
       <h2 id="subs">5. Subcontractor data</h2>

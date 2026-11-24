@@ -17017,6 +17017,60 @@ refactor.
   its own assertion. **107 is pasted on the live database** (19 and 4 columns,
   confirmed by the owner).
 
+- **CRM SALES APPOINTMENTS GO ON GOOGLE CALENDAR TOO, ON A CALENDAR OF THEIR
+  OWN, "SUBSUB SALES", BEHIND A SWITCH OF THEIR OWN.** Asked for as *"make sure
+  that the appointments within the CRM are also being added to a calendar ...
+  another calendar setting integration with Google Calendar for CRM specific
+  sales meetings"*. Migration 108 (`gcal_sales`, `gcal_sales_events`);
+  `salesEventFor` and `salesOnCalendar` in `shared/gcal.js`; the sync sits
+  beside 094's in the Worker.
+  - **The same Google connection, a second calendar.** One account, one sealed
+    refresh token and the same two scopes, because `calendar.app.created` lets
+    SubSub make more than one calendar of its own. **Never on SubSub Jobs**,
+    because an estimate and a crew booking on one calendar is the confusion
+    the CRM's own calendar already refuses.
+  - **Whose:** the sales manager each estimate is booked for (`rep_user_id`),
+    while they hold an admin or pm seat on an account that sells to
+    homeowners. Taken off the account, their estimates come off. **Not the
+    booker**: a call-center seat books for other people and attends none of
+    them.
+  - **What:** everything but a canceled estimate, for a week back and four
+    months ahead. One that has happened stays on its day and its title says
+    how it went (*(sold)*). The event carries the work, the address, the
+    homeowner's first name and last initial, the account, and whether a
+    second decision maker will be there. **It carries no phone and no email**,
+    the rule the jobs calendar already follows, and the item builder never
+    selects them.
+  - **The calendar is made only once there is an estimate to put on it**, so
+    a crew member who connected for their jobs never gets an empty SubSub
+    Sales calendar. **No `gcal_sales` row is on.**
+  - **In step:** booking, moving, reassigning (both sales managers), an
+    outcome, canceling and turning a sale into a job each sync straight away
+    in the background (`gcalSalesSoon`). The ten-minute sweep is the backstop,
+    on its own clock, so somebody with the jobs switch off still gets their
+    estimates.
+  - **`gcalWriteAll` is one writer for both calendars.** The patch,
+    insert-again-on-404, 401 and delete-what-is-gone rules were in `gcalSync`
+    and would have been copied; the jobs sync now goes through it too, and
+    `test:gcal` still passes all 82.
+  - **Its own switch** in My account -> Settings, offered only when the server
+    says this person can be a sales manager (`sales.available`). Off deletes the
+    SubSub Sales calendar from Google and leaves SubSub Jobs alone. Disconnect
+    removes both; reconnecting starts both fresh.
+  - **And their own calendar is read at booking.** With "Don't book me when my
+    calendar is busy" on, an estimate their primary calendar shows taken is
+    refused (`rep_calendar_busy`, naming them). The booking form goes back to
+    the time and says so, and the same **Book anyway** gets past it. An edit
+    that moves nothing (not the day, time, length or person) is never refused
+    over it. An unreadable calendar never blocks a booking.
+  - **Without 108** connecting, booking and disconnecting all still work; the
+    panel names the file and the switch answers `migration_needed`.
+  - The privacy policy's Google section names the second calendar, what its
+    events carry, and that the busy check covers sales appointments.
+  `test:gcalsales` (54), `test:gcalui` (35), `test:salesapptui` (81). Twelve
+  mutations fire, each on its own assertion. **Not verified here:** a live
+  Google round trip. **Paste 108** before the sales calendar works.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -188,7 +188,8 @@ import { googleConfigured, authUrl, exchangeCode, refreshAccess, refreshDead, re
   createCalendar, deleteCalendar, insertEvent, patchEvent, deleteEvent, freeBusy, exchangeReason } from "./gcal.js";
 import { GCAL_SCOPES, GCAL_CALENDAR_NAME, GCAL_PAST_DAYS, GCAL_AHEAD_DAYS, GCAL_BUSY_DAYS,
   validTimeZone, wallToUtc, eventFor, eventFingerprint, companyBusyAt, companyBusyDays,
-  companyBusyOnSpan, WORK_DAY_START, WORK_DAY_END, scopesGranted, gcalReturnTo } from "../shared/gcal.js";
+  companyBusyOnSpan, WORK_DAY_START, WORK_DAY_END, scopesGranted, gcalReturnTo,
+  GCAL_SALES_CALENDAR_NAME, salesEventFor, salesOnCalendar, plusMinutes, busyDuring } from "../shared/gcal.js";
 import { ccGet, ccRefused, ccDownload } from "./companycam.js";
 import { ccProjectView, ccPhotoView, ccDocView, ccPhotoUsable, ccImageUrl, ccHttps,
   cleanCcImport, ccPhotoFileName, CC_PHOTO_PAGE, CC_PROJECT_PAGE } from "../shared/companycam.js";
@@ -10486,6 +10487,7 @@ export function missingSchema(err) {
   if (/\bunit_layout\b/i.test(m)) return "095_unit_layout";
   if (/\baccount_connections\b/i.test(m)) return "091_account_connections";
   if (/\bheld_assignments\b/i.test(m)) return "093_held_assignments";
+  if (/\bgcal_sales(_events)?\b/i.test(m)) return "108_gcal_sales";
   if (/\bgcal_(connections|events|states)\b/i.test(m)) return "094_google_calendar";
   if (/\baccount_integrations\b/i.test(m)) return "090_account_integrations";
   if (/\bgeocodes\b/i.test(m)) return "085_geocodes";
@@ -11674,7 +11676,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     if (!["admin", "pm"].includes(auth.role)) return c.json({ error: "forbidden" }, 403);
     try {
       fromAppt = await c.env.DB.prepare(
-        `SELECT id, job_id, status, first_name, last_name FROM sales_appointments WHERE id = ? AND account_id = ?`)
+        `SELECT id, job_id, status, first_name, last_name, rep_user_id FROM sales_appointments WHERE id = ? AND account_id = ?`)
         .bind(String(b.fromAppointment), accountId).first();
     } catch (err) {
       if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "105_sales_appointments" }, 503);
@@ -11829,6 +11831,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
        WHERE id = ? AND account_id = ? AND job_id IS NULL`).bind(id, fromAppt.id, accountId).run();
     appointmentLinked = { id: fromAppt.id, linked: (r.meta?.changes ?? 1) > 0 };
     if (appointmentLinked.linked) await leadAfterAppointment(c.env, { accountId, apptId: fromAppt.id, userId, sale: true });
+    if (appointmentLinked.linked) gcalSalesSoon(c, [fromAppt.rep_user_id]);
     await logActivity(c.env, accountId, userId, "appointment_converted",
       `Turned the sold estimate for ${fromAppt.first_name} ${fromAppt.last_name} into job ${b.title}`, { appointmentId: fromAppt.id, jobId: id });
   }
@@ -27516,6 +27519,11 @@ app.get("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
   });
 });
 
+// Did an edit move the estimate: a new day, a new time, a new length or a
+// new sales manager.
+const v0Moved = (cur, v) => cur.date !== v.date || cur.time !== v.time
+  || Number(cur.minutes) !== Number(v.minutes) || (cur.repId || null) !== (v.repId || null);
+
 // Every write checks the rep is a sales manager here and the slot is free.
 async function apptCheckRep(c, acct, v, exceptId) {
   if (!v.repId) return null;
@@ -27528,6 +27536,15 @@ async function apptCheckRep(c, acct, v, exceptId) {
   const clash = repClashes(rows, { ...v, exceptId });
   if (clash.length && !v.allowClash) {
     return c.json({ error: "rep_double_booked", clashes: clash.map((r) => ({ id: r.id, time: r.time, minutes: r.minutes })) }, 409);
+  }
+  // 108. Their own Google Calendar, when they asked SubSub not to book them
+  // over it. The same Book anyway answers it, because the call center cannot
+  // see what the other appointment is and a sales manager can sometimes move
+  // it -- and a moved estimate keeps its time unless the time itself changed.
+  if (!v.allowClash && v.checkCalendar !== false
+      && await repCalendarBusy(c.env, v.repId, { date: v.date, time: v.time, minutes: v.minutes })) {
+    const rep = reps.find((r) => r.id === v.repId);
+    return c.json({ error: "rep_calendar_busy", repName: rep?.name || null }, 409);
   }
   return null;
 }
@@ -27587,6 +27604,7 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
       : !cc.value.email ? { sent: false, reason: "no_email_consent" }
       : await apptConfirmEmail(c, acct, v, row?.rep_name || null, userId, id);
     const repTold = v.repId ? await notifyApptRep(c.env, { acct, row, actorId: userId, reassigned: false }) : null;
+    gcalSalesSoon(c, [v.repId]);
     // 107. Booked is an Opportunity: their lead is found or made and moved.
     const lead = await leadForAppointment(c.env, { accountId: acct.id, apptId: id, appt: apptRowToJs(row),
       leadId: b.leadId || null, role, userId });
@@ -27627,7 +27645,10 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
       const merged = { ...cur, ...Object.fromEntries(Object.entries(b).filter(([k]) => k !== "status")) };
       const chk = validAppointment(merged);
       if (!chk.ok) return c.json({ error: chk.error, field: chk.field, missing: chk.missing || undefined }, 400);
-      v = { ...chk.value, allowClash: b.allowClash === true };
+      v = { ...chk.value, allowClash: b.allowClash === true,
+        // An edit that does not move the time or the person is not booking
+        // anybody over anything: their calendar already holds this estimate.
+        checkCalendar: v0Moved(cur, chk.value) };
       if (APPT_STATUSES[status]?.open) {
         const refused = await apptCheckRep(c, acct, v, cur.id);
         if (refused) return refused;
@@ -27668,6 +27689,9 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
       consentSaved = await saveConsent(c.env, { accountId: acct.id, appointmentId: cur.id, consent: ccPatch.value, userId, prior });
     }
     if (v && v.repId && v.repId !== cur.repId) await notifyApptRep(c.env, { acct, row: after, actorId: userId, reassigned: !!cur.repId });
+    // 108. The sales calendar of whoever it is with now, and of whoever it
+    // was taken from, so a reassigned estimate leaves the old one's calendar.
+    gcalSalesSoon(c, [cur.repId, after?.rep_user_id]);
     if (status !== cur.status) {
       const who = `${cur.homeowner.firstName} ${cur.homeowner.lastName}`;
       await logActivity(c.env, acct.id, userId, "appointment_status",
@@ -30400,6 +30424,60 @@ async function gcalItemsFor(env, userId) {
   return [...out.values()];
 }
 
+// WRITE A LIST OF EVENTS TO ONE OF SUBSUB'S CALENDARS: what changed is
+// patched, what is new is inserted, and what is no longer in the list is
+// deleted. One writer for both calendars (094's jobs, 108's sales), because
+// the 404-means-write-it-again and 401-means-the-token-went rules are the same
+// for both and two copies is two places for one of them to go wrong.
+//   `table` / `keyCol` name the event map; `items` carry `key` and `ev`.
+// Answers what it did; the caller records the result.
+async function gcalWriteAll(env, { userId, conn, token, calendarId, ensureCalendar, items, table, keyCol }) {
+  const res = { inserted: 0, updated: 0, deleted: 0, error: null };
+  const { results: have } = await env.DB.prepare(
+    `SELECT ${keyCol} AS k, event_id, fingerprint FROM ${table} WHERE user_id = ?`).bind(userId).all();
+  const known = new Map((have || []).map((r) => [r.k, r]));
+  let remade = false;
+  let cal = calendarId;
+  for (const { key, ev } of items) {
+    const fp = eventFingerprint(ev);
+    const row = known.get(key);
+    known.delete(key);
+    if (row && row.fingerprint === fp) continue;
+    let r = row ? await patchEvent(env, token, cal, row.event_id, ev) : null;
+    // Gone from Google (they deleted the event, or the calendar): write it
+    // again rather than leave it missing from their day.
+    if (!r || r.status === 404 || r.status === 410) {
+      r = await insertEvent(env, token, cal, ev);
+      if ((r.status === 404 || r.status === 410) && !remade) {
+        remade = true;
+        const again = await ensureCalendar();
+        if (again) { cal = again; r = await insertEvent(env, token, cal, ev); }
+      }
+      if (r.ok) res.inserted += 1;
+    } else if (r.ok) res.updated += 1;
+    if (r.status === 401) {
+      const again = await gcalAccess(env, conn, { fresh: true });
+      return { ...res, error: again.error || "write_refused", fatal: true };
+    }
+    if (!r.ok || !r.data?.id) { res.error = "write_refused"; continue; }
+    await env.DB.prepare(
+      `INSERT INTO ${table} (user_id, ${keyCol}, event_id, fingerprint, synced_at)
+       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, ${keyCol}) DO UPDATE SET event_id = excluded.event_id,
+         fingerprint = excluded.fingerprint, synced_at = excluded.synced_at`
+    ).bind(userId, key, r.data.id, fp).run();
+  }
+  // What is left was on the calendar and is no longer in the list.
+  for (const row of known.values()) {
+    const r = await deleteEvent(env, token, cal, row.event_id);
+    if (r.ok || r.status === 404 || r.status === 410) {
+      await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND ${keyCol} = ?`).bind(userId, row.k).run();
+      res.deleted += 1;
+    }
+  }
+  return res;
+}
+
 // KEEP ONE PERSON'S SUBSUB JOBS CALENDAR IN STEP. Writes what changed,
 // deletes what is no longer live, and makes the calendar again if they
 // deleted it in Google. Answers what it did; never throws.
@@ -30429,51 +30507,12 @@ async function gcalSync(env, userId) {
       await gcalNote(env, userId, "calendar_refused");
       return { ...res, error: "calendar_refused" };
     }
-    const items = await gcalItemsFor(env, userId);
-    const { results: have } = await env.DB.prepare(
-      `SELECT visit_id, event_id, fingerprint FROM gcal_events WHERE user_id = ?`).bind(userId).all();
-    const known = new Map((have || []).map((r) => [r.visit_id, r]));
-    let remade = false;
-    for (const item of items) {
-      const ev = eventFor(item, conn.time_zone);
-      const fp = eventFingerprint(ev);
-      const row = known.get(item.visitId);
-      known.delete(item.visitId);
-      if (row && row.fingerprint === fp) continue;
-      let r = row ? await patchEvent(env, acc.token, calendarId, row.event_id, ev) : null;
-      // Gone from Google (they deleted the event, or the calendar): write it
-      // again rather than leave a visit missing from their day.
-      if (!r || r.status === 404 || r.status === 410) {
-        r = await insertEvent(env, acc.token, calendarId, ev);
-        if ((r.status === 404 || r.status === 410) && !remade) {
-          remade = true;
-          if (await ensureCalendar()) r = await insertEvent(env, acc.token, calendarId, ev);
-        }
-        if (r.ok) res.inserted += 1;
-      } else if (r.ok) res.updated += 1;
-      if (r.status === 401) {
-        const again = await gcalAccess(env, conn, { fresh: true });
-        await gcalNote(env, userId, again.error || "write_refused");
-        return { ...res, error: again.error || "write_refused" };
-      }
-      if (!r.ok || !r.data?.id) { res.error = "write_refused"; continue; }
-      await env.DB.prepare(
-        `INSERT INTO gcal_events (user_id, visit_id, event_id, fingerprint, synced_at)
-         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-         ON CONFLICT(user_id, visit_id) DO UPDATE SET event_id = excluded.event_id,
-           fingerprint = excluded.fingerprint, synced_at = excluded.synced_at`
-      ).bind(userId, item.visitId, r.data.id, fp).run();
-    }
-    // What is left was on the calendar and is no longer a live visit of
-    // theirs: superseded, declined, or work they no longer hold.
-    for (const row of known.values()) {
-      const r = await deleteEvent(env, acc.token, calendarId, row.event_id);
-      if (r.ok || r.status === 404 || r.status === 410) {
-        await env.DB.prepare(`DELETE FROM gcal_events WHERE user_id = ? AND visit_id = ?`)
-          .bind(userId, row.visit_id).run();
-        res.deleted += 1;
-      }
-    }
+    const items = (await gcalItemsFor(env, userId))
+      .map((item) => ({ key: item.visitId, ev: eventFor(item, conn.time_zone) }));
+    const w = await gcalWriteAll(env, { userId, conn, token: acc.token, calendarId, ensureCalendar,
+      items, table: "gcal_events", keyCol: "visit_id" });
+    if (w.fatal) { await gcalNote(env, userId, w.error); return { ...res, ...w, fatal: undefined }; }
+    Object.assign(res, w);
     await env.DB.prepare(
       `UPDATE gcal_connections SET last_synced_at = CURRENT_TIMESTAMP, last_error = ? WHERE user_id = ?`
     ).bind(res.error, userId).run();
@@ -30483,6 +30522,138 @@ async function gcalSync(env, userId) {
     console.error("[gcal] sync failed:", err?.message || err);
     return { ...res, error: "failed" };
   }
+}
+
+// ---------------------------------------------------------------------------
+// 108. CRM SALES APPOINTMENTS ON GOOGLE CALENDAR, on a "SubSub Sales" calendar
+// of their own and behind a switch of their own. Same connection, same two
+// scopes: a second calendar on the 094 connection, not a second connection.
+// ---------------------------------------------------------------------------
+
+const gcalSalesRow = (env, userId) => env.DB.prepare(
+  `SELECT * FROM gcal_sales WHERE user_id = ?`).bind(userId).first();
+const gcalSalesNote = (env, userId, error) => env.DB.prepare(
+  `INSERT INTO gcal_sales (user_id, last_error) VALUES (?, ?)
+   ON CONFLICT(user_id) DO UPDATE SET last_error = excluded.last_error`).bind(userId, error).run().catch(() => null);
+
+// WHOSE ESTIMATES: the ones they are the sales manager for -- the person who
+// drives to the house -- on an account that sells to homeowners, where they
+// still hold an admin or project manager seat. Somebody taken off the account
+// stops getting its appointments. The booker is deliberately not included: a
+// call-center seat books dozens a day for other people and attends none of
+// them, so they would be a calendar of somebody else's meetings.
+async function gcalSalesItemsFor(env, userId) {
+  const today = dayKeyUtc();
+  const lo = addDaysKey(today, -GCAL_PAST_DAYS);
+  const hi = addDaysKey(today, GCAL_AHEAD_DAYS);
+  const { results } = await env.DB.prepare(
+    `SELECT a.id, a.status, a.date, a.time, a.minutes, a.services, a.first_name, a.last_name,
+            a.street, a.city, a.state, a.zip, a.second, ac.name AS account_name, ac.kind
+       FROM sales_appointments a JOIN accounts ac ON ac.id = a.account_id
+      WHERE a.rep_user_id = ? AND a.date BETWEEN ? AND ?
+        AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = a.rep_user_id
+                      AND m.account_id = a.account_id AND m.role IN ('admin', 'pm'))`
+  ).bind(userId, lo, hi).all();
+  return (results || []).filter((r) => salesOnCalendar(r.status) && takesAppointments(r.kind)).map((r) => {
+    const second = apptJson(r.second, null);
+    return {
+      appointmentId: r.id, status: r.status, date: r.date, time: r.time, minutes: r.minutes,
+      services: apptJson(r.services, []).map(serviceLabel),
+      firstName: r.first_name, lastName: r.last_name,
+      address: [r.street, r.city, [r.state, r.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+      second: !!second, secondAttends: !!second?.attends,
+      account: r.account_name,
+      link: `${APP_ORIGIN}/?open=appointment&id=${encodeURIComponent(r.id)}`,
+    };
+  });
+}
+
+// KEEP ONE PERSON'S SUBSUB SALES CALENDAR IN STEP. The calendar is made only
+// once there is an estimate to put on it, so a crew member who connected for
+// their jobs never finds an empty "SubSub Sales" calendar on their account.
+// Answers what it did; never throws.
+async function gcalSalesSync(env, userId) {
+  const res = { inserted: 0, updated: 0, deleted: 0, error: null };
+  try {
+    const conn = await gcalConnection(env, userId);
+    if (!conn) return { ...res, error: "not_connected" };
+    const row = await gcalSalesRow(env, userId);
+    if (row && !row.sales_on) return { ...res, skipped: "sales_off" };
+    const items = (await gcalSalesItemsFor(env, userId))
+      .map((item) => ({ key: item.appointmentId, ev: salesEventFor(item, conn.time_zone) }));
+    let calendarId = row?.calendar_id || null;
+    if (!items.length && !calendarId) return { ...res, skipped: "nothing_to_add" };
+    const acc = await gcalAccess(env, conn);
+    if (acc.error) { await gcalSalesNote(env, userId, acc.error); return { ...res, error: acc.error }; }
+    const ensureCalendar = async () => {
+      const made = await createCalendar(env, acc.token, {
+        summary: GCAL_SALES_CALENDAR_NAME,
+        description: "Sales appointments from SubSub's CRM. Kept up to date by SubSub; changes made here are replaced.",
+        timeZone: conn.time_zone,
+      });
+      if (!made.ok || !made.data?.id) return null;
+      calendarId = made.data.id;
+      await env.DB.prepare(
+        `INSERT INTO gcal_sales (user_id, calendar_id) VALUES (?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET calendar_id = excluded.calendar_id`).bind(userId, calendarId).run();
+      await env.DB.prepare(`DELETE FROM gcal_sales_events WHERE user_id = ?`).bind(userId).run();
+      return calendarId;
+    };
+    if (!calendarId && !(await ensureCalendar())) {
+      await gcalSalesNote(env, userId, "calendar_refused");
+      return { ...res, error: "calendar_refused" };
+    }
+    const w = await gcalWriteAll(env, { userId, conn, token: acc.token, calendarId, ensureCalendar,
+      items, table: "gcal_sales_events", keyCol: "appointment_id" });
+    if (w.fatal) { await gcalSalesNote(env, userId, w.error); return { ...res, ...w, fatal: undefined }; }
+    Object.assign(res, w);
+    await env.DB.prepare(
+      `INSERT INTO gcal_sales (user_id, last_synced_at, last_error) VALUES (?, CURRENT_TIMESTAMP, ?)
+       ON CONFLICT(user_id) DO UPDATE SET last_synced_at = excluded.last_synced_at, last_error = excluded.last_error`
+    ).bind(userId, res.error).run();
+    return res;
+  } catch (err) {
+    if (missingSchema(err)) return { ...res, error: "migration_needed" };
+    console.error("[gcal] sales sync failed:", err?.message || err);
+    return { ...res, error: "failed" };
+  }
+}
+
+// Straight after an appointment is booked, moved, reassigned or given an
+// outcome: the sales managers it concerns, the one it was taken from
+// included. Background, best effort; the sweep is the backstop.
+const gcalSalesSoon = (c, userIds) => {
+  const run = (async () => {
+    if (!gcalReady(c.env)) return;
+    for (const id of [...new Set((userIds || []).filter(Boolean))]) await gcalSalesSync(c.env, id);
+  })().catch((err) => console.warn("[gcal] sales soon:", err?.message || err));
+  try { c.executionCtx.waitUntil(run); } catch { /* no context in tests */ }
+  return run;
+};
+
+// IS THE SALES MANAGER BUSY THEN, BY THEIR OWN GOOGLE CALENDAR? Only when
+// they connected and left "don't book me when my calendar is busy" on, and
+// only from their primary calendar -- never the SubSub Sales one, or every
+// estimate would block itself. A calendar Google will not read answers
+// "not busy": an outage must never stop an estimate being booked.
+async function repCalendarBusy(env, userId, { date, time, minutes }) {
+  if (!userId || !date || !time || !gcalReady(env)) return false;
+  let conn = null;
+  try { conn = await gcalConnection(env, userId); } catch (err) { if (missingSchema(err)) return false; throw err; }
+  if (!conn || !conn.block_on) return false;
+  const acc = await gcalAccess(env, conn);
+  if (acc.error) { await gcalNote(env, userId, acc.error); return false; }
+  const startMs = wallToUtc(date, time, conn.time_zone);
+  const endMs = wallToUtc(date, plusMinutes(time, Number(minutes) || 90), conn.time_zone);
+  if (startMs == null || endMs == null) return false;
+  const q = { timeMin: new Date(startMs).toISOString(), timeMax: new Date(endMs).toISOString() };
+  let fb = await freeBusy(env, acc.token, q);
+  if (fb.status === 401) {
+    const again = await gcalAccess(env, conn, { fresh: true });
+    if (again.error) { await gcalNote(env, userId, again.error); return false; }
+    fb = await freeBusy(env, again.token, q);
+  }
+  return fb.ok ? busyDuring(fb.busy, startMs, endMs) : false;
 }
 
 // Everybody connected who might have this job on their calendar, kept in step
@@ -30628,8 +30799,37 @@ app.get("/api/google-calendar", async (c) => {
     lastSyncedAt: conn?.last_synced_at || null,
     lastError: conn?.last_error || null,
     events,
+    sales: await gcalSalesStatus(c.env, userId, conn),
   });
 });
+
+// 108. Whether this person has a sales calendar to offer, and how it stands.
+// Offered to a seat that can be a sales manager -- an admin or project manager
+// on an account that sells to homeowners -- and to nobody else, because a
+// switch for estimates on a crew member's screen is a control about nothing.
+async function gcalSalesStatus(env, userId, conn) {
+  const { results: seats } = await env.DB.prepare(
+    `SELECT a.kind FROM memberships m JOIN accounts a ON a.id = m.account_id
+      WHERE m.user_id = ? AND m.role IN ('admin', 'pm')`).bind(userId).all().catch(() => ({ results: [] }));
+  if (!(seats || []).some((r) => takesAppointments(r.kind))) return { available: false };
+  const out = { available: true, calendarName: GCAL_SALES_CALENDAR_NAME, on: true, events: 0,
+    lastSyncedAt: null, lastError: null };
+  try {
+    const row = await gcalSalesRow(env, userId);
+    if (row) Object.assign(out, { on: !!row.sales_on, lastSyncedAt: row.last_synced_at || null,
+      lastError: row.last_error || null });
+    if (conn) {
+      const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM gcal_sales_events WHERE user_id = ?`)
+        .bind(userId).first();
+      out.events = Number(n?.n || 0);
+    }
+  } catch (err) {
+    const m = missingSchema(err);
+    if (!m) throw err;
+    out.migration = m;
+  }
+  return out;
+}
 
 app.post("/api/google-calendar/start", async (c) => {
   const { userId } = c.get("auth");
@@ -30700,9 +30900,13 @@ app.get("/api/google-calendar/callback", async (c) => {
   ).bind(st.user_id, idTokenEmail(r.data.id_token), sealed, st.time_zone || "UTC").run();
   // A new connection starts a new calendar, so nothing old is pointed at.
   await c.env.DB.prepare(`DELETE FROM gcal_events WHERE user_id = ?`).bind(st.user_id).run();
+  // 108. And a new sales calendar, for the same reason. Without 108 there is
+  // nothing to reset, which must not stop the connection.
+  await c.env.DB.prepare(`UPDATE gcal_sales SET calendar_id = NULL WHERE user_id = ?`).bind(st.user_id).run().catch(() => null);
+  await c.env.DB.prepare(`DELETE FROM gcal_sales_events WHERE user_id = ?`).bind(st.user_id).run().catch(() => null);
   GCAL_ACCESS.set(`${st.user_id}:${sealed}`, { token: r.data.access_token,
     exp: Date.now() + (Number(r.data.expires_in) || 3600) * 1000 });
-  const run = gcalSync(c.env, st.user_id);
+  const run = (async () => { await gcalSync(c.env, st.user_id); await gcalSalesSync(c.env, st.user_id); })();
   try { c.executionCtx.waitUntil(run); } catch { await run; }
   return back(st.return_to, "connected");
 });
@@ -30716,11 +30920,29 @@ app.patch("/api/google-calendar", async (c) => {
     if (typeof b[k] !== "boolean") return c.json({ error: "bad_value", field: k }, 400);
     sets.push(`${col} = ?`); vals.push(b[k] ? 1 : 0);
   }
-  if (!sets.length) return c.json({ error: "nothing_to_change" }, 400);
-  const done = await c.env.DB.prepare(
-    `UPDATE gcal_connections SET ${sets.join(", ")} WHERE user_id = ?`).bind(...vals, userId).run()
-    .catch((err) => { if (missingSchema(err)) return null; throw err; });
-  if (!done?.meta?.changes) return c.json({ error: "not_connected" }, 404);
+  if (b.salesOn !== undefined && typeof b.salesOn !== "boolean") return c.json({ error: "bad_value", field: "salesOn" }, 400);
+  if (!sets.length && b.salesOn === undefined) return c.json({ error: "nothing_to_change" }, 400);
+  const conn = await gcalConnection(c.env, userId).catch((err) => { if (missingSchema(err)) return null; throw err; });
+  if (!conn) return c.json({ error: "not_connected" }, 404);
+  if (sets.length) {
+    await c.env.DB.prepare(`UPDATE gcal_connections SET ${sets.join(", ")} WHERE user_id = ?`).bind(...vals, userId).run();
+  }
+  // 108. The sales calendar's own switch, on a row of its own.
+  if (b.salesOn !== undefined) {
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO gcal_sales (user_id, sales_on) VALUES (?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET sales_on = excluded.sales_on`).bind(userId, b.salesOn ? 1 : 0).run();
+    } catch (err) {
+      const m = missingSchema(err);
+      if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+      throw err;
+    }
+    // Off takes the SubSub Sales calendar off their Google account now, the
+    // rule the jobs switch follows.
+    if (!b.salesOn) await gcalSalesClear(c.env, userId, { deleteCalendar: true });
+    else await gcalSalesSync(c.env, userId);
+  }
   // Turning the push off takes SubSub's events off their calendar now rather
   // than leaving last week's jobs sitting there, wrong, for good.
   if (b.syncOn === false) await gcalClear(c.env, userId, { deleteCalendar: true });
@@ -30734,7 +30956,8 @@ app.post("/api/google-calendar/sync", async (c) => {
   const r = await gcalSync(c.env, userId);
   if (r.error === "not_connected") return c.json({ error: "not_connected" }, 404);
   if (r.error === "migration_needed") return c.json({ error: "migration_needed", migration: "094_google_calendar" }, 503);
-  return c.json(r);
+  const sales = await gcalSalesSync(c.env, userId);
+  return c.json({ ...r, sales });
 });
 
 // Take SubSub's calendar off their Google account: deleting the one calendar
@@ -30751,12 +30974,31 @@ async function gcalClear(env, userId, { deleteCalendar: drop } = {}) {
   return { conn, acc };
 }
 
+// 108. The same for the SubSub Sales calendar. A database without 108 has
+// none to take off, which must not stop a disconnect.
+async function gcalSalesClear(env, userId, { deleteCalendar: drop, acc: given } = {}) {
+  try {
+    const row = await gcalSalesRow(env, userId);
+    if (!row) return;
+    if (drop && row.calendar_id) {
+      const conn = await gcalConnection(env, userId);
+      const acc = given || (conn ? await gcalAccess(env, conn) : { error: "not_connected" });
+      if (!acc.error) await deleteCalendar(env, acc.token, row.calendar_id);
+      await env.DB.prepare(`UPDATE gcal_sales SET calendar_id = NULL WHERE user_id = ?`).bind(userId).run();
+    }
+    await env.DB.prepare(`DELETE FROM gcal_sales_events WHERE user_id = ?`).bind(userId).run();
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+  }
+}
+
 app.delete("/api/google-calendar", async (c) => {
   const { userId } = c.get("auth");
   const got = await gcalClear(c.env, userId, { deleteCalendar: true }).catch((err) => {
     if (missingSchema(err)) return null; throw err;
   });
   if (!got) return c.json({ error: "not_connected" }, 404);
+  await gcalSalesClear(c.env, userId, { deleteCalendar: true, acc: got.acc });
   const refresh = await openSecret(c.env, got.conn.refresh_enc).catch(() => null);
   if (refresh) await revoke(c.env, refresh);
   await c.env.DB.prepare(`DELETE FROM gcal_connections WHERE user_id = ?`).bind(userId).run();
@@ -30780,6 +31022,26 @@ export async function gcalSweep(env) {
   for (const r of rows || []) {
     const s = await gcalSync(env, r.user_id);
     if (s.error) out.failed += 1; else out.synced += 1;
+  }
+  // 108. The sales calendars, on their own clock: somebody with their jobs
+  // switch off can still want their estimates, and a sweep reading
+  // last_synced_at off the jobs row would never reach them. Only people who
+  // are a sales manager on something, or who already have a calendar to keep.
+  try {
+    const { results: sales } = await env.DB.prepare(
+      `SELECT g.user_id FROM gcal_connections g LEFT JOIN gcal_sales s ON s.user_id = g.user_id
+        WHERE COALESCE(s.sales_on, 1) = 1
+          AND (s.calendar_id IS NOT NULL
+            OR EXISTS (SELECT 1 FROM sales_appointments a WHERE a.rep_user_id = g.user_id))
+        ORDER BY COALESCE(s.last_synced_at, '') LIMIT 40`).all();
+    out.sales = 0;
+    for (const r of sales || []) {
+      const s2 = await gcalSalesSync(env, r.user_id);
+      if (!s2.error) out.sales += 1;
+    }
+  } catch (err) {
+    if (!missingSchema(err)) throw err;
+    out.sales = "migration_needed";
   }
   // State rows are one-use and fifteen minutes; nothing reads an old one.
   await env.DB.prepare(`DELETE FROM gcal_states WHERE created_at < datetime('now', '-1 day')`).run().catch(() => null);

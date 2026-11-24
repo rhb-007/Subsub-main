@@ -350,6 +350,9 @@ WITH spec(j) AS (SELECT
   -- 107. CRM leads, and which lead each appointment belongs to.
   (',["m107_sales_leads","col","sales_leads",["id","account_id","stage","first_name","last_name","phone","email","street","city","state","zip","services","source","notes","owner_id","created_by","created_at","updated_at","stage_at"]]' ||
   ',["m107_sales_lead_links","col","sales_lead_links",["appointment_id","lead_id","account_id","linked_at"]]') ||
+  -- 108. CRM sales appointments on their own Google calendar.
+  (',["m108_gcal_sales","col","gcal_sales",["user_id","sales_on","calendar_id","last_synced_at","last_error"]]' ||
+  ',["m108_gcal_sales_events","col","gcal_sales_events",["user_id","appointment_id","event_id","fingerprint","synced_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

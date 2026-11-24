@@ -36,7 +36,7 @@ import {
   QrCode as QrCodeIcon,
   Maximize2, Minimize2, ChevronsDownUp, ChevronsUpDown, Rows3, Share2, ImagePlus, History, UserMinus, UserPlus, PauseCircle, Sparkles, RotateCcw,
   Info, HeartPulse, Megaphone, PhoneCall, MessageSquareText, CloudSun, CloudRain, Cloud, CloudSnow, CloudFog, CloudLightning,
-  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, ChartGantt, Wallet, Circle, Minus,
+  Gift, Award, Contact, BadgeCheck, CalendarRange, CalendarCheck, Handshake, ChartGantt, Wallet, Circle, Minus,
   // Aliased: Map is the JavaScript built-in, which this file uses constantly.
   Map as MapIcon,
   Crown,
@@ -17212,6 +17212,7 @@ const GCAL_ERROR_TEXT = {
   sealed: "SubSub can't read this connection any more. Disconnect, then connect again.",
   google_unreachable: "Google didn't answer the last time SubSub tried. It will try again on its own.",
   calendar_refused: "Google wouldn't let SubSub make the SubSub Jobs calendar. Disconnect, then connect again.",
+  sales_calendar_refused: "Google wouldn't let SubSub make the SubSub Sales calendar. Disconnect, then connect again.",
   write_refused: "Google refused some of the jobs. SubSub will try them again on its own.",
 };
 function gcalErrText(e) {
@@ -17313,6 +17314,11 @@ function GoogleCalendarPanel({ landed = null, crewSide = true }) {
           <p className="panel-note">
             {tt("Put your SubSub jobs on your own Google Calendar, on a calendar called SubSub Jobs, and stop SubSub booking you when your calendar shows you're busy.")}
           </p>
+          {s.sales?.available && (
+            <p className="panel-note gcal-sales-what">
+              {tt("Your CRM sales appointments go on a second calendar, SubSub Sales, so estimates and jobs stay apart.")}
+            </p>
+          )}
           <p className="panel-note gcal-what">
             {tt("SubSub only adds to its own SubSub Jobs calendar and never changes your other events. For the rest of your calendar it only sees when you're busy, not what you're doing.")}
           </p>
@@ -17341,6 +17347,32 @@ function GoogleCalendarPanel({ landed = null, crewSide = true }) {
                 <span className="no-sub">{tt("Proposed times show as free until they're confirmed. Turning this off removes the SubSub Jobs calendar.")}</span>
               </span>
             </label>
+            {/* 108. CRM sales appointments, on a calendar of their own. Offered
+                only to somebody who can be a sales manager: the server says. */}
+            {s.sales?.available && (
+              <label className={`notify-opt gcal-sales-opt ${s.sales.on ? "on" : ""}`} data-gcal-sales>
+                <input type="checkbox" checked={!!s.sales.on} disabled={!!busy || !!s.sales.migration}
+                  onChange={(e) => set({ salesOn: e.target.checked })} />
+                <Handshake size={17} />
+                <span className="no-txt">
+                  <span className="no-name">{tt("Put my CRM sales appointments on Google Calendar")}</span>
+                  <span className="no-sub">
+                    {s.sales.migration
+                      ? `${tt("The database isn't migrated yet: run")} ${s.sales.migration}.sql.`
+                      : tt("Estimates you're the sales manager for go on their own calendar, called SubSub Sales, separate from your jobs. The homeowner's phone and email are left off. Turning this off removes the SubSub Sales calendar.")}
+                  </span>
+                  {s.sales.on && !s.sales.migration && (
+                    <span className="no-sub gcal-sales-count">
+                      {s.sales.events === 1 ? tt("1 appointment is on your SubSub Sales calendar.")
+                        : `${s.sales.events} ${tt("appointments are on your SubSub Sales calendar.")}`}
+                    </span>
+                  )}
+                </span>
+              </label>
+            )}
+            {s.sales?.lastError === "calendar_refused" && s.sales.on && (
+              <p className="gcal-landed warn">{tt(GCAL_ERROR_TEXT.sales_calendar_refused)}</p>
+            )}
             {crewSide && (
               <label className={`notify-opt ${s.blockOn ? "on" : ""}`}>
                 <input type="checkbox" checked={s.blockOn} disabled={!!busy}
@@ -17349,6 +17381,9 @@ function GoogleCalendarPanel({ landed = null, crewSide = true }) {
                 <span className="no-txt">
                   <span className="no-name">{tt("Don't book me when my calendar is busy")}</span>
                   <span className="no-sub">{tt("SubSub won't propose or auto-schedule a time your Google Calendar already shows taken. If several people at your company connect, a time counts as taken only when all of them are busy.")}</span>
+                  {s.sales?.available && (
+                    <span className="no-sub" data-gcal-sales-block>{tt("Sales appointments too: the call center is told your calendar shows you busy, and books you then only if they choose Book anyway.")}</span>
+                  )}
                 </span>
               </label>
             )}
@@ -17365,7 +17400,9 @@ function GoogleCalendarPanel({ landed = null, crewSide = true }) {
           {asking && (
             <ConfirmRemove name={tt("Google Calendar")} verb={tt("Disconnect")}
               what="google calendar" explain={gcalErrText}
-              consequence={tt("The SubSub Jobs calendar comes off your Google account, and SubSub stops checking when you're busy. Your own events are not touched. You can connect again any time.")}
+              consequence={tt(s.sales?.available
+                ? "The SubSub Jobs and SubSub Sales calendars come off your Google account, and SubSub stops checking when you're busy. Your own events are not touched. You can connect again any time."
+                : "The SubSub Jobs calendar comes off your Google account, and SubSub stops checking when you're busy. Your own events are not touched. You can connect again any time.")}
               onCancel={() => setAsking(false)}
               onConfirm={async () => {
                 await api.disconnectGoogleCalendar();
@@ -29707,6 +29744,7 @@ const apptRefusalText = (e) => {
   const code = e?.body?.error;
   if (code === "migration_needed") return `Appointments can't be saved until migration ${e.body.migration || "105"} is run.`;
   if (code === "rep_double_booked") return "That sales manager already has an appointment then. Pick another time, or tick Book anyway.";
+  if (code === "rep_calendar_busy") return `${e.body.repName || "That sales manager"}'s Google Calendar shows them busy then. Pick another time, or tick Book anyway.`;
   if (code === "incomplete") return `Still needed: ${apptFieldWords(e.body.field)}.`;
   if (code === "bad_rep") return "That person can't take appointments here.";
   if (code === "sales_only") return "Only the office can record how the appointment went.";
@@ -29822,6 +29860,11 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [allowClash, setAllowClash] = useState(false);
+  // 108. The sales manager's own Google Calendar shows them taken then. Only
+  // the server can know, so it is set from its refusal and forgotten the
+  // moment the day, the time, the length or the person changes.
+  const [calBusy, setCalBusy] = useState(null);
+  useEffect(() => { setCalBusy(null); }, [f.date, f.time, f.minutes, f.repId]);
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
   const setIn = (key, patch) => setF((x) => ({ ...x, [key]: { ...x[key], ...patch } }));
 
@@ -29862,6 +29905,7 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
       setErr(apptRefusalText(e));
       if (e?.body?.error === "incomplete") setStep(apptStepOf(e.body.field));
       if (e?.body?.error === "rep_double_booked") setStep("schedule");
+      if (e?.body?.error === "rep_calendar_busy") { setCalBusy(e.body.repName || repName(f.repId)); setStep("schedule"); }
     } finally { setSaving(false); }
   };
 
@@ -30064,6 +30108,12 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
               {repName(f.repId)} already has an appointment then. Book anyway
             </label>
           )}
+          {calBusy && clashes.length === 0 && (
+            <label className="appt-warn appt-clash" data-calbusy>
+              <input type="checkbox" checked={allowClash} onChange={(e) => setAllowClash(e.target.checked)} />
+              {calBusy}&apos;s Google Calendar shows them busy then. Book anyway
+            </label>
+          )}
           <label className="fld">Notes for the sales manager
             <textarea rows={3} value={f.notes} onChange={(e) => set({ notes: e.target.value })}
               placeholder="Gate code, dog in the yard, best number to call…" /></label>
@@ -30098,7 +30148,7 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
           <button type="button" className="btn-solid" data-next disabled={here.length > 0}
             onClick={() => setStep(APPT_STEPS[idx + 1].id)}>Next</button>
         </>) : (
-          <button type="button" className="btn-solid" data-book disabled={saving || missing.length > 0 || (clashes.length > 0 && !allowClash)}
+          <button type="button" className="btn-solid" data-book disabled={saving || missing.length > 0 || ((clashes.length > 0 || !!calBusy) && !allowClash)}
             onClick={save}>{saving ? "Saving…" : existing ? "Save changes" : "Book appointment"}</button>
         )}
       </div>

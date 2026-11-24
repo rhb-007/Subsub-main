@@ -2800,6 +2800,23 @@ CREATE TABLE IF NOT EXISTS gcal_states (
   used_at    TEXT
 );
 
+-- 108 — CRM sales appointments on a "SubSub Sales" Google calendar.
+CREATE TABLE IF NOT EXISTS gcal_sales (
+  user_id        TEXT PRIMARY KEY,
+  sales_on       INTEGER NOT NULL DEFAULT 1,
+  calendar_id    TEXT,
+  last_synced_at TEXT,
+  last_error     TEXT
+);
+CREATE TABLE IF NOT EXISTS gcal_sales_events (
+  user_id        TEXT NOT NULL,
+  appointment_id TEXT NOT NULL,
+  event_id       TEXT NOT NULL,
+  fingerprint    TEXT NOT NULL,
+  synced_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, appointment_id)
+);
+
 -- ---------------------------------------------------------------------------
 -- 099 — a second business on one login
 -- ---------------------------------------------------------------------------

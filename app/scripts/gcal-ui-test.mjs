@@ -36,7 +36,12 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/google-calendar") {
     if (refuse) return [403, { error: "forbidden" }];
     if (method === "GET") return [200, { ...state, calendarName: "SubSub Jobs" }];
-    if (method === "PATCH") { sent.push(["patch", body]); state = { ...state, ...body }; return [200, { ok: true }]; }
+    if (method === "PATCH") {
+      sent.push(["patch", body]);
+      const { salesOn, ...rest } = body || {};
+      state = { ...state, ...rest, ...(salesOn !== undefined && state.sales ? { sales: { ...state.sales, on: salesOn } } : {}) };
+      return [200, { ok: true }];
+    }
     if (method === "DELETE") { sent.push(["delete"]); state = { ...state, connected: false, email: null }; return [200, { ok: true }]; }
   }
   if (path === "/api/google-calendar/start") {
@@ -153,6 +158,37 @@ try {
     t.ck("agreeing disconnects", sent.some((x) => x[0] === "delete"));
     const p3 = await panel(page);
     t.ck("and the panel offers Connect again", p3?.buttons.some((b) => /Connect Google Calendar/.test(b)), JSON.stringify(p3?.buttons));
+    await ctx.close();
+  }
+
+  console.log("\n-- 108. a sales manager gets a second calendar --");
+  {
+    state = { configured: true, connected: true, email: "chris@gmail.test", syncOn: true, blockOn: true, events: 3,
+      sales: { available: true, on: true, events: 2, calendarName: "SubSub Sales" } };
+    const { ctx, page } = await visitApp(browser, { host: "sound", webPort: WEB, path: "/?gcal=connected",
+      seat: { userId: "usr_c", accountId: "acc_s" } });
+    await wait(2500);
+    const p = await panel(page);
+    const salesBox = p?.boxes.find((b) => /CRM sales appointments/.test(b.name || ""));
+    t.ck("a switch of its own for CRM sales appointments, on", p?.boxes.length === 3 && salesBox?.on === true, JSON.stringify(p?.boxes));
+    t.ck("which names the SubSub Sales calendar and counts what is on it",
+      /SubSub Sales/.test(p?.text || "") && /2 appointments are on your SubSub Sales calendar/.test(p?.text || ""), p?.text);
+    t.ck("and says the homeowner's phone and email are left off", /phone and email are left off/.test(p?.text || ""));
+    t.ck("the busy switch says it covers estimates too", /call center is told your calendar shows you busy/.test(p?.text || ""));
+    sent.length = 0;
+    await page.evaluate(() => document.querySelector("[data-gcal-sales] input")?.click());
+    await wait(800);
+    const patch = sent.filter((x) => x[0] === "patch").pop();
+    t.ck("turning it off sends exactly that, and nothing about the jobs calendar",
+      JSON.stringify(patch?.[1]) === JSON.stringify({ salesOn: false }), JSON.stringify(patch));
+    const p2 = await panel(page);
+    t.ck("and the switch shows the server's answer, the jobs one untouched",
+      p2?.boxes.find((b) => /CRM sales/.test(b.name || ""))?.on === false
+      && p2?.boxes.find((b) => /Put my SubSub jobs/.test(b.name || ""))?.on === true, JSON.stringify(p2?.boxes));
+    await press(page, "Disconnect");
+    await wait(500);
+    t.ck("Disconnect says both calendars come off",
+      await page.evaluate(() => /SubSub Jobs and SubSub Sales calendars come off/.test(document.querySelector(".modal")?.innerText || "")));
     await ctx.close();
   }
 

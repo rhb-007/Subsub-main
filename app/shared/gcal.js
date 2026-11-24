@@ -142,6 +142,75 @@ export function eventFingerprint(ev) {
   return h.toString(16).padStart(8, "0");
 }
 
+// 108. CRM SALES APPOINTMENTS go on a calendar of their own, "SubSub Sales",
+// never on "SubSub Jobs". An estimate in a homeowner's kitchen and a crew
+// booked onto a roof are different things to the person reading the day, and
+// one calendar holding both is how a sales manager mistakes one for the
+// other -- the same reason the CRM's own calendar draws no job visits. Two
+// calendars also give two switches: plenty of people want one and not the
+// other.
+export const GCAL_SALES_CALENDAR_NAME = "SubSub Sales";
+export const GCAL_SALES_PREFIX = "SubSub Estimate";
+// The words an outcome adds to the title of a visit that has happened.
+// Scheduled and confirmed add nothing: those are the meeting, as booked.
+const SALES_OUTCOME_WORDS = { sat: "ran, no decision", sold: "sold", lost: "not sold", no_show: "no show" };
+
+// What goes on it: everything booked except a canceled one. A visit that has
+// happened stays on the day it happened on -- "did I see the Hendersons on
+// Tuesday" is answered by the calendar -- and says how it went.
+export const salesOnCalendar = (status) => !!status && status !== "cancelled";
+
+// THE EVENT FOR ONE SALES APPOINTMENT. Deliberately carried: the work being
+// estimated, the address (somebody has to drive there), the homeowner's first
+// name and last initial so the right door is knocked on, and whether a second
+// decision maker will be there. Deliberately not: a phone number, an email,
+// or the answers from the call -- the rule `eventFor` follows, for the same
+// reason: a calendar is shared with a spouse or an assistant far more often
+// than a login is, and the full record is one tap away in SubSub.
+export function salesEventFor(item, tz) {
+  const zone = validTimeZone(tz) || "UTC";
+  const name = [item.firstName, item.lastName ? `${String(item.lastName).trim().charAt(0)}.` : ""]
+    .filter(Boolean).join(" ").trim();
+  const what = (item.services || []).join(", ") || "Estimate";
+  const outcome = SALES_OUTCOME_WORDS[item.status];
+  const summary = `${GCAL_SALES_PREFIX}: ${what}${name ? ` -- ${name}` : ""}`.slice(0, 200)
+    + (outcome ? ` (${outcome})` : "");
+  const lines = [];
+  if (item.account) lines.push(`For: ${item.account}`);
+  if (item.second) lines.push(item.secondAttends
+    ? "Both decision makers will be there."
+    : "A second decision maker may not be there.");
+  lines.push(item.status === "confirmed" ? "Confirmed with the homeowner." : outcome
+    ? `Outcome recorded in SubSub: ${outcome}.` : "Booked in SubSub.");
+  if (item.link) lines.push(item.link);
+  lines.push("Added by SubSub. Changes made here are replaced the next time SubSub syncs.");
+  const timed = TIME_RE.test(String(item.time || ""));
+  const start = timed
+    ? { dateTime: `${item.date}T${item.time}:00`, timeZone: zone }
+    : { date: item.date };
+  const end = timed
+    ? { dateTime: `${item.date}T${plusMinutes(item.time, Number(item.minutes) || 90)}:00`, timeZone: zone }
+    : { date: addDays(item.date, 1) };
+  const ev = {
+    summary,
+    description: lines.join("\n"),
+    start, end,
+    transparency: "opaque",
+    extendedProperties: { private: { subsubAppointment: String(item.appointmentId) } },
+  };
+  if (item.address) ev.location = String(item.address).slice(0, 300);
+  return ev;
+}
+
+// The end of an appointment that runs `n` minutes, held to the same day: an
+// estimate that would run past midnight ends at 23:59 rather than becoming an
+// event on two dates.
+export function plusMinutes(hhmm, n) {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  const t = Math.min(h * 60 + m + Math.max(1, Math.round(n)), 23 * 60 + 59);
+  return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+}
+
 // Is [startMs, endMs) inside any of one person's busy periods?
 export function busyDuring(periods, startMs, endMs) {
   return (periods || []).some((p) => {
