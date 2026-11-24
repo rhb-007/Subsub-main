@@ -16890,7 +16890,7 @@ refactor.
   - Appointment reminders to the homeowner before the visit.
   - Recording a call itself (recording, dialing).
   - A route for an appointment the homeowner wants moved by text.
-  - **Pasting 105 is required.** Until then the screen names the file.
+  - **105 is pasted on the live database** (28 columns, confirmed by the owner).
 
 ## Working here
 
