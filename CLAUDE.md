@@ -16971,6 +16971,51 @@ refactor.
   **106 is pasted on the live database** (30 columns across the two tables,
   confirmed by the owner).
 
+- **A GENERAL CONTRACTOR'S APP IS TWO WORKSPACES, JOBS AND CRM, AND THE CRM
+  IS LEADS AT FIVE STAGES WITH THE APPOINTMENTS UNDER THEM.** Asked for as
+  *"two main tabs when you login: Jobs > current dashboard, navigation etc;
+  CRM ... its own tab"*, with a dashboard, leads at Lead / Prospect /
+  Opportunity / Customer / Former customer, and a call center's bookings
+  landing in it at a stage set by whether an appointment was booked. Then a
+  calendar of appointments and a call-center dashboard where a lead is made
+  first and booked second. Migration 107 (`sales_leads`, `sales_lead_links`),
+  `app/shared/leads.js`.
+  - **A switch above the nav, Jobs | CRM** (`.ws-switch`), for a seat that has
+    both. Jobs is everything that was there; CRM swaps the menu for its own
+    pages: Dashboard, Leads, Appointments, Calendar, Follow-ups. The tab id is
+    still `appointments`, because the call-center role and its allowlist name
+    it. Switching back returns to the last Jobs page. A call-center seat has
+    only the CRM, so it gets no switch.
+  - **A lead is a person, an appointment is one visit to them.** Booking finds
+    the lead by phone, then email, or makes one, and links the appointment
+    (`sales_lead_links`). The stage then follows the appointments
+    (`stageAfterAppointments`): booking makes a lead or prospect an
+    opportunity; a sale (sold, or a job made from it) makes them a customer,
+    a former customer included; an opportunity with nothing left open goes
+    back to prospect. **A call-center seat may set only Lead or Prospect** by
+    hand (`CALLCENTER_STAGES`), and cannot move one already past those.
+  - **The office's dashboard** is the pipeline by stage (each card opens Leads
+    at that stage), this month, the next seven days, what is owed, and where
+    leads came from. **The call center's is its own**: one primary press,
+    **New lead**, opening the lead form with **Add and book an appointment**
+    as its main button, which saves the lead and opens the call script seeded
+    from it, so the booking links back and makes them an opportunity. Under
+    it: what this seat added and booked today and this month, the share of its
+    leads that got an appointment, **Ready to book** (every lead or prospect on
+    the account with nothing open, longest waiting first, each with Book), what
+    it booked for the week, and its follow-ups (`callerDashboard`).
+  - **The calendar is estimates only**, never job visits, because a roofing
+    estimate and a crew booking on one grid read as one thing. The job
+    calendar's geometry (`.jcal`), a dot per estimate (booked, gone by with no
+    outcome in red, sold, not sold), a sales-manager filter, a day panel, and
+    **Book one on this day**, which opens the script with that date. Canceled
+    ones are left off.
+  - **`POST /api/v1/leads`** takes leads from an integration, Lead or Prospect
+    only, a duplicate answered 200 with `duplicate: true`.
+  `test:crmleads` (63) and `test:salesapptui` (77). Ten mutations fire, each on
+  its own assertion. **107 needs pasting**; until then every appointment screen
+  works and the CRM says leads are not set up yet.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

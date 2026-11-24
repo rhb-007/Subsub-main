@@ -345,7 +345,8 @@
     "test:sitesecurity": "node --no-warnings scripts/site-security-test.mjs",
     "test:salesappt": "node --no-warnings scripts/sales-appointments-test.mjs",
     "test:salesapptui": "node --no-warnings scripts/sales-appointments-ui-test.mjs",
-    "test:salescrm": "node --no-warnings scripts/sales-crm-test.mjs"
+    "test:salescrm": "node --no-warnings scripts/sales-crm-test.mjs",
+    "test:crmleads": "node --no-warnings scripts/crm-leads-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

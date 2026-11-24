@@ -23,6 +23,8 @@ import { validAppointment, repClashes, STATUSES as APPT_STATUSES, CALLCENTER_STA
   BOOKING_ROLES, SALES_ROLES, takesAppointments, serviceLabel, apptWhenText } from "../shared/salesappt.js";
 import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, MAX_RECORDING_BYTES,
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
+import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
+  CALLCENTER_STAGES } from "../shared/leads.js";
 import { NOTICES, noticeByKey, noticePlaceholders, unknownPlaceholders, renderNotice, noticeVars,
   noticeNeedsLink, NOTICE_SUBJECT_MAX, NOTICE_BODY_MAX } from "../shared/notices.js";
 import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
@@ -870,6 +872,8 @@ const CALLCENTER_ALLOWED = [
   [/^\/api\/appointments\/[^/]+\/activities\/[^/]+$/, ["PATCH"]],
   [/^\/api\/appointments\/[^/]+\/activities\/[^/]+\/file$/, ["GET"]],
   [/^\/api\/sales-followups$/, ["GET"]],
+  [/^\/api\/sales-leads$/, ["GET", "POST"]],
+  [/^\/api\/sales-leads\/[^/]+$/, ["PATCH"]],
   [/^\/api\/uploads\/call-recording\/.+$/, ["PUT"]],
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
   [/^\/api\/me\/avatar$/, ["PATCH"]],
@@ -10492,6 +10496,7 @@ export function missingSchema(err) {
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
+  if (/\bsales_(leads|lead_links)\b/i.test(m)) return "107_crm_leads";
   if (/\bsales_appointments\b/i.test(m)) return "105_sales_appointments";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
@@ -11823,6 +11828,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
          status_at = CASE WHEN status <> 'sold' THEN datetime('now') ELSE status_at END
        WHERE id = ? AND account_id = ? AND job_id IS NULL`).bind(id, fromAppt.id, accountId).run();
     appointmentLinked = { id: fromAppt.id, linked: (r.meta?.changes ?? 1) > 0 };
+    if (appointmentLinked.linked) await leadAfterAppointment(c.env, { accountId, apptId: fromAppt.id, userId, sale: true });
     await logActivity(c.env, accountId, userId, "appointment_converted",
       `Turned the sold estimate for ${fromAppt.first_name} ${fromAppt.last_name} into job ${b.title}`, { appointmentId: fromAppt.id, jobId: id });
   }
@@ -25186,14 +25192,14 @@ const apiError = (c, status, error, message, extra = {}) =>
 // Resolves the bearer token to an account, or answers. Returns null when it
 // has already answered, so callers `if (!ctx) return;` -- there is no second
 // place that decides what a bad token means.
-async function apiCaller(c, integration = "api") {
+async function apiCaller(c, integration = "api", opts = {}) {
   const header = c.req.header("Authorization") || "";
   const raw = /^Bearer\s+(.+)$/i.exec(header.trim())?.[1]?.trim();
   if (!raw) {
     return { res: apiError(c, 401, "missing_token",
       "Send your SubSub API token as: Authorization: Bearer <token>.") };
   }
-  return apiCallerForToken(c, raw, integration);
+  return apiCallerForToken(c, raw, integration, opts);
 }
 
 // The same caller, with the token read off the PATH instead of a header.
@@ -25227,7 +25233,7 @@ async function integrationOn(env, accountId, id) {
   }
 }
 
-async function apiCallerForToken(c, raw, integration) {
+async function apiCallerForToken(c, raw, integration, opts = {}) {
   let row;
   try {
     row = await c.env.DB.prepare(
@@ -25262,10 +25268,13 @@ async function apiCallerForToken(c, raw, integration) {
   // Creating a job is the hiring side's act, exactly as it is on the screen.
   // A subcontractor account has nobody to assign, so a job posted to one
   // would arrive with slots that can never be filled.
-  if (!HIRING_KINDS.includes(row.kind)) {
-    return { res: apiError(c, 403, "not_a_hiring_account",
-      "This account is not set up to hire subcontractors, so it cannot take jobs.",
-      { kind: row.kind }) };
+  // A door may name its own kinds: leads are the SELLING side's, so they go
+  // to the kinds that take appointments rather than the hiring ones.
+  const kindOk = opts.kindOk || ((k) => HIRING_KINDS.includes(k));
+  if (!kindOk(row.kind)) {
+    const [code, msg] = opts.kindError || ["not_a_hiring_account",
+      "This account is not set up to hire subcontractors, so it cannot take jobs."];
+    return { res: apiError(c, 403, code, msg, { kind: row.kind }) };
   }
 
   // The account's own switch in Account -> Integrations. Checked here, at the
@@ -27544,7 +27553,7 @@ async function apptConfirmEmail(c, acct, v, repName, userId, apptId) {
 app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
   const { error, acct } = await apptAccount(c);
   if (error) return error;
-  const { userId } = c.get("auth");
+  const { userId, role } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   const chk = validAppointment(b);
   if (!chk.ok) return c.json({ error: chk.error, field: chk.field, missing: chk.missing || undefined }, 400);
@@ -27578,8 +27587,11 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
       : !cc.value.email ? { sent: false, reason: "no_email_consent" }
       : await apptConfirmEmail(c, acct, v, row?.rep_name || null, userId, id);
     const repTold = v.repId ? await notifyApptRep(c.env, { acct, row, actorId: userId, reassigned: false }) : null;
+    // 107. Booked is an Opportunity: their lead is found or made and moved.
+    const lead = await leadForAppointment(c.env, { accountId: acct.id, apptId: id, appt: apptRowToJs(row),
+      leadId: b.leadId || null, role, userId });
     const consents = await apptConsents(c.env, acct.id, id);
-    return c.json({ appointment: withConsent(apptRowToJs(row), consents), confirmation, repTold,
+    return c.json({ appointment: withConsent(apptRowToJs(row), consents), confirmation, repTold, lead,
       consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) }, 201);
   });
 });
@@ -27663,10 +27675,282 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
       try { await logEvent(c.env, acct.id, userId, "appointment.status", cur.id, { from: cur.status, to: status }); }
       catch (err) { console.warn("[appointments] event:", err?.message || err); }
     }
+    // 107. The lead follows: a sale is a customer, nothing left open takes
+    // an opportunity back to prospect, a reopened visit is an opportunity.
+    const leadStage = status !== cur.status
+      ? await leadAfterAppointment(c.env, { accountId: acct.id, apptId: cur.id, userId, sale: status === "sold" })
+      : null;
     const consents = await apptConsents(c.env, acct.id, cur.id);
-    return c.json({ appointment: withConsent(apptRowToJs(after), consents),
+    return c.json({ appointment: withConsent(apptRowToJs(after), consents), leadStage,
       ...(consentSaved ? { consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) } : {}) });
   });
+});
+
+// ---------------------------------------------------------------------------
+// 107. CRM leads. shared/leads.js holds the stages and the rules.
+//
+// A lead is one homeowner on the account, matched by phone. Booking an
+// appointment finds or makes their lead and moves it to Opportunity; a sale
+// makes it a Customer. Everything here reads only this account's own rows.
+// ---------------------------------------------------------------------------
+
+const LEAD_SELECT = `SELECT l.*, o.name AS owner_name, cb.name AS created_by_name FROM sales_leads l
+  LEFT JOIN users o ON o.id = l.owner_id LEFT JOIN users cb ON cb.id = l.created_by`;
+
+function leadRowToJs(r) {
+  return {
+    id: r.id, stage: r.stage, firstName: r.first_name || "", lastName: r.last_name || "",
+    phone: r.phone || "", email: r.email || "",
+    address: { street: r.street || "", city: r.city || "", state: r.state || "", zip: r.zip || "" },
+    services: apptJson(r.services, []), source: r.source || null, notes: r.notes || null,
+    ownerId: r.owner_id || null, ownerName: r.owner_name || null,
+    createdBy: r.created_by || null, createdByName: r.created_by_name || null,
+    createdAt: r.created_at, updatedAt: r.updated_at, stageAt: r.stage_at,
+  };
+}
+
+async function insertLead(env, { accountId, v, userId }) {
+  const id = uid();
+  await env.DB.prepare(
+    `INSERT INTO sales_leads (id, account_id, stage, first_name, last_name, phone, email, street, city, state, zip,
+       services, source, notes, owner_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(id, accountId, v.stage || "lead", v.firstName || null, v.lastName || null, v.phone || null,
+      v.email || null, v.address?.street || null, v.address?.city || null, v.address?.state || null,
+      v.address?.zip || null, JSON.stringify(v.services || []), v.source || null, v.notes || null,
+      v.ownerId || null, userId || null).run();
+  try { await logEvent(env, accountId, userId || null, "lead.created", id, { stage: v.stage || "lead", source: v.source || null }); }
+  catch (err) { console.warn("[leads] event:", err?.message || err); }
+  return id;
+}
+
+// The lead already on this account for a phone (or, with none, an email).
+async function findLead(env, accountId, { phone, email }) {
+  if (phone) {
+    const r = await env.DB.prepare(`SELECT id FROM sales_leads WHERE account_id = ? AND phone = ? ORDER BY created_at LIMIT 1`)
+      .bind(accountId, phone).first();
+    if (r) return r.id;
+  }
+  if (email) {
+    const r = await env.DB.prepare(`SELECT id FROM sales_leads WHERE account_id = ? AND lower(email) = ? ORDER BY created_at LIMIT 1`)
+      .bind(accountId, String(email).toLowerCase()).first();
+    if (r) return r.id;
+  }
+  return null;
+}
+
+// Moves a lead to the stage its appointments now say. `sale` is a sale that
+// just happened, which makes even a former customer a customer again.
+async function syncLeadStage(env, accountId, leadId, userId, { sale = false } = {}) {
+  const lead = await env.DB.prepare(`SELECT id, stage FROM sales_leads WHERE id = ? AND account_id = ?`).bind(leadId, accountId).first();
+  if (!lead) return null;
+  const { results } = await env.DB.prepare(
+    `SELECT a.status, a.job_id FROM sales_lead_links k JOIN sales_appointments a ON a.id = k.appointment_id
+      WHERE k.lead_id = ? AND k.account_id = ?`).bind(leadId, accountId).all();
+  const appts = (results || []).map((r) => ({ status: r.status, jobId: r.job_id }));
+  const next = sale ? "customer" : stageAfterAppointments(lead.stage, appts);
+  if (next === lead.stage) return { stage: next, changed: false };
+  await env.DB.prepare(`UPDATE sales_leads SET stage = ?, stage_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`)
+    .bind(next, leadId).run();
+  try { await logEvent(env, accountId, userId || null, "lead.stage", leadId, { from: lead.stage, to: next, auto: true }); }
+  catch (err) { console.warn("[leads] event:", err?.message || err); }
+  return { stage: next, changed: true, from: lead.stage };
+}
+
+// Links a booked appointment to its lead -- the one named, else the one with
+// that phone, else a new one -- and moves the lead along. Never fails the
+// booking: a database without 107 answers {migration} and the booking stands.
+async function leadForAppointment(env, { accountId, apptId, appt, leadId = null, role, userId }) {
+  try {
+    let id = null;
+    if (leadId) {
+      const r = await env.DB.prepare(`SELECT id FROM sales_leads WHERE id = ? AND account_id = ?`).bind(String(leadId), accountId).first();
+      if (r) id = r.id;
+    }
+    if (!id) id = await findLead(env, accountId, { phone: appt.homeowner.phone, email: appt.homeowner.email });
+    let created = false;
+    if (!id) {
+      id = await insertLead(env, { accountId, userId, v: {
+        stage: "lead", firstName: appt.homeowner.firstName, lastName: appt.homeowner.lastName,
+        phone: appt.homeowner.phone, email: appt.homeowner.email, address: appt.address,
+        services: appt.services, source: sourceFromBooking(role, appt.source), notes: null } });
+      created = true;
+    }
+    await env.DB.prepare(`INSERT OR IGNORE INTO sales_lead_links (appointment_id, lead_id, account_id) VALUES (?, ?, ?)`)
+      .bind(apptId, id, accountId).run();
+    const st = await syncLeadStage(env, accountId, id, userId);
+    return { leadId: id, created, stage: st?.stage || null };
+  } catch (err) {
+    if (missingSchema(err)) return { migration: "107_crm_leads" };
+    console.error("[leads] link failed:", err?.message || err, apptId);
+    return { error: "link_failed" };
+  }
+}
+
+// After an appointment's status changes: its lead's stage follows.
+async function leadAfterAppointment(env, { accountId, apptId, userId, sale = false }) {
+  try {
+    const k = await env.DB.prepare(`SELECT lead_id FROM sales_lead_links WHERE appointment_id = ? AND account_id = ?`)
+      .bind(apptId, accountId).first();
+    if (!k) return null;
+    return await syncLeadStage(env, accountId, k.lead_id, userId, { sale });
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    console.error("[leads] stage sync failed:", err?.message || err, apptId);
+    return null;
+  }
+}
+
+// Every appointment booked before 107, given its lead. Idempotent: an
+// appointment already linked is skipped, so the list route can call it.
+async function backfillLeads(env, accountId) {
+  const { results } = await env.DB.prepare(
+    `SELECT a.* FROM sales_appointments a LEFT JOIN sales_lead_links k ON k.appointment_id = a.id
+      WHERE a.account_id = ? AND k.appointment_id IS NULL ORDER BY a.created_at LIMIT 200`).bind(accountId).all();
+  for (const r of results || []) {
+    const appt = apptRowToJs(r);
+    const by = r.created_by ? (await env.DB.prepare(`SELECT role FROM memberships WHERE account_id = ? AND user_id = ?`)
+      .bind(accountId, r.created_by).first())?.role : null;
+    await leadForAppointment(env, { accountId, apptId: r.id, appt, role: by, userId: r.created_by || null });
+  }
+  return (results || []).length;
+}
+
+async function leadsGuard(c, fn) {
+  try { return await fn(); }
+  catch (err) {
+    const m = missingSchema(err);
+    if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+    throw err;
+  }
+}
+
+function leadRefusal(c, chk) {
+  return c.json({ error: chk.error, field: chk.field }, chk.error === "stage_sales_only" ? 403 : 400);
+}
+
+app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return leadsGuard(c, async () => {
+    await backfillLeads(c.env, acct.id);
+    const { results } = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.account_id = ? ORDER BY l.updated_at DESC LIMIT 2000`)
+      .bind(acct.id).all();
+    const { results: links } = await c.env.DB.prepare(
+      `SELECT k.lead_id, a.id, a.status, a.date, a.time, a.job_id FROM sales_lead_links k
+         JOIN sales_appointments a ON a.id = k.appointment_id WHERE k.account_id = ?`).bind(acct.id).all();
+    const consents = await apptConsents(c.env, acct.id);
+    const by = new Map();
+    for (const l of links || []) {
+      if (!by.has(l.lead_id)) by.set(l.lead_id, []);
+      by.get(l.lead_id).push({ id: l.id, status: l.status, date: l.date, time: l.time, jobId: l.job_id || null });
+    }
+    const leads = (results || []).map((r) => {
+      const appts = (by.get(r.id) || []).sort((x, y) => `${y.date}${y.time}`.localeCompare(`${x.date}${x.time}`));
+      // The consent on file is the newest appointment's that has one: it is
+      // what they were asked most recently.
+      const withC = appts.find((a) => consents?.get(a.id));
+      return { ...leadRowToJs(r), appointments: appts, consent: withC ? consents.get(withC.id) : null };
+    });
+    return c.json({ leads, owners: await apptReps(c.env, acct.id) });
+  });
+});
+
+app.post("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const chk = validLead(b, { role });
+  if (!chk.ok) return leadRefusal(c, chk);
+  const v = { ...chk.value, source: chk.value.source || (role === "callcenter" ? "call_center" : "office") };
+  if (role === "callcenter") v.ownerId = null;
+  return leadsGuard(c, async () => {
+    if (v.ownerId && !(await apptReps(c.env, acct.id)).some((r) => r.id === v.ownerId)) {
+      return c.json({ error: "bad_owner", field: "ownerId" }, 400);
+    }
+    // One person, one lead: a phone or email already on a lead is refused
+    // by name, so the screen can offer that lead instead of a second copy.
+    const dup = await findLead(c.env, acct.id, { phone: v.phone, email: v.phone ? null : v.email });
+    if (dup) return c.json({ error: "lead_exists", leadId: dup }, 409);
+    const id = await insertLead(c.env, { accountId: acct.id, v, userId });
+    await logActivity(c.env, acct.id, userId, "lead_added",
+      `Added ${[v.firstName, v.lastName].filter(Boolean).join(" ")} to the CRM as a ${stageTerm(v.stage).toLowerCase()}`, { leadId: id });
+    const row = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ?`).bind(id).first();
+    return c.json({ lead: { ...leadRowToJs(row), appointments: [], consent: null } }, 201);
+  });
+});
+
+app.patch("/api/sales-leads/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return leadsGuard(c, async () => {
+    const row = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ? AND l.account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const cur = leadRowToJs(row);
+    // Only the keys sent change: merged over what is stored, then checked
+    // whole, so a partial edit cannot leave a lead the create route refuses.
+    const merged = { ...cur, ...b, address: { ...cur.address, ...(b.address || {}) } };
+    if (!("stage" in b)) delete merged.stage;
+    const chk = validLead(merged, { role, current: cur.stage });
+    if (!chk.ok) return leadRefusal(c, chk);
+    const v = chk.value;
+    if (role === "callcenter") v.ownerId = cur.ownerId;
+    if (v.ownerId && v.ownerId !== cur.ownerId && !(await apptReps(c.env, acct.id)).some((r) => r.id === v.ownerId)) {
+      return c.json({ error: "bad_owner", field: "ownerId" }, 400);
+    }
+    if (v.phone && v.phone !== cur.phone) {
+      const dup = await findLead(c.env, acct.id, { phone: v.phone });
+      if (dup && dup !== cur.id) return c.json({ error: "lead_exists", leadId: dup }, 409);
+    }
+    await c.env.DB.prepare(
+      `UPDATE sales_leads SET stage = ?, first_name = ?, last_name = ?, phone = ?, email = ?, street = ?, city = ?,
+         state = ?, zip = ?, services = ?, source = ?, notes = ?, owner_id = ?, updated_at = datetime('now'),
+         stage_at = CASE WHEN stage <> ? THEN datetime('now') ELSE stage_at END
+       WHERE id = ? AND account_id = ?`)
+      .bind(v.stage, v.firstName || null, v.lastName || null, v.phone || null, v.email || null,
+        v.address.street || null, v.address.city || null, v.address.state || null, v.address.zip || null,
+        JSON.stringify(v.services), v.source || cur.source, v.notes, v.ownerId, v.stage, cur.id, acct.id).run();
+    if (v.stage !== cur.stage) {
+      try { await logEvent(c.env, acct.id, userId, "lead.stage", cur.id, { from: cur.stage, to: v.stage, auto: false }); }
+      catch (err) { console.warn("[leads] event:", err?.message || err); }
+      await logActivity(c.env, acct.id, userId, "lead_stage",
+        `Moved ${[v.firstName, v.lastName].filter(Boolean).join(" ")} from ${stageTerm(cur.stage).toLowerCase()} to ${stageTerm(v.stage).toLowerCase()}`, { leadId: cur.id });
+    }
+    const after = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ?`).bind(cur.id).first();
+    return c.json({ lead: leadRowToJs(after) });
+  });
+});
+
+// A lead from anything that can send a web request: a website form, an
+// automation tool, an ad platform, another CRM. Through the same API key and
+// gates as POST /api/v1/jobs, except that it is the selling side's door, so
+// the kinds are the ones that take appointments rather than the hiring ones.
+app.post("/api/v1/leads", async (c) => {
+  const ctx = await apiCaller(c, "api", { kindOk: takesAppointments,
+    kindError: ["no_crm", "This account does not keep a CRM, so it cannot take leads."] });
+  if (ctx.res) return ctx.res;
+  let body;
+  try { body = await c.req.json(); }
+  catch { return apiError(c, 400, "invalid_json", "The request body must be valid JSON."); }
+  const chk = validLead({ ...body, stage: STAGE_IDS.includes(body?.stage) && CALLCENTER_STAGES.includes(body.stage) ? body.stage : "lead" },
+    { role: "callcenter" });
+  if (!chk.ok) return apiError(c, 400, "invalid_request", `That lead was refused: ${chk.error}.`, { error: chk.error, field: chk.field });
+  const v = { ...chk.value, source: chk.value.source || "api", ownerId: null };
+  try {
+    const dup = await findLead(c.env, ctx.accountId, { phone: v.phone, email: v.email });
+    if (dup) return c.json({ ok: true, duplicate: true, leadId: dup }, 200);
+    const id = await insertLead(c.env, { accountId: ctx.accountId, v, userId: null });
+    await logActivity(c.env, ctx.accountId, null, "lead_added",
+      `A lead arrived through the API: ${[v.firstName, v.lastName].filter(Boolean).join(" ")}`, { leadId: id });
+    return c.json({ ok: true, duplicate: false, leadId: id, stage: v.stage }, 201);
+  } catch (err) {
+    const m = missingSchema(err);
+    if (m) return apiError(c, 503, "migration_needed", "This SubSub environment has not had migration 107 applied yet.", { migration: m });
+    throw err;
+  }
 });
 
 // ---------------------------------------------------------------------------

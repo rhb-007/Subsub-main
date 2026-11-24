@@ -392,6 +392,10 @@ export const api = {
   patchApptActivity: (id, actId, body) => request(`/appointments/${encodeURIComponent(id)}/activities/${encodeURIComponent(actId)}`,
     { method: "PATCH", body: JSON.stringify(body) }),
   listFollowUps: () => request("/sales-followups"),
+  // 107. CRM leads.
+  listLeads: () => request("/sales-leads"),
+  createLead: (body) => request("/sales-leads", { method: "POST", body: JSON.stringify(body) }),
+  patchLead: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
   uploadCallRecording: (file) => putFile(`/uploads/call-recording/${encodeURIComponent(file.name)}`, file),
   apptRecordingBlob: async (id, actId) => {
     const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}/activities/${encodeURIComponent(actId)}/file`,

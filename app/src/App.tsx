@@ -41,7 +41,7 @@ import {
   Map as MapIcon,
   Crown,
   PhoneIncoming,
-  PhoneOutgoing, Mic, CalendarClock,
+  PhoneOutgoing, Mic, CalendarClock, Briefcase,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -59,8 +59,9 @@ import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
 import { SERVICES as APPT_SERVICES, SERVICE_QUESTIONS, HOME_QUESTIONS, SOURCES as APPT_SOURCES,
   STATUSES as APPT_STATUSES, CALLCENTER_STATUSES, DEFAULT_MINUTES as APPT_MINUTES, takesAppointments,
   validAppointment, repClashes, jobSeedFromAppointment, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, sourceLabel, crmDashboard, callerDashboard } from "../shared/leads.js";
 import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
-  contactsFrom, AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
+  AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -2833,6 +2834,14 @@ export default function SubSub() {
     return true;
   };
 
+  // 107. Two workspaces, Jobs and CRM. My account belongs to neither, so it
+  // keeps whichever was showing when it was opened.
+  const [acctInCrm, setAcctInCrm] = useState(false);
+  const lastJobsTab = useRef("dashboard");
+  useEffect(() => {
+    if (tab === "appointments") setAcctInCrm(true);
+    else if (tab !== "account") { setAcctInCrm(false); lastJobsTab.current = tab; }
+  }, [tab]);
   const canRate = role === "admin" || role === "pm";
   const canComplete = role === "admin" || role === "pm";
   // WHO MAY CHANGE SOMEBODY ELSE'S SEAT, and it is a role rather than a
@@ -2868,7 +2877,7 @@ export default function SubSub() {
     : role === "callcenter" ? "appointments" : "portal";
   const homeTitle = homeTab === "dashboard" ? "Back to the dashboard"
     : homeTab === "tenant" ? "Back to your reports"
-    : homeTab === "appointments" ? "Back to CRM / Sales"
+    : homeTab === "appointments" ? "Back to the CRM"
     : "Back to your dashboard";
   const goHome = () => {
     // Anything open belongs to the screen being left: a contractor's detail
@@ -2884,6 +2893,10 @@ export default function SubSub() {
   // fallback — otherwise every subdomain would show the same generic/demo
   // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
+  // 107. Read after `account`, because can("appointments") reads it.
+  const crmWs = tab === "appointments" || (tab === "account" && acctInCrm) || role === "callcenter";
+  // Only a seat that has both: a call-center seat has nothing but the CRM.
+  const showWsSwitch = can("appointments") && can("dashboard");
   // Spanish is offered where it is translated: the people who do the work.
   // Everybody else stays in English whatever this device remembers, so a
   // manager signing in on a crew member's tablet is not handed a half-
@@ -4573,6 +4586,12 @@ export default function SubSub() {
   const subAimed = useRef(false);
   // 106. Arriving from a CRM email: ?open=appointment&id=<id> opens that
   // appointment, ?open=followups the Follow-ups tab. Held until signed in.
+  // 107. A general contractor's two workspaces: Jobs (everything that was
+  // here) and the CRM. The CRM is one tab ("appointments", the id the
+  // call-center role and its allowlist already name) with its own panes, and
+  // which workspace is showing is derived from the tab rather than stored, so
+  // the two can never disagree.
+  const [crmPane, setCrmPane] = useState("dashboard");
   const [crmAsk, setCrmAsk] = useState(() => {
     try {
       const q = new URLSearchParams(window.location.search);
@@ -4587,6 +4606,7 @@ export default function SubSub() {
     if (hydratedFor !== currentAccountId) return;
     crmAimed.current = true;
     window.history.replaceState(null, "", window.location.pathname);
+    setCrmPane(crmAsk.pane === "followups" ? "followups" : "appointments");
     setTab("appointments");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crmAsk, loggedIn, role, hydratedFor, currentAccountId]);
@@ -6161,13 +6181,14 @@ export default function SubSub() {
       if (v && typeof v.tab === "string" && tabAllowed(v.tab, v.pane)) {
         if (typeof v.pane === "string") setPane(v.pane);
         if (typeof v.netView === "string") setNetView(v.netView);
+        if (CRM_PANES.includes(v.crmPane)) setCrmPane(v.crmPane);
         setTab(v.tab);
       }
       return;
     }
-    try { sessionStorage.setItem(viewKey, JSON.stringify({ tab, pane, netView })); } catch { /* private mode */ }
+    try { sessionStorage.setItem(viewKey, JSON.stringify({ tab, pane, netView, crmPane })); } catch { /* private mode */ }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loggedIn, superadminView, hydratedFor, currentAccountId, tab, pane, netView]);
+  }, [loggedIn, superadminView, hydratedFor, currentAccountId, tab, pane, netView, crmPane]);
 
   // Switching accounts, or an admin changing the account type, can leave the
   // current tab unreachable. Fall back rather than render an empty page.
@@ -6998,6 +7019,18 @@ export default function SubSub() {
             </div>
           </div>
         </div>
+        {showWsSwitch && (
+          <div className="ws-switch" role="tablist" aria-label="Workspace">
+            <button role="tab" data-ws="jobs" aria-selected={!crmWs} className={!crmWs ? "on" : ""}
+              onClick={() => { if (crmWs) setTab(lastJobsTab.current || "dashboard"); }}>
+              <Briefcase size={16} /> {tt("Jobs")}
+            </button>
+            <button role="tab" data-ws="crm" aria-selected={crmWs} className={crmWs ? "on" : ""}
+              onClick={() => { if (!crmWs) { setCrmPane("dashboard"); setTab("appointments"); } }}>
+              <Users size={16} /> CRM
+            </button>
+          </div>
+        )}
         {mobileNav && <div className="nav-scrim" onClick={() => setMobileNav(false)} />}
         <nav className={`tabs ${mobileNav ? "open" : ""}`} onClick={(e) => { if (e.target.closest("button")) setMobileNav(false); }}>
           <div className="drawer-user">
@@ -7048,6 +7081,13 @@ export default function SubSub() {
               </button>
             </>
           )}
+          {crmWs && can("appointments") && CRM_NAV.map(([id, label]) => (
+            <button key={id} className={crmPane === id ? "on" : ""} data-crm-nav={id}
+              onClick={() => { setCrmPane(id); setTab("appointments"); }}>
+              {label}
+            </button>
+          ))}
+          {!crmWs && (<>
           {can("dashboard") && (
             <button className={tab === "dashboard" ? "on" : ""} onClick={() => setTab("dashboard")}>
               {tt("Dashboard")}
@@ -7142,11 +7182,6 @@ export default function SubSub() {
               Tenants
             </button>
           )}
-          {can("appointments") && (
-            <button className={tab === "appointments" ? "on" : ""} data-nav="appointments" onClick={() => setTab("appointments")}>
-              CRM / Sales
-            </button>
-          )}
           {can("uniforms") && (
             <button className={tab === "uniforms" ? "on" : ""} onClick={() => setTab("uniforms")}>
               {tt("Uniforms")}{uniformOrders.filter((o) => o.status === "pending").length > 0 &&
@@ -7202,6 +7237,7 @@ export default function SubSub() {
               )}
             </button>
           ))}
+          </>)}
           <div className={`drawer-actions${can("tenant") ? " has-mgr" : ""}`}>
             {can("tenant") && <div className="drawer-mgr"><TenantManager brand={brand} m={tenantMgr} /></div>}
             <button onClick={() => setTab("account")}><UserCog size={15} /> {tt("My account")}</button>
@@ -8831,6 +8867,7 @@ export default function SubSub() {
 
       {tab === "appointments" && can("appointments") && (
         <AppointmentsView role={role} meId={currentUserId} ask={crmAsk} onAskUsed={() => setCrmAsk(null)}
+          pane={crmPane} onPane={setCrmPane}
           onOpenJob={can("jobs") ? (id) => openJob(id) : null}
           onConvert={can("jobs") ? (a, after) => {
             const seed = jobSeedFromAppointment(a);
@@ -29765,8 +29802,15 @@ const apptBlank = () => ({
   consent: { email: null, phone: null, text: null, record: null },
 });
 
-function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCancel }) {
-  const [f, setF] = useState(() => existing ? {
+function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appointments = [], onSaved, onCancel }) {
+  // 107. Booked from a lead: who they are and what they asked about are
+  // already known, so the script starts with them filled in.
+  const [f, setF] = useState(() => !existing && seed ? {
+    ...apptBlank(), ...(seed.date ? { date: seed.date } : {}), services: seed.services || [],
+    homeowner: { ...apptBlank().homeowner, firstName: seed.firstName || "", lastName: seed.lastName || "",
+      phone: seed.phone || "", email: seed.email || "" },
+    address: { ...apptBlank().address, ...(seed.address || {}) },
+  } : existing ? {
     ...apptBlank(), ...existing,
     source: existing.source || "", repId: existing.repId || "", notes: existing.notes || "",
     decidesAlone: !existing.second,
@@ -29811,7 +29855,8 @@ function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCa
       const payload = { ...body(), allowClash: allowClash || undefined };
       const res = existing
         ? await api.patchAppointment(existing.id, payload)
-        : await api.createAppointment({ ...payload, emailHomeowner: f.emailHomeowner && f.consent.email === true });
+        : await api.createAppointment({ ...payload, emailHomeowner: f.emailHomeowner && f.consent.email === true,
+          ...(leadId ? { leadId } : {}) });
       onSaved(res.appointment, res.confirmation || null, res);
     } catch (e) {
       setErr(apptRefusalText(e));
@@ -30095,11 +30140,18 @@ function ApptStatusChip({ status }) {
   return <span className={`tn-chip appt-st appt-st-${status}`} data-status={status}>{APPT_STATUSES[status]?.label || status}</span>;
 }
 
-function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob }) {
+// 107. The CRM workspace's panes, in nav order. The tab is "appointments"
+// (the id the call-center role and its allowlist name); these are its pages.
+const CRM_NAV = [["dashboard", "Dashboard"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"]];
+const CRM_PANES = CRM_NAV.map(([id]) => id);
+
+function LeadStageChip({ stage }) {
+  return <span className={`tn-chip lead-st lead-st-${stage}`} data-stage={stage}>{stageTerm(stage)}</span>;
+}
+
+function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob, pane = "dashboard", onPane }) {
   const sales = role === "admin" || role === "pm";
-  // 106. Three halves of one section: the appointments, the follow-ups that
-  // are owed on them, and the homeowners behind them.
-  const [pane, setPane] = useState(ask?.pane === "followups" ? "followups" : "appointments");
+  const setPane = (p) => onPane?.(p);
   const [followUps, setFollowUps] = useState(null);
   const loadFollowUps = async () => {
     try { setFollowUps((await api.listFollowUps()).followUps || []); }
@@ -30108,13 +30160,25 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   useEffect(() => { loadFollowUps(); }, []);
   const [data, setData] = useState(null);
   const [loadErr, setLoadErr] = useState("");
+  // 107. The leads, beside the appointments. A database without 107 keeps
+  // every appointment screen working and says so on the two that need it.
+  const [leadData, setLeadData] = useState(null);
+  const loadLeads = async () => {
+    try { setLeadData(await api.listLeads()); }
+    catch (e) { setLeadData(e?.body?.error === "migration_needed" ? { migration: e.body.migration || "107_crm_leads" } : { failed: true }); }
+  };
+  useEffect(() => { loadLeads(); }, []);
   const [flow, setFlow] = useState(null);         // null | "new" | appointment
+  const [flowLead, setFlowLead] = useState(null); // a lead being booked
   const [open, setOpen] = useState(null);         // an appointment id
+  const [openLead, setOpenLead] = useState(null); // a lead id
+  const [leadForm, setLeadForm] = useState(null); // null | "new"
   const [flash, setFlash] = useState("");
   const [q, setQ] = useState("");
   const [when, setWhen] = useState("upcoming");
   const [st, setSt] = useState("");
   const [rep, setRep] = useState("");
+  const [leadStage, setLeadStage] = useState("");
   const load = async () => {
     try { setData(await api.listAppointments()); setLoadErr(""); }
     catch (e) {
@@ -30127,6 +30191,12 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const list = data?.appointments || [];
   const reps = data?.reps || [];
   const team = data?.team || reps;
+  const leads = Array.isArray(leadData?.leads) ? leadData.leads : [];
+  const leadOf = useMemo(() => {
+    const m = new Map();
+    for (const l of leads) for (const ap of l.appointments || []) m.set(ap.id, l);
+    return m;
+  }, [leads]);
   // Opened from an email: the appointment it named, once the list is here.
   useEffect(() => {
     if (!ask || !data) return;
@@ -30135,11 +30205,8 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
     onAskUsed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask, data]);
-  const openFollowUps = Array.isArray(followUps) ? followUps : [];
-  const dueNow = openFollowUps.filter((x) => ["due", "overdue"].includes(followUpState(x, dayKey()))).length;
-  const contacts = useMemo(() => contactsFrom(list), [list]);
-  const counts = Object.fromEntries(Object.keys(APPT_STATUSES).map((k) => [k, list.filter((a) => a.status === k).length]));
   const today = dayKey();
+  const counts = Object.fromEntries(Object.keys(APPT_STATUSES).map((k) => [k, list.filter((a) => a.status === k).length]));
   const shown = list.filter((a) => {
     if (when === "upcoming" && (a.date < today || !APPT_STATUSES[a.status]?.open)) return false;
     if (when === "past" && a.date >= today) return false;
@@ -30157,34 +30224,73 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   }).sort((a, b) => when === "upcoming" ? (a.date + a.time).localeCompare(b.date + b.time) : (b.date + b.time).localeCompare(a.date + a.time));
   const needsOutcome = list.filter((a) => a.date < today && APPT_STATUSES[a.status]?.open).length;
   const current = open && list.find((a) => a.id === open);
+  const currentLead = openLead && leads.find((l) => l.id === openLead);
   const upsert = (a) => setData((d) => ({ ...d, appointments: [a, ...(d?.appointments || []).filter((x) => x.id !== a.id)] }));
+  const upsertLead = (l) => setLeadData((d) => ({ ...(d || {}), leads: [l, ...((d?.leads) || []).filter((x) => x.id !== l.id)] }));
+  const goLeads = (stage = "") => { setLeadStage(stage); setPane("leads"); };
+  const titles = { dashboard: "CRM", leads: "Leads", appointments: "Appointments", calendar: "Calendar", followups: "Follow-ups" };
+  const caller = role === "callcenter";
+  const [calDay, setCalDay] = useState("");
 
   return (
-    <main className="ss-main appt-view">
-      <PageHead title="CRM / Sales"
-        sub={sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
+    <main className="ss-main appt-view" data-crm-pane={pane}>
+      <PageHead title={titles[pane] || "CRM"}
+        sub={pane === "dashboard" ? (caller ? "Add the homeowner as a lead, then book their estimate. Booking makes them an opportunity."
+            : "Where every homeowner you are selling to stands, and what is coming up.")
+          : pane === "calendar" ? "Every estimate booked, by day. Press a day to see who is on it."
+          : pane === "leads" ? "Everybody you are trying to sell to, from the first call to the last job."
+          : pane === "followups" ? "What is owed to each homeowner, and when."
+          : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
           : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
-        <button className="btn-solid" data-new-appt onClick={() => setFlow("new")}><PhoneCall size={16} /> New appointment</button>
+        {caller && pane === "dashboard" ? (<>
+          <button className="btn-ghost" data-new-appt onClick={() => { setFlowLead(null); setFlow("new"); }}><PhoneCall size={16} /> New appointment</button>
+          <button className="btn-solid" data-new-lead-book onClick={() => setLeadForm("book")}><UserPlus size={16} /> New lead</button>
+        </>) : (<>
+          {pane === "leads" && <button className="btn-ghost" data-new-lead onClick={() => setLeadForm("new")}><UserPlus size={16} /> Add a lead</button>}
+          <button className="btn-solid" data-new-appt onClick={() => { setFlowLead(calDay && pane === "calendar" ? { date: calDay } : null); setFlow("new"); }}><PhoneCall size={16} /> New appointment</button>
+        </>)}
       </PageHead>
       {flash && <p className="appt-flash" role="status">{flash}</p>}
       {loadErr && <p className="form-err" role="alert">{loadErr}</p>}
       {data && data.crmReady === false && (
         <p className="appt-warn" role="note" data-crm-migration>Follow-up consent, notes and follow-ups aren't set up on this database yet. Run migration 106_sales_crm.</p>
       )}
-      <div className="seg-tabs crm-tabs" role="tablist">
-        {[["appointments", "Appointments", list.length], ["followups", "Follow-ups", dueNow || null], ["contacts", "Contacts", contacts.length]].map(([id, l, n]) => (
-          <button key={id} role="tab" data-crm-tab={id} aria-selected={pane === id} className={pane === id ? "on" : ""} onClick={() => setPane(id)}>
-            {l}{n != null && n !== 0 ? <>{" "}<span className={`nv-n ${id === "followups" ? "due" : ""}`}>{n}</span></> : null}
-          </button>
-        ))}
-      </div>
+      {(pane === "dashboard" || pane === "leads") && leadData?.migration && (
+        <p className="appt-warn" role="note" data-leads-migration>Leads aren't set up on this database yet. Run migration {leadData.migration}.</p>
+      )}
+      {(pane === "dashboard" || pane === "leads") && leadData?.failed && (
+        <p className="form-err" role="alert">Couldn't load the leads. <button className="link-btn" onClick={loadLeads}>Try again</button></p>
+      )}
+
+      {pane === "dashboard" && caller && (
+        <CallerDashboard leads={leads} appointments={list} followUps={Array.isArray(followUps) ? followUps : []} meId={meId}
+          leadsReady={!!leadData && !leadData.migration && !leadData.failed}
+          onNewLead={() => setLeadForm("book")} onOpenLead={(id) => setOpenLead(id)}
+          onBookLead={(l) => { setFlowLead(l); setFlow("new"); }}
+          onOpenAppt={(id) => setOpen(id)} onFollowUps={() => setPane("followups")} onLeads={() => goLeads("")} />
+      )}
+      {pane === "dashboard" && !caller && (
+        <CrmDashboard leads={leads} appointments={list} followUps={Array.isArray(followUps) ? followUps : []} meId={meId}
+          sales={sales} leadsReady={!!leadData && !leadData.migration && !leadData.failed}
+          onStage={goLeads} onOpenAppt={(id) => setOpen(id)} onNeedsOutcome={() => { setWhen("outcome"); setPane("appointments"); }}
+          onFollowUps={() => setPane("followups")} />
+      )}
+
+      {pane === "leads" && (
+        <CrmLeads leads={leads} owners={leadData?.owners || []} stage={leadStage} onStage={setLeadStage}
+          ready={!!leadData && !leadData.migration && !leadData.failed}
+          onOpen={(id) => setOpenLead(id)} onAdd={() => setLeadForm("new")} />
+      )}
+
+      {pane === "calendar" && (
+        <ApptCalendar list={list} reps={reps} selected={calDay} onSelect={setCalDay}
+          onOpen={(id) => setOpen(id)}
+          onNew={(day) => { setFlowLead({ date: day }); setFlow("new"); }} />
+      )}
+
       {pane === "followups" && (
         <CrmFollowUps list={followUps} meId={meId} onOpen={(apptId) => { setPane("appointments"); setOpen(apptId); }}
           onDone={(id) => setFollowUps((xs) => Array.isArray(xs) ? xs.filter((x) => x.id !== id) : xs)} />
-      )}
-      {pane === "contacts" && (
-        <CrmContacts contacts={contacts} byId={Object.fromEntries(list.map((a) => [a.id, a]))}
-          onOpen={(apptId) => { setPane("appointments"); setOpen(apptId); }} />
       )}
       {pane === "appointments" && (<>
       <div className="crm-pipe" data-pipeline>
@@ -30231,27 +30337,560 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       </>)}
 
       {flow && (
-        <Modal onClose={() => setFlow(null)} wide>
-          <CallFlow existing={flow === "new" ? null : flow} reps={reps} appointments={list}
-            onCancel={() => setFlow(null)}
+        <Modal onClose={() => { setFlow(null); setFlowLead(null); }} wide>
+          <CallFlow existing={flow === "new" ? null : flow} seed={flow === "new" ? flowLead : null}
+            leadId={flow === "new" ? flowLead?.id || null : null} reps={reps} appointments={list}
+            onCancel={() => { setFlow(null); setFlowLead(null); }}
             onSaved={(a, conf, res) => {
-              upsert(a); setFlow(null); setOpen(a.id); setPane("appointments");
+              upsert(a); setFlow(null); setFlowLead(null); setOpenLead(null); setOpen(a.id);
+              if (pane !== "appointments" && pane !== "leads" && pane !== "calendar" && !(caller && pane === "dashboard")) setPane("appointments");
+              loadLeads();
               setFlash((flow === "new"
                 ? `Booked ${a.homeowner.firstName} ${a.homeowner.lastName} for ${apptWhenText(a.date, a.time)}.${conf?.sent ? " A confirmation was emailed." : ""}`
+                  + (res?.lead?.stage ? ` They're ${res.lead.created ? "a new lead, now" : "now"} an ${stageTerm(res.lead.stage).toLowerCase()} in your leads.` : "")
                 : "Appointment saved.")
-                + (res?.consentRecorded === false ? ` Their follow-up answers weren't saved: run migration ${res.migration || "106_sales_crm"}.` : ""));
+                + (res?.consentRecorded === false ? ` Their follow-up answers weren't saved: run migration ${res.migration || "106_sales_crm"}.` : "")
+                + (res?.lead?.migration ? ` They weren't added to your leads: run migration ${res.lead.migration}.` : ""));
             }} />
+        </Modal>
+      )}
+      {leadForm && (
+        <Modal onClose={() => setLeadForm(null)}>
+          <LeadForm role={role} owners={leadData?.owners || []} onCancel={() => setLeadForm(null)} bookFirst={leadForm === "book"}
+            onSaveAndBook={(l) => { upsertLead(l); setLeadForm(null); setFlowLead(l); setFlow("new");
+              setFlash(`Added ${[l.firstName, l.lastName].filter(Boolean).join(" ")} as a ${stageTerm(l.stage).toLowerCase()}. Now book their estimate.`); }}
+            onOpenExisting={(id) => { setLeadForm(null); setPane("leads"); setOpenLead(id); }}
+            onSaved={(l) => { upsertLead(l); setLeadForm(null); setPane("leads"); setOpenLead(l.id);
+              setFlash(`Added ${[l.firstName, l.lastName].filter(Boolean).join(" ")} as a ${stageTerm(l.stage).toLowerCase()}.`); }} />
+        </Modal>
+      )}
+      {currentLead && !flow && !current && (
+        <Modal onClose={() => setOpenLead(null)} wide>
+          <LeadDetail lead={currentLead} role={role} owners={leadData?.owners || []}
+            apptById={Object.fromEntries(list.map((a) => [a.id, a]))}
+            onSaved={(l) => upsertLead({ ...currentLead, ...l })}
+            onOpenAppt={(id) => setOpen(id)}
+            onBook={() => { setFlowLead(currentLead); setFlow("new"); }} />
         </Modal>
       )}
       {current && !flow && (
         <Modal onClose={() => setOpen(null)} wide>
+          {leadOf.get(current.id) && (
+            <button type="button" className="crm-lead-link" data-appt-lead onClick={() => { setOpen(null); setOpenLead(leadOf.get(current.id).id); }}>
+              <Users size={14} /> In your leads as <LeadStageChip stage={leadOf.get(current.id).stage} />
+            </button>
+          )}
           <AppointmentDetail a={current} reps={reps} team={team} sales={sales} onFollowUpsChanged={loadFollowUps}
-            onEdit={() => setFlow(current)} onSaved={upsert} onClose={() => setOpen(null)}
-            onConvert={sales && onConvert ? () => { setOpen(null); onConvert(current, () => load()); } : null}
+            onEdit={() => setFlow(current)} onSaved={(a) => { upsert(a); loadLeads(); }} onClose={() => setOpen(null)}
+            onConvert={sales && onConvert ? () => { setOpen(null); onConvert(current, () => { load(); loadLeads(); }); } : null}
             onOpenJob={onOpenJob} />
         </Modal>
       )}
     </main>
+  );
+}
+
+// 107. The CRM's first page: the pipeline by stage, this month, the week
+// ahead and what is owed. Every figure comes off the lists the screen holds,
+// through crmDashboard, and every card is a way into the list it counts.
+function CrmDashboard({ leads, appointments, followUps, meId, sales, leadsReady, onStage, onOpenAppt, onNeedsOutcome, onFollowUps }) {
+  const today = dayKey();
+  const d = crmDashboard({ leads, appointments, today });
+  const owed = followUps.filter((x) => ["due", "overdue"].includes(followUpState(x, today)));
+  const mine = owed.filter((x) => !x.assigneeId || x.assigneeId === meId);
+  return (
+    <div className="crm-dash" data-crm-dash>
+      <section className="crm-funnel" data-funnel aria-label="Pipeline">
+        {LEAD_STAGES.map((stg) => (
+          <button key={stg.id} type="button" className={`crm-stage crm-stage-${stg.id}`} data-stage-card={stg.id}
+            disabled={!leadsReady} onClick={() => onStage(stg.id)}>
+            <b>{leadsReady ? d.stages[stg.id] : "–"}</b>
+            <span className="crm-stage-term">{stg.term}</span>
+            <span className="crm-stage-means">{stg.means}</span>
+          </button>
+        ))}
+      </section>
+      <div className="crm-dash-grid">
+        <section className="crm-card" data-month>
+          <h3>This month</h3>
+          <dl className="crm-kpis">
+            <div><dt>New leads</dt><dd data-kpi="new">{leadsReady ? d.newLeadsMonth : "–"}</dd></div>
+            <div><dt>Appointments booked</dt><dd data-kpi="booked">{d.bookedMonth}</dd></div>
+            <div><dt>Sold</dt><dd data-kpi="sold">{d.soldMonth}</dd></div>
+            <div><dt>Close rate</dt><dd data-kpi="close">{d.closeRate == null ? "–" : `${d.closeRate}%`}</dd></div>
+          </dl>
+          {d.closeRate == null && <p className="note">The close rate shows once a visit this month is marked sold or not sold.</p>}
+        </section>
+        <section className="crm-card" data-week>
+          <h3>Next 7 days</h3>
+          {!d.upcoming.length && <p className="note">No appointments in the next week.</p>}
+          <ul className="crm-mini">
+            {d.upcoming.slice(0, 5).map((a) => (
+              <li key={a.id}><button type="button" data-week-appt={a.id} onClick={() => onOpenAppt(a.id)}>
+                <span className="crm-mini-when">{apptWhenText(a.date).replace(/^(\w+), /, "$1 · ")} {apptTime12(a.time)}</span>
+                <span className="crm-mini-who">{a.homeowner.firstName} {a.homeowner.lastName} · {a.services.map(serviceLabel).join(", ")}</span>
+                <ApptStatusChip status={a.status} />
+              </button></li>
+            ))}
+          </ul>
+          {d.upcoming.length > 5 && <p className="note">And {d.upcoming.length - 5} more.</p>}
+        </section>
+        <section className="crm-card" data-owed>
+          <h3>Waiting on you</h3>
+          <ul className="crm-mini">
+            <li><button type="button" data-owed-fu onClick={onFollowUps}>
+              {mine.length > 0 && <ActDot />}<span className="crm-mini-who">{mine.length === 1 ? "1 follow-up due" : `${mine.length} follow-ups due`}{owed.length > mine.length ? ` (${owed.length} across the team)` : ""}</span>
+            </button></li>
+            {sales && (
+              <li><button type="button" data-owed-outcome onClick={onNeedsOutcome}>
+                {d.needsOutcome > 0 && <ActDot />}<span className="crm-mini-who">{d.needsOutcome === 1 ? "1 visit has gone by with no outcome" : `${d.needsOutcome} visits have gone by with no outcome`}</span>
+              </button></li>
+            )}
+          </ul>
+        </section>
+        <section className="crm-card" data-sources>
+          <h3>Where leads come from</h3>
+          {!leadsReady || !d.bySource.length ? <p className="note">No leads yet.</p> : (
+            <ul className="crm-bars">
+              {d.bySource.map(([src, n]) => (
+                <li key={src}><span>{sourceLabel(src)}</span>
+                  <span className="crm-bar"><i style={{ width: `${Math.round((n / leads.length) * 100)}%` }} /></span><b>{n}</b></li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// The estimates on a month grid. A sales appointment, never a job visit,
+// which is why it is its own calendar: two kinds of appointment on one grid
+// is how a roofing estimate gets read as a crew booking. Reuses .jcal for the
+// geometry; what a dot means is the appointment's status.
+function ApptCalendar({ list, reps = [], selected, onSelect, onOpen, onNew }) {
+  const todayK = dayKey();
+  const [rep, setRep] = useState("");
+  const shown = list.filter((a) => a.status !== "cancelled" && (!rep || (rep === "none" ? !a.repId : a.repId === rep)));
+  // Opens on this month, or on the next month with an estimate in it when
+  // this one has none ahead -- the job calendar's rule, for the same reason.
+  const nextAhead = useMemo(() => shown.filter((a) => a.date >= todayK && APPT_STATUSES[a.status]?.open)
+    .map((a) => a.date).sort()[0] || "", [shown, todayK]);
+  const [cursor, setCursor] = useState(null);
+  const thisMonthHas = shown.some((a) => a.date.slice(0, 7) === todayK.slice(0, 7));
+  const at = cursor || monthOf(selected && DATE_KEY_RE.test(selected) ? selected
+    : !thisMonthHas && nextAhead ? nextAhead : todayK);
+  const byDay = {};
+  shown.forEach((a) => { if (a.date) (byDay[a.date] ||= []).push(a); });
+  Object.values(byDay).forEach((l) => l.sort((a, b) => String(a.time).localeCompare(String(b.time))));
+  const first = new Date(at.y, at.m, 1);
+  const days = new Date(at.y, at.m + 1, 0).getDate();
+  const cells = [...Array.from({ length: first.getDay() }, () => null),
+    ...Array.from({ length: days }, (_, i) => dayKey(new Date(at.y, at.m, i + 1)))];
+  while (cells.length % 7) cells.push(null);
+  const step = (n) => { const d = new Date(at.y, at.m + n, 1); setCursor({ y: d.getFullYear(), m: d.getMonth() }); };
+  const monthLabel = first.toLocaleDateString(uiLocale(), { month: "long", year: "numeric" });
+  const inMonth = shown.filter((a) => a.date.slice(0, 7) === dayKey(first).slice(0, 7)).length;
+  const tone = (a) => a.status === "sold" ? "full" : APPT_STATUSES[a.status]?.open ? (a.date < todayK ? "late" : "open") : "done";
+  const dayList = selected ? byDay[selected] || [] : [];
+  return (
+    <div className="appt-cal" data-appt-cal>
+      {reps.length > 1 && (
+        <label className="appt-cal-rep"><span>Sales manager</span>
+          <select data-cal-rep value={rep} onChange={(e) => setRep(e.target.value)}>
+            <option value="">Everybody</option>
+            <option value="none">Not assigned</option>
+            {reps.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        </label>
+      )}
+      <div className="jcal">
+        <div className="jcal-top">
+          <button className="jcal-nav" onClick={() => step(-1)} aria-label="Previous month">
+            <ChevronRight size={16} style={{ transform: "rotate(180deg)" }} />
+          </button>
+          <div className="jcal-month" data-cal-month={dayKey(first).slice(0, 7)}>
+            <strong>{monthLabel}</strong>
+            <span>{inMonth === 1 ? "1 estimate" : `${inMonth} estimates`}</span>
+          </div>
+          <button className="jcal-nav" onClick={() => step(1)} aria-label="Next month"><ChevronRight size={16} /></button>
+          <button className="jcal-today" onClick={() => { setCursor(monthOf(todayK)); onSelect(todayK); }}>Today</button>
+        </div>
+        <div className="jcal-dows">
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => <span key={i}>{new Date(2026, 10, 1 + i).toLocaleDateString(uiLocale(), { weekday: "short" })}</span>)}
+        </div>
+        <div className="jcal-grid">
+          {cells.map((k, i) => {
+            if (!k) return <span key={`pad${i}`} className="jcal-cell empty" />;
+            const l = byDay[k] || [];
+            return (
+              <button key={k} data-cal-day={k}
+                className={`jcal-cell ${l.length ? "has" : ""} ${k === todayK ? "today" : ""} ${k === selected ? "on" : ""} ${k < todayK ? "past" : ""}`}
+                onClick={() => onSelect(k === selected ? "" : k)} aria-pressed={k === selected}>
+                <span className="jc-dom">{dayFromKey(k).getDate()}</span>
+                {l.length > 0 && (
+                  <span className="jc-marks">
+                    {l.slice(0, 3).map((a) => <span key={a.id} className={`jc-dot ${tone(a)}`} />)}
+                    {l.length > 3 && <span className="jc-plus">+{l.length - 3}</span>}
+                  </span>
+                )}
+                <span className="sr-only">{l.length ? `${l.length} estimate${l.length === 1 ? "" : "s"}` : "nothing booked"}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="jcal-key">
+          <span><i className="jc-dot open" /> Booked</span>
+          <span><i className="jc-dot late" /> Gone by, no outcome</span>
+          <span><i className="jc-dot full" /> Sold</span>
+          <span><i className="jc-dot done" /> Not sold or no-show</span>
+        </div>
+        {selected && (
+          <div className="jcal-day" data-cal-panel={selected}>
+            <div className="jcd-head">
+              <h4>{niceDay(selected)} <span className="jcd-rel">{relDay(selected, todayK)}</span></h4>
+              <button className="jcd-close" onClick={() => onSelect("")} aria-label="Close this day"><X size={14} /></button>
+            </div>
+            {!dayList.length && (
+              <div className="dash-empty"><CalendarCheck size={22} /><p>No estimates booked for this day.</p>
+                {selected >= todayK && <button className="btn-solid dash-empty-btn" data-cal-book onClick={() => onNew(selected)}>
+                  <Plus size={15} /> Book one on this day</button>}
+              </div>
+            )}
+            {dayList.map((a) => (
+              <button key={a.id} className={`jcd-row ${APPT_STATUSES[a.status]?.open ? "" : "done"}`} data-cal-appt={a.id} onClick={() => onOpen(a.id)}>
+                <span className="jcd-time">{apptTime12(a.time)}</span>
+                <span className="jcd-main">
+                  <span className="jcd-title">{a.homeowner.firstName} {a.homeowner.lastName} · {a.services.map(serviceLabel).join(", ")}</span>
+                  <span className="jcd-meta">{[a.address.street, a.address.city].filter(Boolean).join(", ")} · {a.repName || "Not assigned"}</span>
+                </span>
+                <ApptStatusChip status={a.status} />
+              </button>
+            ))}
+            {dayList.length > 0 && selected >= todayK && (
+              <button className="sh-link" data-cal-book onClick={() => onNew(selected)}>Book another on this day</button>
+            )}
+          </div>
+        )}
+        {inMonth === 0 && nextAhead && nextAhead.slice(0, 7) !== dayKey(first).slice(0, 7) && (
+          <p className="jcal-undated">Nothing booked in {monthLabel}. The next estimate is on {niceDay(nextAhead)}.{" "}
+            <button className="sh-link" onClick={() => { setCursor(monthOf(nextAhead)); onSelect(nextAhead); }}>Go there</button></p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// A call-center seat's own first page. The order on it is the order of a
+// call: add who is on the phone as a lead, then book their estimate, which
+// makes them an opportunity. Under that, who to ring next and what this seat
+// has done today and this month.
+function CallerDashboard({ leads, appointments, followUps, meId, leadsReady, onNewLead, onOpenLead, onBookLead, onOpenAppt, onFollowUps, onLeads }) {
+  const today = dayKey();
+  const d = callerDashboard({ leads, appointments, meId, today });
+  const mine = followUps.filter((x) => ["due", "overdue"].includes(followUpState(x, today)) && (!x.assigneeId || x.assigneeId === meId));
+  const name = (l) => [l.firstName, l.lastName].filter(Boolean).join(" ") || "No name";
+  return (
+    <div className="crm-dash caller-dash" data-caller-dash>
+      <section className="caller-start" data-caller-start>
+        <ol className="caller-steps">
+          <li><b>1</b><span><strong>Add the lead</strong>Who is on the phone and what they want done.</span></li>
+          <li><b>2</b><span><strong>Book the estimate</strong>The call script, a time and a sales manager.</span></li>
+          <li><b>3</b><span><strong>They're an opportunity</strong>The office takes it from there.</span></li>
+        </ol>
+        <button className="btn-solid caller-go" data-caller-new-lead disabled={!leadsReady} onClick={onNewLead}>
+          <UserPlus size={18} /> New lead</button>
+        {!leadsReady && <p className="note">Leads aren't available yet, so book with New appointment above.</p>}
+      </section>
+      <dl className="crm-kpis caller-kpis" data-caller-kpis>
+        <div><dt>Leads added today</dt><dd data-ck="leadsToday">{d.leadsToday}</dd></div>
+        <div><dt>Booked today</dt><dd data-ck="bookedToday">{d.bookedToday}</dd></div>
+        <div><dt>Booked this month</dt><dd data-ck="bookedMonth">{d.bookedMonth}</dd></div>
+        <div><dt>Your leads booked</dt><dd data-ck="bookRate">{d.bookRate == null ? "–" : `${d.bookRate}%`}</dd></div>
+      </dl>
+      <div className="crm-dash-grid">
+        <section className="crm-card" data-to-call>
+          <h3>Ready to book <span className="crm-card-n">{d.toCall.length}</span></h3>
+          <p className="note">Leads and prospects with no estimate booked yet, the longest waiting first.</p>
+          {!d.toCall.length && <p className="note">Nobody waiting. New leads show up here.</p>}
+          <ul className="crm-mini">
+            {d.toCall.slice(0, 6).map((l) => (
+              <li key={l.id} className="caller-row">
+                <button type="button" className="caller-who" data-call-lead={l.id} onClick={() => onOpenLead(l.id)}>
+                  <span className="crm-mini-who"><b>{name(l)}</b> {l.phone ? formatPhone(l.phone) : l.email}</span>
+                  <LeadStageChip stage={l.stage} />
+                </button>
+                <button type="button" className="btn-ghost caller-book" data-call-book={l.id} onClick={() => onBookLead(l)}>Book</button>
+              </li>
+            ))}
+          </ul>
+          {d.toCall.length > 6 && <button className="sh-link" onClick={onLeads}>See all {d.toCall.length}</button>}
+        </section>
+        <section className="crm-card" data-caller-week>
+          <h3>You booked, next 7 days</h3>
+          {!d.upcoming.length && <p className="note">Nothing you booked is coming up this week.</p>}
+          <ul className="crm-mini">
+            {d.upcoming.slice(0, 6).map((a) => (
+              <li key={a.id}><button type="button" data-caller-appt={a.id} onClick={() => onOpenAppt(a.id)}>
+                <span className="crm-mini-when">{apptWhenText(a.date).replace(/^(\w+), /, "$1 · ")} {apptTime12(a.time)}</span>
+                <span className="crm-mini-who">{a.homeowner.firstName} {a.homeowner.lastName} · {a.repName || "Not assigned"}</span>
+                <ApptStatusChip status={a.status} />
+              </button></li>
+            ))}
+          </ul>
+        </section>
+        <section className="crm-card" data-caller-owed>
+          <h3>Your follow-ups</h3>
+          <ul className="crm-mini"><li><button type="button" data-caller-fu onClick={onFollowUps}>
+            {mine.length > 0 && <ActDot />}<span className="crm-mini-who">{mine.length === 1 ? "1 follow-up due" : `${mine.length} follow-ups due`}</span>
+          </button></li></ul>
+          <p className="note">{d.leadsMonth === 1 ? "You added 1 lead this month." : `You added ${d.leadsMonth} leads this month.`}</p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// 107. The leads: one line per person, the stage strip on top, the filters
+// under it. Pressing a stage narrows the list to it.
+function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
+  const [q, setQ] = useState("");
+  const [src, setSrc] = useState("");
+  const [owner, setOwner] = useState("");
+  const counts = stageCounts(leads);
+  const needle = q.trim().toLowerCase();
+  const dig = needle.replace(/\D/g, "");
+  const shown = leads.filter((l) => {
+    if (stage && l.stage !== stage) return false;
+    if (src && (l.source || "other") !== src) return false;
+    if (owner && (owner === "none" ? l.ownerId : l.ownerId !== owner)) return false;
+    if (needle) {
+      const hay = [l.firstName, l.lastName, l.email, l.address?.street, l.address?.city, l.address?.zip,
+        ...l.services.map(serviceLabel)].join(" ").toLowerCase();
+      if (!hay.includes(needle) && !(dig.length >= 3 && l.phone.includes(dig))) return false;
+    }
+    return true;
+  });
+  const nextAppt = (l) => (l.appointments || []).filter((a) => APPT_STATUSES[a.status]?.open)
+    .sort((x, y) => `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`))[0];
+  return (
+    <div className="crm-leads" data-leads>
+      <div className="crm-pipe lead-pipe" data-lead-pipe>
+        {LEAD_STAGES.map((stg) => (
+          <button key={stg.id} type="button" data-lead-stage={stg.id} className={`crm-pipe-st ${stage === stg.id ? "on" : ""}`}
+            onClick={() => onStage(stage === stg.id ? "" : stg.id)}>
+            <b>{counts[stg.id] || 0}</b><span>{stg.term}</span>
+          </button>
+        ))}
+      </div>
+      <FilterBar q={q} onQ={setQ} placeholder="Search name, phone, email, address…" shown={shown.length} total={leads.length}
+        onClear={() => { setQ(""); setSrc(""); setOwner(""); onStage(""); }}
+        filters={[
+          { id: "stage", label: "Stages", value: stage, onChange: onStage, options: LEAD_STAGES.map((x) => [x.id, x.term]) },
+          { id: "source", label: "Sources", value: src, onChange: setSrc, options: LEAD_SOURCES.map((x) => [x.id, x.label]) },
+          { id: "owner", label: "Owners", value: owner, onChange: setOwner, options: [["none", "Nobody"], ...owners.map((o) => [o.id, o.name])] },
+        ]} />
+      {ready && !shown.length && (
+        <div className="empty appt-empty">
+          <p>{leads.length ? "Nothing matches." : "No leads yet. A lead is added here whenever an appointment is booked, and you can add one by hand."}</p>
+          {!leads.length && <button className="btn-solid" onClick={onAdd}>Add the first lead</button>}
+        </div>
+      )}
+      <ul className="appt-list">
+        {shown.map((l) => {
+          const nx = nextAppt(l);
+          return (
+            <li key={l.id}>
+              <button type="button" className="appt-row lead-row" data-lead={l.id} onClick={() => onOpen(l.id)}>
+                <span className="appt-row-main"><b>{[l.firstName, l.lastName].filter(Boolean).join(" ") || "No name"}</b>
+                  <span>{[l.phone ? formatPhone(l.phone) : "", l.services.map(serviceLabel).join(", "), l.address?.city].filter(Boolean).join(" · ")}</span></span>
+                <span className="appt-row-side"><LeadStageChip stage={l.stage} />
+                  <span className="appt-row-rep">{nx ? `Appointment ${apptWhenText(nx.date).replace(/^(\w+), /, "")}` : sourceLabel(l.source)}</span></span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function leadRefusalText(e) {
+  const code = e?.body?.error;
+  if (code === "name_required") return "Add a first or last name.";
+  if (code === "contact_required") return "Add a phone number or an email address, so somebody can reach them.";
+  if (code === "bad_phone") return "That phone number needs 10 digits.";
+  if (code === "bad_email") return "That email address doesn't look right.";
+  if (code === "lead_exists") return "Somebody with that phone number is already in your leads.";
+  if (code === "stage_sales_only") return "Only an admin or project manager can set that stage. Opportunity comes from booking an appointment.";
+  if (code === "bad_owner") return "That person can't own leads here.";
+  if (code === "migration_needed") return `Leads aren't set up on this database yet. Run migration ${e.body.migration || "107_crm_leads"}.`;
+  if (!e?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
+  return "That didn't save. Try again.";
+}
+
+// Add a lead, or edit one. The stages offered follow the role: a call-center
+// seat can add a lead or a prospect and nothing that says somebody bought.
+function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpenExisting, onSaveAndBook = null, bookFirst = false }) {
+  const sales = role === "admin" || role === "pm";
+  const [f, setF] = useState(() => ({
+    firstName: existing?.firstName || "", lastName: existing?.lastName || "", phone: existing?.phone || "",
+    email: existing?.email || "", services: existing?.services || [], source: existing?.source || "",
+    stage: existing?.stage || "lead", notes: existing?.notes || "", ownerId: existing?.ownerId || "",
+    address: { street: "", city: "", state: "", zip: "", ...(existing?.address || {}) },
+  }));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const set = (patch) => setF((x) => ({ ...x, ...patch }));
+  const stages = sales ? LEAD_STAGES : LEAD_STAGES.filter((x) => CALLCENTER_STAGES.includes(x.id));
+  const stageLocked = !sales && existing && !CALLCENTER_STAGES.includes(existing.stage);
+  const save = async (andBook = false) => {
+    setBusy(andBook ? "book" : "save"); setErr(null);
+    try {
+      const body = { ...f, ownerId: f.ownerId || null, source: f.source || null };
+      if (stageLocked) delete body.stage;
+      const res = existing ? await api.patchLead(existing.id, body) : await api.createLead(body);
+      (andBook && onSaveAndBook ? onSaveAndBook : onSaved)(res.lead);
+    } catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const toggle = (id) => set({ services: f.services.includes(id) ? f.services.filter((x) => x !== id) : [...f.services, id] });
+  return (
+    <div className="lead-form" data-lead-form>
+      <h3 className="form-title">{existing ? "Edit lead" : "Add a lead"}</h3>
+      <div className="fld-row">
+        <label className="fld"><span>First name</span><input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} /></label>
+        <label className="fld"><span>Last name</span><input value={f.lastName} onChange={(e) => set({ lastName: e.target.value })} /></label>
+      </div>
+      <div className="fld-row">
+        <label className="fld"><span>Mobile</span><input inputMode="tel" value={f.phone} onChange={(e) => set({ phone: e.target.value })} /></label>
+        <label className="fld"><span>Email</span><input type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} /></label>
+      </div>
+      <label className="fld"><span>Street</span><input value={f.address.street} onChange={(e) => set({ address: { ...f.address, street: e.target.value } })} /></label>
+      <div className="fld-row">
+        <label className="fld"><span>City</span><input value={f.address.city} onChange={(e) => set({ address: { ...f.address, city: e.target.value } })} /></label>
+        <label className="fld"><span>State</span><input maxLength={2} value={f.address.state} onChange={(e) => set({ address: { ...f.address, state: e.target.value.toUpperCase() } })} /></label>
+        <label className="fld"><span>ZIP</span><input inputMode="numeric" value={f.address.zip} onChange={(e) => set({ address: { ...f.address, zip: e.target.value } })} /></label>
+      </div>
+      <div className="fld"><span>Interested in</span>
+        <div className="chips">
+          {APPT_SERVICES.map((sv) => (
+            <button key={sv.id} type="button" className={`chip ${f.services.includes(sv.id) ? "on" : ""}`} onClick={() => toggle(sv.id)}>{sv.label}</button>
+          ))}
+        </div>
+      </div>
+      <div className="fld-row">
+        <label className="fld"><span>Stage</span>
+          <select data-lead-stage-pick value={f.stage} disabled={stageLocked} onChange={(e) => set({ stage: e.target.value })}>
+            {(stageLocked ? LEAD_STAGES.filter((x) => x.id === existing.stage) : stages).map((x) => <option key={x.id} value={x.id}>{x.term} — {x.means}</option>)}
+          </select>
+        </label>
+        <label className="fld"><span>Source</span>
+          <select value={f.source} onChange={(e) => set({ source: e.target.value })}>
+            <option value="">{role === "callcenter" ? "Call center" : "Office"}</option>
+            {LEAD_SOURCES.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
+          </select>
+        </label>
+      </div>
+      {!sales && <p className="note">Opportunity is set by booking them an appointment. Customer and former customer are the office's to set.</p>}
+      {sales && (
+        <label className="fld"><span>Owner</span>
+          <select value={f.ownerId} onChange={(e) => set({ ownerId: e.target.value })}>
+            <option value="">Nobody</option>
+            {owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+        </label>
+      )}
+      <label className="fld"><span>Notes</span><textarea rows={3} value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></label>
+      {err && (
+        <p className="form-err" role="alert">{leadRefusalText(err)}
+          {err?.body?.error === "lead_exists" && err.body.leadId && onOpenExisting && (
+            <> <button type="button" className="link-btn" onClick={() => onOpenExisting(err.body.leadId)}>Open them</button></>
+          )}
+        </p>
+      )}
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        {!existing && onSaveAndBook ? (<>
+          <button className={bookFirst ? "btn-ghost" : "btn-solid"} data-save-lead disabled={!!busy} onClick={() => save(false)}>{busy === "save" ? "Saving…" : "Add lead only"}</button>
+          <button className={bookFirst ? "btn-solid" : "btn-ghost"} data-save-lead-book disabled={!!busy} onClick={() => save(true)}>
+            <CalendarCheck size={15} /> {busy === "book" ? "Saving…" : "Add and book an appointment"}</button>
+        </>) : (
+          <button className="btn-solid" data-save-lead disabled={!!busy} onClick={() => save(false)}>{busy ? "Saving…" : existing ? "Save" : "Add lead"}</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// One lead: who they are, their stage, their appointments, and the one press
+// that moves them forward -- booking an appointment.
+function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook }) {
+  const sales = role === "admin" || role === "pm";
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState(null);
+  const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "No name";
+  const mayPick = (id) => sales || (CALLCENTER_STAGES.includes(id) && CALLCENTER_STAGES.includes(lead.stage));
+  const move = async (stage) => {
+    setBusy(stage); setErr(null);
+    try { onSaved((await api.patchLead(lead.id, { stage })).lead); }
+    catch (e) { setErr(e); }
+    finally { setBusy(""); }
+  };
+  if (editing) {
+    return <LeadForm role={role} owners={owners} existing={lead} onCancel={() => setEditing(false)}
+      onSaved={(l) => { onSaved(l); setEditing(false); }} />;
+  }
+  const appts = (lead.appointments || []).map((x) => ({ ...x, full: apptById[x.id] || null }));
+  return (
+    <div className="lead-detail" data-lead-detail={lead.id}>
+      <div className="lead-head">
+        <div>
+          <h3 className="form-title">{name}</h3>
+          <p className="lead-sub">{[lead.phone ? formatPhone(lead.phone) : "", lead.email,
+            [lead.address?.street, lead.address?.city, lead.address?.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</p>
+        </div>
+        <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
+      </div>
+      <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
+        {LEAD_STAGES.map((stg) => (
+          <button key={stg.id} type="button" data-move={stg.id} aria-pressed={lead.stage === stg.id}
+            className={`lead-stage-btn ${lead.stage === stg.id ? "on" : ""}`}
+            disabled={lead.stage === stg.id || !mayPick(stg.id) || !!busy} onClick={() => move(stg.id)}
+            title={mayPick(stg.id) ? stg.means : stg.id === "opportunity" ? "Set by booking an appointment" : "The office sets this"}>
+            <b>{stg.term}</b><span>{stg.means}</span>
+          </button>
+        ))}
+      </div>
+      {!sales && <p className="note">Booking an appointment makes them an opportunity. A sale makes them a customer.</p>}
+      {err && <p className="form-err" role="alert">{leadRefusalText(err)}</p>}
+      <dl className="lead-facts">
+        <div><dt>Interested in</dt><dd>{lead.services.length ? lead.services.map(serviceLabel).join(", ") : "Not said yet"}</dd></div>
+        <div><dt>Source</dt><dd>{sourceLabel(lead.source)}</dd></div>
+        <div><dt>Owner</dt><dd>{lead.ownerName || "Nobody"}</dd></div>
+        <div><dt>Added</dt><dd>{stampDay(lead.createdAt)}{lead.createdByName ? ` by ${lead.createdByName}` : ""}</dd></div>
+      </dl>
+      <div className="lead-consent"><span className="lead-label">Follow-up consent</span>
+        {lead.consent ? <ConsentChips consent={lead.consent} /> : <p className="note">Not asked yet. It is asked when an appointment is booked.</p>}
+      </div>
+      {lead.notes && <div className="lead-notes"><span className="lead-label">Notes</span><p>{lead.notes}</p></div>}
+      <section className="lead-appts">
+        <div className="lead-appts-head"><span className="lead-label">Appointments</span>
+          <button className="btn-solid" data-book-lead onClick={onBook}><PhoneCall size={15} /> Book an appointment</button></div>
+        {!appts.length && <p className="note">None yet. Booking one makes them an opportunity.</p>}
+        <ul className="appt-list">
+          {appts.map((x) => (
+            <li key={x.id}><button type="button" className="appt-row" data-lead-appt={x.id} onClick={() => onOpenAppt(x.id)}>
+              <span className="appt-row-when"><b>{apptWhenText(x.date).replace(/^(\w+), /, "$1 · ")}</b><span>{apptTime12(x.time)}</span></span>
+              <span className="appt-row-main"><b>{x.full ? x.full.services.map(serviceLabel).join(", ") : "Estimate"}</b>
+                <span>{x.full?.repName || "Not assigned"}</span></span>
+              <span className="appt-row-side"><ApptStatusChip status={x.status} /></span>
+            </button></li>
+          ))}
+        </ul>
+      </section>
+    </div>
   );
 }
 
@@ -30552,35 +31191,6 @@ function CrmFollowUps({ list, meId, onOpen, onDone }) {
             </li>
           );
         })}
-      </ul>
-    </div>
-  );
-}
-
-// The homeowners behind this account's appointments, one per phone number.
-// Built from the account's own list, so nothing here reaches past it.
-function CrmContacts({ contacts, byId, onOpen }) {
-  const [q, setQ] = useState("");
-  const needle = q.trim().toLowerCase();
-  const shown = contacts.filter((c) => !needle || [c.firstName, c.lastName, c.phone, c.email, c.address?.city, c.address?.street]
-    .join(" ").toLowerCase().includes(needle) || (needle.replace(/\D/g, "").length >= 3 && c.phone.includes(needle.replace(/\D/g, ""))));
-  return (
-    <div className="crm-contacts" data-contacts>
-      <FilterBar q={q} onQ={setQ} placeholder="Search name, phone, email…" shown={shown.length} total={contacts.length}
-        onClear={() => setQ("")} filters={[]} />
-      {!contacts.length && <p className="note">Homeowners show up here once an appointment is booked.</p>}
-      <ul className="appt-list">
-        {shown.map((c) => (
-          <li key={c.key}>
-            <button type="button" className="appt-row crm-contact" data-contact={c.key} onClick={() => onOpen(c.latestId)}>
-              <span className="appt-row-main"><b>{c.firstName} {c.lastName}</b>
-                <span>{formatPhone(c.phone)}{c.email ? ` · ${c.email}` : ""}{c.address?.city ? ` · ${c.address.city}` : ""}</span>
-                <ConsentChips consent={c.consent} /></span>
-              <span className="appt-row-side"><ApptStatusChip status={byId[c.latestId]?.status || c.latestStatus} />
-                <span className="appt-row-rep">{c.appointments.length === 1 ? "1 appointment" : `${c.appointments.length} appointments`}</span></span>
-            </button>
-          </li>
-        ))}
       </ul>
     </div>
   );
@@ -54195,7 +54805,88 @@ button.job-insp:hover{border-color:#2f5577}
 .crm-fu-done{flex:none;display:inline-flex;align-items:center;gap:4px;min-height:44px}
 .crm-fu-state.overdue{color:#8e3422;font-weight:700}
 .crm-fu-state.due{color:#8a5a12;font-weight:700}
-.crm-contact .crm-chips{margin-top:6px}
+/* 107. The two workspaces, Jobs and CRM, as one segmented switch in the header. */
+.ws-switch{display:inline-flex;align-self:flex-start;gap:4px;padding:4px;border-radius:12px;background:var(--paper);border:1px solid var(--line)}
+.ws-switch button{display:inline-flex;align-items:center;gap:7px;min-height:40px;padding:0 18px;border:0;border-radius:9px;background:none;font:700 14px Inter,sans-serif;color:var(--ink-soft);cursor:pointer}
+.ws-switch button.on{background:var(--ink);color:#fff}
+@media (max-width:820px){.ws-switch{align-self:stretch}.ws-switch button{flex:1 1 0;justify-content:center}}
+/* 107. Leads and the CRM dashboard. */
+.lead-st-lead{background:var(--paper);color:var(--ink-soft)}
+.lead-st-prospect{background:#e8eef8;color:#2b4a7a}
+.lead-st-opportunity{background:#fbf0dd;color:#8a5a12}
+.lead-st-customer{background:#e6f2ec;color:#1d5740}
+.lead-st-former{background:#efe9f6;color:#5a3f80}
+.crm-dash{display:flex;flex-direction:column;gap:18px}
+.crm-funnel{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.crm-stage{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:14px;border:1px solid var(--line);border-top:4px solid var(--line);border-radius:12px;background:var(--card);text-align:left;cursor:pointer;min-height:44px}
+.crm-stage:disabled{cursor:default;opacity:.7}
+.crm-stage b{font:800 26px Inter,sans-serif;color:var(--ink)}
+.crm-stage-term{font:700 14px Inter,sans-serif;color:var(--ink)}
+.crm-stage-means{font-size:12.5px;color:var(--ink-soft);line-height:1.3}
+.crm-stage-prospect{border-top-color:#6d8fc4}
+.crm-stage-opportunity{border-top-color:#e39b32}
+.crm-stage-customer{border-top-color:#2f8a5f}
+.crm-stage-former{border-top-color:#8a6bb3}
+.crm-dash-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.crm-card{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);display:flex;flex-direction:column;gap:10px;min-width:0}
+.crm-card h3{margin:0;font:700 15px Inter,sans-serif}
+.crm-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
+.crm-kpis div{padding:10px;border-radius:10px;background:var(--paper)}
+.crm-kpis dt{font-size:12.5px;color:var(--ink-soft)}
+.crm-kpis dd{margin:2px 0 0;font:800 22px Inter,sans-serif}
+.crm-mini{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.crm-mini button{display:flex;flex-wrap:wrap;align-items:center;gap:8px;width:100%;min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);text-align:left;cursor:pointer;font-size:14px}
+.crm-mini-when{font-weight:700}
+.crm-mini-who{flex:1 1 160px;min-width:0;overflow-wrap:anywhere}
+/* The estimates calendar: the job grid's geometry, a late dot of its own. */
+.appt-cal{display:flex;flex-direction:column;gap:12px}
+.appt-cal-rep{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:700;color:var(--ink-soft)}
+.appt-cal-rep select{min-height:44px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:15px}
+.jc-dot.late{background:var(--red)}
+.appt-cal .jcd-row{flex-wrap:wrap}
+/* The call center's first page leads with the one press a call starts with. */
+.caller-start{display:flex;flex-wrap:wrap;align-items:center;gap:16px;padding:18px;border:1px solid var(--line);
+  border-left:4px solid var(--brand);border-radius:14px;background:var(--card);margin-bottom:14px}
+.caller-steps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:14px;flex:1 1 420px}
+.caller-steps li{display:flex;gap:10px;align-items:flex-start;flex:1 1 150px;min-width:0}
+.caller-steps b{flex:none;width:26px;height:26px;border-radius:50%;background:var(--brand);color:#fff;display:flex;
+  align-items:center;justify-content:center;font-size:13px}
+.caller-steps span{display:flex;flex-direction:column;font-size:13px;color:var(--ink-soft);gap:2px}
+.caller-steps strong{color:var(--ink);font-size:14.5px}
+.caller-go{min-height:52px;padding:0 22px;font-size:16px}
+.caller-kpis{grid-template-columns:repeat(4,minmax(0,1fr));margin-bottom:14px}
+.caller-row{display:flex;gap:8px;align-items:stretch}
+.caller-row .caller-who{flex:1;min-width:0}
+.caller-row .caller-book{flex:none;width:auto;min-width:72px;justify-content:center}
+.crm-card-n{font-size:12px;font-weight:800;color:var(--ink-soft);margin-left:6px}
+@media (max-width:560px){.caller-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.caller-go{width:100%;justify-content:center}}
+.crm-bars{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.crm-bars li{display:grid;grid-template-columns:130px 1fr 32px;align-items:center;gap:10px;font-size:14px}
+.crm-bar{height:10px;border-radius:5px;background:var(--paper);overflow:hidden}
+.crm-bar i{display:block;height:100%;background:var(--brand)}
+.crm-bars b{text-align:right}
+@media (max-width:820px){.crm-funnel{grid-template-columns:repeat(2,minmax(0,1fr))}.crm-dash-grid{grid-template-columns:1fr}}
+.lead-pipe .crm-pipe-st{flex:1 1 0}
+.crm-lead-link{display:inline-flex;align-items:center;gap:8px;margin:0 0 12px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--paper);font:600 13px Inter,sans-serif;cursor:pointer;min-height:36px}
+.lead-detail{display:flex;flex-direction:column;gap:14px}
+.lead-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.lead-sub{margin:4px 0 0;color:var(--ink-soft);font-size:14px;overflow-wrap:anywhere}
+.lead-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.lead-stage-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:56px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);text-align:left;cursor:pointer}
+.lead-stage-btn b{font:700 13.5px Inter,sans-serif;color:var(--ink)}
+.lead-stage-btn span{font-size:11.5px;color:var(--ink-soft);line-height:1.25}
+.lead-stage-btn.on{background:var(--ink);border-color:var(--ink)}
+.lead-stage-btn.on b,.lead-stage-btn.on span{color:#fff}
+.lead-stage-btn:disabled:not(.on){opacity:.55;cursor:default}
+@media (max-width:620px){.lead-stages{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.lead-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
+.lead-facts dt,.lead-label{font-size:12.5px;color:var(--ink-soft);font-weight:600}
+.lead-facts dd{margin:2px 0 0;font-size:14px}
+.lead-consent,.lead-notes{display:flex;flex-direction:column;gap:6px}
+.lead-notes p{margin:0;white-space:pre-wrap;font-size:14px}
+.lead-appts{display:flex;flex-direction:column;gap:8px}
+.lead-appts-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.lead-form{display:flex;flex-direction:column;gap:12px}
 
 `;
 // The dark theme is derived from the sheet above, a twin after each rule (see

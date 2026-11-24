@@ -2600,6 +2600,41 @@ CREATE TABLE IF NOT EXISTS sales_activities (
 CREATE INDEX IF NOT EXISTS ix_sales_activities_appt ON sales_activities(appointment_id, created_at);
 CREATE INDEX IF NOT EXISTS ix_sales_activities_due ON sales_activities(account_id, kind, due_date);
 
+-- 107. CRM leads (see migrations/107_crm_leads.sql).
+CREATE TABLE IF NOT EXISTS sales_leads (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  stage       TEXT NOT NULL DEFAULT 'lead',
+  first_name  TEXT,
+  last_name   TEXT,
+  phone       TEXT,
+  email       TEXT,
+  street      TEXT,
+  city        TEXT,
+  state       TEXT,
+  zip         TEXT,
+  services    TEXT NOT NULL DEFAULT '[]',
+  source      TEXT,
+  notes       TEXT,
+  owner_id    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  stage_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_sales_leads_account ON sales_leads(account_id, stage);
+CREATE INDEX IF NOT EXISTS ix_sales_leads_phone ON sales_leads(account_id, phone);
+
+-- Which lead an appointment belongs to. A table rather than a column on
+-- sales_appointments, so this is one paste with no ALTER TABLE.
+CREATE TABLE IF NOT EXISTS sales_lead_links (
+  appointment_id TEXT PRIMARY KEY REFERENCES sales_appointments(id) ON DELETE CASCADE,
+  lead_id        TEXT NOT NULL REFERENCES sales_leads(id) ON DELETE CASCADE,
+  account_id     TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  linked_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_sales_lead_links_lead ON sales_lead_links(lead_id);
+
 -- 104. Staff's settings for each email SubSub sends.
 CREATE TABLE IF NOT EXISTS notice_settings (
   kind        TEXT PRIMARY KEY,

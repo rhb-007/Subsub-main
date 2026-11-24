@@ -347,6 +347,9 @@ WITH spec(j) AS (SELECT
   -- 106. CRM / Sales: consent to follow up, and activity on an appointment.
   ',["m106_sales_consents","col","sales_consents",["appointment_id","account_id","email","phone","text","record_call","script_version","captured_by","captured_at","reminder_sent_for"]]' ||
   ',["m106_sales_activities","col","sales_activities",["id","account_id","appointment_id","kind","body","direction","outcome","channel","due_date","assignee_id","done_at","done_by","file_key","file_name","file_type","file_size","record_consent","reminded_at","created_by","created_at"]]') ||
+  -- 107. CRM leads, and which lead each appointment belongs to.
+  (',["m107_sales_leads","col","sales_leads",["id","account_id","stage","first_name","last_name","phone","email","street","city","state","zip","services","source","notes","owner_id","created_by","created_at","updated_at","stage_at"]]' ||
+  ',["m107_sales_lead_links","col","sales_lead_links",["appointment_id","lead_id","account_id","linked_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -915,6 +918,13 @@ WITH inv(j) AS (SELECT '['
   || ',' || json_array('m106_inv_recording_no_consent', (SELECT COUNT(*) FROM sales_activities
     WHERE kind NOT IN ('note','call','follow_up','recording')
        OR (kind = 'recording' AND (record_consent IS NOT 1 OR file_key IS NULL)))))
+  -- 107. A lead at a stage the screen cannot draw, or an appointment linked
+  -- to a lead on another account.
+  || (',' || json_array('m107_inv_bad_lead', (SELECT COUNT(*) FROM sales_leads
+    WHERE stage NOT IN ('lead','prospect','opportunity','customer','former'))
+    + (SELECT COUNT(*) FROM sales_lead_links k JOIN sales_leads l ON l.id = k.lead_id
+        JOIN sales_appointments a ON a.id = k.appointment_id
+       WHERE l.account_id <> k.account_id OR a.account_id <> k.account_id)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

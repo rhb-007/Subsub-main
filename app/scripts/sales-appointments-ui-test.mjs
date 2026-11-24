@@ -68,6 +68,19 @@ let FUS = [
   { id: "fu_2", kind: "follow_up", appointmentId: "ap_1", body: "Text the brochure", dueDate: key(3), channel: "text",
     assigneeId: "u_rep", assigneeName: "Marcus Hill", who: "Gale Fern", doneAt: null, createdAt: "2026-11-01T10:00:00Z" },
 ];
+// 107. The CRM's leads.
+const lead = (id, extra = {}) => ({ id, stage: "lead", firstName: "Ivy", lastName: "Lane", phone: "2535550102", email: "ivy@home.test",
+  address: { street: "4 Elm St", city: "Tacoma", state: "WA", zip: "98405" }, services: ["siding"], source: "website",
+  notes: null, ownerId: null, ownerName: null, createdBy: "u_cc", createdByName: "Cara Call",
+  createdAt: `${key(0)} 09:00:00`, updatedAt: `${key(0)} 09:00:00`, stageAt: `${key(0)} 09:00:00`, appointments: [], consent: null, ...extra });
+let LEADS = [
+  lead("ld_gale", { stage: "opportunity", firstName: "Gale", lastName: "Fern", phone: "2535550100", services: ["roofing"], source: "call_center",
+    appointments: [{ id: "ap_1", status: "scheduled", date: DAY, time: "10:30", jobId: null }], consent: { email: false, phone: true, text: true, record: null } }),
+  lead("ld_hal", { stage: "opportunity", firstName: "Hal", lastName: "Stone", phone: "2535550101", source: "call_center",
+    appointments: [{ id: "ap_sat", status: "sat", date: key(-2), time: "10:30", jobId: null }] }),
+  lead("ld_ivy"),
+];
+const leadsPosted = [], leadsPatched = [];
 const USERS = [
   { id: "u_admin", name: "Richard Braun", email: "rb@outerhome.test", phone: null, role: "admin", subId: null,
     propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false },
@@ -103,6 +116,19 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     return [200, { activity: { ...(FUS.find((x) => x.id === fm[2]) || {}), doneAt: body.done ? new Date().toISOString() : null } }];
   }
   if (path === "/api/sales-followups") return [200, { followUps: FUS }];
+  if (path === "/api/sales-leads" && method === "GET") return ACC !== GC ? [403, { error: "no_appointments_for_this_account" }] : [200, { leads: LEADS, owners: REPS }];
+  if (path === "/api/sales-leads" && method === "POST") {
+    leadsPosted.push(body);
+    const l = lead("ld_new", { ...body, stage: body.stage || "lead" });
+    LEADS = [l, ...LEADS];
+    return [201, { lead: l }];
+  }
+  const lm = path.match(/^\/api\/sales-leads\/([^/]+)$/);
+  if (lm && method === "PATCH") {
+    leadsPatched.push({ id: lm[1], body });
+    LEADS = LEADS.map((l) => l.id === lm[1] ? { ...l, ...body } : l);
+    return [200, { lead: LEADS.find((l) => l.id === lm[1]) }];
+  }
   const pm = path.match(/^\/api\/appointments\/([^/]+)$/);
   if (pm && method === "PATCH") {
     patched.push({ id: pm[1], body });
@@ -170,13 +196,45 @@ try {
     const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB, seat: SEAT });
     for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".appt-view")) break; }
     const nav = await navLabels(page);
-    t.ck("the menu is CRM / Sales and nothing else on the account",
-      nav.includes("CRM / Sales") && !nav.some((l) => /^(Dashboard|Jobs|Subcontractors|Contractors|Calendar|Properties)$/.test(l)),
+    t.ck("the menu is the CRM's pages and nothing else on the account",
+      ["Dashboard", "Leads", "Appointments", "Follow-ups"].every((l) => nav.includes(l))
+      && !nav.some((l) => /^(Jobs|Subcontractors|Contractors|Availability|Properties|Inbox|CRM \/ Sales)$/.test(l)),
       nav.join(" | "));
+    t.ck("and no Jobs / CRM switch, since it has only the CRM", !(await page.$(".ws-switch")));
     if (process.env.DBG) console.log(await page.evaluate(() => document.body.innerText.slice(0, 1500)), crashes);
     const head = await page.evaluate(() => document.querySelector(".appt-view .dash-hello h2")?.innerText || "");
-    t.ck("and it lands on the CRM / Sales page", /^CRM \/ Sales/.test(head.trim()), head);
-    t.ck("which lists what is booked", (await page.$$("[data-appt]")).length === 1);
+    t.ck("and it lands on its own dashboard, not the office's", /^CRM/.test(head.trim()) && !!(await page.$("[data-caller-dash]"))
+      && !(await page.$("[data-funnel]")), head);
+    const ck = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-ck]")].map((x) => [x.dataset.ck, x.innerText.trim()])));
+    t.ck("which counts what this seat did today and this month", ck.leadsToday === "3" && ck.bookedMonth !== undefined
+      && ck.bookRate === "67%", JSON.stringify(ck));
+    const toCall = await page.$$eval("[data-call-lead]", (xs) => xs.map((x) => x.dataset.callLead));
+    t.ck("and lists the leads with no estimate booked, ready to book", toCall.join() === "ld_ivy", toCall.join());
+    const head2 = await page.evaluate(() => [...document.querySelectorAll(".page-head button, .appt-view > * button")].slice(0, 4).map((b) => b.innerText.trim()));
+    t.ck("its first press is New lead", !!(await page.$("[data-caller-new-lead]")) && !!(await page.$("[data-new-lead-book].btn-solid")), head2.join(" | "));
+    await click(page, "[data-caller-new-lead]");
+    await wait(300);
+    t.ck("which opens the lead form with Add and book as the main button", !!(await page.$("[data-save-lead-book].btn-solid"))
+      && !!(await page.$("[data-save-lead].btn-ghost")));
+    await page.evaluate(() => {
+      const set = (lab, val) => { const l = [...document.querySelectorAll(".lead-form label.fld")].find((x) => (x.querySelector("span")?.textContent || "").trim() === lab);
+        const el = l?.querySelector("input"); if (!el) return;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, val);
+        el.dispatchEvent(new Event("input", { bubbles: true })); };
+      set("First name", "Kim"); set("Last name", "Ward"); set("Mobile", "253-555-0188");
+    });
+    await click(page, "[data-save-lead-book]");
+    await wait(500);
+    const before = leadsPosted.length;
+    t.ck("adding them saves the lead first", leadsPosted.some((x) => x.firstName === "Kim"), JSON.stringify(leadsPosted));
+    const seededName = await page.evaluate(() => !!document.querySelector(".appt-flow"));
+    t.ck("then goes straight into booking their estimate", seededName, String(before));
+    await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
+    await wait(300);
+    LEADS = LEADS.filter((l) => l.firstName !== "Kim"); leadsPosted.length = 0;
+    await click(page, '[data-crm-nav="appointments"]');
+    await wait(300);
+    t.ck("Appointments lists what is booked", (await page.$$("[data-appt]")).length === 1);
 
     await click(page, "[data-new-appt]");
     await wait(300);
@@ -294,15 +352,92 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- the call center and leads --");
+  {
+    SEAT = { userId: "u_cc", accountId: "acc_gc", role: "callcenter" };
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB, seat: SEAT });
+    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$("[data-crm-nav]")) break; }
+    await click(page, '[data-crm-nav="leads"]');
+    for (let n = 0; n < 20; n++) { await wait(150); if (await page.$("[data-lead]")) break; }
+    await click(page, '[data-lead="ld_ivy"]');
+    await wait(300);
+    const btns = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-move]")].map((b) => [b.dataset.move, b.disabled])));
+    t.ck("a call-center seat may qualify a lead to prospect, and nothing past it", btns.prospect === false
+      && btns.opportunity === true && btns.customer === true && btns.former === true, JSON.stringify(btns));
+    await click(page, '[data-move="prospect"]');
+    await wait(300);
+    t.ck("and pressing it saves the stage", leadsPatched.some((x) => x.id === "ld_ivy" && x.body.stage === "prospect"), JSON.stringify(leadsPatched));
+    t.ck("and the detail shows it", await page.evaluate(() => document.querySelector('[data-move="prospect"]')?.getAttribute("aria-pressed") === "true"));
+    await click(page, "[data-book-lead]");
+    await wait(300);
+    const seeded = await page.evaluate(() => [...document.querySelectorAll(".appt-flow")].length);
+    t.ck("Book an appointment opens the call script for them", seeded === 1);
+    await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
+    await wait(200);
+    await click(page, "[data-new-lead]");
+    await wait(300);
+    const opts = await page.$$eval("[data-lead-stage-pick] option", (xs) => xs.map((x) => x.value));
+    t.ck("Add a lead offers the call center Lead and Prospect only", opts.join() === "lead,prospect", opts.join());
+    await page.evaluate(() => {
+      const set = (lab, val) => { const l = [...document.querySelectorAll(".lead-form label.fld")].find((x) => (x.querySelector("span")?.textContent || "").trim() === lab);
+        const el = l?.querySelector("input"); if (!el) return;
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, val);
+        el.dispatchEvent(new Event("input", { bubbles: true })); };
+      set("First name", "Jo"); set("Last name", "Banks"); set("Mobile", "253-555-0177");
+    });
+    await page.evaluate(() => [...document.querySelectorAll(".lead-form .chip")].find((b) => b.innerText.trim() === "Gutter replacement")?.click());
+    await click(page, "[data-save-lead]");
+    await wait(400);
+    const lp = leadsPosted[0] || {};
+    t.ck("and adding one sends who they are and what they want", lp.firstName === "Jo" && lp.phone === "253-555-0177"
+      && lp.services?.join() === "gutters" && lp.stage === "lead", JSON.stringify(lp));
+    t.ck("and opens them", !!(await page.$('[data-lead-detail="ld_new"]')));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- the admin --");
   {
     SEAT = { userId: "u_admin", accountId: "acc_gc", role: "admin" };
     const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB, seat: SEAT });
-    for (let n = 0; n < 40; n++) { await wait(200); if ((await navLabels(page)).includes("CRM / Sales")) break; }
+    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".ws-switch")) break; }
     const nav = await navLabels(page);
-    t.ck("the admin has CRM / Sales beside the rest, not Appointments", nav.includes("CRM / Sales") && nav.includes("Jobs")
-      && !nav.includes("Appointments"), nav.join(" | "));
-    await clickText(page, "nav.tabs button", "^CRM / Sales");
+    t.ck("the admin logs in to Jobs, and the CRM is not in its menu", nav.includes("Jobs") && nav.includes("Dashboard")
+      && !nav.some((l) => /^(CRM \/ Sales|Leads|Appointments|Follow-ups)$/.test(l)), nav.join(" | "));
+    const ws = await page.evaluate(() => [...document.querySelectorAll(".ws-switch [data-ws]")].map((b) => `${b.dataset.ws}:${b.getAttribute("aria-selected")}`));
+    t.ck("a Jobs / CRM switch, on Jobs", ws.join() === "jobs:true,crm:false", ws.join());
+    await click(page, '[data-ws="crm"]');
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-crm-dash]")) break; }
+    const crmNav = await navLabels(page);
+    const from = crmNav.indexOf("Dashboard");
+    t.ck("the CRM has its own menu, starting with its dashboard", from >= 0 && ["Dashboard", "Leads", "Appointments", "Calendar", "Follow-ups"].every((l, i) => crmNav[from + i] === l)
+      && !crmNav.includes("Jobs"), crmNav.join(" | "));
+    await click(page, '[data-stage-card="opportunity"]');
+    await wait(300);
+    const rows = await page.$$eval("[data-lead]", (xs) => xs.map((x) => x.dataset.lead));
+    t.ck("a stage on the dashboard opens Leads at that stage", rows.join() === "ld_gale,ld_hal", rows.join());
+    await click(page, '[data-ws="jobs"]');
+    await wait(300);
+    t.ck("and Jobs takes it back to where it was", !!(await page.$(".ws-switch [data-ws=jobs][aria-selected=true]")) && !(await page.$(".appt-view")));
+    await click(page, '[data-ws="crm"]');
+    await wait(300);
+    await click(page, '[data-crm-nav="calendar"]');
+    for (let n = 0; n < 20; n++) { await wait(150); if (await page.$("[data-appt-cal]")) break; }
+    t.ck("Calendar is its own page with a month grid", !!(await page.$("[data-appt-cal] .jcal-grid")));
+    await click(page, `[data-cal-day="${APPTS.find((a) => a.id === "ap_1").date}"]`);
+    await wait(250);
+    const dayAppts = await page.$$eval("[data-cal-appt]", (xs) => xs.map((x) => x.dataset.calAppt));
+    const onDay = APPTS.filter((a) => a.date === APPTS.find((x) => x.id === "ap_1").date && a.status !== "cancelled").map((a) => a.id);
+    t.ck("pressing a day lists the estimates on it", dayAppts.includes("ap_1") && dayAppts.length === onDay.length
+      && dayAppts.every((id) => onDay.includes(id)), `${dayAppts.join()} / ${onDay.join()}`);
+    const dot = await page.evaluate((d) => document.querySelector(`[data-cal-day="${d}"] .jc-dot`)?.className || "", APPTS.find((a) => a.id === "ap_sat").date);
+    t.ck("an estimate that has gone by with no outcome is marked late", /late/.test(dot), dot);
+    await click(page, "[data-cal-appt]");
+    await wait(300);
+    t.ck("and pressing one opens it", !!(await page.$(".appt-detail, [data-appt-lead]")));
+    await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
+    await wait(200);
+    await click(page, '[data-crm-nav="appointments"]');
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".appt-view")) break; }
     const needs = await page.evaluate(() => document.querySelector("[data-needs-outcome]")?.innerText || "");
     t.ck("an appointment gone by with no outcome is called out", /has gone by/.test(needs), needs);
@@ -377,14 +512,13 @@ try {
     // Back to the section for the other two tabs.
     await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
     await wait(200);
-    await clickText(page, "nav.tabs button", "^CRM / Sales");
-    for (let n = 0; n < 20; n++) { await wait(200); if (await page.$("[data-crm-tab]")) break; }
-    const tabs = await page.evaluate(() => [...document.querySelectorAll("[data-crm-tab]")].map((b) => b.innerText.replace(/\s+/g, " ").trim()));
-    t.ck("the section is three tabs, with the follow-ups due counted", tabs.length === 3 && /^Appointments/.test(tabs[0])
-      && /^Follow-ups 1$/.test(tabs[1]) && /^Contacts 3$/.test(tabs[2]), tabs.join(" | "));
+    // Saving the job lands on Jobs; the switch takes it back to the CRM.
+    if (!(await page.$("[data-crm-nav]"))) { await click(page, '[data-ws="crm"]'); await wait(300); }
+    await click(page, '[data-crm-nav="appointments"]');
+    for (let n = 0; n < 20; n++) { await wait(200); if (await page.$("[data-pipe]")) break; }
     const pipe = await page.evaluate(() => [...document.querySelectorAll("[data-pipe]")].map((b) => `${b.dataset.pipe}:${b.querySelector("b")?.innerText}`));
     t.ck("the pipeline counts each stage", pipe.includes("scheduled:1") && pipe.includes("confirmed:1") && pipe.length === 6, pipe.join());
-    await click(page, '[data-crm-tab="followups"]');
+    await click(page, '[data-crm-nav="followups"]');
     await wait(300);
     const mine = await page.$$eval("[data-fu]", (xs) => xs.map((x) => x.dataset.fu));
     t.ck("Follow-ups opens on the ones owed by me", mine.join() === "fu_1", mine.join());
@@ -397,10 +531,20 @@ try {
     await wait(400);
     t.ck("Done ticks it off and it leaves the list", fuPatched.some((x) => x.id === "fu_1" && x.body.done === true)
       && (await page.$$("[data-fu]")).length === 1, JSON.stringify(fuPatched));
-    await click(page, '[data-crm-tab="contacts"]');
+    await click(page, '[data-crm-nav="leads"]');
     await wait(300);
-    const people = await page.$$eval("[data-contact]", (xs) => xs.map((x) => x.innerText.split("\n")[0]));
-    t.ck("Contacts lists each homeowner once", people.length === 3, people.join(" | "));
+    const lpipe = await page.evaluate(() => [...document.querySelectorAll("[data-lead-stage]")].map((b) => `${b.dataset.leadStage}:${b.querySelector("b")?.innerText}`));
+    t.ck("Leads counts each stage in the owner's words", lpipe.length === 5 && lpipe.includes("opportunity:2"), lpipe.join());
+    await click(page, '[data-lead="ld_hal"]');
+    await wait(300);
+    const adm = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-move]")].map((b) => [b.dataset.move, b.disabled])));
+    t.ck("the office may move a lead to any stage", adm.customer === false && adm.former === false && adm.lead === false, JSON.stringify(adm));
+    await click(page, '[data-move="former"]');
+    await wait(300);
+    t.ck("and the move is saved", leadsPatched.some((x) => x.id === "ld_hal" && x.body.stage === "former"));
+    await click(page, '[data-lead-appt="ap_sat"]');
+    await wait(300);
+    t.ck("an appointment opens from its lead", !!(await page.$(".appt-detail, [data-appt-lead]")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -412,7 +556,8 @@ try {
     for (let n = 0; n < 40; n++) { await wait(200); if ((await navLabels(page)).includes("Dashboard")) break; }
     const nav = await navLabels(page);
     t.ck("the screen opened", nav.includes("Dashboard"), nav.join(" | "));
-    t.ck("and it has no CRM / Sales", !nav.includes("CRM / Sales") && !nav.includes("Appointments"), nav.join(" | "));
+    t.ck("and it has no CRM", !nav.includes("CRM / Sales") && !nav.includes("Leads") && !nav.includes("Appointments")
+      && !(await page.$(".ws-switch")), nav.join(" | "));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
