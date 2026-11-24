@@ -20,7 +20,9 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
   agreementSentEmail, rosterJoinedEmail, docUploadedEmail } from "./mail.js";
 import * as MAIL from "./mail.js";
 import { validAppointment, repClashes, STATUSES as APPT_STATUSES, CALLCENTER_STATUSES,
-  BOOKING_ROLES, SALES_ROLES, takesAppointments, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+  BOOKING_ROLES, SALES_ROLES, REP_ROLES, OFFICE_ROLES, takesAppointments, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+import { validLeadMessage, validLeadConsent, leadConsentFrom, leadConsentOf, channelBlock,
+  leadReplyAddress, leadTokenFromAddress, LEAD_EMAILS_PER_HOUR } from "../shared/leadcontact.js";
 import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, MAX_RECORDING_BYTES,
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
@@ -879,6 +881,20 @@ const CALLCENTER_ALLOWED = [
   [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
   [/^\/api\/me\/avatar$/, ["PATCH"]],
   [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
+  // 109. Contacting a lead, and the CRM Inbox.
+  [/^\/api\/crm-inbox$/, ["GET"]],
+  [/^\/api\/sales-leads\/[^/]+\/messages$/, ["GET", "POST"]],
+  [/^\/api\/sales-leads\/[^/]+\/messages\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/sales-leads\/[^/]+\/consent$/, ["PUT"]],
+];
+
+// 109. A sales manager: the call center's routes, narrowed by crmScope to
+// their own appointments and leads, plus their own Google Calendar -- the
+// person who drives to the house is the one whose diary matters.
+const SALES_ALLOWED = [
+  ...CALLCENTER_ALLOWED,
+  [/^\/api\/google-calendar$/, ["GET", "PATCH", "DELETE"]],
+  [/^\/api\/google-calendar\/(start|sync)$/, ["POST"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -886,6 +902,7 @@ app.use("/api/*", async (c, next) => {
   const list = auth?.role === "owner" ? OWNER_ALLOWED
     : auth?.role === "tenant" ? TENANT_ALLOWED
     : auth?.role === "callcenter" ? CALLCENTER_ALLOWED
+    : auth?.role === "sales" ? SALES_ALLOWED
     : null;
   if (!list) return next();
   const path = new URL(c.req.url).pathname;
@@ -6355,7 +6372,7 @@ app.get("/api/account-users", async (c) => {
   // a request signed "an owner" is no use to them.
   // 105. A call-center seat is narrowed the same way: its own row, so the app
   // knows which seat it is in, and nobody else's.
-  const selfOnly = ["owner", "tenant", "callcenter"].includes(auth.role);
+  const selfOnly = ["owner", "tenant", "callcenter", "sales"].includes(auth.role);
   const mine = selfOnly ? ` AND m.user_id = ? ` : "";
   const { results } = await c.env.DB.prepare(
     `SELECT u.*, m.role, m.company_id, m.unit FROM memberships m
@@ -6419,7 +6436,7 @@ app.get("/api/account-users", async (c) => {
 // same person can already exist as a user from another account.
 // A role the API will accept on a membership. The database no longer carries
 // a CHECK for this (see migration 014), so this is the constraint.
-const MEMBER_ROLES = ["admin", "pm", "owner", "tenant", "contractor", "callcenter"];
+const MEMBER_ROLES = ["admin", "pm", "owner", "tenant", "contractor", "callcenter", "sales"];
 // 105. A call-center seat only exists on an account that sells to homeowners.
 async function callcenterAllowedOn(env, accountId) {
   const a = await env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
@@ -6624,7 +6641,7 @@ app.post("/api/account-users", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   const b = await c.req.json(); // { name, email, phone, role, subId, propertyIds }
   if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
-  if (b.role === "callcenter" && !(await callcenterAllowedOn(c.env, accountId))) {
+  if ((b.role === "callcenter" || b.role === "sales") && !(await callcenterAllowedOn(c.env, accountId))) {
     return c.json({ error: "no_appointments_for_this_account" }, 400);
   }
   // An owner or tenant scoped to nothing can see nothing, which is a login
@@ -6822,7 +6839,7 @@ app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
   }
   if (b.role != null) {
     if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
-    if (b.role === "callcenter" && !(await callcenterAllowedOn(c.env, accountId))) {
+    if ((b.role === "callcenter" || b.role === "sales") && !(await callcenterAllowedOn(c.env, accountId))) {
       return c.json({ error: "no_appointments_for_this_account" }, 400);
     }
     await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE user_id = ? AND account_id = ?`)
@@ -10498,6 +10515,7 @@ export function missingSchema(err) {
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
+  if (/\b(lead_messages|sales_lead_consents)\b/i.test(m)) return "109_lead_contact";
   if (/\bsales_(leads|lead_links)\b/i.test(m)) return "107_crm_leads";
   if (/\bsales_appointments\b/i.test(m)) return "105_sales_appointments";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
@@ -22865,6 +22883,9 @@ const MAX_INBOUND_BYTES = 25 * 1024 * 1024;
 async function acceptEmailReply(env, mail) {
   const domain = replyDomainOf(env);
   if (!domain) return { rejected: "Replies by email are not switched on. Please answer in SubSub." };
+  // 109. A homeowner answering an email sent from the CRM.
+  const leadToken = (mail.to || []).map((a) => leadTokenFromAddress(a, domain)).find(Boolean);
+  if (leadToken) return acceptLeadReply(env, mail, leadToken);
   const token = (mail.to || []).map((a) => tokenFromAddress(a, domain)).find(Boolean);
   if (!token) return { rejected: "This address does not belong to a SubSub conversation." };
   const db = env.DB;
@@ -27492,9 +27513,16 @@ async function apptAccount(c) {
 async function apptReps(env, accountId) {
   const { results } = await env.DB.prepare(
     `SELECT u.id, u.name, u.email, m.role FROM memberships m JOIN users u ON u.id = m.user_id
-      WHERE m.account_id = ? AND m.role IN ('admin', 'pm') ORDER BY u.name`).bind(accountId).all();
+      WHERE m.account_id = ? AND m.role IN ('admin', 'pm', 'sales') ORDER BY u.name`).bind(accountId).all();
   return (results || []).map((u) => ({ id: u.id, name: u.name, role: u.role }));
 }
+
+// 109. A sales manager's CRM is their own: the estimates booked for them, and
+// the leads they own or have an estimate with. Everybody else on the CRM sees
+// the whole account. Answers the user id to narrow by, or null.
+const crmScopeOf = (c) => { const a = c.get("auth"); return a?.role === "sales" ? a.userId : null; };
+const LEAD_IN_SCOPE = `(l.owner_id = ? OR EXISTS (SELECT 1 FROM sales_lead_links k2
+  JOIN sales_appointments a2 ON a2.id = k2.appointment_id WHERE k2.lead_id = l.id AND a2.rep_user_id = ?))`;
 
 const APPT_SELECT = `SELECT a.*, r.name AS rep_name, cb.name AS created_by_name FROM sales_appointments a
   LEFT JOIN users r ON r.id = a.rep_user_id LEFT JOIN users cb ON cb.id = a.created_by`;
@@ -27511,8 +27539,9 @@ app.get("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
   const { error, acct } = await apptAccount(c);
   if (error) return error;
   return apptMigrationGuard(c, async () => {
-    const { results } = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.account_id = ? ORDER BY a.date DESC, a.time DESC LIMIT 1000`)
-      .bind(acct.id).all();
+    const me = crmScopeOf(c);
+    const { results } = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.account_id = ?${me ? " AND a.rep_user_id = ?" : ""}
+      ORDER BY a.date DESC, a.time DESC LIMIT 1000`).bind(acct.id, ...(me ? [me] : [])).all();
     const consents = await apptConsents(c.env, acct.id);
     return c.json({ appointments: (results || []).map((r) => withConsent(apptRowToJs(r), consents)),
       reps: await apptReps(c.env, acct.id), team: await crmTeam(c.env, acct.id), crmReady: consents !== null });
@@ -27575,6 +27604,8 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
   const chk = validAppointment(b);
   if (!chk.ok) return c.json({ error: chk.error, field: chk.field, missing: chk.missing || undefined }, 400);
   const v = { ...chk.value, allowClash: b.allowClash === true };
+  // 109. A sales manager books their own estimates, never somebody else's.
+  if (role === "sales") v.repId = userId;
   // 106. Asking is part of the booking: email, phone and text each answered.
   const cc = validConsent(b.consent, { email: v.homeowner.email, phone: v.homeowner.phone });
   if (!cc.ok) return c.json({ error: cc.error, field: cc.field }, 400);
@@ -27607,7 +27638,7 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
     gcalSalesSoon(c, [v.repId]);
     // 107. Booked is an Opportunity: their lead is found or made and moved.
     const lead = await leadForAppointment(c.env, { accountId: acct.id, apptId: id, appt: apptRowToJs(row),
-      leadId: b.leadId || null, role, userId });
+      leadId: b.leadId || null, role, userId, scopeTo: crmScopeOf(c) });
     const consents = await apptConsents(c.env, acct.id, id);
     return c.json({ appointment: withConsent(apptRowToJs(row), consents), confirmation, repTold, lead,
       consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) }, 201);
@@ -27620,10 +27651,13 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
   const { userId, role } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   return apptMigrationGuard(c, async () => {
-    const row = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ? AND a.account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    const row = await apptOfAccount(c, acct);
     if (!row) return c.json({ error: "not_found" }, 404);
     const cur = apptRowToJs(row);
     if (cur.jobId) return c.json({ error: "already_a_job", jobId: cur.jobId }, 409);
+    // 109. Their own estimate stays theirs: handing it to somebody else is the
+    // office's move, and would take it out of the one list they can see.
+    if (role === "sales" && "repId" in b && b.repId !== userId) return c.json({ error: "rep_is_you", field: "repId" }, 403);
     const sales = SALES_ROLES.includes(role);
     // A call-center seat books and reschedules; once the visit has an outcome
     // it is the sales side's record and theirs to change.
@@ -27784,11 +27818,13 @@ async function syncLeadStage(env, accountId, leadId, userId, { sale = false } = 
 // Links a booked appointment to its lead -- the one named, else the one with
 // that phone, else a new one -- and moves the lead along. Never fails the
 // booking: a database without 107 answers {migration} and the booking stands.
-async function leadForAppointment(env, { accountId, apptId, appt, leadId = null, role, userId }) {
+async function leadForAppointment(env, { accountId, apptId, appt, leadId = null, role, userId, scopeTo = null }) {
   try {
     let id = null;
     if (leadId) {
-      const r = await env.DB.prepare(`SELECT id FROM sales_leads WHERE id = ? AND account_id = ?`).bind(String(leadId), accountId).first();
+      // 109. A sales manager names one of their own leads, or none.
+      const r = await env.DB.prepare(`SELECT l.id FROM sales_leads l WHERE l.id = ? AND l.account_id = ?${scopeTo ? ` AND ${LEAD_IN_SCOPE}` : ""}`)
+        .bind(String(leadId), accountId, ...(scopeTo ? [scopeTo, scopeTo] : [])).first();
       if (r) id = r.id;
     }
     if (!id) id = await findLead(env, accountId, { phone: appt.homeowner.phone, email: appt.homeowner.email });
@@ -27802,6 +27838,12 @@ async function leadForAppointment(env, { accountId, apptId, appt, leadId = null,
     }
     await env.DB.prepare(`INSERT OR IGNORE INTO sales_lead_links (appointment_id, lead_id, account_id) VALUES (?, ?, ?)`)
       .bind(apptId, id, accountId).run();
+    // 109. A lead nobody owns is owned by the sales manager it was booked
+    // with, so following them up is somebody's job. One already owned stays.
+    if (appt.repId) {
+      await env.DB.prepare(`UPDATE sales_leads SET owner_id = ? WHERE id = ? AND account_id = ? AND owner_id IS NULL`)
+        .bind(appt.repId, id, accountId).run();
+    }
     const st = await syncLeadStage(env, accountId, id, userId);
     return { leadId: id, created, stage: st?.stage || null };
   } catch (err) {
@@ -27858,12 +27900,17 @@ app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
   if (error) return error;
   return leadsGuard(c, async () => {
     await backfillLeads(c.env, acct.id);
-    const { results } = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.account_id = ? ORDER BY l.updated_at DESC LIMIT 2000`)
-      .bind(acct.id).all();
+    const me = crmScopeOf(c);
+    const { results } = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.account_id = ?${me ? ` AND ${LEAD_IN_SCOPE}` : ""}
+      ORDER BY l.updated_at DESC LIMIT 2000`).bind(acct.id, ...(me ? [me, me] : [])).all();
+    // A sales manager is told about their own estimates only, even on a lead
+    // they own that somebody else also visited.
     const { results: links } = await c.env.DB.prepare(
       `SELECT k.lead_id, a.id, a.status, a.date, a.time, a.job_id FROM sales_lead_links k
-         JOIN sales_appointments a ON a.id = k.appointment_id WHERE k.account_id = ?`).bind(acct.id).all();
+         JOIN sales_appointments a ON a.id = k.appointment_id WHERE k.account_id = ?${me ? " AND a.rep_user_id = ?" : ""}`)
+      .bind(acct.id, ...(me ? [me] : [])).all();
     const consents = await apptConsents(c.env, acct.id);
+    const direct = await leadConsents(c.env, acct.id);
     const by = new Map();
     for (const l of links || []) {
       if (!by.has(l.lead_id)) by.set(l.lead_id, []);
@@ -27873,8 +27920,8 @@ app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
       const appts = (by.get(r.id) || []).sort((x, y) => `${y.date}${y.time}`.localeCompare(`${x.date}${x.time}`));
       // The consent on file is the newest appointment's that has one: it is
       // what they were asked most recently.
-      const withC = appts.find((a) => consents?.get(a.id));
-      return { ...leadRowToJs(r), appointments: appts, consent: withC ? consents.get(withC.id) : null };
+      const consent = leadConsentFrom(direct?.get(r.id) || null, appts.map((a) => consents?.get(a.id)).filter(Boolean));
+      return { ...leadRowToJs(r), appointments: appts, consent };
     });
     return c.json({ leads, owners: await apptReps(c.env, acct.id) });
   });
@@ -27889,6 +27936,8 @@ app.post("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
   if (!chk.ok) return leadRefusal(c, chk);
   const v = { ...chk.value, source: chk.value.source || (role === "callcenter" ? "call_center" : "office") };
   if (role === "callcenter") v.ownerId = null;
+  // 109. A sales manager's lead is theirs.
+  if (role === "sales") v.ownerId = userId;
   return leadsGuard(c, async () => {
     if (v.ownerId && !(await apptReps(c.env, acct.id)).some((r) => r.id === v.ownerId)) {
       return c.json({ error: "bad_owner", field: "ownerId" }, 400);
@@ -27911,7 +27960,7 @@ app.patch("/api/sales-leads/:id", requireRole(...BOOKING_ROLES), async (c) => {
   const { userId, role } = c.get("auth");
   const b = await c.req.json().catch(() => ({}));
   return leadsGuard(c, async () => {
-    const row = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ? AND l.account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    const row = await leadOfAccount(c, acct);
     if (!row) return c.json({ error: "not_found" }, 404);
     const cur = leadRowToJs(row);
     // Only the keys sent change: merged over what is stored, then checked
@@ -27921,7 +27970,7 @@ app.patch("/api/sales-leads/:id", requireRole(...BOOKING_ROLES), async (c) => {
     const chk = validLead(merged, { role, current: cur.stage });
     if (!chk.ok) return leadRefusal(c, chk);
     const v = chk.value;
-    if (role === "callcenter") v.ownerId = cur.ownerId;
+    if (role === "callcenter" || role === "sales") v.ownerId = cur.ownerId;
     if (v.ownerId && v.ownerId !== cur.ownerId && !(await apptReps(c.env, acct.id)).some((r) => r.id === v.ownerId)) {
       return c.json({ error: "bad_owner", field: "ownerId" }, 400);
     }
@@ -27978,6 +28027,221 @@ app.post("/api/v1/leads", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// 109. Contacting a lead from the CRM: email, a text from your own phone, a
+// printed letter, a logged call, a note -- and the Inbox that lists them all.
+// shared/leadcontact.js holds the rules. Everything is narrowed for a sales
+// manager to their own leads, through leadOfAccount.
+// ---------------------------------------------------------------------------
+
+async function leadOfAccount(c, acct, id = c.req.param("id")) {
+  const me = crmScopeOf(c);
+  return c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ? AND l.account_id = ?${me ? ` AND ${LEAD_IN_SCOPE}` : ""}`)
+    .bind(id, acct.id, ...(me ? [me, me] : [])).first();
+}
+
+// Consent asked of each lead directly, by lead id. null without 109.
+async function leadConsents(env, accountId, leadId = null) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT lc.*, u.name AS captured_by_name FROM sales_lead_consents lc LEFT JOIN users u ON u.id = lc.captured_by
+        WHERE lc.account_id = ?${leadId ? " AND lc.lead_id = ?" : ""}`).bind(...(leadId ? [accountId, leadId] : [accountId])).all();
+    return new Map((results || []).map((r) => [r.lead_id, leadConsentOf(r)]));
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+// The consent on file for one lead: asked directly or at a booking, newest.
+async function consentForLead(env, accountId, leadId) {
+  const direct = (await leadConsents(env, accountId, leadId))?.get(leadId) || null;
+  const { results } = await env.DB.prepare(`SELECT appointment_id FROM sales_lead_links WHERE lead_id = ? AND account_id = ?`)
+    .bind(leadId, accountId).all();
+  const appts = await apptConsents(env, accountId);
+  return leadConsentFrom(direct, (results || []).map((r) => appts?.get(r.appointment_id)).filter(Boolean));
+}
+
+const LEAD_MSG_SELECT = `SELECT m.*, u.name AS sent_by_name, l.first_name, l.last_name FROM lead_messages m
+  LEFT JOIN users u ON u.id = m.sent_by JOIN sales_leads l ON l.id = m.lead_id`;
+function leadMessageToJs(r) {
+  return {
+    id: r.id, leadId: r.lead_id, channel: r.channel, direction: r.direction, subject: r.subject || null,
+    body: r.body || null, to: r.to_addr || null, status: r.status, error: r.error || null, outcome: r.outcome || null,
+    sentBy: r.sent_by || null, sentByName: r.sent_by_name || null, readAt: r.read_at || null,
+    mailedAt: r.mailed_at || null, createdAt: r.created_at,
+    who: [r.first_name, r.last_name].filter(Boolean).join(" ") || null,
+  };
+}
+
+async function leadContactGuard(c, fn) {
+  try { return await fn(); }
+  catch (err) {
+    const m = missingSchema(err);
+    if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+    throw err;
+  }
+}
+
+// One lead's contacts, newest first, with the consent on file and which
+// channels are open right now. Opening it reads their replies.
+app.get("/api/sales-leads/:id/messages", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const lead = leadRowToJs(row);
+    const { results } = await c.env.DB.prepare(`${LEAD_MSG_SELECT} WHERE m.lead_id = ? AND m.account_id = ?
+      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 500`).bind(lead.id, acct.id).all();
+    await c.env.DB.prepare(`UPDATE lead_messages SET read_at = ? WHERE lead_id = ? AND account_id = ?
+      AND direction = 'inbound' AND read_at IS NULL`).bind(new Date().toISOString(), lead.id, acct.id).run();
+    const consent = await consentForLead(c.env, acct.id, lead.id);
+    const blocks = Object.fromEntries(["email", "text", "mail"].map((ch) => [ch, channelBlock(ch, { lead, consent })]));
+    return c.json({ messages: (results || []).map(leadMessageToJs), consent, blocks,
+      canReply: !!replyDomainOf(c.env), accountName: acct.name });
+  });
+});
+
+app.post("/api/sales-leads/:id/messages", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const lead = leadRowToJs(row);
+    const consent = await consentForLead(c.env, acct.id, lead.id);
+    const chk = validLeadMessage(b, { lead, consent });
+    if (!chk.ok) return c.json({ error: chk.error }, 400);
+    const v = chk.value;
+    if (v.channel === "email") {
+      const rl = await rateLimit(c.env, "lead-email", acct.id, { limit: LEAD_EMAILS_PER_HOUR, windowMinutes: 60 });
+      if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+    }
+    const id = uid();
+    const domain = replyDomainOf(c.env);
+    const token = v.channel === "email" && domain ? replyToken() : null;
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      `INSERT INTO lead_messages (id, account_id, lead_id, channel, direction, subject, body, to_addr, status, outcome,
+         reply_token, sent_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, acct.id, lead.id, v.channel, v.direction, v.subject || null, v.body || null, v.to || null, v.status,
+        v.outcome || null, token, userId, now).run();
+    let sent = null;
+    if (v.channel === "email") {
+      // Written first, then sent: a send that dies halfway leaves a row that
+      // says so rather than an email nobody has a record of.
+      const me = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first();
+      const mail = MAIL.leadEmail({ body: v.body, accountName: acct.name, senderName: me?.name || "", canReply: !!token });
+      const result = await sendEmail(c.env, { to: v.to, subject: v.subject, text: mail.text, html: mail.html,
+        fromName: acct.name, ...(token ? { replyTo: leadReplyAddress(token, domain) } : {}) });
+      await logMail(c.env, { accountId: acct.id, companyId: null, to: v.to, kind: "lead_email", subject: v.subject, result, sentBy: userId });
+      await c.env.DB.prepare(`UPDATE lead_messages SET status = ?, error = ? WHERE id = ?`)
+        .bind(result.ok ? "sent" : "failed", result.ok ? null : String(result.error || "send_failed").slice(0, 300), id).run();
+      sent = { ok: !!result.ok, error: result.ok ? null : result.error || "send_failed" };
+    }
+    await c.env.DB.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(lead.id).run();
+    try { await logEvent(c.env, acct.id, userId, `lead.${v.channel}`, lead.id, { messageId: id, direction: v.direction }); }
+    catch (err) { console.warn("[leads] contact event:", err?.message || err); }
+    const after = await c.env.DB.prepare(`${LEAD_MSG_SELECT} WHERE m.id = ?`).bind(id).first();
+    return c.json({ message: leadMessageToJs(after), ...(sent ? { sent } : {}) }, 201);
+  });
+});
+
+// A printed letter marked mailed, or not. The only change a contact takes.
+app.patch("/api/sales-leads/:id/messages/:mid", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b.mailed !== "boolean") return c.json({ error: "bad_request" }, 400);
+  return leadContactGuard(c, async () => {
+    if (!(await leadOfAccount(c, acct))) return c.json({ error: "not_found" }, 404);
+    const m = await c.env.DB.prepare(`SELECT * FROM lead_messages WHERE id = ? AND lead_id = ? AND account_id = ?`)
+      .bind(c.req.param("mid"), c.req.param("id"), acct.id).first();
+    if (!m) return c.json({ error: "not_found" }, 404);
+    if (m.channel !== "mail") return c.json({ error: "not_a_letter" }, 409);
+    await c.env.DB.prepare(`UPDATE lead_messages SET mailed_at = ? WHERE id = ?`)
+      .bind(b.mailed ? new Date().toISOString() : null, m.id).run();
+    const after = await c.env.DB.prepare(`${LEAD_MSG_SELECT} WHERE m.id = ?`).bind(m.id).first();
+    return c.json({ message: leadMessageToJs(after) });
+  });
+});
+
+// Consent asked of a lead directly, in the script's words. Every change is
+// an event carrying the old answers, as an appointment's is.
+app.put("/api/sales-leads/:id/consent", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const lead = leadRowToJs(row);
+    const chk = validLeadConsent(b.consent, { lead });
+    if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+    const prior = await consentForLead(c.env, acct.id, lead.id);
+    const n = (v) => (v ? 1 : 0);
+    await c.env.DB.prepare(
+      `INSERT INTO sales_lead_consents (lead_id, account_id, email, phone, text, script_version, captured_by, captured_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(lead_id) DO UPDATE SET email = excluded.email, phone = excluded.phone, text = excluded.text,
+         script_version = excluded.script_version, captured_by = excluded.captured_by, captured_at = excluded.captured_at`)
+      .bind(lead.id, acct.id, n(chk.value.email), n(chk.value.phone), n(chk.value.text), CONSENT_VERSION, userId,
+        new Date().toISOString()).run();
+    try {
+      await logEvent(c.env, acct.id, userId, "lead.consent", lead.id, { version: CONSENT_VERSION, to: chk.value,
+        from: prior ? { email: prior.email, phone: prior.phone, text: prior.text } : null });
+    } catch (err) { console.warn("[leads] consent event:", err?.message || err); }
+    return c.json({ consent: await consentForLead(c.env, acct.id, lead.id) });
+  });
+});
+
+// The CRM Inbox: every contact with every lead this seat can see, newest
+// first. The screen filters by kind; the counts come with it.
+app.get("/api/crm-inbox", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return leadContactGuard(c, async () => {
+    const me = crmScopeOf(c);
+    const { results } = await c.env.DB.prepare(`${LEAD_MSG_SELECT} WHERE m.account_id = ?${me ? ` AND ${LEAD_IN_SCOPE}` : ""}
+      ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1000`).bind(acct.id, ...(me ? [me, me] : [])).all();
+    return c.json({ messages: (results || []).map(leadMessageToJs) });
+  });
+});
+
+// 109. A homeowner's answer to an email sent from the CRM, by its l- reply
+// address. Taken only FROM the lead's own address, for the reason a
+// conversation's reply is: a forwarded email must not speak for them. Never
+// tells a stranger anything.
+async function acceptLeadReply(env, mail, token) {
+  const db = env.DB;
+  let row;
+  try { row = await db.prepare(`SELECT * FROM lead_messages WHERE reply_token = ?`).bind(token).first(); }
+  catch (err) { if (missingSchema(err)) return { rejected: "Replies by email are not switched on yet." }; throw err; }
+  if (!row) return { rejected: "This address does not belong to a SubSub conversation." };
+  const lead = await db.prepare(`SELECT id, email, account_id FROM sales_leads WHERE id = ?`).bind(row.lead_id).first();
+  const own = String(lead?.email || "").toLowerCase();
+  const senders = (Array.isArray(mail.from) ? mail.from : [mail.from])
+    .map((x) => String(x || "").trim().toLowerCase().replace(/^.*<([^>]+)>.*$/, "$1")).filter(Boolean);
+  if (!own || !senders.includes(own)) return { rejected: "This reply address only takes replies from the person it was sent to." };
+  const body = replyTextFrom(mail.text || htmlReplyText(mail.html)).slice(0, 8000);
+  if (!body.trim()) return { rejected: "Your reply came through empty. Write above the quoted message.", notify: true, to: own };
+  const since = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const dupe = await db.prepare(`SELECT id FROM lead_messages WHERE lead_id = ? AND direction = 'inbound' AND body = ?
+    AND created_at > ? LIMIT 1`).bind(row.lead_id, body, since).first();
+  if (dupe) return { duplicate: dupe.id };
+  const id = uid();
+  await db.prepare(`INSERT INTO lead_messages (id, account_id, lead_id, channel, direction, subject, body, to_addr, status, created_at)
+    VALUES (?, ?, ?, 'email', 'inbound', ?, ?, ?, 'received', ?)`)
+    .bind(id, row.account_id, row.lead_id, row.subject ? `Re: ${row.subject}`.slice(0, 200) : null, body, own,
+      new Date().toISOString()).run();
+  await db.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(row.lead_id).run();
+  return { ok: true, leadMessageId: id };
+}
+
+// ---------------------------------------------------------------------------
 // 106. CRM / Sales: consent and activity on an appointment.
 // shared/salescrm.js holds the rules.
 // ---------------------------------------------------------------------------
@@ -28028,7 +28292,7 @@ async function saveConsent(env, { accountId, appointmentId, consent, userId, pri
 async function crmTeam(env, accountId) {
   const { results } = await env.DB.prepare(
     `SELECT u.id, u.name, m.role FROM memberships m JOIN users u ON u.id = m.user_id
-      WHERE m.account_id = ? AND m.role IN ('admin', 'pm', 'callcenter') ORDER BY u.name`).bind(accountId).all();
+      WHERE m.account_id = ? AND m.role IN ('admin', 'pm', 'callcenter', 'sales') ORDER BY u.name`).bind(accountId).all();
   const seen = new Set();
   return (results || []).filter((u) => !seen.has(u.id) && seen.add(u.id)).map((u) => ({ id: u.id, name: u.name, role: u.role }));
 }
@@ -28081,8 +28345,13 @@ async function crmGuard(c, fn) {
   }
 }
 
+// One appointment on this account, by the route's :id, narrowed for a sales
+// manager to their own. Another seat's estimate answers like one that does
+// not exist.
 async function apptOfAccount(c, acct) {
-  return c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ? AND a.account_id = ?`).bind(c.req.param("id"), acct.id).first();
+  const me = crmScopeOf(c);
+  return c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ? AND a.account_id = ?${me ? " AND a.rep_user_id = ?" : ""}`)
+    .bind(c.req.param("id"), acct.id, ...(me ? [me] : [])).first();
 }
 
 app.get("/api/appointments/:id/activities", requireRole(...BOOKING_ROLES), async (c) => {
@@ -28161,6 +28430,7 @@ app.patch("/api/appointments/:id/activities/:actId", requireRole(...BOOKING_ROLE
   const b = await c.req.json().catch(() => ({}));
   if (typeof b.done !== "boolean") return c.json({ error: "bad_request" }, 400);
   return crmGuard(c, async () => {
+    if (!(await apptOfAccount(c, acct))) return c.json({ error: "not_found" }, 404);
     const act = await c.env.DB.prepare(`SELECT * FROM sales_activities WHERE id = ? AND appointment_id = ? AND account_id = ?`)
       .bind(c.req.param("actId"), c.req.param("id"), acct.id).first();
     if (!act) return c.json({ error: "not_found" }, 404);
@@ -28177,6 +28447,7 @@ app.get("/api/appointments/:id/activities/:actId/file", requireRole(...BOOKING_R
   const { error, acct } = await apptAccount(c);
   if (error) return error;
   return crmGuard(c, async () => {
+    if (!(await apptOfAccount(c, acct))) return c.json({ error: "not_found" }, 404);
     const act = await c.env.DB.prepare(`SELECT * FROM sales_activities WHERE id = ? AND appointment_id = ? AND account_id = ?`)
       .bind(c.req.param("actId"), c.req.param("id"), acct.id).first();
     if (!act || act.kind !== "recording" || !act.file_key) return c.json({ error: "not_found" }, 404);
@@ -28201,8 +28472,8 @@ app.get("/api/sales-followups", requireRole(...BOOKING_ROLES), async (c) => {
               a.first_name, a.last_name, a.phone, a.date AS appt_date, a.status AS appt_status
          FROM sales_activities s JOIN sales_appointments a ON a.id = s.appointment_id
          LEFT JOIN users au ON au.id = s.assignee_id LEFT JOIN users cb ON cb.id = s.created_by
-        WHERE s.account_id = ? AND s.kind = 'follow_up' AND s.done_at IS NULL
-        ORDER BY s.due_date ASC, s.created_at ASC LIMIT 500`).bind(acct.id).all();
+        WHERE s.account_id = ? AND s.kind = 'follow_up' AND s.done_at IS NULL${crmScopeOf(c) ? " AND (a.rep_user_id = ? OR s.assignee_id = ?)" : ""}
+        ORDER BY s.due_date ASC, s.created_at ASC LIMIT 500`).bind(acct.id, ...(crmScopeOf(c) ? [crmScopeOf(c), crmScopeOf(c)] : [])).all();
     return c.json({ followUps: (results || []).map((r) => ({ ...activityRowToJs(r),
       who: `${r.first_name} ${r.last_name}`, phone: r.phone, apptDate: r.appt_date, apptStatus: r.appt_status })) });
   });
@@ -30552,7 +30823,7 @@ async function gcalSalesItemsFor(env, userId) {
        FROM sales_appointments a JOIN accounts ac ON ac.id = a.account_id
       WHERE a.rep_user_id = ? AND a.date BETWEEN ? AND ?
         AND EXISTS (SELECT 1 FROM memberships m WHERE m.user_id = a.rep_user_id
-                      AND m.account_id = a.account_id AND m.role IN ('admin', 'pm'))`
+                      AND m.account_id = a.account_id AND m.role IN ('admin', 'pm', 'sales'))`
   ).bind(userId, lo, hi).all();
   return (results || []).filter((r) => salesOnCalendar(r.status) && takesAppointments(r.kind)).map((r) => {
     const second = apptJson(r.second, null);
@@ -30810,7 +31081,7 @@ app.get("/api/google-calendar", async (c) => {
 async function gcalSalesStatus(env, userId, conn) {
   const { results: seats } = await env.DB.prepare(
     `SELECT a.kind FROM memberships m JOIN accounts a ON a.id = m.account_id
-      WHERE m.user_id = ? AND m.role IN ('admin', 'pm')`).bind(userId).all().catch(() => ({ results: [] }));
+      WHERE m.user_id = ? AND m.role IN ('admin', 'pm', 'sales')`).bind(userId).all().catch(() => ({ results: [] }));
   if (!(seats || []).some((r) => takesAppointments(r.kind))) return { available: false };
   const out = { available: true, calendarName: GCAL_SALES_CALENDAR_NAME, on: true, events: 0,
     lastSyncedAt: null, lastError: null };

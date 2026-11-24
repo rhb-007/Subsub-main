@@ -113,8 +113,20 @@ export const CALLCENTER_STATUSES = ["scheduled", "confirmed", "cancelled"];
 export const DEFAULT_MINUTES = 90;
 
 // The roles that book and the roles that run the outcome.
-export const BOOKING_ROLES = ["admin", "pm", "callcenter"];
-export const SALES_ROLES = ["admin", "pm"];
+//
+// 109. A SALES MANAGER (`sales`) is a third CRM seat: the person who drives
+// to the house. They book, run and record the outcome of THEIR OWN estimates
+// and follow up THEIR OWN leads, and see nobody else's -- see crmScope in the
+// Worker. They are not the office: they do not turn a sale into a job, and a
+// sale is the office's to staff.
+export const BOOKING_ROLES = ["admin", "pm", "callcenter", "sales"];
+export const SALES_ROLES = ["admin", "pm", "sales"];
+// The office sees every appointment and lead on the account.
+export const OFFICE_ROLES = ["admin", "pm"];
+// Who an estimate can be booked for and a lead owned by.
+export const REP_ROLES = ["admin", "pm", "sales"];
+// Seats that have the CRM and nothing else; both are allowlisted in the Worker.
+export const CRM_ONLY_ROLES = ["callcenter", "sales"];
 
 // The account kinds that sell replacements to homeowners. A property manager
 // hires contractors for their own buildings and has no homeowner to call, so a

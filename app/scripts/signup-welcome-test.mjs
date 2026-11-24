@@ -322,7 +322,7 @@ try {
     // person wrote is theirs and is not ours to limit.
     const bodyWords = (txt) => String(txt || "").split(/\n(?:--|\u2014) |\nRichard Braun\nFounder/)[0]
       .split(/\s+/).filter(Boolean).length;
-    const long = composers.filter(([k]) => !/^(messageEmail|customInviteEmail)$/.test(k))
+    const long = composers.filter(([k]) => !/^(messageEmail|customInviteEmail|leadEmail)$/.test(k))
       .map(([k, f]) => { try { return [k, bodyWords(f(args)?.text)]; } catch { return [k, 0]; } })
       .filter(([, n]) => n > 100);
     t.ck("every email is 100 words or fewer before the sign-off", long.length === 0, JSON.stringify(long));

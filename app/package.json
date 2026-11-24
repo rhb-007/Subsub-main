@@ -347,7 +347,9 @@
     "test:salesappt": "node --no-warnings scripts/sales-appointments-test.mjs",
     "test:salesapptui": "node --no-warnings scripts/sales-appointments-ui-test.mjs",
     "test:salescrm": "node --no-warnings scripts/sales-crm-test.mjs",
-    "test:crmleads": "node --no-warnings scripts/crm-leads-test.mjs"
+    "test:crmleads": "node --no-warnings scripts/crm-leads-test.mjs",
+    "test:leadcontact": "node --no-warnings scripts/lead-contact-test.mjs",
+    "test:leadcontactui": "node --no-warnings scripts/lead-contact-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

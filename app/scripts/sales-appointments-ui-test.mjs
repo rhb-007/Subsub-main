@@ -200,9 +200,12 @@ try {
     for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".appt-view")) break; }
     const nav = await navLabels(page);
     t.ck("the menu is the CRM's pages and nothing else on the account",
-      ["Dashboard", "Leads", "Appointments", "Follow-ups"].every((l) => nav.includes(l))
-      && !nav.some((l) => /^(Jobs|Subcontractors|Contractors|Availability|Properties|Inbox|CRM \/ Sales)$/.test(l)),
+      ["Dashboard", "Inbox", "Leads", "Appointments", "Follow-ups"].every((l) => nav.includes(l))
+      && !nav.some((l) => /^(Jobs|Subcontractors|Contractors|Availability|Properties|CRM \/ Sales)$/.test(l)),
       nav.join(" | "));
+    // 109. The one Inbox on the menu is the CRM's (leads), never the
+    // account's conversations, which a call-center seat does not have.
+    t.ck("and its one Inbox is the CRM's", nav.filter((l) => l === "Inbox").length === 1 && !!(await page.$('[data-crm-nav="inbox"]')));
     t.ck("and no Jobs / CRM switch, since it has only the CRM", !(await page.$(".ws-switch")));
     if (process.env.DBG) console.log(await page.evaluate(() => document.body.innerText.slice(0, 1500)), crashes);
     const head = await page.evaluate(() => document.querySelector(".appt-view .dash-hello h2")?.innerText || "");
@@ -433,7 +436,7 @@ try {
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-crm-dash]")) break; }
     const crmNav = await navLabels(page);
     const from = crmNav.indexOf("Dashboard");
-    t.ck("the CRM has its own menu, starting with its dashboard", from >= 0 && ["Dashboard", "Leads", "Appointments", "Calendar", "Follow-ups"].every((l, i) => crmNav[from + i] === l)
+    t.ck("the CRM has its own menu, starting with its dashboard", from >= 0 && ["Dashboard", "Inbox", "Leads", "Appointments", "Calendar", "Follow-ups"].every((l, i) => crmNav[from + i] === l)
       && !crmNav.includes("Jobs"), crmNav.join(" | "));
     await click(page, '[data-stage-card="opportunity"]');
     await wait(300);

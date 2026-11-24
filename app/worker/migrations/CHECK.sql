@@ -353,6 +353,9 @@ WITH spec(j) AS (SELECT
   -- 108. CRM sales appointments on their own Google calendar.
   (',["m108_gcal_sales","col","gcal_sales",["user_id","sales_on","calendar_id","last_synced_at","last_error"]]' ||
   ',["m108_gcal_sales_events","col","gcal_sales_events",["user_id","appointment_id","event_id","fingerprint","synced_at"]]') ||
+  -- 109. Contacting a lead from the CRM, and consent asked of a lead directly.
+  (',["m109_lead_messages","col","lead_messages",["id","account_id","lead_id","channel","direction","subject","body","to_addr","status","error","outcome","reply_token","sent_by","read_at","mailed_at","created_at"]]' ||
+  ',["m109_sales_lead_consents","col","sales_lead_consents",["lead_id","account_id","email","phone","text","script_version","captured_by","captured_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -928,6 +931,13 @@ WITH inv(j) AS (SELECT '['
     + (SELECT COUNT(*) FROM sales_lead_links k JOIN sales_leads l ON l.id = k.lead_id
         JOIN sales_appointments a ON a.id = k.appointment_id
        WHERE l.account_id <> k.account_id OR a.account_id <> k.account_id)))
+  -- 109. A contact with a lead the Inbox cannot draw, or one filed against a
+  -- lead on another account.
+  || (',' || json_array('m109_inv_bad_lead_message', (SELECT COUNT(*) FROM lead_messages
+    WHERE channel NOT IN ('email','text','mail','call','note')
+       OR direction NOT IN ('outbound','inbound'))
+    + (SELECT COUNT(*) FROM lead_messages m JOIN sales_leads l ON l.id = m.lead_id
+       WHERE l.account_id <> m.account_id)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

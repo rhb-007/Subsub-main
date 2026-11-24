@@ -17080,6 +17080,76 @@ refactor.
   orders are small. `test:consolegmv` (7) adds a job with only an offer out;
   counting every job as staffed fails one assertion.
 
+- **A LEAD CAN BE EMAILED, TEXTED, WRITTEN TO OR CALLED FROM THE CRM, EVERY
+  CONTACT IS IN A CRM INBOX, AND A SALES MANAGER SEAT SEES ONLY ITS OWN.**
+  Asked for as *"contact leads from subsub via email, SMS, and mail (physical
+  address) - add an inbox with types of communication"* and *"a sales manager
+  role, that will have access to appointment assigned to them as well as leads
+  assigned to them so they can follow up on their own via email and text"*.
+  Migration 109 (`lead_messages`, `sales_lead_consents`),
+  `app/shared/leadcontact.js`.
+
+  **Each lead has an Overview tab and a Contact tab.** Contact holds the
+  consent on file, five buttons (Email, Text, Letter, Log a call, Note), and
+  everything said both ways, newest first. **The CRM menu gains Inbox**: every
+  contact with every lead the seat can see, filtered by kind (email, texts,
+  letters, calls, notes, unread replies), with the unread count on the menu.
+  A row opens that lead on Contact.
+
+  **The channels are not equally real, and each says what it is:**
+  - **Email is sent by SubSub** through Resend, in the account's name, signed
+    by the sender. Its Reply-To is `l-<token>@MESSAGE_REPLY_DOMAIN`, a
+    different prefix from a conversation's `m-`, so the two cannot be confused.
+    A reply is added to the lead as an inbound row only when it comes FROM the
+    lead's own address. It is written before it is sent, rate-limited per
+    account (`LEAD_EMAILS_PER_HOUR`), and a failed send says so on the row.
+  - **A text opens the messages app on that device** with the words filled in
+    (`sms:` link, so the tap itself opens it on an iPad), and is logged as
+    *Opened on your phone*, never as delivered, because SubSub has no text
+    provider and cannot see whether it was sent. **Still open:** sending texts
+    from SubSub itself, which needs the SMS provider.
+  - **A letter is printed** from a print window (account, date, the
+    homeowner's name and address where a window envelope shows them, the
+    words, the account's sign-off), logged as printed, and marked mailed by a
+    press. There is no print-and-mail provider.
+  - **A call** is a `tel:` link and a log; **a note** is a note.
+
+  **Consent gates them as it gates follow-ups**: email and text need that
+  channel's yes, an outbound call needs the phone yes, and a letter needs only
+  a whole address. Each button is greyed out with the same reason the route
+  refuses with (`channelBlock`, `BLOCK_TEXT`). **Consent can now be asked of a
+  lead directly**, in the script's words. Before this it was asked only at a
+  booking, so a lead added by hand could never be emailed. The newest answer
+  wins (`leadConsentFrom`), whether it came from the lead or from an
+  appointment, so a later *no* outranks an older *yes*. Every change is a
+  `lead.consent` event carrying the old answers.
+
+  **A sales manager is role `sales`**, offered only where homeowners are sold
+  to (`APPOINTMENT_KINDS`, the call-center rule). It has the CRM and nothing
+  else (`SALES_ALLOWED`: the call center's routes plus their own Google
+  Calendar), and `crmScopeOf` narrows every CRM route to their own rows:
+  - **appointments** booked for them (`rep_user_id`), in lists, single reads,
+    activity and recordings; somebody else's answers `not_found`;
+  - **leads** they own or have an estimate with (`LEAD_IN_SCOPE`), in lists,
+    edits, contacts and the Inbox;
+  - **follow-ups** on their estimates or handed to them.
+
+  They book for themselves (the server sets the rep whatever is sent, and the
+  form says *You*), own the leads they add, cannot hand an estimate to
+  somebody else (`rep_is_you`), and record outcomes like the office. **They do
+  not turn a sale into a job**: that is the office's. A lead nobody owned is
+  now owned by the sales manager it was booked with, so following it up is
+  somebody's job. They are offered as a sales manager to book, get the SubSub
+  Sales calendar, and have their busy times checked.
+
+  `test:leadcontact` (59) and `test:leadcontactui` (20). Ten mutations fire,
+  each on its own assertion: the lead scope, the appointment scope, the email
+  consent check, the reply-sender check, the self-booking, the allowlist, the
+  self-rep form, the greyed buttons, the Contact tab, and the owner picker.
+  `test:salesapptui` pinned a CRM menu with no Inbox and was moved to the new
+  rule. **Pasting 109 is required**; until then leads load and contacting
+  names the file. **Not verified here:** a live email and reply round trip.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

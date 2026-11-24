@@ -1628,6 +1628,17 @@ Open the conversation:
   return { subject, text, html: textToHtml(text, link, { keepLines: true }) };
 }
 
+// 109. An email to a CRM lead, in words somebody on the account wrote. Theirs,
+// so it is not on the Notifications screen and not ours to shorten. The
+// marker above it is where a reply is cut, so a homeowner's answer lands in
+// the CRM Inbox without the whole thread quoted under it.
+export function leadEmail({ body, accountName, senderName = "", canReply = false }) {
+  const said = String(body || "").trim();
+  const sign = [senderName, accountName].filter(Boolean).join("\n");
+  const text = `${canReply ? `-- ${REPLY_MARKER} --\n\n` : ""}${said}${sign ? `\n\n${sign}` : ""}`;
+  return { text, html: textToHtml(text, null, { keepLines: true }) };
+}
+
 // 083. A reply by email that could not be added, told to the person it came
 // from. Only ever sent to the address the reply address was issued to.
 export function messageReplyRefusedEmail(reason) {

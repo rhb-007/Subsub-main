@@ -396,6 +396,12 @@ export const api = {
   listLeads: () => request("/sales-leads"),
   createLead: (body) => request("/sales-leads", { method: "POST", body: JSON.stringify(body) }),
   patchLead: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  // 109. Contacting a lead, and the CRM Inbox.
+  leadMessages: (id) => request(`/sales-leads/${encodeURIComponent(id)}/messages`),
+  sendLeadMessage: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}/messages`, { method: "POST", body: JSON.stringify(body) }),
+  patchLeadMessage: (id, mid, body) => request(`/sales-leads/${encodeURIComponent(id)}/messages/${encodeURIComponent(mid)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  putLeadConsent: (id, consent) => request(`/sales-leads/${encodeURIComponent(id)}/consent`, { method: "PUT", body: JSON.stringify({ consent }) }),
+  crmInbox: () => request("/crm-inbox"),
   uploadCallRecording: (file) => putFile(`/uploads/call-recording/${encodeURIComponent(file.name)}`, file),
   apptRecordingBlob: async (id, actId) => {
     const res = await fetch(`${API_BASE}/appointments/${encodeURIComponent(id)}/activities/${encodeURIComponent(actId)}/file`,

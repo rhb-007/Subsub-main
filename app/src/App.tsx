@@ -23,7 +23,7 @@ import { createPortal } from "react-dom";
 const BUILD = import.meta.env.VITE_BUILD === "platform" ? "platform" : "tenant";
 import {
   Monitor, Moon, Languages,
-  Search, Phone, Mail, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
+  Search, Phone, Mail, Printer, MapPin, FileText, FileWarning, Shield, ScrollText, Calendar,
   CheckCircle2, AlertTriangle, X, Plus, Send, Upload, Filter, Star,
   Hammer, Home, PanelTop, Wind, Fence, Layers, Building2, ClipboardList, ClipboardCheck,
   Users, StickyNote, ListChecks, Check, XCircle, Clock, Target, ChevronDown, ChevronRight, Pencil, Trash2, UserCog, UserX, Zap, Ruler, BrickWall, LogOut, LogIn, Eye, ArrowRightLeft, Lock, Download, Shirt, ArrowUpDown, Bell, Receipt, Wrench, ShieldCheck, Ban, PlayCircle,
@@ -58,7 +58,10 @@ import { TENANT_PROBLEMS, tenantGroups, tenantWhere } from "../shared/tenantprob
 import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
 import { SERVICES as APPT_SERVICES, SERVICE_QUESTIONS, HOME_QUESTIONS, SOURCES as APPT_SOURCES,
   STATUSES as APPT_STATUSES, CALLCENTER_STATUSES, DEFAULT_MINUTES as APPT_MINUTES, takesAppointments,
-  validAppointment, repClashes, jobSeedFromAppointment, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+  validAppointment, repClashes, jobSeedFromAppointment, serviceLabel, apptWhenText,
+  SALES_ROLES, OFFICE_ROLES, CRM_ONLY_ROLES } from "../shared/salesappt.js";
+import { LEAD_CHANNELS, BLOCK_TEXT, smsHref as leadSmsHref, telHref as leadTelHref, letterLines, messageStatusText, inboxCounts,
+  addressLine as leadAddressLine, MAX_TEXT_BODY } from "../shared/leadcontact.js";
 import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, sourceLabel, crmDashboard, callerDashboard } from "../shared/leads.js";
 import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
   AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
@@ -726,6 +729,10 @@ const ROLES = {
   // not the only thing keeping them out. Only on an account that sells to
   // homeowners -- see takesAppointments.
   callcenter: { label: "Call center", can: ["appointments", "account"] },
+  // 109. The person who drives to the house: their own estimates and their
+  // own leads, followed up by email, text, letter or a call. Allowlisted on
+  // the server (SALES_ALLOWED) and narrowed to their own rows by crmScope.
+  sales: { label: "Sales manager", can: ["appointments", "account"] },
 };
 // What a seat is called inside a given kind of account. The permissions are
 // ROLES[role].can and nothing here touches them -- this is the word on the
@@ -2874,7 +2881,7 @@ export default function SubSub() {
   // The role, not can(): can("appointments") reads `account`, which is not
   // declared until below, and a const read before it exists is a blank page.
   const homeTab = can("dashboard") ? "dashboard" : can("tenant") ? "tenant"
-    : role === "callcenter" ? "appointments" : "portal";
+    : CRM_ONLY_ROLES.includes(role) ? "appointments" : "portal";
   const homeTitle = homeTab === "dashboard" ? "Back to the dashboard"
     : homeTab === "tenant" ? "Back to your reports"
     : homeTab === "appointments" ? "Back to the CRM"
@@ -2894,7 +2901,7 @@ export default function SubSub() {
   // branding on its login screen.
   const account = accounts.find((a) => a.id === membership.accountId) || accounts[0];
   // 107. Read after `account`, because can("appointments") reads it.
-  const crmWs = tab === "appointments" || (tab === "account" && acctInCrm) || role === "callcenter";
+  const crmWs = tab === "appointments" || (tab === "account" && acctInCrm) || CRM_ONLY_ROLES.includes(role);
   // Only a seat that has both: a call-center seat has nothing but the CRM.
   const showWsSwitch = can("appointments") && can("dashboard");
   // Spanish is offered where it is translated: the people who do the work.
@@ -4592,6 +4599,8 @@ export default function SubSub() {
   // which workspace is showing is derived from the tab rather than stored, so
   // the two can never disagree.
   const [crmPane, setCrmPane] = useState("dashboard");
+  // 109. Replies from leads nobody has opened, for the CRM Inbox's count.
+  const [crmUnread, setCrmUnread] = useState(0);
   const [crmAsk, setCrmAsk] = useState(() => {
     try {
       const q = new URLSearchParams(window.location.search);
@@ -6195,7 +6204,7 @@ export default function SubSub() {
   useEffect(() => {
     if (loggedIn && tab === "properties" && !hasProperties(account)) setTab("dashboard");
     // 105. A call-center seat has two screens, and "dashboard" is not one.
-    if (loggedIn && role === "callcenter" && tab !== "appointments" && tab !== "account") setTab("appointments");
+    if (loggedIn && CRM_ONLY_ROLES.includes(role) && tab !== "appointments" && tab !== "account") setTab("appointments");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.id, account.kind, loggedIn, tab, role]);
 
@@ -7084,7 +7093,7 @@ export default function SubSub() {
           {crmWs && can("appointments") && CRM_NAV.map(([id, label]) => (
             <button key={id} className={crmPane === id ? "on" : ""} data-crm-nav={id}
               onClick={() => { setCrmPane(id); setTab("appointments"); }}>
-              {label}
+              {label}{id === "inbox" && crmUnread > 0 && <LiveCount n={crmUnread} what="unread" />}
             </button>
           ))}
           {!crmWs && (<>
@@ -8867,6 +8876,7 @@ export default function SubSub() {
 
       {tab === "appointments" && can("appointments") && (
         <AppointmentsView role={role} meId={currentUserId} ask={crmAsk} onAskUsed={() => setCrmAsk(null)}
+          accountName={account.name} onUnread={setCrmUnread}
           pane={crmPane} onPane={setCrmPane}
           onOpenJob={can("jobs") ? (id) => openJob(id) : null}
           onConvert={can("jobs") ? (a, after) => {
@@ -29794,9 +29804,9 @@ function ConsentQ({ id, label, ask, value, onChange, note = null, disableYes = f
 
 // What a homeowner agreed to, at a glance. A channel with no answer on file
 // reads "not asked", never yes.
-function ConsentChips({ consent }) {
+function ConsentChips({ consent, noRecord = false }) {
   const row = [...CONSENT_CHANNELS.map((c) => [c.id, c.label, consent?.[c.id]]),
-    ["record", "Recording", consent?.record]];
+    ...(noRecord ? [] : [["record", "Recording", consent?.record]])];
   return (
     <div className="crm-chips" data-consent-chips>
       {row.map(([id, label, v]) => (
@@ -29849,11 +29859,11 @@ const apptBlank = () => ({
   consent: { email: null, phone: null, text: null, record: null },
 });
 
-function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appointments = [], onSaved, onCancel }) {
+function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appointments = [], onSaved, onCancel, selfRep = null }) {
   // 107. Booked from a lead: who they are and what they asked about are
   // already known, so the script starts with them filled in.
   const [f, setF] = useState(() => !existing && seed ? {
-    ...apptBlank(), ...(seed.date ? { date: seed.date } : {}), services: seed.services || [],
+    ...apptBlank(), ...(seed.date ? { date: seed.date } : {}), ...(selfRep ? { repId: selfRep } : {}), services: seed.services || [],
     homeowner: { ...apptBlank().homeowner, firstName: seed.firstName || "", lastName: seed.lastName || "",
       phone: seed.phone || "", email: seed.email || "" },
     address: { ...apptBlank().address, ...(seed.address || {}) },
@@ -29864,7 +29874,7 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
     second: existing.second ? { ...apptBlank().second, ...existing.second } : apptBlank().second,
     consent: existing.consent ? { email: existing.consent.email, phone: existing.consent.phone,
       text: existing.consent.text, record: existing.consent.record } : apptBlank().consent,
-  } : apptBlank());
+  } : { ...apptBlank(), ...(selfRep ? { repId: selfRep } : {}) });
   const [step, setStep] = useState(existing ? "review" : "call");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
@@ -30093,11 +30103,17 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
               <select value={f.minutes} onChange={(e) => set({ minutes: Number(e.target.value) })}>
                 {[60, 90, 120, 150, 180].map((m) => <option key={m} value={m}>{m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m / 60}h`}</option>)}
               </select></label>
+            {/* 109. A sales manager books their own estimates; the server
+                makes it so whatever is sent, and the form says it. */}
+            {selfRep ? (
+              <div className="fld">Sales manager <span className="appt-self-rep" data-self-rep>You</span></div>
+            ) : (
             <label className="fld">Sales manager <span className="fld-note">or assign later</span>
               <select value={f.repId} onChange={(e) => set({ repId: e.target.value })} data-rep>
                 <option value="">Assign later</option>
                 {reps.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select></label>
+            )}
           </div>
           {f.repId && f.date && (
             <div className="appt-day" data-rep-day>
@@ -30201,15 +30217,28 @@ function ApptStatusChip({ status }) {
 
 // 107. The CRM workspace's panes, in nav order. The tab is "appointments"
 // (the id the call-center role and its allowlist name); these are its pages.
-const CRM_NAV = [["dashboard", "Dashboard"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"]];
+// 109. Inbox: every email, text, letter, call and note with a lead.
+const CRM_NAV = [["dashboard", "Dashboard"], ["inbox", "Inbox"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"]];
 const CRM_PANES = CRM_NAV.map(([id]) => id);
 
 function LeadStageChip({ stage }) {
   return <span className={`tn-chip lead-st lead-st-${stage}`} data-stage={stage}>{stageTerm(stage)}</span>;
 }
 
-function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob, pane = "dashboard", onPane }) {
-  const sales = role === "admin" || role === "pm";
+function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob, pane = "dashboard", onPane,
+  accountName = "", onUnread = null }) {
+  // 109. A sales manager records the outcome of their own visits like the
+  // office does; the office alone turns a sale into a job (onConvert).
+  const sales = SALES_ROLES.includes(role);
+  const selfRep = role === "sales" ? meId : null;
+  // 109. The Inbox: every contact with every lead this seat can see.
+  const [inboxData, setInboxData] = useState(null);
+  const loadInbox = async () => {
+    try { const r = await api.crmInbox(); setInboxData(r); onUnread?.(inboxCounts(r.messages || []).unread); }
+    catch (e) { setInboxData(e?.body?.error === "migration_needed" ? { migration: e.body.migration || "109_lead_contact" } : { failed: true }); }
+  };
+  useEffect(() => { loadInbox(); }, []);
+  const [leadTab, setLeadTab] = useState("");
   const setPane = (p) => onPane?.(p);
   const [followUps, setFollowUps] = useState(null);
   const loadFollowUps = async () => {
@@ -30287,7 +30316,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const upsert = (a) => setData((d) => ({ ...d, appointments: [a, ...(d?.appointments || []).filter((x) => x.id !== a.id)] }));
   const upsertLead = (l) => setLeadData((d) => ({ ...(d || {}), leads: [l, ...((d?.leads) || []).filter((x) => x.id !== l.id)] }));
   const goLeads = (stage = "") => { setLeadStage(stage); setPane("leads"); };
-  const titles = { dashboard: "CRM", leads: "Leads", appointments: "Appointments", calendar: "Calendar", followups: "Follow-ups" };
+  const titles = { dashboard: "CRM", inbox: "Inbox", leads: "Leads", appointments: "Appointments", calendar: "Calendar", followups: "Follow-ups" };
   const caller = role === "callcenter";
   const [calDay, setCalDay] = useState("");
 
@@ -30298,6 +30327,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
             : "Where every homeowner you are selling to stands, and what is coming up.")
           : pane === "calendar" ? "Every estimate booked, by day. Press a day to see who is on it."
           : pane === "leads" ? "Everybody you are trying to sell to, from the first call to the last job."
+          : pane === "inbox" ? "Every email, text, letter, call and note with your leads, and their replies."
           : pane === "followups" ? "What is owed to each homeowner, and when."
           : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
           : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
@@ -30333,6 +30363,11 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
           sales={sales} leadsReady={!!leadData && !leadData.migration && !leadData.failed}
           onStage={goLeads} onOpenAppt={(id) => setOpen(id)} onNeedsOutcome={() => { setWhen("outcome"); setPane("appointments"); }}
           onFollowUps={() => setPane("followups")} />
+      )}
+
+      {pane === "inbox" && (
+        <CrmInbox data={inboxData} onRetry={loadInbox}
+          onOpen={(leadId) => { setLeadTab("contact"); setOpenLead(leadId); }} />
       )}
 
       {pane === "leads" && (
@@ -30397,7 +30432,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
 
       {flow && (
         <Modal onClose={() => { setFlow(null); setFlowLead(null); }} wide>
-          <CallFlow existing={flow === "new" ? null : flow} seed={flow === "new" ? flowLead : null}
+          <CallFlow existing={flow === "new" ? null : flow} seed={flow === "new" ? flowLead : null} selfRep={selfRep}
             leadId={flow === "new" ? flowLead?.id || null : null} reps={reps} appointments={list}
             onCancel={() => { setFlow(null); setFlowLead(null); }}
             onSaved={(a, conf, res) => {
@@ -30424,8 +30459,9 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
         </Modal>
       )}
       {currentLead && !flow && !current && (
-        <Modal onClose={() => setOpenLead(null)} wide>
+        <Modal onClose={() => { setOpenLead(null); setLeadTab(""); loadInbox(); }} wide>
           <LeadDetail lead={currentLead} role={role} owners={leadData?.owners || []}
+            accountName={accountName} startTab={leadTab} onContacted={loadInbox}
             apptById={Object.fromEntries(list.map((a) => [a.id, a]))}
             onSaved={(l) => upsertLead({ ...currentLead, ...l })}
             onOpenAppt={(id) => setOpen(id)}
@@ -30791,7 +30827,9 @@ function leadRefusalText(e) {
 // Add a lead, or edit one. The stages offered follow the role: a call-center
 // seat can add a lead or a prospect and nothing that says somebody bought.
 function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpenExisting, onSaveAndBook = null, bookFirst = false }) {
-  const sales = role === "admin" || role === "pm";
+  const sales = SALES_ROLES.includes(role);
+  // A sales manager's leads are theirs; who owns a lead is the office's call.
+  const office = OFFICE_ROLES.includes(role);
   const [f, setF] = useState(() => ({
     firstName: existing?.firstName || "", lastName: existing?.lastName || "", phone: existing?.phone || "",
     email: existing?.email || "", services: existing?.services || [], source: existing?.source || "",
@@ -30852,7 +30890,7 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
         </label>
       </div>
       {!sales && <p className="note">Opportunity is set by booking them an appointment. Customer and former customer are the office's to set.</p>}
-      {sales && (
+      {office && (
         <label className="fld"><span>Owner</span>
           <select value={f.ownerId} onChange={(e) => set({ ownerId: e.target.value })}>
             <option value="">Nobody</option>
@@ -30884,8 +30922,8 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
 
 // One lead: who they are, their stage, their appointments, and the one press
 // that moves them forward -- booking an appointment.
-function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook }) {
-  const sales = role === "admin" || role === "pm";
+function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, accountName = "", startTab = "", onContacted }) {
+  const sales = SALES_ROLES.includes(role);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState(null);
@@ -30912,6 +30950,8 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         </div>
         <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
+      <LeadDetailTabs lead={lead} start={startTab} accountName={accountName} onContacted={onContacted}
+        onConsent={(consent) => onSaved({ ...lead, consent })}>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
         {LEAD_STAGES.map((stg) => (
           <button key={stg.id} type="button" data-move={stg.id} aria-pressed={lead.stage === stg.id}
@@ -30949,6 +30989,327 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
           ))}
         </ul>
       </section>
+      </LeadDetailTabs>
+    </div>
+  );
+}
+
+// 109. A lead is two tabs: who they are, and contacting them. Contact opens
+// first when the lead was opened from the Inbox.
+function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent, children }) {
+  const [tab, setTab] = useState(start === "contact" ? "contact" : "overview");
+  return (<>
+    <div className="seg-tabs lead-tabs" role="tablist">
+      <button type="button" role="tab" data-lead-tab="overview" aria-selected={tab === "overview"} className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}>Overview</button>
+      <button type="button" role="tab" data-lead-tab="contact" aria-selected={tab === "contact"} className={tab === "contact" ? "on" : ""} onClick={() => setTab("contact")}>Contact</button>
+    </div>
+    {tab === "overview" ? children
+      : <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} />}
+  </>);
+}
+
+// 109. What a refused contact is called on the screen, in the route's words.
+function leadContactErrText(e) {
+  const code = e?.body?.error;
+  if (BLOCK_TEXT[code]) return BLOCK_TEXT[code];
+  if (code === "subject_required") return "Add a subject.";
+  if (code === "body_required") return "Write something first.";
+  if (code === "rate_limited") return "That's a lot of email in an hour. Wait a few minutes and try again.";
+  if (code === "consent_needs_email") return "Add an email address on the lead before recording a yes to email.";
+  if (code === "consent_needs_phone") return "Add a 10-digit mobile number on the lead before recording a yes to calls or texts.";
+  if (code === "incomplete") return "Answer all three questions.";
+  if (code === "not_found") return "That lead isn't one you can see any more.";
+  if (code === "migration_needed") return `Contacting leads isn't set up on this database yet. Run migration ${e.body.migration || "109_lead_contact"}.`;
+  if (!e?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
+  return `That didn't go through (${code || e.status}). Try again.`;
+}
+
+const LEAD_CH_ICONS = { email: Mail, text: MessageSquareText, mail: Printer, call: PhoneCall, note: StickyNote };
+
+// 109. One contact with a lead, as a row: the kind, which way it went, when,
+// who, what it said and how it stands.
+function LeadMessageRow({ m, showWho = false, onOpen = null, onMailed = null }) {
+  const Icon = LEAD_CH_ICONS[m.channel] || StickyNote;
+  const inbound = m.direction === "inbound";
+  const inner = (<>
+    <span className={`lm-ico lm-${m.channel} ${inbound ? "in" : ""}`}><Icon size={15} /></span>
+    <span className="lm-main">
+      <span className="lm-top">
+        <b>{showWho ? (m.who || "A lead") : (LEAD_CHANNELS[m.channel]?.label || m.channel)}</b>
+        <span className={`lm-st ${inbound && !m.readAt ? "unread" : ""}`} data-lm-status>{messageStatusText(m)}</span>
+        <span className="lm-when">{stampDay(m.createdAt)}</span>
+      </span>
+      {m.subject && <span className="lm-subject">{m.subject}</span>}
+      {m.body && <span className="lm-body">{m.body}</span>}
+      {m.channel === "call" && m.outcome && <span className="lm-body">{m.outcome}</span>}
+      <span className="lm-foot">
+        {showWho && <>{LEAD_CHANNELS[m.channel]?.label} · </>}
+        {inbound ? `From ${m.to || "them"}` : m.sentByName ? `By ${m.sentByName}` : ""}
+        {m.status === "failed" && m.error ? ` · ${m.error}` : ""}
+      </span>
+    </span>
+  </>);
+  return (
+    <li className={`lm-row ${inbound ? "inbound" : ""} ${inbound && !m.readAt ? "unread" : ""}`} data-lead-msg={m.id} data-channel={m.channel}>
+      {onOpen ? <button type="button" className="lm-open" onClick={() => onOpen(m.leadId)}>{inner}</button> : <div className="lm-open">{inner}</div>}
+      {!onOpen && m.channel === "mail" && onMailed && (
+        <button type="button" className="btn-ghost lm-mailed" data-mark-mailed={m.id} onClick={() => onMailed(m, !m.mailedAt)}>
+          {m.mailedAt ? "Not mailed after all" : "Mark mailed"}</button>
+      )}
+    </li>
+  );
+}
+
+// 109. Consent asked of a lead directly, in the words the script reads out.
+function LeadConsentForm({ lead, consent, onSaved, onCancel }) {
+  const [c, setC] = useState(() => ({ email: consent?.email ?? null, phone: consent?.phone ?? null, text: consent?.text ?? null }));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try { onSaved((await api.putLeadConsent(lead.id, c)).consent); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="lc-consent" data-lead-consent-form>
+      <p className="note">Ask them, reading the words out, and record each answer.</p>
+      {CONSENT_CHANNELS.map((q) => (
+        <div key={q.id} className="lc-q">
+          <p className="lc-ask">"{q.ask}"</p>
+          <div className="seg-tabs lc-yn">
+            <button type="button" data-consent-yes={q.id} className={c[q.id] === true ? "on" : ""} onClick={() => setC({ ...c, [q.id]: true })}>Yes</button>
+            <button type="button" data-consent-no={q.id} className={c[q.id] === false ? "on" : ""} onClick={() => setC({ ...c, [q.id]: false })}>No</button>
+          </div>
+        </div>
+      ))}
+      {err && <p className="form-err" role="alert">{leadContactErrText(err)}</p>}
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" data-save-consent disabled={busy || CONSENT_CHANNELS.some((q) => c[q.id] == null)} onClick={save}>
+          {busy ? "Saving…" : "Save their answers"}</button>
+      </div>
+    </div>
+  );
+}
+
+// 109. Contacting one lead: email from SubSub, a text from your own phone, a
+// printed letter, a logged call or a note, then everything said both ways,
+// newest first. Each button is greyed out with the same reason the route
+// would refuse with, before it is pressed.
+function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
+  const [d, setD] = useState(null);
+  const [loadErr, setLoadErr] = useState(null);
+  const [mode, setMode] = useState("");
+  const [f, setF] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [flash, setFlash] = useState("");
+  const [askConsent, setAskConsent] = useState(false);
+  const load = async () => {
+    try { setD(await api.leadMessages(lead.id)); setLoadErr(null); }
+    catch (e) { setLoadErr(e); }
+  };
+  useEffect(() => { load(); }, [lead.id]);
+  const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "them";
+  const consent = d?.consent || null;
+  const blocks = d?.blocks || {};
+  const callBlocked = !consent || consent.phone !== true;
+  const start = (m) => {
+    setMode(m); setErr(null); setFlash("");
+    setF(m === "email" ? { subject: "", body: `Hi ${lead.firstName || "there"},\n\n` }
+      : m === "text" ? { body: `Hi ${lead.firstName || "there"}, this is ${accountName}. ` }
+      : m === "mail" ? { body: "" } : m === "call" ? { direction: "outbound", outcome: CALL_OUTCOMES[0], body: "" } : { body: "" });
+  };
+  const send = async (body) => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await api.sendLeadMessage(lead.id, body);
+      setD((x) => ({ ...(x || {}), messages: [r.message, ...((x?.messages) || [])] }));
+      setMode("");
+      setFlash(body.channel === "email" ? (r.sent?.ok ? `Emailed ${name}.` : `Saved, but the email didn't send: ${r.sent?.error || "try again"}.`)
+        : body.channel === "text" ? "Opened in your messages app. Press send there."
+        : body.channel === "mail" ? "Letter ready to print. Mark it mailed once it goes in the mail."
+        : "Logged.");
+      onContacted?.();
+      return r;
+    } catch (e) { setErr(e); return null; }
+    finally { setBusy(false); }
+  };
+  const printLetter = (body) => {
+    const L = letterLines({ accountName, lead, body, date: new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) });
+    const esc = (x) => String(x).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+    const w = window.open("", "_blank");
+    if (!w) return false;
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Letter to ${esc(name)}</title>
+      <style>body{font:12pt/1.5 Georgia,serif;margin:1in;color:#111}.from{font-weight:700;margin-bottom:24pt}
+      .to{margin:24pt 0}p{margin:0 0 12pt}</style></head><body>
+      <div class="from">${esc(L.from)}</div><div>${esc(L.date)}</div>
+      <div class="to">${L.to.map(esc).join("<br>")}</div><p>${esc(L.greeting)}</p>
+      ${L.paragraphs.map((p) => `<p>${esc(p).replace(/\n/g, "<br>")}</p>`).join("")}
+      <p>Sincerely,</p><p>${esc(L.signoff)}</p></body></html>`);
+    w.document.close();
+    w.focus();
+    w.print();
+    return true;
+  };
+  const markMailed = async (m, mailed) => {
+    try {
+      const r = await api.patchLeadMessage(lead.id, m.id, { mailed });
+      setD((x) => ({ ...x, messages: x.messages.map((y) => (y.id === m.id ? r.message : y)) }));
+    } catch (e) { setErr(e); }
+  };
+  if (loadErr) {
+    return <p className="form-err" role="alert" data-contact-err>{leadContactErrText(loadErr)} <button className="link-btn" onClick={load}>Try again</button></p>;
+  }
+  if (!d) return <p className="note">Loading…</p>;
+  const btn = (id, label, Icon, block) => (
+    <button type="button" key={id} className={`btn-ghost lc-btn ${mode === id ? "on" : ""}`} data-contact={id}
+      disabled={!!block} title={block ? BLOCK_TEXT[block] : ""} onClick={() => start(id)}>
+      <Icon size={15} /> {label}</button>
+  );
+  const blockedNotes = ["email", "text", "mail"].filter((ch) => blocks[ch]).map((ch) => (
+    <li key={ch} data-contact-block={ch}><b>{LEAD_CHANNELS[ch].label}:</b> {BLOCK_TEXT[blocks[ch]]}</li>
+  ));
+  return (
+    <div className="lead-contact" data-lead-contact={lead.id}>
+      <div className="lc-consent-line">
+        <span className="lead-label">Follow-up consent</span>
+        {consent ? <ConsentChips consent={consent} noRecord /> : <p className="note">Not asked yet.</p>}
+        <button type="button" className="link-btn" data-ask-consent onClick={() => setAskConsent(true)}>
+          {consent ? "Ask again" : "Ask them now"}</button>
+      </div>
+      {askConsent && (
+        <LeadConsentForm lead={lead} consent={consent} onCancel={() => setAskConsent(false)}
+          onSaved={(c) => { setAskConsent(false); onConsent?.(c); load(); }} />
+      )}
+      <div className="lc-btns" role="group" aria-label="Contact them">
+        {btn("email", "Email", Mail, blocks.email)}
+        {btn("text", "Text", MessageSquareText, blocks.text)}
+        {btn("mail", "Letter", Printer, blocks.mail)}
+        {btn("call", "Log a call", PhoneCall, null)}
+        {btn("note", "Note", StickyNote, null)}
+      </div>
+      {blockedNotes.length > 0 && <ul className="lc-blocked">{blockedNotes}</ul>}
+      {flash && <p className="appt-flash" role="status">{flash}</p>}
+
+      {mode === "email" && (
+        <div className="lc-form" data-compose="email">
+          <p className="note">Sent from SubSub in {accountName}'s name to {lead.email}.
+            {d.canReply ? " Their reply comes back to this Inbox." : " Replies by email aren't switched on yet, so they'll reply to SubSub's address."}</p>
+          <label className="fld">Subject<input value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} data-email-subject /></label>
+          <label className="fld">Message<textarea rows={7} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-email-body /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            <button className="btn-solid" data-send-email disabled={busy || !f.subject?.trim() || !f.body?.trim()}
+              onClick={() => send({ channel: "email", subject: f.subject, body: f.body })}><Send size={15} /> {busy ? "Sending…" : "Send email"}</button>
+          </div>
+        </div>
+      )}
+      {mode === "text" && (
+        <div className="lc-form" data-compose="text">
+          <p className="note">SubSub can't send texts yet, so this opens the messages app on this device with your words filled in, to {formatPhone(lead.phone)}. Press send there.</p>
+          <label className="fld">Message<textarea rows={4} maxLength={MAX_TEXT_BODY} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-text-body /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            {/* A link, so the messages app opens on the press itself: a tap
+                that waited on a request first would lose it on an iPad. The
+                record is written beside it. */}
+            <a className={`btn-solid ${busy || !f.body?.trim() ? "is-disabled" : ""}`} data-send-text href={leadSmsHref(lead.phone, f.body)}
+              onClick={(e) => { if (busy || !f.body?.trim()) { e.preventDefault(); return; } send({ channel: "text", body: f.body }); }}>
+              <MessageSquareText size={15} /> Open in Messages</a>
+          </div>
+        </div>
+      )}
+      {mode === "mail" && (
+        <div className="lc-form" data-compose="mail">
+          <p className="note">A letter to {leadAddressLine(lead.address)}, printed here for you to mail.</p>
+          <label className="fld">Letter<textarea rows={8} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-letter-body
+            placeholder="Thank you for meeting with us…" /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            <button className="btn-solid" data-print-letter disabled={busy || !f.body?.trim()}
+              onClick={async () => { const body = f.body; if (await send({ channel: "mail", body })) printLetter(body); }}>
+              <Printer size={15} /> Print letter</button>
+          </div>
+        </div>
+      )}
+      {mode === "call" && (
+        <div className="lc-form" data-compose="call">
+          {lead.phone && <a className="btn-ghost lc-tel" href={leadTelHref(lead.phone)}><PhoneCall size={15} /> Call {formatPhone(lead.phone)}</a>}
+          <div className="seg-tabs">
+            <button type="button" className={f.direction === "outbound" ? "on" : ""} disabled={callBlocked}
+              onClick={() => setF({ ...f, direction: "outbound" })}>I called them</button>
+            <button type="button" className={f.direction === "inbound" ? "on" : ""} onClick={() => setF({ ...f, direction: "inbound" })}>They called</button>
+          </div>
+          {callBlocked && <p className="note">{BLOCK_TEXT.no_call_consent} You can still log a call they made.</p>}
+          <label className="fld">How it went
+            <select value={f.outcome} onChange={(e) => setF({ ...f, outcome: e.target.value })}>
+              {CALL_OUTCOMES.map((o) => <option key={o}>{o}</option>)}
+            </select></label>
+          <label className="fld">Notes<textarea rows={3} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            <button className="btn-solid" data-log-call disabled={busy || (f.direction === "outbound" && callBlocked)}
+              onClick={() => send({ channel: "call", direction: callBlocked ? "inbound" : f.direction, outcome: f.outcome, body: f.body })}>Log the call</button>
+          </div>
+        </div>
+      )}
+      {mode === "note" && (
+        <div className="lc-form" data-compose="note">
+          <label className="fld">Note<textarea rows={3} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-note-body /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            <button className="btn-solid" data-save-note disabled={busy || !f.body?.trim()} onClick={() => send({ channel: "note", body: f.body })}>Save note</button>
+          </div>
+        </div>
+      )}
+      {err && <p className="form-err" role="alert">{leadContactErrText(err)}</p>}
+      <ul className="lm-list" data-lead-msgs>
+        {(d.messages || []).map((m) => <LeadMessageRow key={m.id} m={m} onMailed={markMailed} />)}
+      </ul>
+      {!(d.messages || []).length && <p className="note">Nothing yet. Every email, text, letter and call with {name} is listed here.</p>}
+    </div>
+  );
+}
+
+// 109. The CRM Inbox: every contact with every lead this seat can see, both
+// ways, newest first, and the replies nobody has opened at the top of mind.
+const INBOX_KINDS = [["all", "All"], ["unread", "Unread replies"], ["email", "Email"], ["text", "Texts"], ["mail", "Letters"], ["call", "Calls"], ["note", "Notes"]];
+function CrmInbox({ data, onRetry, onOpen }) {
+  const [kind, setKind] = useState("all");
+  const [q, setQ] = useState("");
+  if (data?.migration) return <p className="appt-warn" role="note" data-inbox-migration>Contacting leads isn't set up on this database yet. Run migration {data.migration}.</p>;
+  if (data?.failed) return <p className="form-err" role="alert">Couldn't load the inbox. <button className="link-btn" onClick={onRetry}>Try again</button></p>;
+  if (!data) return <p className="note">Loading…</p>;
+  const all = data.messages || [];
+  const counts = inboxCounts(all);
+  const needle = q.trim().toLowerCase();
+  const shown = all.filter((m) => {
+    if (kind === "unread" && !(m.direction === "inbound" && !m.readAt)) return false;
+    if (!["all", "unread"].includes(kind) && m.channel !== kind) return false;
+    if (needle && ![m.who, m.subject, m.body, m.to].join(" ").toLowerCase().includes(needle)) return false;
+    return true;
+  });
+  return (
+    <div className="crm-inbox" data-crm-inbox>
+      <div className="crm-pipe inbox-kinds" data-inbox-kinds>
+        {INBOX_KINDS.map(([id, label]) => (
+          <button key={id} type="button" data-inbox-kind={id} className={`crm-pipe-st ${kind === id ? "on" : ""}`} onClick={() => setKind(id)}>
+            <b>{counts[id] ?? 0}</b><span>{label}</span>
+          </button>
+        ))}
+      </div>
+      <FilterBar q={q} onQ={setQ} placeholder="Search name, subject, words…" shown={shown.length} total={all.length}
+        onClear={() => { setQ(""); setKind("all"); }} filters={[]} />
+      {!shown.length && (
+        <div className="empty appt-empty">
+          <p>{all.length ? "Nothing matches." : "Nothing here yet. Open a lead and press Email, Text, Letter or Log a call."}</p>
+        </div>
+      )}
+      <ul className="lm-list inbox-list-crm">
+        {shown.map((m) => <LeadMessageRow key={m.id} m={m} showWho onOpen={onOpen} />)}
+      </ul>
     </div>
   );
 }
@@ -39441,7 +39802,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
   // 105. A call-center seat only exists on an account that books homeowners;
   // the server refuses it anywhere else.
   const roles = Object.entries(ROLES).filter(([k]) =>
-    k === "callcenter" ? (takesAppointments(accountKind) || k === existing?.role)
+    CRM_ONLY_ROLES.includes(k) ? (takesAppointments(accountKind) || k === existing?.role)
     : !ALWAYS_SCOPED_ROLES.includes(k)
     || k === existing?.role
     || (offered.includes(k) && properties.length > 0));
@@ -39504,6 +39865,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
                   {k === "owner" && tt("Only the buildings you choose — can request work, sees no costs")}
                   {k === "contractor" && tt("Own availability, trades, docs, job responses")}
                   {k === "callcenter" && tt("Books homeowner appointments on calls, and nothing else")}
+                  {k === "sales" && tt("Runs the estimates booked for them and follows up their own leads, and nothing else")}
                 </span>
               </button>
             ))}
@@ -54945,6 +55307,43 @@ button.job-insp:hover{border-color:#2f5577}
 .lead-notes p{margin:0;white-space:pre-wrap;font-size:14px}
 .lead-appts{display:flex;flex-direction:column;gap:8px}
 .lead-appts-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+/* 109. Contacting a lead, and the CRM Inbox. */
+.lead-tabs{margin:12px 0 14px}
+.lead-contact{display:flex;flex-direction:column;gap:12px}
+.lc-consent-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.lc-consent{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--paper)}
+.lc-q{margin:0 0 12px}
+.lc-ask{margin:0 0 6px;font-size:14px;font-style:italic;color:var(--ink)}
+.lc-yn{margin:0}
+.lc-btns{display:flex;flex-wrap:wrap;gap:8px}
+.lc-btn{display:inline-flex;align-items:center;gap:6px;min-height:44px}
+.lc-btn.on{border-color:var(--brand);color:var(--brand)}
+.lc-btn:disabled{opacity:.5;cursor:not-allowed}
+.lc-blocked{margin:0;padding-left:18px;font-size:13px;color:var(--ink-soft)}
+.lc-form{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);display:flex;flex-direction:column;gap:10px}
+.lc-form .seg-tabs{margin:0}
+.lc-tel{display:inline-flex;align-items:center;gap:6px;width:fit-content}
+a.btn-solid.is-disabled{opacity:.5;pointer-events:none}
+.lm-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.lm-row{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+.lm-row.unread{border-color:var(--amber);box-shadow:inset 3px 0 0 var(--amber)}
+.lm-row.inbound{background:var(--paper)}
+.lm-open{display:flex;gap:10px;align-items:flex-start;flex:1 1 auto;min-width:0;padding:12px 14px;background:none;border:0;text-align:left;color:inherit;font:inherit;cursor:default}
+button.lm-open{cursor:pointer}
+.lm-ico{flex:none;width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--paper);color:var(--ink-soft)}
+.lm-ico.in{background:var(--brand);color:#fff}
+.lm-main{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1 1 auto}
+.lm-top{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 10px}
+.lm-st{font-size:12px;font-weight:700;color:var(--ink-soft)}
+.lm-st.unread{color:var(--amber)}
+.lm-when{font-size:12px;color:var(--ink-soft);margin-left:auto}
+.lm-subject{font-weight:700;font-size:14px}
+.lm-body{font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.lm-foot{font-size:12px;color:var(--ink-soft)}
+.lm-mailed{flex:none;margin:10px 10px 0 0;min-height:36px}
+.appt-self-rep{display:block;margin-top:6px;font-weight:700}
+.inbox-kinds{flex-wrap:wrap}
+@media (max-width:560px){.lm-when{margin-left:0;width:100%}.lm-row{flex-wrap:wrap}.lm-mailed{margin:0 12px 12px 54px}}
 .lead-form{display:flex;flex-direction:column;gap:12px}
 
 `;

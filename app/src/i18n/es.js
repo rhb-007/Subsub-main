@@ -1262,4 +1262,5 @@ export default {
   "Get paid {amount}*": "Gane {amount}*",
   "Add a GC": "Agregar un GC",
   "Books homeowner appointments on calls, and nothing else": "Agenda citas con propietarios por teléfono, y nada más",
+  "Runs the estimates booked for them and follows up their own leads, and nothing else": "Hace las visitas de presupuesto agendadas a su nombre y da seguimiento a sus propios clientes potenciales, y nada más",
 };
