@@ -382,6 +382,11 @@ export const api = {
   // Move-in and move-out unit inspections. Every one of these resolves the
   // inspection through one check on the server -- the account AND the seat's
   // property scope -- so there is nothing to narrow here.
+  // 105. Sales appointments booked by the call center, before a job.
+  listAppointments: () => request("/appointments"),
+  createAppointment: (body) => request("/appointments", { method: "POST", body: JSON.stringify(body) }),
+  patchAppointment: (id, body) => request(`/appointments/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+
   listInspections: () => request("/inspections"),
   createInspection: (body) => request("/inspections", { method: "POST", body: JSON.stringify(body) }),
   getInspection: (id) => request(`/inspections/${id}`),

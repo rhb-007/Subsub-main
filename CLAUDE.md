@@ -16785,6 +16785,113 @@ refactor.
   HTTPS* for the zone is a belt-and-braces setting on top of this, not needed
   for it.
 
+- **A CALL-CENTER SEAT BOOKS HOMEOWNERS FOR ESTIMATES, AND AN APPOINTMENT IS
+  NOT A JOB UNTIL THE OFFICE SAYS IT SOLD.** Asked for as a new admin user type
+  for call-center users who add homeowner appointments on inbound and outbound
+  calls, before anything is closed (that happens on site, by the sales
+  manager), walking a Q&A that starts from the service: roof, siding, window
+  or gutter replacement, or several. Migration 105 (`sales_appointments`),
+  `app/shared/salesappt.js`.
+
+  **The seat is role `callcenter`, and it is restricted the way a guest seat
+  is.** `CALLCENTER_ALLOWED` is an allowlist in the Worker beside
+  `OWNER_ALLOWED` and `TENANT_ALLOWED`: the appointment routes, its own
+  account read, its own user row and profile picture, and nothing else. So a
+  new route refuses it until somebody decides otherwise. No jobs, no roster,
+  no buildings, no money. `GET /api/account-users` gives it its own row only,
+  the tenant rule, because that row is how the app knows which seat it is in;
+  without it the seat fell back to the contractor portal. `memberships.role`
+  has no CHECK, so the role needed no migration. In the app it is
+  `ROLES.callcenter` with `appointments` and `account`, and it lands on
+  Appointments.
+
+  **Only accounts that sell to homeowners have it** (`APPOINTMENT_KINDS`:
+  general contractor and subcontractor). A property manager hires for its own
+  buildings and has no homeowner to call, so the role is refused there
+  (`no_appointments_for_this_account`) on the add-user and role-change
+  routes, and the user form does not offer it. Admins and project managers on
+  those accounts also get the Appointments screen.
+
+  **The script is data in the shared module**, read by the route, the screen
+  and the tests. Seven steps:
+  1. The call: inbound or outbound, and how they heard of us.
+  2. The services, any of the four.
+  3. Each service's questions. Some are required: for a roof, the material,
+     age, leaks and stories; for windows, how many and the frame.
+  4. The home and the homeowner: owns the home (a renter is flagged), the
+     timeline, name, mobile, email and address.
+  5. The second decision maker: alone, or a named person with their
+     relationship and whether they will be at the appointment. Both decision
+     makers present is the biggest predictor of a sale, so it is asked
+     whenever there is somebody.
+  6. The time and the sales manager, with that manager's other appointments
+     that day shown and an overlap named.
+  7. A review.
+
+  **Next names what it is waiting for**, and a booking is checked again on the
+  server (`validAppointment`). Anything required left blank is refused as
+  `incomplete`, naming the first one. A required answer is a fact the sales
+  manager needs before driving out; everything else is nice to know and never
+  blocks a booking, because a script that cannot book without an answer the
+  homeowner does not have loses the appointment.
+
+  **A rep is never double-booked silently.** An overlapping open appointment
+  is refused (`rep_double_booked`) unless the booker ticks *Book anyway*,
+  because a sales manager can sometimes run two back to back. The reps offered
+  are the account's admins and project managers, never a call-center seat.
+
+  **The outcome is the sales side's.** A call-center seat may book,
+  reschedule, confirm and cancel (`CALLCENTER_STATUSES`). Ran-no-decision,
+  sold, not sold and no-show are the office's, and once an outcome is
+  recorded the call center can no longer change it (`outcome_recorded`). An
+  appointment past its time with no outcome is called out at the top of the
+  list for the office.
+
+  **Sold becomes a job through the ordinary job form, once.**
+  - *Sold, create the job* opens the job form filled in from the call
+    (`jobSeedFromAppointment`): the trades from the services, the homeowner
+    as the client, the address, and the answers in the scope. The office then
+    assigns a subcontractor the usual way.
+  - `POST /api/jobs` takes `fromAppointment` (admin and pm only), checks it
+    before anything is written, and links it after. The appointment reads
+    sold and points at the job, guarded on `job_id IS NULL`, so a second
+    press is refused (`appointment_already_a_job`) and makes no second job.
+  - A canceled, lost or no-show appointment is refused (`appointment_not_sold`).
+  - An appointment that is a job can no longer be edited.
+
+  **The homeowner gets a confirmation** (`appointment_booked`, on the
+  console's Notifications screen like every other email), in the account's
+  name and signed by its team, because the homeowner called *them*. It asks
+  for every decision maker to be there when there is a second person. Only
+  when an address was given and the box is left ticked.
+
+  `test:appointments` (55) and `test:appointmentsui` (36). The mutations fire:
+  - the call center allowed an outcome: 3 server, 1 browser;
+  - converting twice: 2;
+  - the clash check: 1;
+  - the outcome lock: 2;
+  - the job form not sending the appointment: 1;
+  - the account-kind gate: 1;
+  - Next not waiting: 3.
+
+  The convert route's own role check is covered by the jobs route refusing
+  the seat outright, so its mutation changes no outcome; it stays as defense
+  for the owner and tenant seats that route also takes.
+
+  One trap hit on the way, and it is this file's own. The home-screen line
+  first read `can("appointments")`, which reads `account`, which is declared
+  further down the same component. The page blanked behind *Cannot access
+  before initialization* while lint stayed green: the temporal-dead-zone class
+  `no-use-before-define` would catch, which is still open. It reads the role
+  now.
+
+  **Still open:**
+  - No calendar view of appointments, only the list.
+  - Appointment reminders to the homeowner before the visit.
+  - Recording a call itself (recording, dialing).
+  - A route for an appointment the homeowner wants moved by text.
+  - **Pasting 105 is required.** Until then the screen names the file.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

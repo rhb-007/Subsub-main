@@ -341,7 +341,9 @@ WITH spec(j) AS (SELECT
   -- 103. A message from the other side deleted for one person only.
   ',["m103_message_hides","col","message_hides",["message_id","user_id","hidden_at"]]' ||
   -- 104. Staff's settings for each email SubSub sends: off, or new words.
-  ',["m104_notice_settings","col","notice_settings",["kind","enabled","subject","body","updated_at","updated_by"]]') ||
+  ',["m104_notice_settings","col","notice_settings",["kind","enabled","subject","body","updated_at","updated_by"]]' ||
+  -- 105. Sales appointments booked by the call center, before a job.
+  ',["m105_sales_appointments","col","sales_appointments",["id","account_id","status","direction","services","details","home","first_name","last_name","phone","street","city","state","zip","second","date","time","minutes","rep_user_id","job_id","created_by","status_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

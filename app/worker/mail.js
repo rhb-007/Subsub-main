@@ -487,6 +487,27 @@ ${NOREPLY}`;
   return { subject, text, html: linkAlso(textToHtml(text, null), link) };
 }
 
+// A homeowner's estimate, booked by the account's call center. In the
+// account's voice, because the homeowner called THEM; SubSub is not a party
+// they have heard of. It names what was booked and who is coming, and asks
+// for every decision maker to be there, which is why the call asked.
+function appointmentBookedEmailRaw({ firstName, account, services = [], when, address, repName, second = false }) {
+  const what = services.length ? services.join(", ").toLowerCase() : "your project";
+  const text = `Hi ${firstName || "there"},
+
+Thanks for calling ${account?.name || "us"}. Your free estimate for ${what} is booked:
+
+${when}
+${address || ""}
+
+${repName ? `${repName} will come out to see the home` : "One of our team will come out to see the home"} and go over options and pricing with you.${second ? " Please make sure everyone who will decide on the project can be there." : ""}
+
+Need to change the time? Just call us back.
+
+The ${account?.name || "team"} team`;
+  return { subject: `Your estimate is booked: ${when}`, text, html: textToHtml(text, null) };
+}
+
 // TOLD WHEN A COMPANY ON YOUR ROSTER ADDS TO ITS COMPLIANCE PACK: a
 // certificate, a bond, a W-9, a license number, or your agreement signed.
 // A signed agreement is not in force until this account countersigns it,
@@ -1627,6 +1648,7 @@ function notice(key, fn) {
   };
 }
 export const rosterJoinedEmail = notice("roster_joined", rosterJoinedEmailRaw);
+export const appointmentBookedEmail = notice("appointment_booked", appointmentBookedEmailRaw);
 export const applicationReceivedEmail = notice("application_received", applicationReceivedEmailRaw);
 export const applicationDecidedEmail = notice("application_decided", applicationDecidedEmailRaw);
 export const subInviteEmail = notice("sub_invite", subInviteEmailRaw);

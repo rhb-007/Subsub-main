@@ -40,6 +40,8 @@ import {
   // Aliased: Map is the JavaScript built-in, which this file uses constantly.
   Map as MapIcon,
   Crown,
+  PhoneIncoming,
+  PhoneOutgoing,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -54,6 +56,9 @@ import { counterpartLabel, MAX_PHOTOS as MSG_MAX_PHOTOS,
   looksLikeTime, jobSeedFrom } from "../shared/messaging.js";
 import { TENANT_PROBLEMS, tenantGroups, tenantWhere } from "../shared/tenantproblems.js";
 import { REPORT_DRAFT_REFUSALS } from "../shared/reportdraft.js";
+import { SERVICES as APPT_SERVICES, SERVICE_QUESTIONS, HOME_QUESTIONS, SOURCES as APPT_SOURCES,
+  STATUSES as APPT_STATUSES, CALLCENTER_STATUSES, DEFAULT_MINUTES as APPT_MINUTES, takesAppointments,
+  validAppointment, repClashes, jobSeedFromAppointment, serviceLabel, apptWhenText } from "../shared/salesappt.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -672,7 +677,7 @@ function hydrateError(broke) {
 }
 
 const ROLES = {
-  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account", "inbox"] },
+  admin: { label: "Admin", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "appointments", "calendar", "jobs", "uniforms", "account", "inbox"] },
   // The default label. "Property manager" rather than "project manager",
   // because three of the four account kinds are property businesses and
   // project-manager was general-contractor language left on the role
@@ -695,7 +700,7 @@ const ROLES = {
   // only an account with buildings has any, and every tenant route is
   // admin/pm. A scoped manager sees the tenants of their own buildings,
   // because the server narrows the list.
-  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "calendar", "jobs", "uniforms", "account", "inbox"] },
+  pm: { label: "Property manager", can: ["dashboard", "contractors", "properties", "inspections", "tenants", "appointments", "calendar", "jobs", "uniforms", "account", "inbox"] },
   // A building owner is a guest in somebody else's account, scoped to the
   // buildings they were granted. No contractor directory -- they see who is
   // coming to their own jobs, not who the account works with -- and no
@@ -712,6 +717,12 @@ const ROLES = {
   // account's, which is why "tenant" is the only view they carry.
   tenant: { label: "Tenant", can: ["tenant", "account", "inbox"] },
   contractor: { label: "Contractor", can: ["portal", "account", "inbox"] },
+  // 105. Books homeowners for estimates on inbound and outbound calls, and
+  // nothing else: no jobs, no roster, no buildings, no money. The server holds
+  // the same line with an allowlist (CALLCENTER_ALLOWED), so a hidden tab is
+  // not the only thing keeping them out. Only on an account that sells to
+  // homeowners -- see takesAppointments.
+  callcenter: { label: "Call center", can: ["appointments", "account"] },
 };
 // What a seat is called inside a given kind of account. The permissions are
 // ROLES[role].can and nothing here touches them -- this is the word on the
@@ -2816,6 +2827,7 @@ export default function SubSub() {
   const can = (view) => {
     if (!ROLES[role].can.includes(view)) return false;
     if (view === "properties" || view === "inspections" || view === "tenants") return hasProperties(account);
+    if (view === "appointments") return takesAppointments(kindOf(account));
     return true;
   };
 
@@ -2848,9 +2860,13 @@ export default function SubSub() {
   // no dashboard at all -- the role cannot see one -- and theirs is the job
   // list. Sending everybody to "dashboard" would land a contractor on a blank
   // screen, since the tab renders behind can("dashboard").
-  const homeTab = can("dashboard") ? "dashboard" : can("tenant") ? "tenant" : "portal";
+  // The role, not can(): can("appointments") reads `account`, which is not
+  // declared until below, and a const read before it exists is a blank page.
+  const homeTab = can("dashboard") ? "dashboard" : can("tenant") ? "tenant"
+    : role === "callcenter" ? "appointments" : "portal";
   const homeTitle = homeTab === "dashboard" ? "Back to the dashboard"
     : homeTab === "tenant" ? "Back to your reports"
+    : homeTab === "appointments" ? "Back to appointments"
     : "Back to your dashboard";
   const goHome = () => {
     // Anything open belongs to the screen being left: a contractor's detail
@@ -6136,8 +6152,10 @@ export default function SubSub() {
   // current tab unreachable. Fall back rather than render an empty page.
   useEffect(() => {
     if (loggedIn && tab === "properties" && !hasProperties(account)) setTab("dashboard");
+    // 105. A call-center seat has two screens, and "dashboard" is not one.
+    if (loggedIn && role === "callcenter" && tab !== "appointments" && tab !== "account") setTab("appointments");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [account.id, account.kind, loggedIn, tab]);
+  }, [account.id, account.kind, loggedIn, tab, role]);
 
   if (!loggedIn && chooser) {
     return (
@@ -7101,6 +7119,11 @@ export default function SubSub() {
           {can("tenants") && (
             <button className={tab === "tenants" ? "on" : ""} onClick={() => setTab("tenants")}>
               Tenants
+            </button>
+          )}
+          {can("appointments") && (
+            <button className={tab === "appointments" ? "on" : ""} data-nav="appointments" onClick={() => setTab("appointments")}>
+              Appointments
             </button>
           )}
           {can("uniforms") && (
@@ -8785,6 +8808,15 @@ export default function SubSub() {
           onOpenJob={can("jobs") ? (id) => openJob(id) : null} />
       )}
 
+      {tab === "appointments" && can("appointments") && (
+        <AppointmentsView role={role}
+          onOpenJob={can("jobs") ? (id) => openJob(id) : null}
+          onConvert={can("jobs") ? (a, after) => {
+            const seed = jobSeedFromAppointment(a);
+            setJobForm({ preset: seed, fromAppointment: a.id, afterAppointment: after });
+          } : null} />
+      )}
+
       {tab === "tenants" && can("tenants") && (
         <main className="ss-main">
           <PageHead title="Tenants"
@@ -8999,8 +9031,11 @@ export default function SubSub() {
           preset={jobForm.preset || null}
           onSubmit={async (job) => {
             const ft = jobForm.fromThread;
-            const id = await createJob(ft ? { ...job, fromThread: ft } : job, jobForm.forSub, { stay: !!ft });
+            const fa = jobForm.fromAppointment;
+            const body = ft ? { ...job, fromThread: ft } : fa ? { ...job, fromAppointment: fa } : job;
+            const id = await createJob(body, jobForm.forSub, { stay: !!ft });
             if (ft) { refreshInbox(); setThreadNonce((n) => n + 1); }
+            if (fa && jobForm.afterAppointment) jobForm.afterAppointment();
             return id;
           }}
           onCancel={() => setJobForm(null)} /></Modal>}
@@ -29556,6 +29591,578 @@ function MaterialSource({ value, onChange }) {
 
 // ---- Create job ----------------------------------------------------------
 // The job holds every project fact. Work orders are derived from it on assign.
+// ---------------------------------------------------------------------------
+// 105. SALES APPOINTMENTS: the call center's script and the office's list.
+//
+// A call-center seat books a homeowner for an estimate on an inbound or an
+// outbound call. Nothing here is a job: the sale is closed on site by the
+// sales manager, the office records the outcome, and a sold appointment is
+// turned into a job through the ordinary job form, prefilled. The script, the
+// rules for a complete booking and the outcome states are shared/salesappt.js,
+// the same module the route checks with.
+// ---------------------------------------------------------------------------
+
+const APPT_STEPS = [
+  { id: "call", label: "Call" },
+  { id: "services", label: "Services" },
+  { id: "details", label: "Details" },
+  { id: "homeowner", label: "Homeowner" },
+  { id: "decider", label: "Decision maker" },
+  { id: "schedule", label: "Schedule" },
+  { id: "review", label: "Review" },
+];
+
+// Which step a missing answer is on, so Next can say what it is waiting for.
+const apptStepOf = (field) => {
+  const [head] = String(field).split(".");
+  if (head === "direction") return "call";
+  if (head === "services") return "services";
+  if (APPT_SERVICES.some((s) => s.id === head)) return "details";
+  if (head === "home" || head === "homeowner" || head === "address") return "homeowner";
+  if (head === "second") return "decider";
+  return "schedule";
+};
+const APPT_FIELD_WORDS = {
+  "homeowner.firstName": "their first name", "homeowner.lastName": "their last name",
+  "homeowner.phone": "a 10-digit phone number", "address.street": "the street address",
+  "address.city": "the city", "address.state": "the state", "address.zip": "a 5-digit ZIP",
+  "second.firstName": "the second person's first name", "second.relationship": "how they are related",
+  "second.attends": "whether they will be at the appointment", date: "a date", time: "a time",
+};
+function apptFieldWords(field) {
+  if (APPT_FIELD_WORDS[field]) return APPT_FIELD_WORDS[field];
+  const [head, q] = String(field).split(".");
+  const qs = head === "home" ? HOME_QUESTIONS : SERVICE_QUESTIONS[head] || [];
+  const found = qs.find((x) => x.id === q);
+  return found ? `${head === "home" ? "" : serviceLabel(head) + ": "}${found.label.replace(/\?$/, "").toLowerCase()}` : field;
+}
+const apptTime12 = (t) => {
+  if (!t) return "";
+  const [h, m] = t.split(":").map(Number);
+  return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+};
+const apptRefusalText = (e) => {
+  const code = e?.body?.error;
+  if (code === "migration_needed") return `Appointments can't be saved until migration ${e.body.migration || "105"} is run.`;
+  if (code === "rep_double_booked") return "That sales manager already has an appointment then. Pick another time, or tick Book anyway.";
+  if (code === "incomplete") return `Still needed: ${apptFieldWords(e.body.field)}.`;
+  if (code === "bad_rep") return "That person can't take appointments here.";
+  if (code === "sales_only") return "Only the office can record how the appointment went.";
+  if (code === "outcome_recorded") return "This appointment already has an outcome, so only the office can change it.";
+  if (code === "already_a_job") return "This appointment is already a job.";
+  if (code === "forbidden") return "You don't have access to do that.";
+  if (!e?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
+  return `That didn't save (${code || e.status}). Try again.`;
+};
+
+function ApptQuestion({ q, value, onChange }) {
+  if (q.type === "choice" || q.type === "multi") {
+    const multi = q.type === "multi";
+    const on = (o) => multi ? (value || []).includes(o) : value === o;
+    const press = (o) => {
+      if (!multi) return onChange(value === o ? null : o);
+      const cur = value || [];
+      onChange(cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o]);
+    };
+    return (
+      <div className="appt-q" data-q={q.id}>
+        <div className="appt-q-label">{q.label}{q.required ? <span className="appt-req" aria-label="required"> *</span> : null}
+          {multi && <span className="fld-note"> pick any</span>}</div>
+        <div className="chips">
+          {q.options.map((o) => (
+            <button type="button" key={o} className={`chip ${on(o) ? "on" : ""}`} aria-pressed={on(o)} onClick={() => press(o)}>{o}</button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <label className="fld appt-q" data-q={q.id}>{q.label}{q.required ? <span className="appt-req"> *</span> : null}
+      <input type={q.type === "number" ? "number" : "text"} inputMode={q.type === "number" ? "numeric" : undefined}
+        value={value ?? ""} onChange={(e) => onChange(e.target.value === "" ? null
+          : q.type === "number" ? Number(e.target.value) : e.target.value)} />
+    </label>
+  );
+}
+
+const apptBlank = () => ({
+  direction: "", source: "", services: [], details: {}, home: {},
+  homeowner: { firstName: "", lastName: "", phone: "", email: "" },
+  address: { street: "", city: "", state: "", zip: "" },
+  decidesAlone: null,
+  second: { firstName: "", lastName: "", relationship: "", phone: "", email: "", attends: null },
+  date: "", time: "", minutes: APPT_MINUTES, repId: "", notes: "", emailHomeowner: true,
+});
+
+function CallFlow({ existing = null, reps = [], appointments = [], onSaved, onCancel }) {
+  const [f, setF] = useState(() => existing ? {
+    ...apptBlank(), ...existing,
+    source: existing.source || "", repId: existing.repId || "", notes: existing.notes || "",
+    decidesAlone: !existing.second,
+    second: existing.second ? { ...apptBlank().second, ...existing.second } : apptBlank().second,
+  } : apptBlank());
+  const [step, setStep] = useState(existing ? "review" : "call");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [allowClash, setAllowClash] = useState(false);
+  const set = (patch) => setF((x) => ({ ...x, ...patch }));
+  const setIn = (key, patch) => setF((x) => ({ ...x, [key]: { ...x[key], ...patch } }));
+
+  const body = () => ({
+    direction: f.direction, source: f.source || null, services: f.services,
+    details: Object.fromEntries(f.services.map((s) => [s, f.details[s] || {}])),
+    home: f.home, homeowner: f.homeowner, address: f.address,
+    second: f.decidesAlone === false ? f.second : null,
+    date: f.date, time: f.time, minutes: Number(f.minutes) || APPT_MINUTES, repId: f.repId || null,
+    notes: f.notes || null,
+  });
+  const check = validAppointment(body());
+  const missing = check.ok ? [] : (check.missing || [check.field]);
+  const missingOn = (id) => missing.filter((m) => apptStepOf(m) === id)
+    .concat(id === "decider" && f.decidesAlone === null ? ["decider"] : []);
+  const idx = APPT_STEPS.findIndex((s) => s.id === step);
+  const here = missingOn(step);
+  const clashes = repClashes(appointments, { repId: f.repId, date: f.date, time: f.time,
+    minutes: Number(f.minutes) || APPT_MINUTES, exceptId: existing?.id || null });
+  const repName = (id) => reps.find((r) => r.id === id)?.name || "";
+  const repDay = f.repId && f.date ? appointments.filter((a) => a.repId === f.repId && a.date === f.date
+    && a.id !== existing?.id && APPT_STATUSES[a.status]?.open).sort((a, b) => a.time.localeCompare(b.time)) : [];
+
+  const save = async () => {
+    setSaving(true); setErr("");
+    try {
+      const payload = { ...body(), allowClash: allowClash || undefined };
+      const res = existing
+        ? await api.patchAppointment(existing.id, payload)
+        : await api.createAppointment({ ...payload, emailHomeowner: f.emailHomeowner });
+      onSaved(res.appointment, res.confirmation || null);
+    } catch (e) {
+      setErr(apptRefusalText(e));
+      if (e?.body?.error === "incomplete") setStep(apptStepOf(e.body.field));
+      if (e?.body?.error === "rep_double_booked") setStep("schedule");
+    } finally { setSaving(false); }
+  };
+
+  const toggleService = (id) => set({ services: f.services.includes(id) ? f.services.filter((x) => x !== id) : [...f.services, id] });
+
+  return (
+    <div className="appt-flow" data-step={step}>
+      <h3 className="form-title">{existing ? "Edit appointment" : "New appointment"}</h3>
+      <ol className="appt-steps" aria-label="Steps">
+        {APPT_STEPS.map((s, i) => (
+          <li key={s.id} className={`${s.id === step ? "on" : ""} ${i < idx && !missingOn(s.id).length ? "done" : ""}`}>
+            <button type="button" onClick={() => setStep(s.id)} aria-current={s.id === step ? "step" : undefined}>
+              <span className="appt-step-n">{i + 1}</span><span className="appt-step-l">{s.label}</span>
+            </button>
+          </li>
+        ))}
+      </ol>
+
+      {step === "call" && (
+        <div className="appt-pane">
+          <div className="appt-q">
+            <div className="appt-q-label">Is this an inbound or an outbound call?<span className="appt-req"> *</span></div>
+            <div className="appt-big-choice">
+              {[["inbound", "Inbound", "They called us", PhoneIncoming], ["outbound", "Outbound", "We called them", PhoneOutgoing]].map(([v, l, d, Icon]) => (
+                <button type="button" key={v} data-direction={v} className={`appt-big ${f.direction === v ? "on" : ""}`}
+                  aria-pressed={f.direction === v} onClick={() => set({ direction: v })}>
+                  <Icon size={22} /><b>{l}</b><span>{d}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          <label className="fld">How did they hear about us?
+            <select value={f.source} onChange={(e) => set({ source: e.target.value })}>
+              <option value="">Not asked</option>
+              {APPT_SOURCES.map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {step === "services" && (
+        <div className="appt-pane">
+          <div className="appt-q-label">What home service are they considering?<span className="appt-req"> *</span>
+            <span className="fld-note"> pick all that apply</span></div>
+          <div className="appt-big-choice appt-services">
+            {APPT_SERVICES.map((s) => (
+              <button type="button" key={s.id} data-service={s.id} className={`appt-big ${f.services.includes(s.id) ? "on" : ""}`}
+                aria-pressed={f.services.includes(s.id)} onClick={() => toggleService(s.id)}>
+                {f.services.includes(s.id) ? <CheckCircle2 size={22} /> : <Circle size={22} />}<b>{s.label}</b>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {step === "details" && (
+        <div className="appt-pane">
+          {!f.services.length && <p className="note">Pick a service first.</p>}
+          {f.services.map((s) => (
+            <section key={s} className="appt-svc" data-svc={s}>
+              <h4>{serviceLabel(s)}</h4>
+              {SERVICE_QUESTIONS[s].map((q) => (
+                <ApptQuestion key={q.id} q={q} value={f.details[s]?.[q.id]}
+                  onChange={(v) => setF((x) => ({ ...x, details: { ...x.details, [s]: { ...(x.details[s] || {}), [q.id]: v } } }))} />
+              ))}
+            </section>
+          ))}
+        </div>
+      )}
+
+      {step === "homeowner" && (
+        <div className="appt-pane">
+          <h4>About the home</h4>
+          {HOME_QUESTIONS.map((q) => (
+            <ApptQuestion key={q.id} q={q} value={f.home[q.id]} onChange={(v) => setIn("home", { [q.id]: v })} />
+          ))}
+          {f.home.owns === "No" && (
+            <p className="appt-warn" role="note">They don't own the home. The owner has to be part of the appointment, so book it with the owner instead.</p>
+          )}
+          <h4>The homeowner</h4>
+          <div className="appt-grid">
+            <label className="fld">First name<span className="appt-req"> *</span>
+              <input value={f.homeowner.firstName} onChange={(e) => setIn("homeowner", { firstName: e.target.value })} autoComplete="off" /></label>
+            <label className="fld">Last name<span className="appt-req"> *</span>
+              <input value={f.homeowner.lastName} onChange={(e) => setIn("homeowner", { lastName: e.target.value })} autoComplete="off" /></label>
+            <label className="fld">Mobile<span className="appt-req"> *</span>
+              <input inputMode="tel" value={formatPhone(f.homeowner.phone)} onChange={(e) => setIn("homeowner", { phone: e.target.value })} /></label>
+            <label className="fld">Email <span className="fld-note">for the confirmation</span>
+              <input type="email" value={f.homeowner.email} onChange={(e) => setIn("homeowner", { email: e.target.value })} /></label>
+          </div>
+          <h4>Where the work is</h4>
+          <div className="appt-grid">
+            <label className="fld appt-wide">Street address<span className="appt-req"> *</span>
+              <input value={f.address.street} onChange={(e) => setIn("address", { street: e.target.value })} /></label>
+            <label className="fld">City<span className="appt-req"> *</span>
+              <input value={f.address.city} onChange={(e) => setIn("address", { city: e.target.value })} /></label>
+            <StateSelect value={f.address.state} onChange={(v) => setIn("address", { state: v })} />
+            <label className="fld">ZIP<span className="appt-req"> *</span>
+              <input inputMode="numeric" value={f.address.zip} onChange={(e) => setIn("address", { zip: e.target.value })} /></label>
+          </div>
+        </div>
+      )}
+
+      {step === "decider" && (
+        <div className="appt-pane">
+          <div className="appt-q-label">Does anybody else decide on this with them, like a spouse or partner?<span className="appt-req"> *</span></div>
+          <div className="appt-big-choice">
+            <button type="button" data-decider="alone" className={`appt-big ${f.decidesAlone === true ? "on" : ""}`}
+              aria-pressed={f.decidesAlone === true} onClick={() => set({ decidesAlone: true })}>
+              <b>They decide alone</b></button>
+            <button type="button" data-decider="second" className={`appt-big ${f.decidesAlone === false ? "on" : ""}`}
+              aria-pressed={f.decidesAlone === false} onClick={() => set({ decidesAlone: false })}>
+              <b>Somebody else decides too</b></button>
+          </div>
+          {f.decidesAlone === false && (<>
+            <div className="appt-grid">
+              <label className="fld">First name<span className="appt-req"> *</span>
+                <input value={f.second.firstName} onChange={(e) => setIn("second", { firstName: e.target.value })} /></label>
+              <label className="fld">Last name
+                <input value={f.second.lastName} onChange={(e) => setIn("second", { lastName: e.target.value })} /></label>
+              <label className="fld">Relationship<span className="appt-req"> *</span>
+                <select value={f.second.relationship} onChange={(e) => setIn("second", { relationship: e.target.value })}>
+                  <option value="">Choose…</option>
+                  {["Spouse", "Partner", "Co-owner", "Parent", "Adult child", "Other"].map((r) => <option key={r}>{r}</option>)}
+                </select></label>
+              <label className="fld">Mobile
+                <input inputMode="tel" value={formatPhone(f.second.phone)} onChange={(e) => setIn("second", { phone: e.target.value })} /></label>
+              <label className="fld appt-wide">Email
+                <input type="email" value={f.second.email} onChange={(e) => setIn("second", { email: e.target.value })} /></label>
+            </div>
+            <div className="appt-q">
+              <div className="appt-q-label">Will they be at the appointment?<span className="appt-req"> *</span></div>
+              <div className="chips">
+                {[[true, "Yes, both will be there"], [false, "No"]].map(([v, l]) => (
+                  <button type="button" key={l} className={`chip ${f.second.attends === v ? "on" : ""}`} aria-pressed={f.second.attends === v}
+                    data-attends={String(v)} onClick={() => setIn("second", { attends: v })}>{l}</button>
+                ))}
+              </div>
+              {f.second.attends === false && (
+                <p className="appt-warn" role="note">Every decision maker should be there. If you can, find a time when both can be home.</p>
+              )}
+            </div>
+          </>)}
+        </div>
+      )}
+
+      {step === "schedule" && (
+        <div className="appt-pane">
+          <div className="appt-grid">
+            <label className="fld">Date<span className="appt-req"> *</span>
+              <input type="date" min={dayKey()} value={f.date} onChange={(e) => set({ date: e.target.value })} /></label>
+            <label className="fld">Time<span className="appt-req"> *</span>
+              <input type="time" step="900" value={f.time} onChange={(e) => set({ time: e.target.value })} /></label>
+            <label className="fld">Length
+              <select value={f.minutes} onChange={(e) => set({ minutes: Number(e.target.value) })}>
+                {[60, 90, 120, 150, 180].map((m) => <option key={m} value={m}>{m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m / 60}h`}</option>)}
+              </select></label>
+            <label className="fld">Sales manager <span className="fld-note">or assign later</span>
+              <select value={f.repId} onChange={(e) => set({ repId: e.target.value })} data-rep>
+                <option value="">Assign later</option>
+                {reps.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select></label>
+          </div>
+          {f.repId && f.date && (
+            <div className="appt-day" data-rep-day>
+              <b>{repName(f.repId)} on {apptWhenText(f.date)}</b>
+              {repDay.length ? (
+                <ul>{repDay.map((a) => (
+                  <li key={a.id} className={clashes.some((c) => c.id === a.id) ? "clash" : ""}>
+                    {apptTime12(a.time)} · {a.homeowner.firstName} {a.homeowner.lastName} · {a.address.city}
+                  </li>
+                ))}</ul>
+              ) : <p className="note">Nothing booked yet that day.</p>}
+            </div>
+          )}
+          {clashes.length > 0 && (
+            <label className="appt-warn appt-clash" data-clash>
+              <input type="checkbox" checked={allowClash} onChange={(e) => setAllowClash(e.target.checked)} />
+              {repName(f.repId)} already has an appointment then. Book anyway
+            </label>
+          )}
+          <label className="fld">Notes for the sales manager
+            <textarea rows={3} value={f.notes} onChange={(e) => set({ notes: e.target.value })}
+              placeholder="Gate code, dog in the yard, best number to call…" /></label>
+          {!existing && (
+            <label className="appt-check">
+              <input type="checkbox" checked={f.emailHomeowner} disabled={!f.homeowner.email}
+                onChange={(e) => set({ emailHomeowner: e.target.checked })} />
+              {f.homeowner.email ? `Email ${f.homeowner.email} a confirmation` : "No email given, so no confirmation is sent"}
+            </label>
+          )}
+        </div>
+      )}
+
+      {step === "review" && (
+        <div className="appt-pane appt-review" data-review>
+          <ApptSummary a={{ ...body(), second: f.decidesAlone === false ? f.second : null }} repName={repName(f.repId)} />
+          {missing.length > 0 && (
+            <p className="appt-warn" data-missing>Still needed before booking: {andList(missing.slice(0, 4).map(apptFieldWords))}
+              {missing.length > 4 ? ` and ${missing.length - 4} more` : ""}.</p>
+          )}
+        </div>
+      )}
+
+      {err && <p className="form-err" role="alert">{err}</p>}
+      <div className="form-actions appt-actions">
+        <button type="button" className="btn-ghost" onClick={idx === 0 || existing && step === "review" ? onCancel : () => setStep(APPT_STEPS[idx - 1].id)}>
+          {idx === 0 || existing && step === "review" ? "Cancel" : "Back"}</button>
+        {step !== "review" ? (<>
+          {here.length > 0 && <span className="appt-next-why" data-why>Still needed: {apptFieldWords(here[0] === "decider" ? "decider" : here[0]).replace(/^decider$/, "whether anybody else decides")}</span>}
+          <button type="button" className="btn-solid" data-next disabled={here.length > 0}
+            onClick={() => setStep(APPT_STEPS[idx + 1].id)}>Next</button>
+        </>) : (
+          <button type="button" className="btn-solid" data-book disabled={saving || missing.length > 0 || (clashes.length > 0 && !allowClash)}
+            onClick={save}>{saving ? "Saving…" : existing ? "Save changes" : "Book appointment"}</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ApptSummary({ a, repName }) {
+  const who = [a.homeowner?.firstName, a.homeowner?.lastName].filter(Boolean).join(" ");
+  return (
+    <div className="appt-sum">
+      <div className="appt-sum-when" data-when>{a.date ? apptWhenText(a.date, a.time) : "No time yet"}
+        {a.minutes ? <span> · {a.minutes} min</span> : null}{repName ? <span> · {repName}</span> : <span> · sales manager not assigned</span>}</div>
+      <dl>
+        <dt>Homeowner</dt><dd data-who>{who || "—"}{a.homeowner?.phone ? ` · ${formatPhone(a.homeowner.phone)}` : ""}
+          {a.homeowner?.email ? ` · ${a.homeowner.email}` : ""}</dd>
+        <dt>Address</dt><dd>{[a.address?.street, a.address?.city, [a.address?.state, a.address?.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ") || "—"}</dd>
+        <dt>Decides with</dt><dd data-second>{a.second
+          ? `${a.second.firstName} ${a.second.lastName || ""} (${a.second.relationship || "?"})${a.second.attends === true ? ", will be there" : a.second.attends === false ? ", will NOT be there" : ""}${a.second.phone ? ` · ${formatPhone(a.second.phone)}` : ""}`
+          : "Nobody, they decide alone"}</dd>
+        <dt>Call</dt><dd>{a.direction === "outbound" ? "Outbound" : a.direction === "inbound" ? "Inbound" : "—"}{a.source ? ` · ${a.source}` : ""}</dd>
+        {(a.services || []).map((s) => (
+          <React.Fragment key={s}>
+            <dt>{serviceLabel(s)}</dt>
+            <dd>{(SERVICE_QUESTIONS[s] || []).filter((q) => a.details?.[s]?.[q.id] != null)
+              .map((q) => `${q.label.replace(/\?$/, "")}: ${[].concat(a.details[s][q.id]).join(", ")}`).join(" · ") || "—"}</dd>
+          </React.Fragment>
+        ))}
+        <dt>The home</dt><dd>{HOME_QUESTIONS.filter((q) => a.home?.[q.id] != null)
+          .map((q) => `${q.label.replace(/\?$/, "")}: ${a.home[q.id]}`).join(" · ") || "—"}</dd>
+        {a.notes ? (<><dt>Notes</dt><dd>{a.notes}</dd></>) : null}
+      </dl>
+    </div>
+  );
+}
+
+function ApptStatusChip({ status }) {
+  return <span className={`tn-chip appt-st appt-st-${status}`} data-status={status}>{APPT_STATUSES[status]?.label || status}</span>;
+}
+
+function AppointmentsView({ role, onConvert, onOpenJob }) {
+  const sales = role === "admin" || role === "pm";
+  const [data, setData] = useState(null);
+  const [loadErr, setLoadErr] = useState("");
+  const [flow, setFlow] = useState(null);         // null | "new" | appointment
+  const [open, setOpen] = useState(null);         // an appointment id
+  const [flash, setFlash] = useState("");
+  const [q, setQ] = useState("");
+  const [when, setWhen] = useState("upcoming");
+  const [st, setSt] = useState("");
+  const [rep, setRep] = useState("");
+  const load = async () => {
+    try { setData(await api.listAppointments()); setLoadErr(""); }
+    catch (e) {
+      setLoadErr(e?.body?.error === "migration_needed"
+        ? `Appointments aren't set up on this database yet. Run migration ${e.body.migration || "105_sales_appointments"}.`
+        : "Couldn't load the appointments. Reload to try again.");
+    }
+  };
+  useEffect(() => { load(); }, []);
+  const list = data?.appointments || [];
+  const reps = data?.reps || [];
+  const today = dayKey();
+  const shown = list.filter((a) => {
+    if (when === "upcoming" && (a.date < today || !APPT_STATUSES[a.status]?.open)) return false;
+    if (when === "past" && a.date >= today) return false;
+    if (when === "outcome" && !(a.date < today && APPT_STATUSES[a.status]?.open)) return false;
+    if (st && a.status !== st) return false;
+    if (rep && (rep === "none" ? a.repId : a.repId !== rep)) return false;
+    if (q.trim()) {
+      const hay = [a.homeowner.firstName, a.homeowner.lastName, a.homeowner.phone, a.address.street, a.address.city,
+        a.address.zip, a.second?.firstName, ...a.services.map(serviceLabel)].join(" ").toLowerCase();
+      const needle = q.trim().toLowerCase();
+      const digitsOnly = needle.replace(/\D/g, "");
+      if (!hay.includes(needle) && !(digitsOnly.length >= 3 && a.homeowner.phone.includes(digitsOnly))) return false;
+    }
+    return true;
+  }).sort((a, b) => when === "upcoming" ? (a.date + a.time).localeCompare(b.date + b.time) : (b.date + b.time).localeCompare(a.date + a.time));
+  const needsOutcome = list.filter((a) => a.date < today && APPT_STATUSES[a.status]?.open).length;
+  const current = open && list.find((a) => a.id === open);
+  const upsert = (a) => setData((d) => ({ ...d, appointments: [a, ...(d?.appointments || []).filter((x) => x.id !== a.id)] }));
+
+  return (
+    <main className="ss-main appt-view">
+      <PageHead title="Appointments"
+        sub={sales ? "Homeowners booked for an estimate. Record how each one went, and turn a sale into a job."
+          : "Book homeowners for a free estimate on inbound and outbound calls."}>
+        <button className="btn-solid" data-new-appt onClick={() => setFlow("new")}><PhoneCall size={16} /> New appointment</button>
+      </PageHead>
+      {flash && <p className="appt-flash" role="status">{flash}</p>}
+      {loadErr && <p className="form-err" role="alert">{loadErr}</p>}
+      {sales && needsOutcome > 0 && when !== "outcome" && (
+        <button className="appt-needs" data-needs-outcome onClick={() => setWhen("outcome")}>
+          <ActDot /> {needsOutcome === 1 ? "1 appointment has gone by" : `${needsOutcome} appointments have gone by`} with no outcome recorded
+        </button>
+      )}
+      <FilterBar q={q} onQ={setQ} placeholder="Search name, phone, address…" shown={shown.length} total={list.length}
+        onClear={() => { setQ(""); setSt(""); setRep(""); setWhen("upcoming"); }}
+        filters={[
+          { id: "when", label: "When", noAll: true, value: when, onChange: setWhen,
+            options: [["upcoming", "Upcoming"], ["outcome", "Gone by, no outcome"], ["past", "Past"], ["all", "All"]] },
+          { id: "status", label: "Statuses", value: st, onChange: setSt, options: Object.entries(APPT_STATUSES).map(([k, v]) => [k, v.label]) },
+          { id: "rep", label: "Sales managers", value: rep, onChange: setRep,
+            options: [["none", "Not assigned"], ...reps.map((r) => [r.id, r.name])] },
+        ]} />
+      {data && !shown.length && (
+        <div className="empty appt-empty">
+          <p>{list.length ? "Nothing matches." : "No appointments yet."}</p>
+          {!list.length && <button className="btn-solid" onClick={() => setFlow("new")}>Book the first one</button>}
+        </div>
+      )}
+      <ul className="appt-list">
+        {shown.map((a) => (
+          <li key={a.id}>
+            <button className="appt-row" data-appt={a.id} onClick={() => setOpen(a.id)}>
+              <span className="appt-row-when"><b>{apptWhenText(a.date).replace(/^(\w+), /, "$1 · ")}</b><span>{apptTime12(a.time)}</span></span>
+              <span className="appt-row-main"><b>{a.homeowner.firstName} {a.homeowner.lastName}</b>
+                <span>{a.services.map(serviceLabel).join(", ")} · {a.address.city}</span></span>
+              <span className="appt-row-side"><ApptStatusChip status={a.status} />
+                <span className="appt-row-rep">{a.repName || "Not assigned"}</span></span>
+            </button>
+          </li>
+        ))}
+      </ul>
+
+      {flow && (
+        <Modal onClose={() => setFlow(null)} wide>
+          <CallFlow existing={flow === "new" ? null : flow} reps={reps} appointments={list}
+            onCancel={() => setFlow(null)}
+            onSaved={(a, conf) => {
+              upsert(a); setFlow(null); setOpen(a.id);
+              setFlash(flow === "new"
+                ? `Booked ${a.homeowner.firstName} ${a.homeowner.lastName} for ${apptWhenText(a.date, a.time)}.${conf?.sent ? " A confirmation was emailed." : ""}`
+                : "Appointment saved.");
+            }} />
+        </Modal>
+      )}
+      {current && !flow && (
+        <Modal onClose={() => setOpen(null)} wide>
+          <AppointmentDetail a={current} reps={reps} sales={sales}
+            onEdit={() => setFlow(current)} onSaved={upsert} onClose={() => setOpen(null)}
+            onConvert={sales && onConvert ? () => { setOpen(null); onConvert(current, () => load()); } : null}
+            onOpenJob={onOpenJob} />
+        </Modal>
+      )}
+    </main>
+  );
+}
+
+function AppointmentDetail({ a, reps, sales, onEdit, onSaved, onConvert, onOpenJob }) {
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState(a.outcomeNote || "");
+  const open = APPT_STATUSES[a.status]?.open;
+  const mayEdit = !a.jobId && (sales || open);
+  const choices = (sales ? Object.keys(APPT_STATUSES) : CALLCENTER_STATUSES).filter((s) => s !== a.status);
+  const setStatus = async (status) => {
+    setBusy(status); setErr("");
+    try { const r = await api.patchAppointment(a.id, { status, ...(sales ? { outcomeNote: note } : {}) }); onSaved(r.appointment); }
+    catch (e) { setErr(apptRefusalText(e)); }
+    finally { setBusy(""); }
+  };
+  const saveNote = async () => {
+    setBusy("note"); setErr("");
+    try { const r = await api.patchAppointment(a.id, { outcomeNote: note }); onSaved(r.appointment); }
+    catch (e) { setErr(apptRefusalText(e)); }
+    finally { setBusy(""); }
+  };
+  const repName = a.repName || reps.find((r) => r.id === a.repId)?.name || "";
+  return (
+    <div className="appt-detail" data-detail={a.id}>
+      <div className="appt-detail-head">
+        <h3 className="form-title">{a.homeowner.firstName} {a.homeowner.lastName}</h3>
+        <ApptStatusChip status={a.status} />
+      </div>
+      <ApptSummary a={a} repName={repName} />
+      {a.createdByName && <p className="note">Booked by {a.createdByName}.</p>}
+      {a.jobId ? (
+        <div className="appt-job" data-job>
+          <CheckCircle2 size={16} /> This sale is a job now.
+          {onOpenJob && <button className="btn-ghost" onClick={() => onOpenJob(a.jobId)}>Open the job</button>}
+        </div>
+      ) : (<>
+        {sales && (
+          <label className="fld">How it went <span className="fld-note">for the office</span>
+            <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} data-outcome-note />
+            {note !== (a.outcomeNote || "") && <button className="btn-ghost appt-note-save" disabled={!!busy} onClick={saveNote}>Save note</button>}
+          </label>
+        )}
+        <div className="appt-status-row" data-status-row>
+          <span className="appt-q-label">{sales ? "Mark it" : "Update it"}</span>
+          {choices.map((s) => (
+            <button key={s} type="button" className={`btn-ghost appt-set appt-set-${s}`} data-set={s} disabled={!!busy || (!sales && !open)}
+              onClick={() => setStatus(s)}>{busy === s ? "Saving…" : APPT_STATUSES[s].label}</button>
+          ))}
+        </div>
+        {!sales && !open && <p className="note">The outcome is recorded, so only the office can change it now.</p>}
+      </>)}
+      {err && <p className="form-err" role="alert">{err}</p>}
+      <div className="form-actions">
+        {mayEdit && <button className="btn-ghost" data-edit onClick={onEdit}>Edit details</button>}
+        {sales && !a.jobId && onConvert && !["lost", "no_show", "cancelled"].includes(a.status) && (
+          <button className="btn-solid" data-convert onClick={onConvert}>Sold — create the job</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, accountName, rosterWord = "Subcontractor", properties, forProperty, forDate, asOwner = false, canSetAccess = false, canPickTenant = false, existing = null, lockedTrades = [], preset = null }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
@@ -29605,15 +30212,15 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     // 082. Made from a conversation: what they said, as the title and the
     // scope, for somebody to read and correct before anything is created.
     title: preset?.title || (start ? `${start.name} — ` : ""),
-    client: "", propertyId: start ? start.id : "",
-    address: start ? start.address || "" : "",
-    area: start ? start.city || "" : "",
-    zip: start ? start.zip || "" : "",
+    client: preset?.client || "", propertyId: start ? start.id : "",
+    address: start ? start.address || "" : (preset?.address || ""),
+    area: start ? start.city || "" : (preset?.area || ""),
+    zip: start ? start.zip || "" : (preset?.zip || ""),
     sqft: "", stories: "",
     // Opened from an empty day on the calendar: that day is the answer to
     // the question the form is about to ask.
     date: forDate || "", time: "07:00",
-    trades: forSub ? [...forSub.categories] : [],
+    trades: forSub ? [...forSub.categories] : preset?.trades ? [...preset.trades] : [],
     scope: preset?.scope || "",
     // materialSource is the seed the chooser parses, empty on a new job. The
     // three below it are what gets sent; the Worker composes the line back
@@ -37739,8 +38346,11 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
   // somebody already holds stays listed either way, so editing a user cannot
   // silently change what they are.
   const offered = ACCOUNT_KINDS[accountKind]?.invites || [];
+  // 105. A call-center seat only exists on an account that books homeowners;
+  // the server refuses it anywhere else.
   const roles = Object.entries(ROLES).filter(([k]) =>
-    !ALWAYS_SCOPED_ROLES.includes(k)
+    k === "callcenter" ? (takesAppointments(accountKind) || k === existing?.role)
+    : !ALWAYS_SCOPED_ROLES.includes(k)
     || k === existing?.role
     || (offered.includes(k) && properties.length > 0));
 
@@ -37801,6 +38411,7 @@ function UserForm({ subs, onSubmit, onCancel, existing, isSelf, canChangeRole = 
                     : tt("Create jobs & work orders, assign contractors"))}
                   {k === "owner" && tt("Only the buildings you choose — can request work, sees no costs")}
                   {k === "contractor" && tt("Own availability, trades, docs, job responses")}
+                  {k === "callcenter" && tt("Books homeowner appointments on calls, and nothing else")}
                 </span>
               </button>
             ))}
@@ -53053,6 +53664,74 @@ button.job-insp:hover{border-color:#2f5577}
 .pf-root select.role-sel{border-radius:9px;min-width:170px}
 .pf-root select.role-sel.r-admin{border-color:#1f6b4a;color:#1f6b4a;background:#eef5f1}
 @media (max-width:560px){:root{--field-fs:16px}}
+
+/* 105. Sales appointments: the call script and the office's list. */
+.appt-flow{display:flex;flex-direction:column;gap:14px}
+.appt-steps{display:flex;gap:4px;list-style:none;margin:0 0 4px;padding:0;overflow-x:auto}
+.appt-steps li{flex:1 1 0;min-width:0}
+.appt-steps button{width:100%;display:flex;flex-direction:column;align-items:center;gap:4px;padding:6px 2px;background:none;border:0;cursor:pointer;color:var(--ink-soft);font:600 11.5px Inter,sans-serif}
+.appt-step-n{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;border:1.5px solid var(--line);background:var(--card);font-size:13px}
+.appt-steps li.done .appt-step-n{background:#e6f2ec;border-color:#1f6b4a;color:#1d5740}
+.appt-steps li.on .appt-step-n{background:var(--brand);border-color:var(--brand);color:#fff}
+.appt-steps li.on button{color:var(--ink)}
+.appt-step-l{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+@media (max-width:620px){.appt-steps li:not(.on) .appt-step-l{display:none}}
+.appt-pane{display:flex;flex-direction:column;gap:14px}
+.appt-pane h4{margin:6px 0 0;font-size:15px}
+.appt-q{display:flex;flex-direction:column;gap:8px}
+.appt-q-label{font-weight:650;font-size:14.5px}
+.appt-req{color:#b5442e}
+.appt-big-choice{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.appt-big{display:flex;flex-direction:column;align-items:flex-start;gap:4px;padding:16px;min-height:64px;border:1.5px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);cursor:pointer;text-align:left;font:500 14px Inter,sans-serif}
+.appt-big b{font-size:16px}
+.appt-big span{color:var(--ink-soft);font-size:13px}
+.appt-big.on{border-color:var(--brand);background:#eef5f1;box-shadow:0 0 0 2px var(--brand) inset}
+.appt-services .appt-big{flex-direction:row;align-items:center;gap:10px}
+.appt-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.appt-grid .appt-wide{grid-column:1/-1}
+@media (max-width:560px){.appt-grid{grid-template-columns:1fr}}
+.appt-svc{display:flex;flex-direction:column;gap:12px;padding:14px;border:1px solid var(--line);border-radius:12px}
+.appt-svc h4{margin:0}
+.appt-warn{margin:0;padding:10px 12px;border-radius:9px;background:#fbf0dd;color:#7a4f10;font-size:13.5px}
+.appt-clash{display:flex;gap:8px;align-items:center}
+.appt-check{display:flex;gap:8px;align-items:center;font-size:14px}
+.appt-day{padding:12px;border:1px solid var(--line);border-radius:10px;font-size:13.5px}
+.appt-day ul{margin:6px 0 0;padding-left:18px}
+.appt-day li.clash{color:#b5442e;font-weight:650}
+.appt-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.appt-actions .btn-solid{margin-left:auto}
+.appt-next-why{font-size:13px;color:var(--ink-soft);margin-left:auto}
+.appt-next-why + .btn-solid{margin-left:0}
+.appt-sum-when{font-weight:700;font-size:16px;margin-bottom:8px}
+.appt-sum-when span{font-weight:500;color:var(--ink-soft)}
+.appt-sum dl{display:grid;grid-template-columns:140px 1fr;gap:6px 12px;margin:0;font-size:14px}
+.appt-sum dt{color:var(--ink-soft);font-weight:600}
+.appt-sum dd{margin:0}
+@media (max-width:560px){.appt-sum dl{grid-template-columns:1fr}.appt-sum dd{margin-bottom:6px}}
+.appt-list{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.appt-row{width:100%;display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);cursor:pointer;text-align:left;font:500 14px Inter,sans-serif;min-height:56px}
+.appt-row:hover{border-color:var(--brand)}
+.appt-row-when{flex:none;width:150px;display:flex;flex-direction:column}
+.appt-row-when span{color:var(--ink-soft);font-size:13px}
+.appt-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.appt-row-main span{color:var(--ink-soft);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.appt-row-side{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.appt-row-rep{font-size:12.5px;color:var(--ink-soft)}
+@media (max-width:560px){.appt-row{flex-wrap:wrap}.appt-row-when{width:auto}.appt-row-side{flex-direction:row;width:100%;justify-content:space-between}}
+.appt-st{background:#e8eff8;color:#2b4d7a}
+.appt-st-confirmed,.appt-st-sold{background:#e6f2ec;color:#1d5740}
+.appt-st-sat{background:#fbf0dd;color:#8a5a12}
+.appt-st-lost,.appt-st-no_show{background:#f8e6e2;color:#8e3422}
+.appt-st-cancelled{background:var(--paper);color:var(--ink-soft)}
+.appt-needs{display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:10px 14px;border:1px solid #e3c48a;border-radius:10px;background:#fbf0dd;color:#7a4f10;font:600 14px Inter,sans-serif;cursor:pointer}
+.appt-flash{margin:0 0 12px;padding:10px 14px;border-radius:10px;background:#e6f2ec;color:#1d5740;font-weight:600}
+.appt-empty{text-align:center;padding:28px 0}
+.appt-detail{display:flex;flex-direction:column;gap:14px}
+.appt-detail-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.appt-status-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.appt-set{min-height:40px}
+.appt-job{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:10px;background:#e6f2ec;color:#1d5740;font-weight:600}
+.appt-note-save{align-self:flex-start;margin-top:6px}
 
 `;
 // The dark theme is derived from the sheet above, a twin after each rule (see

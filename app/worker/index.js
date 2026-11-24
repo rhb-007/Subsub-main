@@ -19,6 +19,8 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
   licenseExpiryEmail, actionReminderEmail, messageNotifyEmail, messageEmail, messageReplyRefusedEmail,
   agreementSentEmail, rosterJoinedEmail, docUploadedEmail } from "./mail.js";
 import * as MAIL from "./mail.js";
+import { validAppointment, repClashes, STATUSES as APPT_STATUSES, CALLCENTER_STATUSES,
+  BOOKING_ROLES, SALES_ROLES, takesAppointments, serviceLabel, apptWhenText } from "../shared/salesappt.js";
 import { NOTICES, noticeByKey, noticePlaceholders, unknownPlaceholders, renderNotice, noticeVars,
   noticeNeedsLink, NOTICE_SUBJECT_MAX, NOTICE_BODY_MAX } from "../shared/notices.js";
 import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
@@ -848,10 +850,30 @@ const TENANT_ALLOWED = [
   [/^\/api\/report-draft$/, ["GET", "POST"]],
 ];
 
+// 105. A call-center seat books homeowners for estimates and does nothing
+// else on the account: no jobs, no roster, no buildings, no money. The same
+// allowlist shape as a guest seat, for the same reason -- a new route refuses
+// it until somebody decides otherwise. Its own profile and settings are here
+// because a seat that cannot sign in to its own My account is a broken login.
+const CALLCENTER_ALLOWED = [
+  [/^\/api\/account$/, ["GET"]],
+  [/^\/api\/account-by-subdomain\/[^/]+$/, ["GET"]],
+  [/^\/api\/me$/, ["PATCH"]],
+  [/^\/api\/logo\/[^/]+$/, ["GET"]],
+  [/^\/api\/auth\/me$/, ["GET"]],
+  [/^\/api\/account-users$/, ["GET"]],     // scoped: themselves only
+  [/^\/api\/appointments$/, ["GET", "POST"]],
+  [/^\/api\/appointments\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/uploads\/avatar\/.+$/, ["PUT"]],
+  [/^\/api\/me\/avatar$/, ["PATCH"]],
+  [/^\/api\/account-users\/[^/]+\/avatar$/, ["GET"]],
+];
+
 app.use("/api/*", async (c, next) => {
   const auth = c.get("auth");
   const list = auth?.role === "owner" ? OWNER_ALLOWED
     : auth?.role === "tenant" ? TENANT_ALLOWED
+    : auth?.role === "callcenter" ? CALLCENTER_ALLOWED
     : null;
   if (!list) return next();
   const path = new URL(c.req.url).pathname;
@@ -6319,11 +6341,14 @@ app.get("/api/account-users", async (c) => {
   // is how the app knows which seat it is sitting in. A scoped property
   // manager does need the list -- they answer the owners who raise work, and
   // a request signed "an owner" is no use to them.
-  const mine = (auth.role === "owner" || auth.role === "tenant") ? ` AND m.user_id = ? ` : "";
+  // 105. A call-center seat is narrowed the same way: its own row, so the app
+  // knows which seat it is in, and nobody else's.
+  const selfOnly = ["owner", "tenant", "callcenter"].includes(auth.role);
+  const mine = selfOnly ? ` AND m.user_id = ? ` : "";
   const { results } = await c.env.DB.prepare(
     `SELECT u.*, m.role, m.company_id, m.unit FROM memberships m
      JOIN users u ON u.id = m.user_id WHERE m.account_id = ? ${mine}`
-  ).bind(accountId, ...((auth.role === "owner" || auth.role === "tenant") ? [auth.userId] : [])).all();
+  ).bind(accountId, ...(selfOnly ? [auth.userId] : [])).all();
   const { results: scopes } = await c.env.DB.prepare(
     `SELECT mp.property_id, m.user_id FROM membership_properties mp
        JOIN memberships m ON m.id = mp.membership_id WHERE m.account_id = ?`
@@ -6382,7 +6407,12 @@ app.get("/api/account-users", async (c) => {
 // same person can already exist as a user from another account.
 // A role the API will accept on a membership. The database no longer carries
 // a CHECK for this (see migration 014), so this is the constraint.
-const MEMBER_ROLES = ["admin", "pm", "owner", "tenant", "contractor"];
+const MEMBER_ROLES = ["admin", "pm", "owner", "tenant", "contractor", "callcenter"];
+// 105. A call-center seat only exists on an account that sells to homeowners.
+async function callcenterAllowedOn(env, accountId) {
+  const a = await env.DB.prepare(`SELECT kind FROM accounts WHERE id = ?`).bind(accountId).first();
+  return !!a && takesAppointments(a.kind);
+}
 
 // Replaces a membership's building list. Only an owner has one: giving an
 // admin a list would read as a restriction the rest of the code does not
@@ -6582,6 +6612,9 @@ app.post("/api/account-users", requireRole("admin"), async (c) => {
   const { accountId } = c.get("auth");
   const b = await c.req.json(); // { name, email, phone, role, subId, propertyIds }
   if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
+  if (b.role === "callcenter" && !(await callcenterAllowedOn(c.env, accountId))) {
+    return c.json({ error: "no_appointments_for_this_account" }, 400);
+  }
   // An owner or tenant scoped to nothing can see nothing, which is a login
   // that does not work and a support call that follows. A manager with no
   // list is the ordinary case -- the whole account -- so it is not refused.
@@ -6777,6 +6810,9 @@ app.patch("/api/account-users/:userId", requireRole("admin"), async (c) => {
   }
   if (b.role != null) {
     if (!MEMBER_ROLES.includes(b.role)) return c.json({ error: "invalid_role" }, 400);
+    if (b.role === "callcenter" && !(await callcenterAllowedOn(c.env, accountId))) {
+      return c.json({ error: "no_appointments_for_this_account" }, 400);
+    }
     await c.env.DB.prepare(`UPDATE memberships SET role = ?, company_id = ? WHERE user_id = ? AND account_id = ?`)
       .bind(b.role, b.subId ?? null, userId, accountId).run();
   }
@@ -10448,6 +10484,7 @@ export function missingSchema(err) {
   if (/\bmessage_reply_tokens\b/i.test(m)) return "083_message_reply_tokens";
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
+  if (/\bsales_appointments\b/i.test(m)) return "105_sales_appointments";
   if (/\bmessage_(threads|reads)\b|\bmessages\b|ux_message_thread_key/i.test(m)) return "081_messages";
   if (/\bwo_hour_(entries|requests)\b|ux_wo_hour_request/i.test(m)) return "078_wo_hours";
   if (/\baction_reminders\b|ux_action_reminder/i.test(m)) return "080_action_reminders";
@@ -11617,6 +11654,26 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   if (measured.error) return c.json(measured, 400);
   const measureDocs = measured.docs;
 
+  // 105. Made from a sold sales appointment. Checked before anything is
+  // written, so a second press cannot make a second job from one sale.
+  let fromAppt = null;
+  if (b.fromAppointment) {
+    if (!["admin", "pm"].includes(auth.role)) return c.json({ error: "forbidden" }, 403);
+    try {
+      fromAppt = await c.env.DB.prepare(
+        `SELECT id, job_id, status, first_name, last_name FROM sales_appointments WHERE id = ? AND account_id = ?`)
+        .bind(String(b.fromAppointment), accountId).first();
+    } catch (err) {
+      if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "105_sales_appointments" }, 503);
+      throw err;
+    }
+    if (!fromAppt) return c.json({ error: "appointment_not_found" }, 404);
+    if (fromAppt.job_id) return c.json({ error: "appointment_already_a_job", jobId: fromAppt.job_id }, 409);
+    if (["cancelled", "no_show", "lost"].includes(fromAppt.status)) {
+      return c.json({ error: "appointment_not_sold", status: fromAppt.status }, 409);
+    }
+  }
+
   const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
     "date", "time", "trades", "scope", "material_source", "materials_paid_by", "measurement_docs",
     "created_by", "property_id", "requested_by", "photos", "report_detail", "severity"];
@@ -11749,12 +11806,26 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     catch (err) { console.warn("[jobs] thread link failed:", err?.message || err); fromThread = { linked: false, reason: "error" }; }
   }
 
+  // 105. The sale is now a job: the appointment is marked sold and points at
+  // it. Guarded on job_id IS NULL, so two presses link once.
+  let appointmentLinked = null;
+  if (fromAppt) {
+    const r = await c.env.DB.prepare(
+      `UPDATE sales_appointments SET job_id = ?, status = 'sold', updated_at = datetime('now'),
+         status_at = CASE WHEN status <> 'sold' THEN datetime('now') ELSE status_at END
+       WHERE id = ? AND account_id = ? AND job_id IS NULL`).bind(id, fromAppt.id, accountId).run();
+    appointmentLinked = { id: fromAppt.id, linked: (r.meta?.changes ?? 1) > 0 };
+    await logActivity(c.env, accountId, userId, "appointment_converted",
+      `Turned the sold estimate for ${fromAppt.first_name} ${fromAppt.last_name} into job ${b.title}`, { appointmentId: fromAppt.id, jobId: id });
+  }
+
   const saved = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
   const wos = saved ? (await c.env.DB.prepare(
     `SELECT wo.*, c.company AS company_name FROM work_orders wo LEFT JOIN companies c ON c.id = wo.company_id
       WHERE wo.job_id = ? AND wo.voided_at IS NULL`).bind(id).all()).results : [];
   const savedSpans = saved ? (await spansForJobs(c.env, [id]))[id] || {} : {};
   return c.json({ id, requested: !!requestedBy, severity, ...(fromThread ? { fromThread } : {}),
+    ...(appointmentLinked ? { fromAppointment: appointmentLinked } : {}),
     emergency, job: saved ? { ...jobRowToJs(saved, wos), spans: savedSpans } : null,
     ...(spansSaved ? { spansSaved } : {}) }, 201);
 });
@@ -27345,6 +27416,207 @@ app.post("/api/platform/notices/:key/test", async (c) => {
   const result = await sendEmail(c.env, { to: staff.email, subject, text, html: MAIL.brandedHtml(text, vars.link || null) });
   if (!result.ok) return c.json({ error: result.error, detail: result.detail || null }, 502);
   return c.json({ ok: true, to: staff.email });
+});
+
+// ---------------------------------------------------------------------------
+// 105. Sales appointments: a homeowner booked for an estimate, before anything
+// is a job. shared/salesappt.js is the script and the rules.
+//
+// Booked by a call-center seat or by the office; the outcome is the office's.
+// A call-center seat is a restricted seat (CALLCENTER_ALLOWED): it reaches
+// these routes, its own profile and nothing else on the account.
+// ---------------------------------------------------------------------------
+
+const apptJson = (v, fallback) => { try { return v ? JSON.parse(v) : fallback; } catch { return fallback; } };
+
+function apptRowToJs(r) {
+  return {
+    id: r.id, status: r.status, direction: r.direction, source: r.source || null,
+    services: apptJson(r.services, []), details: apptJson(r.details, {}), home: apptJson(r.home, {}),
+    homeowner: { firstName: r.first_name, lastName: r.last_name, phone: r.phone, email: r.email || "" },
+    address: { street: r.street, city: r.city, state: r.state, zip: r.zip },
+    second: apptJson(r.second, null),
+    date: r.date, time: r.time, minutes: r.minutes,
+    repId: r.rep_user_id || null, repName: r.rep_name || null,
+    notes: r.notes || null, outcomeNote: r.outcome_note || null,
+    jobId: r.job_id || null,
+    createdBy: r.created_by || null, createdByName: r.created_by_name || null,
+    createdAt: r.created_at, updatedAt: r.updated_at, statusAt: r.status_at || null,
+  };
+}
+
+// Whether this account sells to homeowners. Read off the account, never the
+// seat: a call-center seat on a property manager's account would be a seat
+// with nothing to do.
+async function apptAccount(c) {
+  const { accountId } = c.get("auth");
+  const acct = await c.env.DB.prepare(`SELECT id, name, kind, subdomain FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!acct || !takesAppointments(acct.kind)) return { error: c.json({ error: "no_appointments_for_this_account", kind: acct?.kind || null }, 403) };
+  return { acct };
+}
+
+// The sales managers an appointment may go to: the account's admins and
+// project managers. Never a guest, a contractor or another call-center seat.
+async function apptReps(env, accountId) {
+  const { results } = await env.DB.prepare(
+    `SELECT u.id, u.name, u.email, m.role FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE m.account_id = ? AND m.role IN ('admin', 'pm') ORDER BY u.name`).bind(accountId).all();
+  return (results || []).map((u) => ({ id: u.id, name: u.name, role: u.role }));
+}
+
+const APPT_SELECT = `SELECT a.*, r.name AS rep_name, cb.name AS created_by_name FROM sales_appointments a
+  LEFT JOIN users r ON r.id = a.rep_user_id LEFT JOIN users cb ON cb.id = a.created_by`;
+
+async function apptMigrationGuard(c, fn) {
+  try { return await fn(); }
+  catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "105_sales_appointments" }, 503);
+    throw err;
+  }
+}
+
+app.get("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return apptMigrationGuard(c, async () => {
+    const { results } = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.account_id = ? ORDER BY a.date DESC, a.time DESC LIMIT 1000`)
+      .bind(acct.id).all();
+    return c.json({ appointments: (results || []).map(apptRowToJs), reps: await apptReps(c.env, acct.id) });
+  });
+});
+
+// Every write checks the rep is a sales manager here and the slot is free.
+async function apptCheckRep(c, acct, v, exceptId) {
+  if (!v.repId) return null;
+  const reps = await apptReps(c.env, acct.id);
+  if (!reps.some((r) => r.id === v.repId)) return c.json({ error: "bad_rep", field: "repId" }, 400);
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, rep_user_id, date, time, minutes, status FROM sales_appointments
+      WHERE account_id = ? AND rep_user_id = ? AND date = ?`).bind(acct.id, v.repId, v.date).all();
+  const rows = (results || []).map((r) => ({ id: r.id, repId: r.rep_user_id, date: r.date, time: r.time, minutes: r.minutes, status: r.status }));
+  const clash = repClashes(rows, { ...v, exceptId });
+  if (clash.length && !v.allowClash) {
+    return c.json({ error: "rep_double_booked", clashes: clash.map((r) => ({ id: r.id, time: r.time, minutes: r.minutes })) }, 409);
+  }
+  return null;
+}
+
+async function apptConfirmEmail(c, acct, v, repName, userId, apptId) {
+  const to = realEmail(v.homeowner.email);
+  if (!to) return { sent: false, reason: "no_email" };
+  try {
+    const mail = MAIL.appointmentBookedEmail({ firstName: v.homeowner.firstName, account: acct,
+      services: v.services.map(serviceLabel), when: apptWhenText(v.date, v.time),
+      address: `${v.address.street}, ${v.address.city}, ${v.address.state} ${v.address.zip}`,
+      repName, second: !!(v.second && v.second.attends) || !!v.second });
+    const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text,
+      html: mail.html, fromName: acct.name });
+    await logMail(c.env, { accountId: acct.id, companyId: null, to, kind: "appointment_booked", subject: mail.subject, result, sentBy: userId });
+    return { sent: !!result.ok, reason: result.ok ? null : (result.error || "send_failed") };
+  } catch (err) {
+    console.error("[appointments] confirmation failed:", err?.message || err, apptId);
+    return { sent: false, reason: "send_failed" };
+  }
+}
+
+app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const chk = validAppointment(b);
+  if (!chk.ok) return c.json({ error: chk.error, field: chk.field, missing: chk.missing || undefined }, 400);
+  const v = { ...chk.value, allowClash: b.allowClash === true };
+  return apptMigrationGuard(c, async () => {
+    const refused = await apptCheckRep(c, acct, v, null);
+    if (refused) return refused;
+    const id = uid();
+    await c.env.DB.prepare(
+      `INSERT INTO sales_appointments (id, account_id, status, direction, source, services, details, home,
+        first_name, last_name, phone, email, street, city, state, zip, second, date, time, minutes,
+        rep_user_id, notes, created_by, status_at)
+       VALUES (?, ?, 'scheduled', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`)
+      .bind(id, acct.id, v.direction, v.source, JSON.stringify(v.services), JSON.stringify(v.details),
+        JSON.stringify(v.home), v.homeowner.firstName, v.homeowner.lastName, v.homeowner.phone,
+        v.homeowner.email || null, v.address.street, v.address.city, v.address.state, v.address.zip,
+        v.second ? JSON.stringify(v.second) : null, v.date, v.time, v.minutes, v.repId, v.notes, userId).run();
+    const row = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ?`).bind(id).first();
+    const who = `${v.homeowner.firstName} ${v.homeowner.lastName}`;
+    await logActivity(c.env, acct.id, userId, "appointment_booked",
+      `Booked an estimate for ${who} (${v.services.map(serviceLabel).join(", ")}) on ${apptWhenText(v.date, v.time)}`, { appointmentId: id });
+    try { await logEvent(c.env, acct.id, userId, "appointment.booked", id, { direction: v.direction, services: v.services }); }
+    catch (err) { console.warn("[appointments] event:", err?.message || err); }
+    const confirmation = b.emailHomeowner === false ? { sent: false, reason: "not_asked" }
+      : await apptConfirmEmail(c, acct, v, row?.rep_name || null, userId, id);
+    return c.json({ appointment: apptRowToJs(row), confirmation }, 201);
+  });
+});
+
+app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return apptMigrationGuard(c, async () => {
+    const row = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ? AND a.account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const cur = apptRowToJs(row);
+    if (cur.jobId) return c.json({ error: "already_a_job", jobId: cur.jobId }, 409);
+    const sales = SALES_ROLES.includes(role);
+    // A call-center seat books and reschedules; once the visit has an outcome
+    // it is the sales side's record and theirs to change.
+    if (!sales && !APPT_STATUSES[cur.status]?.open) return c.json({ error: "outcome_recorded", status: cur.status }, 409);
+
+    let status = cur.status;
+    if (b.status !== undefined && b.status !== cur.status) {
+      if (!APPT_STATUSES[b.status]) return c.json({ error: "bad_status" }, 400);
+      if (!sales && !CALLCENTER_STATUSES.includes(b.status)) return c.json({ error: "sales_only", status: b.status }, 403);
+      status = b.status;
+    }
+    // Details, if any were sent: the whole booking is checked again, merged
+    // over what is stored, so a partial edit cannot leave a booking the
+    // create route would have refused.
+    const editing = ["services", "details", "home", "homeowner", "address", "second", "date", "time",
+      "minutes", "repId", "notes", "source", "direction"].some((k) => k in b);
+    let v = null;
+    if (editing) {
+      const merged = { ...cur, ...Object.fromEntries(Object.entries(b).filter(([k]) => k !== "status")) };
+      const chk = validAppointment(merged);
+      if (!chk.ok) return c.json({ error: chk.error, field: chk.field, missing: chk.missing || undefined }, 400);
+      v = { ...chk.value, allowClash: b.allowClash === true };
+      if (APPT_STATUSES[status]?.open) {
+        const refused = await apptCheckRep(c, acct, v, cur.id);
+        if (refused) return refused;
+      }
+    }
+    const outcome = sales && "outcomeNote" in b ? (String(b.outcomeNote || "").trim().slice(0, 2000) || null) : cur.outcomeNote;
+    if (v) {
+      await c.env.DB.prepare(
+        `UPDATE sales_appointments SET status = ?, direction = ?, source = ?, services = ?, details = ?, home = ?,
+          first_name = ?, last_name = ?, phone = ?, email = ?, street = ?, city = ?, state = ?, zip = ?, second = ?,
+          date = ?, time = ?, minutes = ?, rep_user_id = ?, notes = ?, outcome_note = ?, updated_at = datetime('now'),
+          status_at = CASE WHEN status <> ? THEN datetime('now') ELSE status_at END
+         WHERE id = ? AND account_id = ? AND job_id IS NULL`)
+        .bind(status, v.direction, v.source, JSON.stringify(v.services), JSON.stringify(v.details), JSON.stringify(v.home),
+          v.homeowner.firstName, v.homeowner.lastName, v.homeowner.phone, v.homeowner.email || null,
+          v.address.street, v.address.city, v.address.state, v.address.zip, v.second ? JSON.stringify(v.second) : null,
+          v.date, v.time, v.minutes, v.repId, v.notes, outcome, status, cur.id, acct.id).run();
+    } else {
+      await c.env.DB.prepare(
+        `UPDATE sales_appointments SET status = ?, outcome_note = ?, updated_at = datetime('now'),
+          status_at = CASE WHEN status <> ? THEN datetime('now') ELSE status_at END
+         WHERE id = ? AND account_id = ? AND job_id IS NULL`).bind(status, outcome, status, cur.id, acct.id).run();
+    }
+    const after = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.id = ?`).bind(cur.id).first();
+    if (status !== cur.status) {
+      const who = `${cur.homeowner.firstName} ${cur.homeowner.lastName}`;
+      await logActivity(c.env, acct.id, userId, "appointment_status",
+        `Marked the estimate for ${who} ${APPT_STATUSES[status].label.toLowerCase()}`, { appointmentId: cur.id, from: cur.status, to: status });
+      try { await logEvent(c.env, acct.id, userId, "appointment.status", cur.id, { from: cur.status, to: status }); }
+      catch (err) { console.warn("[appointments] event:", err?.message || err); }
+    }
+    return c.json({ appointment: apptRowToJs(after) });
+  });
 });
 
 // ---------------------------------------------------------------------------

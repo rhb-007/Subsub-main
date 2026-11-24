@@ -1251,4 +1251,5 @@ export default {
   "+ Add a GC": "+ Agregar un GC",
   "Get paid {amount}*": "Gane {amount}*",
   "Add a GC": "Agregar un GC",
+  "Books homeowner appointments on calls, and nothing else": "Agenda citas con propietarios por teléfono, y nada más",
 };
