@@ -17071,6 +17071,15 @@ refactor.
   mutations fire, each on its own assertion. **Not verified here:** a live
   Google round trip. **108 is pasted on the live database** (5 and 5 columns, confirmed by the owner).
 
+- **THE CONSOLE'S PERIOD TILES CARRY "JOBS CREATED", AND HOW MANY GOT A
+  CONTRACTOR.** Asked for with the empty eighth cell of the MTD grid on screen.
+  `metricsFor` counts jobs raised in the window (`jobsNew`) and those with an
+  accepted work order (`jobsStaffed`), so the tile reads *3* over *2 with a
+  contractor · 67%* on MTD, Total and Range alike. Raised is demand; staffed is
+  whether the rosters answered it, which GMV beside it cannot say when work
+  orders are small. `test:consolegmv` (7) adds a job with only an offer out;
+  counting every job as staffed fails one assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

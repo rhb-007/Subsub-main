@@ -48,6 +48,10 @@ const BOOT = {
       assignments: { roofing: wo("accepted", 300000), gutters: wo("pending", 900000) } },
     { id: "j2", accountId: "acc_pm", title: "Sink", status: "active", date: TODAY, createdAt: TODAY + "T10:00:00Z",
       assignments: { plumbing: wo("accepted", 120000), painting: wo("declined", 50000) } },
+    // Raised this month with only an offer out: counts as a job created, not
+    // as one with a contractor, and adds nothing to GMV.
+    { id: "j3", accountId: "acc_pm", title: "Fence", status: "active", date: TODAY, createdAt: TODAY + "T11:00:00Z",
+      assignments: { fencing: wo("pending", 70000) } },
   ],
   subEvents: [], activity: [], smsDaily: [],
 };
@@ -91,6 +95,14 @@ try {
   const line = await page.evaluate(() => (document.body.innerText.match(/\$[\d,]+ GMV to date/) || [""])[0]);
   t.ck("the dashboard's GMV line is the accepted work in dollars ($4,200)", line === "$4,200 GMV to date", line);
   t.ck("the MTD GMV tile agrees", (await kpi(null, "GMV")) === "$4,200", await kpi(null, "GMV"));
+  const jobsTile = await page.evaluate(() => {
+    const k = [...document.querySelectorAll(".pf-kpis-period .kpi")]
+      .find((x) => x.querySelector(".kpi-l")?.innerText.trim() === "Jobs created");
+    return k ? { v: k.querySelector(".kpi-v")?.innerText.trim(), sub: k.innerText } : null;
+  });
+  t.ck("the MTD tiles carry Jobs created: 3 raised this month", jobsTile?.v === "3", JSON.stringify(jobsTile));
+  t.ck("and say how many have a contractor who accepted (2, 67%)",
+    /2 with a contractor · 67%/.test(jobsTile?.sub || ""), jobsTile?.sub);
 
   console.log("\n-- the account window --");
   await nav("Accounts"); await wait(600);

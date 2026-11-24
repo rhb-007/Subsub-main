@@ -11024,6 +11024,11 @@ function SuperadminConsole({ me, admin, onRefresh, refreshing, refreshedAt,
       newMrr, expansion, contraction, churnMrr,
       netMrr: newMrr + expansion + contraction + churnMrr,
       gmv: jobs.filter((j) => within(j.createdAt)).reduce((n, j) => n + jobGmv(j), 0),
+      // Jobs raised in the window, and how many of those have a contractor who
+      // accepted. Raised is demand; staffed is whether the roster answered it.
+      jobsNew: jobs.filter((j) => within(j.createdAt)).length,
+      jobsStaffed: jobs.filter((j) => within(j.createdAt)
+        && Object.values(j.assignments || {}).some((x) => x.status === "accepted")).length,
       // Conversions over signups in the same window. Not a cohort rate --
       // somebody who signed up in March can convert in April -- so it is
       // labelled by what it is rather than presented as one.
@@ -13268,6 +13273,10 @@ function PeriodStats({ m, finance, showSms, allTime }) {
       {finance && <Kpi label="Net new MRR" value={signed(m.netMrr)} accent />}
       {finance && <Kpi label="ARR contribution" value={signed(m.netMrr * 12)} sub="net new MRR × 12" />}
       <Kpi label="GMV" value={fmtC(m.gmv)} sub="work-order value accepted" />
+      <Kpi label="Jobs created" value={(m.jobsNew || 0).toLocaleString()}
+        sub={m.jobsNew
+          ? `${m.jobsStaffed} with a contractor · ${pct(m.jobsStaffed / m.jobsNew)}`
+          : "none raised in this window"} />
       {showSms && (
         <Kpi label="SMS sent" value={m.sms.sent.toLocaleString()}
           sub={finance
