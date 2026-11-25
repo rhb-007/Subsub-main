@@ -3010,3 +3010,18 @@ CREATE TABLE IF NOT EXISTS lead_followups (
 );
 CREATE INDEX IF NOT EXISTS ix_lead_followups_due ON lead_followups(account_id, done_at, due_date);
 CREATE INDEX IF NOT EXISTS ix_lead_followups_lead ON lead_followups(lead_id);
+
+-- 112. Markets.
+CREATE TABLE IF NOT EXISTS sales_markets (
+  id          TEXT PRIMARY KEY,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  name        TEXT NOT NULL,
+  zips        TEXT NOT NULL DEFAULT '[]',
+  cities      TEXT NOT NULL DEFAULT '[]',
+  services    TEXT NOT NULL DEFAULT '[]',
+  active      INTEGER NOT NULL DEFAULT 1,
+  created_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_sales_markets_account ON sales_markets(account_id);

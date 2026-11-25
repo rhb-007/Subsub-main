@@ -17345,6 +17345,64 @@ refactor.
   and the update sent without `replace`. **Not mutation-proved:** the route's
   `status === "sent"` check, because the guarded UPDATE refuses the same case.
 
+- **THE CONTACT CENTER: MARKETS BY ZIP, THE WEATHER ON THE CALL, A SCRIPT
+  FOR EACH STEP, A WRAP-UP, AND A RANK.** Asked for in ten points. Migration
+  112 (`sales_markets`), `app/shared/markets.js`, and `RANK_WINDOWS`,
+  `rankWindow` and `bookingLeaderboard` in `app/shared/leads.js`.
+  - **"View as" has a way back.** Viewing a teammate from Account -> Users
+    draws a banner (*You're viewing as Pat Lee. You're still signed in as
+    yourself.*) with **Back to your admin view**, which returns to the admin
+    on Account -> Users. It is still only a preview of data already loaded;
+    the API authenticates as whoever is signed in.
+  - **"Call center" is "Contact center"** on every label. The role id stays
+    `callcenter`, because the allowlist, the stored rows and the tests name it.
+  - **Markets** is a CRM page for admins and project managers: a name, ZIP
+    codes, towns ("Tacoma, WA"; a town needs its state) and the services
+    offered there. **Whole values only**, so "981" is refused rather than read
+    as every ZIP in Seattle. A contact center seat may read markets and may
+    not change them (403 from the allowlist; the route's own `office_only` is
+    a second guard and is not mutation-proved for that reason).
+  - **A lead's market is worked out on read, never stored**: its ZIP first,
+    then its town and state, inactive markets skipped, name order breaking a
+    tie. Moving a ZIP moves every lead with it. On the lead, the lead form and
+    the call script's address step, `LeadArea` names the market, names any
+    service asked for that the market does not offer, and shows the weather
+    there with one line to talk about it (rain on a roofing call asks about
+    leaks). The weather is `GET /api/crm-weather`, through the same
+    `weatherAt` the dashboard uses, cached, rate-limited per account, and
+    `{}` on any failure so a dead lookup never costs the call.
+  - **The contact center's CRM is four pages**: Dashboard, Leads,
+    Appointments, Calendar. The Add menu is Lead, Prospect and Opportunity;
+    Opportunity opens *Add an opportunity* with booking as the main button,
+    because booking is what makes somebody an opportunity.
+  - **Its dashboard has one button, New appointment**, which asks whether it
+    is somebody in the leads or a new homeowner. The second New lead button is
+    gone. The greeting has 22px under it before the steps card.
+  - **Every step of the call script says what to say**, in quotes, with the
+    account's and the rep's names and the homeowner's once given: the
+    greeting (inbound and outbound differ), the project, the details, who
+    they are, the decision maker, the time, and the read-back. The lead form
+    carries the same opening lines.
+  - **Booking ends on a wrap-up, not on the appointment.** It says the estimate
+    is booked and they are an opportunity, whether the confirmation email went
+    (and why not when it did not), that a reminder goes the day before when
+    they agreed to email, and a closing to read: the time, the street, the
+    estimator, the email, a reminder to have the second decision maker there,
+    and a goodbye. **Add a follow-up** and **Open the appointment** sit under it.
+  - **Your rank**, on the contact center dashboard: estimates booked in the
+    window (Today, This week from Monday, Month to date, or Custom dates), the
+    rep's rank with ties sharing a place, their count, their share of
+    everything booked, how many more to move up, and the top five. Counted by
+    who booked it and when (`created_at`), canceled ones left out.
+  `test:markets` (36), `test:salesapptui` (101) and `test:viewasui` (8).
+  Mutations fire on the ZIP prefix rule, the account scope on the markets
+  list, the wrap-up, the market and weather on the script, the spacing, the
+  rank, the script lines, and the View as banner. Back landing on Users was a
+  real bug the new suite found. `test:schemadrift` caught the 112 check as a
+  new top-level group pushing the join depth to 41; it sits in the last group
+  now. **Paste 112** before markets can be added; until then the page names
+  the file and leads show no market.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

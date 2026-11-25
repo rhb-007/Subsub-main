@@ -397,6 +397,13 @@ export const api = {
   patchLeadFollowUp: (id, fid, body) => request(`/sales-leads/${encodeURIComponent(id)}/follow-ups/${encodeURIComponent(fid)}`,
     { method: "PATCH", body: JSON.stringify(body) }),
   // 107. CRM leads.
+  // 112. Markets, and the weather where a homeowner is.
+  listMarkets: () => request("/markets"),
+  createMarket: (body) => request("/markets", { method: "POST", body: JSON.stringify(body) }),
+  patchMarket: (id, body) => request(`/markets/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteMarket: (id) => request(`/markets/${id}`, { method: "DELETE" }),
+  crmWeather: ({ zip = "", city = "", state = "" } = {}) =>
+    request(`/crm-weather?zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}`),
   listLeads: () => request("/sales-leads"),
   createLead: (body) => request("/sales-leads", { method: "POST", body: JSON.stringify(body) }),
   patchLead: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),

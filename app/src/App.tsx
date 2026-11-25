@@ -62,9 +62,10 @@ import { SERVICES as APPT_SERVICES, SERVICE_QUESTIONS, HOME_QUESTIONS, SOURCES a
   SALES_ROLES, OFFICE_ROLES, CRM_ONLY_ROLES } from "../shared/salesappt.js";
 import { LEAD_CHANNELS, BLOCK_TEXT, smsHref as leadSmsHref, telHref as leadTelHref, letterLines, messageStatusText, inboxCounts,
   addressLine as leadAddressLine, MAX_TEXT_BODY } from "../shared/leadcontact.js";
-import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, sourceLabel, crmDashboard, callerDashboard } from "../shared/leads.js";
+import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, sourceLabel, crmDashboard, callerDashboard, RANK_WINDOWS, rankWindow, bookingLeaderboard } from "../shared/leads.js";
 import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
   AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
+import { validMarket, marketFor, servicesNotOffered, weatherTalk, marketErrText } from "../shared/markets.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -730,7 +731,7 @@ const ROLES = {
   // the same line with an allowlist (CALLCENTER_ALLOWED), so a hidden tab is
   // not the only thing keeping them out. Only on an account that sells to
   // homeowners -- see takesAppointments.
-  callcenter: { label: "Call center", can: ["appointments", "account"] },
+  callcenter: { label: "Contact center", can: ["appointments", "account"] },
   // 109. The person who drives to the house: their own estimates and their
   // own leads, followed up by email, text, letter or a call. Allowlisted on
   // the server (SALES_ALLOWED) and narrowed to their own rows by crmScope.
@@ -2254,6 +2255,10 @@ export default function SubSub() {
   const [properties, setProperties] = useState(seedProperties);
   const [users, setUsers] = useState(BUILD === "platform" ? seedUsers : seedUsers.filter((u) => !u.platform));
   const [currentUserId, setCurrentUserId] = useState("u1");
+  // "View as" a teammate: who pressed it, and where they were, so the banner
+  // can put them back. Only a preview of the screen -- the API still answers
+  // as the person really signed in -- and cleared on any account switch.
+  const [viewAsFrom, setViewAsFrom] = useState(null);
   const [currentAccountId, setCurrentAccountId] = useState("a1");
   // Which account the roster in state was last loaded for. Until it matches
   // the current one, "this contractor login isn't linked to a record" is a
@@ -6817,6 +6822,19 @@ export default function SubSub() {
           <button onClick={leaveImpersonation}>Back to console</button>
         </div>
       )}
+      {viewAsFrom && viewAsFrom.accountId === currentAccountId && viewAsFrom.userId !== currentUserId && (
+        <div className="imp-banner viewas-banner" role="status" data-viewas>
+          <Eye size={14} />
+          <span>You're viewing as <b>{users.find((u) => u.id === currentUserId)?.name || "a teammate"}</b>. You're still
+            signed in as yourself.</span>
+          <button type="button" onClick={() => {
+            const back = viewAsFrom; setViewAsFrom(null);
+            setCurrentUserId(back.userId); setPane("dashboard"); setTab(back.tab || "account");
+            // View as is pressed from Account -> Users, so that is where Back lands.
+            if ((back.tab || "account") === "account") setOpenPane({ pane: "users", n: Date.now() });
+          }}>Back to your admin view</button>
+        </div>
+      )}
       <header className="ss-header">
         <div className="header-top">
           {/* The logo and the company name are what people reach for to get
@@ -6851,7 +6869,9 @@ export default function SubSub() {
               // stage they are at. A call-center seat sets lead and prospect.
               if (crmWs && can("appointments")) {
                 for (const st of LEAD_STAGES.filter((x) => x.id !== "former")) {
-                  if (!SALES_ROLES.includes(role) && !CALLCENTER_STAGES.includes(st.id)) continue;
+                  // 112. A contact center seat adds an opportunity by booking
+                  // it: the form opens with booking as its main button.
+                  if (!SALES_ROLES.includes(role) && !CALLCENTER_STAGES.includes(st.id) && st.id !== "opportunity") continue;
                   actions.push([`crm-${st.id}`, st.term, `New ${st.term.toLowerCase()}`, UserPlus, () => {
                     setCrmAsk({ newLead: st.id, n: Date.now() }); setTab("appointments");
                   }]);
@@ -8857,6 +8877,7 @@ export default function SubSub() {
           onResendInvite={resendInvite}
           onLoginAs={(id) => {
             const m = memberships.find((x) => x.userId === id && x.accountId === account.id);
+            setViewAsFrom((v) => v || { userId: currentUserId, accountId: account.id, tab });
             setCurrentUserId(id); setPane("dashboard");
             setTab(ROLES[(m && m.role) || "contractor"].can[0]);
           }}
@@ -17426,7 +17447,7 @@ function GoogleCalendarPanel({ landed = null, crewSide = true }) {
                   <span className="no-name">{tt("Don't book me when my calendar is busy")}</span>
                   <span className="no-sub">{tt("SubSub won't propose or auto-schedule a time your Google Calendar already shows taken. If several people at your company connect, a time counts as taken only when all of them are busy.")}</span>
                   {s.sales?.available && (
-                    <span className="no-sub" data-gcal-sales-block>{tt("Sales appointments too: the call center is told your calendar shows you busy, and books you then only if they choose Book anyway.")}</span>
+                    <span className="no-sub" data-gcal-sales-block>{tt("Sales appointments too: the contact center is told your calendar shows you busy, and books you then only if they choose Book anyway.")}</span>
                   )}
                 </span>
               </label>
@@ -29883,7 +29904,76 @@ const apptBlank = () => ({
   consent: { email: null, phone: null, text: null, record: null },
 });
 
-function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appointments = [], onSaved, onCancel, selfRep = null }) {
+// 112. What the rep says on each step, in order, so the booking reads as a
+// conversation with the homeowner rather than a form being filled in. The
+// words are a starting point; the rep says them in their own voice.
+function callSay(step, { f, accountName, meName, repName }) {
+  const acct = accountName || "our company";
+  const me = (meName || "").split(" ")[0] || "";
+  const first = f.homeowner?.firstName?.trim();
+  const them = first ? `, ${first}` : "";
+  const svc = andList((f.services || []).map((x) => serviceLabel(x).toLowerCase()));
+  if (step === "call") return f.direction === "outbound"
+    ? `"Hi, this is ${me || "[your name]"} with ${acct}. You asked about a free estimate. Is now a good time for a few minutes?"`
+    : `"Thanks for calling ${acct}, this is ${me || "[your name]"}. How can I help you today?"`;
+  if (step === "services") return `"What project are you thinking about for your home?"`;
+  if (step === "details") return svc ? `"Great, a few quick questions about the ${svc} so our estimator comes ready."` : `"Tell me a little about the project."`;
+  if (step === "homeowner") return `"Who do I have the pleasure of speaking with? And the best number and email to reach you${them}? What's the address of the home?"`;
+  if (step === "decider") return `"Is anyone else part of the decision, like a spouse or partner? It helps to have everyone there so all of your questions get answered at once."`;
+  if (step === "schedule") return `"${repName ? `${repName.split(" ")[0]}, our estimator,` : "Our estimator"} can come out and give you a free estimate. What day and time work best for you${them}?"`;
+  if (step === "review") return `"Let me read that back to make sure I have everything right."`;
+  return null;
+}
+
+// 112. The end of the call: what was booked, whether the confirmation went,
+// whether a follow-up is set, and a closing the rep can read.
+function callWrapText(a, conf) {
+  const first = a.homeowner?.firstName || "";
+  const rep = (a.repName || "").split(" ")[0];
+  const when = apptWhenText(a.date, a.time);
+  const lines = [
+    `"Perfect${first ? `, ${first}` : ""}. You're all set for ${when}${a.address?.street ? ` at ${a.address.street}` : ""}.`,
+    rep ? ` ${rep} will be your estimator.` : " One of our estimators will be out.",
+    conf?.sent ? ` You'll get a confirmation email${a.homeowner?.email ? ` at ${a.homeowner.email}` : ""} in a few minutes.` : "",
+    a.second ? ` Please make sure ${a.second.firstName || "they"} can be there too, so all of your questions get answered.` : "",
+    " If anything changes, just give us a call. Thanks so much for choosing us, and have a great day!\"",
+  ];
+  return lines.join("");
+}
+function confText(conf, a) {
+  if (conf?.sent) return `Confirmation emailed to ${a.homeowner?.email || "the homeowner"}.`;
+  const r = conf?.reason;
+  if (r === "no_email_consent") return "No confirmation email: they didn't agree to email.";
+  if (r === "not_asked") return a.homeowner?.email ? "No confirmation email: you left it unticked." : "No confirmation email: no email address was given.";
+  if (r === "no_email") return "No confirmation email: no email address was given.";
+  return "The confirmation email didn't go. Tell them the time again before you hang up.";
+}
+function CallWrapUp({ a, conf, lead, onFollowUp, onOpen, onDone }) {
+  return (
+    <div className="call-wrap" data-call-wrap>
+      <div className="call-wrap-head"><CheckCircle2 size={26} /><div>
+        <h3 className="form-title">Booked. Time to wrap up the call</h3>
+        <p className="note">{a.homeowner.firstName} {a.homeowner.lastName} · {apptWhenText(a.date, a.time)}{a.repName ? ` · ${a.repName}` : " · estimator not assigned yet"}</p>
+      </div></div>
+      <ul className="call-wrap-list">
+        <li data-wrap="booked" className="ok"><CheckCircle2 size={16} /> Estimate booked{lead?.stage ? `, and they're now an ${stageTerm(lead.stage).toLowerCase()}` : ""}.</li>
+        <li data-wrap="email" className={conf?.sent ? "ok" : "warn"}>{conf?.sent ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />} {confText(conf, a)}</li>
+        <li data-wrap="followup" className="ok"><CheckCircle2 size={16} />
+          {a.consent?.email === true ? " They'll get a reminder email the day before." : " No reminder email goes, so the estimator should call ahead."}</li>
+      </ul>
+      <div className="call-wrap-say"><span className="call-say-l">Say</span>
+        <p className="crm-script" data-wrap-say>{callWrapText(a, conf)}</p></div>
+      <div className="form-actions">
+        {onFollowUp && <button type="button" className="btn-ghost" data-wrap-fu onClick={onFollowUp}><Plus size={15} /> Add a follow-up</button>}
+        <button type="button" className="btn-ghost" data-wrap-open onClick={onOpen}>Open the appointment</button>
+        <button type="button" className="btn-solid" data-wrap-done onClick={onDone}>Done</button>
+      </div>
+    </div>
+  );
+}
+
+function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appointments = [], onSaved, onCancel, selfRep = null,
+  accountName = "", meName = "" }) {
   // 107. Booked from a lead: who they are and what they asked about are
   // already known, so the script starts with them filled in.
   const [f, setF] = useState(() => !existing && seed ? {
@@ -29953,6 +30043,7 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
   };
 
   const toggleService = (id) => set({ services: f.services.includes(id) ? f.services.filter((x) => x !== id) : [...f.services, id] });
+  const say = existing ? null : callSay(step, { f, accountName, meName, repName: repName(f.repId) });
 
   return (
     <div className="appt-flow" data-step={step}>
@@ -29967,6 +30058,7 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
         ))}
       </ol>
 
+      {say && <p className="crm-script call-say" data-say={step}><span className="call-say-l">Say</span>{say}</p>}
       {step === "call" && (
         <div className="appt-pane">
           <div className="appt-q">
@@ -30070,6 +30162,7 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
             <label className="fld">ZIP<span className="appt-req"> *</span>
               <input inputMode="numeric" value={f.address.zip} onChange={(e) => setIn("address", { zip: e.target.value })} /></label>
           </div>
+          <LeadArea zip={f.address.zip} city={f.address.city} state={f.address.state} services={f.services} />
         </div>
       )}
 
@@ -30244,10 +30337,15 @@ function ApptStatusChip({ status }) {
 // 109. Inbox: every email, text, letter, call and note with a lead.
 // 110. Reports for everybody but the call center (which has its own
 // dashboard); Setup (templates, sequences, the website form) for the office.
+// 112. Markets for the office. And a contact-center seat's menu is the four
+// pages a call needs and nothing else: dashboard, leads, appointments and the
+// calendar. Their follow-ups are on their dashboard.
 const CRM_NAV = [["dashboard", "Dashboard"], ["inbox", "Inbox"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"],
-  ["reports", "Reports"], ["setup", "Setup"]];
+  ["reports", "Reports"], ["markets", "Markets"], ["setup", "Setup"]];
 const CRM_PANES = CRM_NAV.map(([id]) => id);
-const crmNavFor = (role) => CRM_NAV.filter(([id]) => (id === "reports" ? role !== "callcenter" : id === "setup" ? ["admin", "pm"].includes(role) : true));
+const CALLCENTER_PANES = ["dashboard", "leads", "appointments", "calendar"];
+const crmNavFor = (role) => CRM_NAV.filter(([id]) => (role === "callcenter" ? CALLCENTER_PANES.includes(id)
+  : id === "setup" || id === "markets" ? ["admin", "pm"].includes(role) : true));
 
 function LeadStageChip({ stage }) {
   return <span className={`tn-chip lead-st lead-st-${stage}`} data-stage={stage}>{stageTerm(stage)}</span>;
@@ -30286,6 +30384,16 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
     catch (e) { setLeadData(e?.body?.error === "migration_needed" ? { migration: e.body.migration || "107_crm_leads" } : { failed: true }); }
   };
   useEffect(() => { loadLeads(); }, []);
+  // 112. The account's markets, for matching every lead on these screens.
+  const [marketData, setMarketData] = useState(null);
+  const loadMarkets = async () => {
+    try { setMarketData(await api.listMarkets()); }
+    catch (e) { setMarketData(e?.body?.error === "migration_needed" ? { migration: e.body.migration || "112_markets" } : { failed: true }); }
+  };
+  useEffect(() => { loadMarkets(); }, []);
+  const marketsCtx = useMemo(() => ({ markets: marketData?.markets || [], ready: !!marketData,
+    migration: marketData?.migration || null, reload: loadMarkets }), [marketData]);
+  const [marketAdd, setMarketAdd] = useState(0);
   const [flow, setFlow] = useState(null);         // null | "new" | appointment
   const [flowLead, setFlowLead] = useState(null); // a lead being booked
   const [open, setOpen] = useState(null);         // an appointment id
@@ -30299,6 +30407,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const [updating, setUpdating] = useState(false);   // Reports: Update report
   const [leadMode, setLeadMode] = useState("");      // a channel to start on a lead's Contact tab
   const [flash, setFlash] = useState("");
+  const [wrap, setWrap] = useState(null);           // 112. {a, conf, lead} after a booking
   const [q, setQ] = useState("");
   const [when, setWhen] = useState("upcoming");
   const [st, setSt] = useState("");
@@ -30366,7 +30475,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const upsertLead = (l) => setLeadData((d) => ({ ...(d || {}), leads: [l, ...((d?.leads) || []).filter((x) => x.id !== l.id)] }));
   const goLeads = (stage = "") => { setLeadStage(stage); setPane("leads"); };
   const titles = { dashboard: "CRM", inbox: "Inbox", leads: "Leads", appointments: "Appointments", calendar: "Calendar", followups: "Follow-ups",
-    reports: "Reports", setup: "Setup" };
+    reports: "Reports", markets: "Markets", setup: "Setup" };
   const caller = role === "callcenter";
   const [calDay, setCalDay] = useState("");
   const leadsReady = !!leadData && !leadData.migration && !leadData.failed;
@@ -30380,11 +30489,11 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const helloUnread = inboxCounts(inboxData?.messages || []).unread || 0;
   // 111. One button per page, for what that page is for.
   const headCta = (<>
-      {pane === "dashboard" ? (<>
-        {caller && !leadsReady && <button className="btn-ghost" data-new-appt onClick={() => { setFlowLead(null); setFlow("new"); }}><PhoneCall size={16} /> New appointment</button>}
-        <button className="btn-solid" data-new-lead data-new-lead-book={caller ? "" : undefined}
-          onClick={() => setLeadForm(caller ? "book" : "new")}><UserPlus size={16} /> New lead</button>
-      </>)
+      {pane === "dashboard" ? (caller
+        // 112. One button for the contact center: the call is booking an
+        // estimate, and the script adds the lead as it goes.
+        ? <button className="btn-solid" data-new-appt onClick={() => setApptStart({})}><PhoneCall size={16} /> New appointment</button>
+        : <button className="btn-solid" data-new-lead onClick={() => setLeadForm("new")}><UserPlus size={16} /> New lead</button>)
         : pane === "inbox" ? <button className="btn-solid" data-new-message onClick={() => setCompose(true)}><Send size={16} /> New message</button>
         : pane === "leads" ? <button className="btn-solid" data-new-lead onClick={() => setLeadForm("new")}><UserPlus size={16} /> Add a lead</button>
         : pane === "appointments" || pane === "calendar" ? (
@@ -30392,10 +30501,12 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
             <PhoneCall size={16} /> New appointment</button>)
         : pane === "followups" ? <button className="btn-solid" data-add-followup onClick={() => setFuForm(true)}><Plus size={16} /> Add a follow-up</button>
         : pane === "reports" ? <button className="btn-solid" data-update-report onClick={() => setUpdating(true)}><Pencil size={16} /> Update report</button>
+        : pane === "markets" ? <button className="btn-solid" data-add-market onClick={() => setMarketAdd((n) => n + 1)}><Plus size={16} /> Add a market</button>
         : null}
   </>);
 
   return (
+    <MarketsCtx.Provider value={marketsCtx}>
     <main className="ss-main appt-view" data-crm-pane={pane}>
       {pane === "dashboard" ? (
         <CrmHello name={meName} weather={weather} mineToday={helloToday} owed={helloOwed} unread={helloUnread} caller={caller}>
@@ -30411,6 +30522,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
             : pane === "followups" ? "What is owed to each homeowner, and when."
             : pane === "reports" ? "What is in the pipeline, who is closing, where sales come from and why estimates are lost."
             : pane === "setup" ? "Templates for email, texts and letters, follow-up sequences, and the estimate form for your own website."
+            : pane === "markets" ? "Where you sell, and which services you offer in each place."
             : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
             : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
           {headCta}
@@ -30463,6 +30575,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
         <CrmReports leads={leads} appointments={list} leadsReady={!!leadData && !leadData.migration && !leadData.failed}
           dealsReady={data ? data.dealsReady !== false : true} />
       )}
+      {pane === "markets" && ["admin", "pm"].includes(role) && <CrmMarkets adding={marketAdd} />}
       {pane === "setup" && ["admin", "pm"].includes(role) && (
         <CrmSetup lib={lib} onReload={loadLib} subdomain={subdomain} accountName={accountName} theme={theme} />
       )}
@@ -30519,10 +30632,12 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       {flow && (
         <Modal onClose={() => { setFlow(null); setFlowLead(null); }} wide>
           <CallFlow existing={flow === "new" ? null : flow} seed={flow === "new" ? flowLead : null} selfRep={selfRep}
+            accountName={accountName} meName={meName}
             leadId={flow === "new" ? flowLead?.id || null : null} reps={reps} appointments={list}
             onCancel={() => { setFlow(null); setFlowLead(null); }}
             onSaved={(a, conf, res) => {
-              upsert(a); setFlow(null); setFlowLead(null); setOpenLead(null); setOpen(a.id);
+              upsert(a); setFlow(null); setFlowLead(null); setOpenLead(null);
+              if (flow === "new") setWrap({ a, conf, lead: res?.lead || null }); else setOpen(a.id);
               if (pane !== "appointments" && pane !== "leads" && pane !== "calendar" && !(caller && pane === "dashboard")) setPane("appointments");
               loadLeads();
               setFlash((flow === "new"
@@ -30532,6 +30647,14 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
                 + (res?.consentRecorded === false ? ` Their follow-up answers weren't saved: run migration ${res.migration || "106_sales_crm"}.` : "")
                 + (res?.lead?.migration ? ` They weren't added to your leads: run migration ${res.lead.migration}.` : ""));
             }} />
+        </Modal>
+      )}
+      {wrap && (
+        <Modal onClose={() => setWrap(null)}>
+          <CallWrapUp a={wrap.a} conf={wrap.conf} lead={wrap.lead}
+            onFollowUp={wrap.lead?.id ? () => { const l = leads.find((x) => x.id === wrap.lead.id) || wrap.lead; setWrap(null); setFuForm(l); } : null}
+            onOpen={() => { const id = wrap.a.id; setWrap(null); setOpen(id); }}
+            onDone={() => setWrap(null)} />
         </Modal>
       )}
       {leadForm && (
@@ -30598,6 +30721,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
         </Modal>
       )}
     </main>
+    </MarketsCtx.Provider>
   );
 }
 
@@ -30797,6 +30921,53 @@ function ApptCalendar({ list, reps = [], selected, onSelect, onOpen, onNew }) {
 // call: add who is on the phone as a lead, then book their estimate, which
 // makes them an opportunity. Under that, who to ring next and what this seat
 // has done today and this month.
+// 112. Where this rep stands among the contact center: estimates booked in
+// the window picked, their rank, and their share of everything booked.
+function CallerRank({ appointments, meId, today }) {
+  const [win, setWin] = useState("day");
+  const [custom, setCustom] = useState({ from: today, to: today });
+  const range = rankWindow(win, today, custom);
+  const b = bookingLeaderboard({ appointments, meId, ...range });
+  const top = b.rows.slice(0, 5);
+  const meShown = top.some((r) => r.id === meId);
+  const ord = (n) => { const v = n % 100; return n + (v >= 11 && v <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th"); };
+  return (
+    <section className="crm-card caller-rank" data-caller-rank>
+      <div className="caller-rank-head">
+        <h3>Your rank</h3>
+        <div className="seg-tabs caller-rank-win" role="group" aria-label="When">
+          {RANK_WINDOWS.map((w) => (
+            <button key={w.id} type="button" data-rank-win={w.id} className={win === w.id ? "on" : ""} aria-pressed={win === w.id}
+              onClick={() => setWin(w.id)}>{w.label}</button>
+          ))}
+        </div>
+      </div>
+      {win === "custom" && (
+        <div className="caller-rank-dates">
+          <label className="fld">From<input type="date" data-rank-from value={custom.from} onChange={(e) => setCustom((c) => ({ ...c, from: e.target.value }))} /></label>
+          <label className="fld">To<input type="date" data-rank-to value={custom.to} onChange={(e) => setCustom((c) => ({ ...c, to: e.target.value }))} /></label>
+        </div>
+      )}
+      <div className="caller-rank-big">
+        <div><b data-rank-me>{b.myRank ? ord(b.myRank) : "–"}</b><span>{b.of ? `of ${b.of} booking` : "nobody has booked yet"}</span></div>
+        <div><b data-rank-booked>{b.myBooked}</b><span>{b.myBooked === 1 ? "estimate you booked" : "estimates you booked"}</span></div>
+        <div><b data-rank-share>{b.share == null ? "–" : `${b.share}%`}</b><span>of {b.total} booked in all</span></div>
+      </div>
+      {b.myRank === 1 && b.myBooked > 0 && <p className="caller-rank-cheer" data-rank-cheer>You're in first. Keep it going!</p>}
+      {b.myRank > 1 && <p className="caller-rank-cheer" data-rank-cheer>{b.rows[b.myRank - 2]?.booked - b.myBooked + 1 || 1} more to move up.</p>}
+      {top.length > 0 && (
+        <ol className="caller-board" data-rank-board>
+          {top.map((r) => (
+            <li key={r.id} className={r.id === meId ? "me" : ""}><span className="cb-rank">{r.rank}</span>
+              <span className="cb-name">{r.id === meId ? "You" : r.name}</span><span className="cb-n">{r.booked}</span></li>
+          ))}
+          {!meShown && b.myRank && <li className="me"><span className="cb-rank">{b.myRank}</span><span className="cb-name">You</span><span className="cb-n">{b.myBooked}</span></li>}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function CallerDashboard({ leads, appointments, followUps, meId, leadsReady, onNewLead, onOpenLead, onBookLead, onOpenAppt, onFollowUps, onLeads }) {
   const today = dayKey();
   const d = callerDashboard({ leads, appointments, meId, today });
@@ -30806,14 +30977,13 @@ function CallerDashboard({ leads, appointments, followUps, meId, leadsReady, onN
     <div className="crm-dash caller-dash" data-caller-dash>
       <section className="caller-start" data-caller-start>
         <ol className="caller-steps">
-          <li><b>1</b><span><strong>Add the lead</strong>Who is on the phone and what they want done.</span></li>
-          <li><b>2</b><span><strong>Book the estimate</strong>The call script, a time and a sales manager.</span></li>
-          <li><b>3</b><span><strong>They're an opportunity</strong>The office takes it from there.</span></li>
+          <li><b>1</b><span><strong>Greet and listen</strong>Who they are and what they want done. The script tells you what to say.</span></li>
+          <li><b>2</b><span><strong>Book the estimate</strong>A day, a time and an estimator. They're added to your leads as you go.</span></li>
+          <li><b>3</b><span><strong>Wrap up the call</strong>Confirm the time, the email and the follow-up, then say goodbye.</span></li>
         </ol>
-        <button className="btn-solid caller-go" data-caller-new-lead disabled={!leadsReady} onClick={onNewLead}>
-          <UserPlus size={18} /> New lead</button>
-        {!leadsReady && <p className="note">Leads aren't available yet, so book with New appointment above.</p>}
+        {!leadsReady && <p className="note">Leads aren't available yet. Bookings still go through with New appointment above.</p>}
       </section>
+      <CallerRank appointments={appointments} meId={meId} today={today} />
       <dl className="crm-kpis caller-kpis" data-caller-kpis>
         <div><dt>Leads added today</dt><dd data-ck="leadsToday">{d.leadsToday}</dd></div>
         <div><dt>Booked today</dt><dd data-ck="bookedToday">{d.bookedToday}</dd></div>
@@ -30977,7 +31147,10 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
   const toggle = (id) => set({ services: f.services.includes(id) ? f.services.filter((x) => x !== id) : [...f.services, id] });
   return (
     <div className="lead-form" data-lead-form>
-      <h3 className="form-title">{existing ? "Edit lead" : startStage && firstStage !== "lead" ? `Add a ${stageTerm(firstStage).toLowerCase()}` : "Add a lead"}</h3>
+      <h3 className="form-title">{existing ? "Edit lead" : startStage === "opportunity" ? "Add an opportunity"
+        : startStage && firstStage !== "lead" ? `Add a ${stageTerm(firstStage).toLowerCase()}` : "Add a lead"}</h3>
+      {!existing && startStage === "opportunity" && !sales && <p className="note" data-opp-note>Add them, then book their estimate. Booking is what makes them an opportunity.</p>}
+      {!existing && <p className="crm-script call-say" data-lead-say><span className="call-say-l">Say</span>"Who do I have the pleasure of speaking with? And the best number to reach you?"</p>}
       <div className="fld-row">
         <label className="fld"><span>First name</span><input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} /></label>
         <label className="fld"><span>Last name</span><input value={f.lastName} onChange={(e) => set({ lastName: e.target.value })} /></label>
@@ -30992,6 +31165,8 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
         <label className="fld"><span>State</span><input maxLength={2} value={f.address.state} onChange={(e) => set({ address: { ...f.address, state: e.target.value.toUpperCase() } })} /></label>
         <label className="fld"><span>ZIP</span><input inputMode="numeric" value={f.address.zip} onChange={(e) => set({ address: { ...f.address, zip: e.target.value } })} /></label>
       </div>
+      <LeadArea zip={f.address.zip} city={f.address.city} state={f.address.state} services={f.services} compact />
+      {!existing && <p className="crm-script call-say"><span className="call-say-l">Say</span>"And what project are you thinking about for your home?"</p>}
       <div className="fld"><span>Interested in</span>
         <div className="chips">
           {APPT_SERVICES.map((sv) => (
@@ -31007,7 +31182,7 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
         </label>
         <label className="fld"><span>Source</span>
           <select value={f.source} onChange={(e) => set({ source: e.target.value })}>
-            <option value="">{role === "callcenter" ? "Call center" : "Office"}</option>
+            <option value="">{role === "callcenter" ? "Contact center" : "Office"}</option>
             {LEAD_SOURCES.map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
           </select>
         </label>
@@ -31073,6 +31248,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         </div>
         <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
+      <LeadArea zip={lead.address?.zip} city={lead.address?.city} state={lead.address?.state} services={lead.services || []} />
       <LeadDetailTabs lead={lead} start={startTab} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib}
         onConsent={(consent) => onSaved({ ...lead, consent })}>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
@@ -31706,6 +31882,158 @@ function CrmReports({ leads, appointments, leadsReady, dealsReady }) {
           <p className="note">The middle figure across every lead and sale, so one slow job doesn't skew it.</p>
         </section>
       </div>
+    </div>
+  );
+}
+
+// 112. MARKETS, and what the rep knows about where the homeowner is.
+//
+// The markets are read once by the CRM and handed down through a context, so
+// the lead form, the call script and a lead's record all match a homeowner to
+// the same list without each asking for it.
+const MarketsCtx = React.createContext({ markets: [], ready: false });
+
+// The weather at a ZIP (or town), asked once per place per half hour and
+// shared by every card showing it. Decoration: a failure is no card.
+const AREA_WX = new Map();
+function useAreaWeather({ zip = "", city = "", state = "" } = {}) {
+  const z = /^\d{5}$/.test(String(zip || "").trim()) ? String(zip).trim() : "";
+  const key = z ? `z|${z}` : city && state ? `c|${String(city).trim().toLowerCase()}|${String(state).toUpperCase()}` : "";
+  const [w, setW] = useState(() => (key && AREA_WX.get(key)?.value) || null);
+  useEffect(() => {
+    if (!key) { setW(null); return undefined; }
+    const hit = AREA_WX.get(key);
+    if (hit && Date.now() - hit.at < 30 * 60_000) { setW(hit.value); return undefined; }
+    let live = true;
+    // A short wait, so typing a ZIP asks once, not five times.
+    const t = setTimeout(async () => {
+      try {
+        const r = await api.crmWeather(z ? { zip: z } : { city, state });
+        AREA_WX.set(key, { at: Date.now(), value: r && typeof r.tempF === "number" ? r : null });
+        if (live) setW(AREA_WX.get(key).value);
+      } catch { if (live) setW(null); }
+    }, 450);
+    return () => { live = false; clearTimeout(t); };
+  }, [key]);
+  return w;
+}
+
+// Which market they are in, whether it does what they asked for, and the
+// weather there with something to say about it. On a lead's record and on the
+// call script beside their address.
+function LeadArea({ zip, city, state, services = [], compact = false }) {
+  const { markets, ready } = React.useContext(MarketsCtx);
+  const m = marketFor(markets, { zip, city, state });
+  const w = useAreaWeather({ zip, city, state });
+  const off = servicesNotOffered(m, services);
+  const has = /^\d{5}$/.test(String(zip || "").trim()) || (city && state);
+  if (!has) return null;
+  const line = weatherLine(w);
+  const talk = weatherTalk(w, services);
+  return (
+    <div className={`lead-area ${compact ? "compact" : ""}`} data-lead-area>
+      <div className="lead-area-row" data-lead-market>
+        <MapPin size={15} />
+        {m ? <span><b>{m.name}</b> market</span>
+          : ready && markets.length ? <span className="lead-area-none">Not in any of your markets</span>
+          : ready ? <span className="lead-area-none">No markets set up yet</span> : <span className="lead-area-none">Checking the market…</span>}
+        {off.length > 0 && <span className="tn-chip lead-area-warn" data-not-offered>{andList(off.map(serviceLabel))} not offered there</span>}
+      </div>
+      {line && (
+        <div className="lead-area-row lead-area-wx" data-lead-weather>
+          <CloudSun size={15} />
+          <span><b>{line}</b>{w?.place ? ` in ${w.place}` : ""}
+            {typeof w?.hiF === "number" ? ` · high ${Math.round(w.hiF)}°, low ${Math.round(w.loF)}°` : ""}</span>
+        </div>
+      )}
+      {line && talk && <p className="crm-script lead-area-talk" data-weather-talk>{talk}</p>}
+    </div>
+  );
+}
+
+const marketBlank = () => ({ name: "", zips: "", cities: "", services: [], active: true });
+function CrmMarkets({ adding = 0 }) {
+  const { markets, ready, migration, reload } = React.useContext(MarketsCtx);
+  const [edit, setEdit] = useState(null); // null | {id?, name, zips, cities, services, active}
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [removing, setRemoving] = useState(null);
+  useEffect(() => { if (adding) { setEdit(marketBlank()); setErr(null); } }, [adding]);
+  const save = async () => {
+    setBusy(true); setErr(null);
+    const v = validMarket(edit);
+    if (!v.ok) { setErr(v); setBusy(false); return; }
+    try {
+      if (edit.id) await api.patchMarket(edit.id, v.market); else await api.createMarket(v.market);
+      setEdit(null); await reload();
+    } catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const remove = async (m) => {
+    try { await api.deleteMarket(m.id); setRemoving(null); await reload(); }
+    catch (e) { setErr(e); setRemoving(null); }
+  };
+  const toggleSvc = (id) => setEdit((x) => ({ ...x, services: x.services.includes(id) ? x.services.filter((s) => s !== id) : [...x.services, id] }));
+  return (
+    <div className="crm-markets" data-markets>
+      {migration && <p className="appt-warn" role="note">Markets aren't set up on this database yet. Run migration {migration}.</p>}
+      <p className="note">A market is a place you sell in: the ZIP codes or towns it covers and the services you offer there.
+        Every lead is matched to a market by their ZIP, so the contact center knows what to offer them.</p>
+      {edit && (
+        <div className="lc-form market-form" data-market-form>
+          <label className="fld">Market name<input value={edit.name} data-market-name placeholder="South Sound"
+            onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+          <label className="fld">ZIP codes <span className="fld-note">separate with commas or spaces</span>
+            <textarea rows={2} value={edit.zips} data-market-zips placeholder="98402, 98403, 98405"
+              onChange={(e) => setEdit({ ...edit, zips: e.target.value })} /></label>
+          <label className="fld">Towns <span className="fld-note">one per line, with the state</span>
+            <textarea rows={2} value={edit.cities} data-market-cities placeholder={"Tacoma, WA\nFife, WA"}
+              onChange={(e) => setEdit({ ...edit, cities: e.target.value })} /></label>
+          <div className="appt-q-label">Services offered there</div>
+          <div className="chips" data-market-services>
+            {APPT_SERVICES.map((sv) => (
+              <button key={sv.id} type="button" className={`chip ${edit.services.includes(sv.id) ? "on" : ""}`}
+                aria-pressed={edit.services.includes(sv.id)} data-market-svc={sv.id} onClick={() => toggleSvc(sv.id)}>{sv.label}</button>
+            ))}
+          </div>
+          <label className="appt-check"><input type="checkbox" checked={edit.active} onChange={(e) => setEdit({ ...edit, active: e.target.checked })} />
+            Active: leads here are matched to it</label>
+          {err && <p className="form-err" role="alert">{marketErrText(err)}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => { setEdit(null); setErr(null); }}>Cancel</button>
+            <button className="btn-solid" data-market-save disabled={busy} onClick={save}>{busy ? "Saving…" : edit.id ? "Save market" : "Add market"}</button>
+          </div>
+        </div>
+      )}
+      {!edit && err && <p className="form-err" role="alert">{marketErrText(err)}</p>}
+      {ready && !markets.length && !edit && (
+        <div className="empty appt-empty"><p>No markets yet.</p>
+          <button className="btn-solid" onClick={() => setEdit(marketBlank())}>Add your first market</button></div>
+      )}
+      <ul className="market-list">
+        {markets.map((m) => (
+          <li key={m.id} className={`market-row ${m.active ? "" : "off"}`} data-market={m.id}>
+            <div className="market-main">
+              <b>{m.name}</b>{!m.active && <span className="tn-chip">Paused</span>}
+              <span className="note">{[m.zips.length ? `${m.zips.length} ${m.zips.length === 1 ? "ZIP" : "ZIPs"}` : "",
+                m.cities.length ? m.cities.slice(0, 3).map((c) => `${c.city}, ${c.state}`).join(" · ") + (m.cities.length > 3 ? ` +${m.cities.length - 3}` : "") : ""]
+                .filter(Boolean).join(" · ")}</span>
+              <span className="market-svcs">{m.services.map((sv) => <span key={sv} className="tn-chip">{serviceLabel(sv)}</span>)}</span>
+            </div>
+            <div className="market-acts">
+              <button className="btn-ghost sm" data-market-edit onClick={() => { setErr(null);
+                setEdit({ id: m.id, name: m.name, zips: m.zips.join(", "), cities: m.cities.map((c) => `${c.city}, ${c.state}`).join("\n"),
+                  services: m.services, active: m.active }); }}><Pencil size={13} /> Edit</button>
+              <button className="btn-ghost sm" data-market-delete onClick={() => setRemoving(m)}><Trash2 size={13} /></button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {removing && (
+        <ConfirmRemove name={removing.name} what="market" verb="Delete"
+          consequence="Leads in it are not changed; they just won't be matched to a market until another one covers their ZIP."
+          onConfirm={() => remove(removing)} onCancel={() => setRemoving(null)} />
+      )}
     </div>
   );
 }
@@ -56386,7 +56714,33 @@ button.job-insp:hover{border-color:#2f5577}
 .appt-start-opt:hover:not(:disabled){border-color:var(--brand)}
 .appt-start-opt:disabled{opacity:.55;cursor:not-allowed}
 @media (max-width:560px){.appt-start-opts{grid-template-columns:1fr}}
-.crm-hello{margin-bottom:4px}
+.crm-hello{margin-bottom:22px}
+.call-say{display:flex;gap:10px;align-items:flex-start;margin:0 0 14px;padding:12px 14px;border-left:3px solid var(--brand);
+  background:var(--paper);border-radius:8px;font-size:15px;line-height:1.45}
+.call-say-l{flex:none;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--brand);padding-top:3px}
+.call-wrap-head{display:flex;gap:12px;align-items:flex-start;color:var(--brand)}
+.call-wrap-head .form-title{color:var(--ink);margin:0}
+.call-wrap-list{list-style:none;margin:16px 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.call-wrap-list li{display:flex;gap:8px;align-items:center;font-size:14.5px}
+.call-wrap-list li.ok svg{color:var(--brand)}
+.call-wrap-list li.warn svg{color:var(--amber)}
+.call-wrap-say{padding:14px;border-left:3px solid var(--brand);background:var(--paper);border-radius:8px;margin-bottom:14px}
+.call-wrap-say .crm-script{margin:6px 0 0;font-size:16px;line-height:1.5}
+.caller-rank-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.caller-rank-head h3{margin:0}
+.caller-rank-win{flex-wrap:wrap}
+.caller-rank-dates{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px}
+.caller-rank-big{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-top:14px}
+.caller-rank-big>div{display:flex;flex-direction:column;gap:2px;padding:12px;border:1px solid var(--line);border-radius:10px}
+.caller-rank-big b{font-size:28px;font-weight:800;color:var(--brand)}
+.caller-rank-big span{font-size:12.5px;color:var(--ink-soft)}
+.caller-rank-cheer{margin:10px 0 0;font-weight:700}
+.caller-board{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.caller-board li{display:flex;gap:10px;align-items:center;padding:6px 10px;border-radius:8px;font-size:14px}
+.caller-board li.me{background:var(--paper);font-weight:700}
+.cb-rank{width:24px;text-align:center;color:var(--ink-soft)}
+.cb-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:560px){.caller-rank-big{grid-template-columns:1fr}}
 .crm-hello p b{color:var(--brand)}
 .report-stage{align-items:flex-end}
 .report-appt{border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}

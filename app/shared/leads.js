@@ -29,7 +29,7 @@ export const CALLCENTER_STAGES = ["lead", "prospect"];
 // Where a lead came from. `call_center` is set when a call-center seat books
 // or adds one, `api` when one arrives through the API.
 export const LEAD_SOURCES = [
-  { id: "call_center", label: "Call center" },
+  { id: "call_center", label: "Contact center" },
   { id: "website", label: "Website" },
   { id: "referral", label: "Referral" },
   { id: "in_person", label: "In person" },
@@ -172,5 +172,54 @@ export function callerDashboard({ leads = [], appointments = [], meId = null, to
     toCall,
     upcoming: myAppts.filter((a) => STATUSES[a.status]?.open && a.date >= today && a.date <= weekAhead)
       .sort((x, y) => `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`)),
+  };
+}
+
+// 112. WHO BOOKED THE MOST, for the contact center's dashboard. Counted over
+// the estimates BOOKED in the window (by when they were booked, not when the
+// visit is), canceled ones (stored as 'cancelled') left out, ranked by count then name so a tie reads
+// the same on every screen. `share` is this seat's part of everything booked
+// in the window, as a whole percent; null over nothing, because 0% of nothing
+// is not an answer.
+export const RANK_WINDOWS = [
+  { id: "day", label: "Today" },
+  { id: "week", label: "This week" },
+  { id: "mtd", label: "Month to date" },
+  { id: "custom", label: "Custom" },
+];
+export function rankWindow(id, today, custom = {}) {
+  if (id === "day") return { from: today, to: today };
+  if (id === "mtd") return { from: `${today.slice(0, 7)}-01`, to: today };
+  if (id === "week") {
+    // Monday to today. Built at noon UTC so no timezone moves the day.
+    const d = new Date(`${today}T12:00:00Z`);
+    const back = (d.getUTCDay() + 6) % 7;
+    return { from: addDays(today, -back), to: today };
+  }
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(custom.from || "") ? custom.from : today;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(custom.to || "") ? custom.to : today;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+export function bookingLeaderboard({ appointments = [], meId = null, from, to }) {
+  const day = (stamp) => String(stamp || "").replace(" ", "T").slice(0, 10);
+  const inWin = appointments.filter((a) => a.status !== "cancelled" && a.createdBy
+    && day(a.createdAt) >= from && day(a.createdAt) <= to);
+  const by = new Map();
+  for (const a of inWin) {
+    const r = by.get(a.createdBy) || { id: a.createdBy, name: a.createdByName || "Someone", booked: 0 };
+    r.booked += 1; by.set(a.createdBy, r);
+  }
+  const rows = [...by.values()].sort((x, y) => y.booked - x.booked || String(x.name).localeCompare(String(y.name)));
+  // Standard competition ranking: two people on 5 are both second.
+  let last = null, rank = 0;
+  rows.forEach((r, i) => { if (r.booked !== last) { rank = i + 1; last = r.booked; } r.rank = rank; });
+  const me = rows.find((r) => r.id === meId) || null;
+  const total = inWin.length;
+  return {
+    rows, total,
+    myBooked: me ? me.booked : 0,
+    myRank: me ? me.rank : null,
+    of: rows.length,
+    share: total ? Math.round(((me ? me.booked : 0) / total) * 100) : null,
   };
 }

@@ -365,7 +365,9 @@ WITH spec(j) AS (SELECT
   ',["m110_crm_enrollments","col","crm_enrollments",["id","account_id","lead_id","sequence_id","start_stage","enrolled_by","started_at","next_step","next_at","sent_count","status","stopped_reason","stopped_at"]]') ||
   -- 111. Text and letter templates (paste 1), and follow-ups on a lead (paste 2).
   (',["m111_template_channel","col","crm_templates",["channel"]]' ||
-  ',["m111_lead_followups","col","lead_followups",["id","account_id","lead_id","body","channel","due_date","assignee_id","enrollment_id","template_id","done_at","done_by","reminded_at","created_by","created_at"]]') ||
+  ',["m111_lead_followups","col","lead_followups",["id","account_id","lead_id","body","channel","due_date","assignee_id","enrollment_id","template_id","done_at","done_by","reminded_at","created_by","created_at"]]' ||
+  -- 112. Markets: where an account sells, and what it sells there.
+  ',["m112_sales_markets","col","sales_markets",["id","account_id","name","zips","cities","services","active","created_by","created_at","updated_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

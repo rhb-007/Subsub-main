@@ -353,7 +353,9 @@
     "test:crmchannels": "node --no-warnings scripts/crm-channels-test.mjs",
     "test:crmpagesui": "node --no-warnings scripts/crm-pages-ui-test.mjs",
     "test:crmselling": "node --no-warnings scripts/crm-selling-test.mjs",
-    "test:crmsellingui": "node --no-warnings scripts/crm-selling-ui-test.mjs"
+    "test:crmsellingui": "node --no-warnings scripts/crm-selling-ui-test.mjs",
+    "test:markets": "node --no-warnings scripts/markets-test.mjs",
+    "test:viewasui": "node --no-warnings scripts/view-as-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

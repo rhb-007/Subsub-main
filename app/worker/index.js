@@ -28,6 +28,7 @@ import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, M
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
   CALLCENTER_STAGES } from "../shared/leads.js";
+import { validMarket, MAX_MARKETS } from "../shared/markets.js";
 import { validDeal, optOutBlock, unsubscribeLink, UNSUB_TOKEN_RE, validDnc, BUILTIN_TEMPLATES, isBuiltin,
   validTemplate, validSequence, stepDueAt, sequenceStop, fillTemplate, leadVars, webLeadProblem,
   webConsent, webLeadServices, templateChannel, BUILTIN_SEQUENCES, isStarterSequence,
@@ -898,6 +899,9 @@ const CALLCENTER_ALLOWED = [
   // 111. A follow-up on a homeowner, with or without an estimate booked.
   [/^\/api\/sales-leads\/[^/]+\/follow-ups$/, ["POST"]],
   [/^\/api\/sales-leads\/[^/]+\/follow-ups\/[^/]+$/, ["PATCH"]],
+  // 112. The markets a lead is matched to, and the weather where they are.
+  [/^\/api\/markets$/, ["GET"]],
+  [/^\/api\/crm-weather$/, ["GET"]],
 ];
 
 // 109. A sales manager: the call center's routes, narrowed by crmScope to
@@ -5345,6 +5349,48 @@ const connectRequestToJs = (r) => ({
 // not load.
 const weatherCache = new Map();
 
+// The weather at a town, or at a ZIP, for any screen that shows it. One cache
+// and one choice of geocoder answer, so the tenant's card and the contact
+// center's lead can never disagree about the same place. Every failure is {}.
+async function weatherAt({ city = "", state = "", zip = "" }) {
+    const key = city ? `${city.toLowerCase()}|${state.toLowerCase()}|${zip}` : `zip|${zip}`;
+    const hit = weatherCache.get(key);
+    if (hit && Date.now() - hit.at < WEATHER_TTL_MIN * 60_000) return hit.value;
+
+    // The geocoder takes no state filter -- an `admin1` parameter is silently
+    // ignored, which is how Ruston, WA got Ruston, LOUISIANA's weather. So
+    // ask for several US matches and choose among them (shared/geopick.js),
+    // then try the ZIP itself if the town gave nothing in the right state.
+    const geocode = (name) => fetch(
+      `https://geocoding-api.open-meteo.com/v1/search?count=20&language=en&format=json&countryCode=US`
+      + `&name=${encodeURIComponent(name)}`
+    ).then((r) => r.json()).catch(() => null);
+    let place = null;
+    if (city) place = pickPlace((await geocode(city))?.results, { city, state, zip });
+    if (!place && /^\d{5}$/.test(zip)) place = pickPlace((await geocode(zip))?.results, { state, zip });
+    if (!place) { weatherCache.set(key, { at: Date.now(), value: {} }); return {}; }
+
+    const wx = await fetch(
+      `https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code`
+      // 072. Today's high and low, for the tenant's weather card. Same call,
+      // so it costs nothing more; absent from a reply, the card shows only now.
+      + `&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto`
+      + `&temperature_unit=fahrenheit&latitude=${place.latitude}&longitude=${place.longitude}`
+    ).then((r) => r.json()).catch(() => null);
+    const cur = wx?.current;
+    if (!cur || typeof cur.temperature_2m !== "number" || weatherLabel(cur.weather_code) === null) {
+      weatherCache.set(key, { at: Date.now(), value: {} });
+      return {};
+    }
+
+    const value = { tempF: cur.temperature_2m, code: cur.weather_code, place: city || place.name || zip };
+    const hi = wx?.daily?.temperature_2m_max?.[0], lo = wx?.daily?.temperature_2m_min?.[0];
+    if (typeof hi === "number" && typeof lo === "number") { value.hiF = hi; value.loF = lo; }
+    weatherCache.set(key, { at: Date.now(), value });
+    return value;
+}
+
+
 // Where an account IS, for the one purpose of naming a town to a weather API.
 //
 // This read `accounts.company_id -> companies.city` and nothing else, which is
@@ -5452,41 +5498,7 @@ app.get("/api/weather", async (c) => {
     if (!where) return c.json({});
     const { city, state, zip = "" } = where;
 
-    const key = city ? `${city.toLowerCase()}|${state.toLowerCase()}|${zip}` : `zip|${zip}`;
-    const hit = weatherCache.get(key);
-    if (hit && Date.now() - hit.at < WEATHER_TTL_MIN * 60_000) return c.json(hit.value);
-
-    // The geocoder takes no state filter -- an `admin1` parameter is silently
-    // ignored, which is how Ruston, WA got Ruston, LOUISIANA's weather. So
-    // ask for several US matches and choose among them (shared/geopick.js),
-    // then try the ZIP itself if the town gave nothing in the right state.
-    const geocode = (name) => fetch(
-      `https://geocoding-api.open-meteo.com/v1/search?count=20&language=en&format=json&countryCode=US`
-      + `&name=${encodeURIComponent(name)}`
-    ).then((r) => r.json()).catch(() => null);
-    let place = null;
-    if (city) place = pickPlace((await geocode(city))?.results, { city, state, zip });
-    if (!place && /^\d{5}$/.test(zip)) place = pickPlace((await geocode(zip))?.results, { state, zip });
-    if (!place) { weatherCache.set(key, { at: Date.now(), value: {} }); return c.json({}); }
-
-    const wx = await fetch(
-      `https://api.open-meteo.com/v1/forecast?current=temperature_2m,weather_code`
-      // 072. Today's high and low, for the tenant's weather card. Same call,
-      // so it costs nothing more; absent from a reply, the card shows only now.
-      + `&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto`
-      + `&temperature_unit=fahrenheit&latitude=${place.latitude}&longitude=${place.longitude}`
-    ).then((r) => r.json()).catch(() => null);
-    const cur = wx?.current;
-    if (!cur || typeof cur.temperature_2m !== "number" || weatherLabel(cur.weather_code) === null) {
-      weatherCache.set(key, { at: Date.now(), value: {} });
-      return c.json({});
-    }
-
-    const value = { tempF: cur.temperature_2m, code: cur.weather_code, place: city || place.name || zip };
-    const hi = wx?.daily?.temperature_2m_max?.[0], lo = wx?.daily?.temperature_2m_min?.[0];
-    if (typeof hi === "number" && typeof lo === "number") { value.hiF = hi; value.loF = lo; }
-    weatherCache.set(key, { at: Date.now(), value });
-    return c.json(value);
+    return c.json(await weatherAt({ city, state, zip }));
   } catch (err) {
     console.warn("[weather] not read:", err?.message || err);
     return c.json({});
@@ -10529,6 +10541,7 @@ export function missingSchema(err) {
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
+  if (/\bsales_markets\b/i.test(m)) return "112_markets";
   if (/\blead_followups\b|crm_templates has no column named channel/i.test(m)) return "111_crm_channels";
   if (/\b(sales_deals|lead_opt_outs|lead_unsub_tokens|crm_templates|crm_sequences|crm_enrollments)\b/i.test(m)) return "110_crm_selling";
   if (/\b(lead_messages|sales_lead_consents)\b/i.test(m)) return "109_lead_contact";
@@ -27978,6 +27991,110 @@ async function leadsGuard(c, fn) {
 function leadRefusal(c, chk) {
   return c.json({ error: chk.error, field: chk.field }, chk.error === "stage_sales_only" ? 403 : 400);
 }
+
+// ---------------------------------------------------------------------------
+// 112. MARKETS. app/shared/markets.js holds the rules. Everybody on the CRM
+// reads them, because a lead's market is worked out from them on screen; only
+// the office (admin, pm) changes them.
+const marketToJs = (r) => ({
+  id: r.id, name: r.name, zips: parseJson(r.zips, []) || [], cities: parseJson(r.cities, []) || [],
+  services: parseJson(r.services, []) || [], active: !!r.active, updatedAt: r.updated_at,
+});
+async function listMarkets(env, accountId) {
+  const { results } = await env.DB.prepare(`SELECT * FROM sales_markets WHERE account_id = ? ORDER BY name`).bind(accountId).all();
+  return (results || []).map(marketToJs);
+}
+const marketsGuard = async (c, fn) => {
+  try { return await fn(); }
+  catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "112_markets" }, 503);
+    throw err;
+  }
+};
+
+app.get("/api/markets", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return marketsGuard(c, async () => c.json({ markets: await listMarkets(c.env, acct.id) }));
+});
+
+app.post("/api/markets", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  if (!["admin", "pm"].includes(role)) return c.json({ error: "office_only" }, 403);
+  const v = validMarket(await c.req.json().catch(() => ({})));
+  if (!v.ok) return c.json(v, 400);
+  return marketsGuard(c, async () => {
+    const n = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM sales_markets WHERE account_id = ?`).bind(acct.id).first();
+    if ((n?.n || 0) >= MAX_MARKETS) return c.json({ error: "too_many_markets" }, 409);
+    const id = uid();
+    const m = v.market;
+    await c.env.DB.prepare(`INSERT INTO sales_markets (id, account_id, name, zips, cities, services, active, created_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, acct.id, m.name, JSON.stringify(m.zips), JSON.stringify(m.cities),
+      JSON.stringify(m.services), m.active ? 1 : 0, userId).run();
+    await logEvent(c.env, acct.id, userId, "market.created", id, { name: m.name });
+    const r = await c.env.DB.prepare(`SELECT * FROM sales_markets WHERE id = ?`).bind(id).first();
+    return c.json({ market: marketToJs(r) }, 201);
+  });
+});
+
+app.patch("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  if (!["admin", "pm"].includes(role)) return c.json({ error: "office_only" }, 403);
+  return marketsGuard(c, async () => {
+    const cur = await c.env.DB.prepare(`SELECT * FROM sales_markets WHERE id = ? AND account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!cur) return c.json({ error: "not_found" }, 404);
+    const b = await c.req.json().catch(() => ({}));
+    // Only the keys sent are changed; the rest are what is stored.
+    const was = marketToJs(cur);
+    const v = validMarket({ name: b.name ?? was.name, zips: b.zips ?? was.zips, cities: b.cities ?? was.cities,
+      services: b.services ?? was.services, active: b.active ?? was.active });
+    if (!v.ok) return c.json(v, 400);
+    const m = v.market;
+    await c.env.DB.prepare(`UPDATE sales_markets SET name = ?, zips = ?, cities = ?, services = ?, active = ?,
+      updated_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ?`).bind(m.name, JSON.stringify(m.zips),
+      JSON.stringify(m.cities), JSON.stringify(m.services), m.active ? 1 : 0, cur.id, acct.id).run();
+    await logEvent(c.env, acct.id, userId, "market.updated", cur.id, { name: m.name });
+    const r = await c.env.DB.prepare(`SELECT * FROM sales_markets WHERE id = ?`).bind(cur.id).first();
+    return c.json({ market: marketToJs(r) });
+  });
+});
+
+app.delete("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  if (!["admin", "pm"].includes(role)) return c.json({ error: "office_only" }, 403);
+  return marketsGuard(c, async () => {
+    const cur = await c.env.DB.prepare(`SELECT id, name FROM sales_markets WHERE id = ? AND account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!cur) return c.json({ error: "not_found" }, 404);
+    // Nothing points at a market (a lead's is worked out on read), so deleting
+    // one loses no record: those leads simply have no market until another
+    // covers their ZIP.
+    await c.env.DB.prepare(`DELETE FROM sales_markets WHERE id = ? AND account_id = ?`).bind(cur.id, acct.id).run();
+    await logEvent(c.env, acct.id, userId, "market.deleted", cur.id, { name: cur.name });
+    return c.json({ ok: true });
+  });
+});
+
+// The weather where a homeowner is, so the rep on the call can talk to it.
+// Asked by ZIP (or town and state), never by a person: what leaves is a place.
+// Rate-limited per account, and like every weather route, every failure is {}.
+app.get("/api/crm-weather", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const zip = String(c.req.query("zip") || "").trim().slice(0, 5);
+  const city = String(c.req.query("city") || "").trim().slice(0, 80);
+  const state = String(c.req.query("state") || "").trim().toUpperCase().slice(0, 2);
+  if (!/^\d{5}$/.test(zip) && !(city && /^[A-Z]{2}$/.test(state))) return c.json({});
+  const rl = await rateLimit(c.env, "crm-weather", acct.id, { limit: 600, windowMinutes: 60 });
+  if (!rl.ok) return c.json({});
+  try { return c.json(await weatherAt({ city, state, zip: /^\d{5}$/.test(zip) ? zip : "" })); }
+  catch (err) { console.warn("[crm-weather] not read:", err?.message || err); return c.json({}); }
+});
 
 app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
   const { error, acct } = await apptAccount(c);
