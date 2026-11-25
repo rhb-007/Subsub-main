@@ -17147,8 +17147,8 @@ refactor.
   consent check, the reply-sender check, the self-booking, the allowlist, the
   self-rep form, the greyed buttons, the Contact tab, and the owner picker.
   `test:salesapptui` pinned a CRM menu with no Inbox and was moved to the new
-  rule. **Pasting 109 is required**; until then leads load and contacting
-  names the file. **Not verified here:** a live email and reply round trip.
+  rule. **109 is pasted on the live database** (16 and 8 columns, confirmed
+  by the owner). **Not verified here:** a live email and reply round trip.
 
 ## Working here
 
