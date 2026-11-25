@@ -137,9 +137,9 @@ const chooseStandard = async (page) => {
 };
 
 const overrideBox = (page) => page.evaluate(() => {
-  const el = document.querySelector(".agr-over");
+  const el = document.querySelector("[data-agr-edit]");
   if (!el) return null;
-  const tog = el.querySelector(".agr-over-tog");
+  const tog = el.querySelector(".agr-edit-head");
   return {
     toggle: (tog?.innerText || "").replace(/\s+/g, " ").trim(),
     open: !!el.querySelector(".agr-fields"),
@@ -148,12 +148,13 @@ const overrideBox = (page) => page.evaluate(() => {
       unit: (f.querySelector(".agr-unit")?.innerText || "").trim(),
       value: f.querySelector("input")?.value ?? null,
     })),
-    reset: [...el.querySelectorAll("button")].some((b) => /standard terms/i.test(b.innerText)),
+    reset: [...el.querySelectorAll("button")].some((b) => /my defaults/i.test(b.innerText)),
+    party: [...el.querySelectorAll("[data-agr-party] input, [data-agr-party] select")].map((i) => i.value),
   };
 });
 
 const setField = (page, label, value) => page.evaluate(([lab, v]) => {
-  const f = [...document.querySelectorAll(".agr-over .agr-field")]
+  const f = [...document.querySelectorAll("[data-agr-edit] .agr-field")]
     .find((x) => (x.querySelector("span")?.innerText || "").trim() === lab);
   const i = f?.querySelector("input");
   if (!i) return false;
@@ -191,7 +192,7 @@ try {
     t.ck("the override section is there", !!box, String(box));
     // Choosing the SubSub agreement is choosing to edit its terms, so they
     // are open rather than folded behind a toggle.
-    t.ck("and opens unfolded", box?.open === true, JSON.stringify(box?.toggle));
+    t.ck("and is open", box?.open === true, JSON.stringify(box?.toggle));
     t.ck("naming the contractor it is for", /Bay Roofing/.test(box?.toggle || ""), box?.toggle);
     t.ck("with nothing changed, it says nothing", !/changed/i.test(box?.toggle || ""), box?.toggle);
 
@@ -199,7 +200,7 @@ try {
     // THE FIELDS ARE FULL SIZE. TermFields is the same grid Account -> Company
     // draws, and its inputs were bare browser boxes there: short, small type.
     // Measured, because only the computed box knows whether the rule fired.
-    const sizes = await page.evaluate(() => [...document.querySelectorAll(".agr-over .agr-in input")]
+    const sizes = await page.evaluate(() => [...document.querySelectorAll("[data-agr-edit] .agr-in input")]
       .map((i) => ({ h: Math.round(i.getBoundingClientRect().height), f: parseFloat(getComputedStyle(i).fontSize) })));
     t.ck("the term inputs are at least 44px tall at 15px type",
       sizes.length > 0 && sizes.every((s) => s.h >= 44 && s.f >= 15), JSON.stringify(sizes.slice(0, 4)));
@@ -217,6 +218,12 @@ try {
     // Offered only when there is something to reset: a control that does
     // nothing is a control somebody presses to find out.
     t.ck("and no reset while nothing is changed", box?.reset === false);
+    // THE COMPANY DETAILS ARE HERE TOO, seeded from the account, because they
+    // print on this agreement and Account -> Company no longer carries them.
+    t.ck("your company details are on the card, filled in from the account",
+      JSON.stringify(box?.party) === JSON.stringify(["Outerhome LLC", "1 Pike St", "Seattle", "WA"]), JSON.stringify(box?.party));
+    t.ck("an admin is offered to make them the defaults, unticked",
+      await page.evaluate(() => document.querySelector("[data-save-default] input")?.checked === false));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -231,12 +238,18 @@ try {
     await chooseStandard(page);
 
     t.ck("the warranty field can be typed into", await setField(page, "Warranty on the work", 24));
+    await page.evaluate(() => {
+      const i = document.querySelector("[data-agr-party] input");
+      const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+      set.call(i, "Outerhome Roofing LLC"); i.dispatchEvent(new Event("input", { bubbles: true }));
+      document.querySelector("[data-save-default] input")?.click();
+    });
     await wait(350);
     let box = await overrideBox(page);
     // THE COUNT IS WHAT MAKES FOLDING SAFE: a modified set must never be
     // silently modified.
-    t.ck("the toggle counts what is different from the standing terms",
-      /1 changed/.test(box?.toggle || ""), box?.toggle);
+    t.ck("the heading counts what is different from the defaults",
+      /2 changed/.test(box?.toggle || ""), box?.toggle);
     t.ck("and a reset appears now there is something to reset", box?.reset === true);
 
     // The preview has to move with it. This is the assertion the whole
@@ -267,8 +280,8 @@ try {
 
     calls = [];
     t.ck("it offers to ask for the missing documents in the same press",
-      await page.evaluate(() => /IRS Form W-9/.test(document.querySelector(".agr-askdocs")?.innerText || "")
-        && document.querySelector(".agr-askdocs input")?.checked === true));
+      await page.evaluate(() => /IRS Form W-9/.test(document.querySelector(".agr-askdocs:not(.agr-savedef)")?.innerText || "")
+        && document.querySelector(".agr-askdocs:not(.agr-savedef) input")?.checked === true));
     await page.evaluate(() => document.querySelector('.agr-panel [data-act="send-standard"]')?.click());
     for (let n = 0; n < 40 && !calls.some((c) => c[0] === "docreq"); n++) await wait(150);
     t.ck("sending also sends the document request, after the agreement",
@@ -280,6 +293,9 @@ try {
     // unchanged, because nothing could write them.
     t.ck("issuing sends the changed term", issued[0]?.terms?.warrantyMonths === 24,
       JSON.stringify(issued[0]?.terms?.warrantyMonths));
+    t.ck("and the company name typed for this agreement", issued[0]?.hiringParty?.name === "Outerhome Roofing LLC",
+      JSON.stringify(issued[0]?.hiringParty));
+    t.ck("and that the admin asked to make them the defaults", issued[0]?.saveAsDefault === true);
     t.ck("and leaves the rest of the account's terms alone",
       issued[0]?.terms?.paymentDays === STANDING.paymentDays
         && issued[0]?.terms?.warrantyResponseHours === STANDING.warrantyResponseHours,
@@ -370,6 +386,51 @@ try {
     await ctx.close();
   }
 
+  console.log("\n-- a sent agreement nobody has signed can be edited, and sending replaces it --");
+  {
+    issued = [];
+    LIVE = { id: "ag_sent", status: "sent", source: "subsub_standard", waitingOn: "sub_sign", issuedAt: "2026-11-21 10:00:00",
+      inForce: false, terms: { ...STANDING, warrantyMonths: 18 }, parties: PARTIES,
+      document: { templateId: "subsub-standard-subcontract", templateVersion: "1.1.0", title: "SubSub Standard Subcontractor Agreement", sections: [] },
+      sends: [{ kind: "issued", at: "2026-11-21 10:00:00", by: "Richard Braun", to: "rae@bay.test", emailed: true, emailTried: true }] };
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
+    await wait(2200);
+    await openCard(page);
+    t.ck("Edit terms is offered while it waits on them to sign",
+      await page.evaluate(() => !!document.querySelector('.agr-panel [data-act="edit-terms"]')));
+    await page.evaluate(() => document.querySelector('.agr-panel [data-act="edit-terms"]')?.click());
+    await wait(400);
+    const box = await overrideBox(page);
+    t.ck("the editor opens on what was sent, not the defaults",
+      box?.fields.find((f) => /Warranty on the work/i.test(f.label))?.value === "18",
+      JSON.stringify(box?.fields.filter((f) => /Warranty on the work/i.test(f.label))));
+    await setField(page, "Warranty on the work", 30);
+    await wait(300);
+    await page.evaluate(() => document.querySelector('.agr-panel [data-act="send-revised"]')?.click());
+    for (let n = 0; n < 30 && !issued.length; n++) await wait(150);
+    t.ck("sending asks the server to replace the one they have",
+      issued[0]?.replace === true && issued[0]?.terms?.warrantyMonths === 30, JSON.stringify(issued[0] && { r: issued[0].replace, w: issued[0].terms?.warrantyMonths }));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+    LIVE = null;
+  }
+
+  console.log("\n-- Account -> Company no longer carries the terms --");
+  {
+    const { ctx, page, crashes } = await visitApp(browser, { host: "outerhome", webPort: WEB,
+      seat: { userId: "u_rb", accountId: "acc_out" }, viewport: { width: 1280, height: 1600 } });
+    await wait(2200);
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => /^My account$/i.test(b.innerText.trim()))?.click());
+    for (let n = 0; n < 20; n++) { await wait(200); if (await page.$(".acct-tabs")) break; }
+    const seen = await page.evaluate(() => ({ tabs: !!document.querySelector(".acct-tabs"),
+      terms: /Your subcontractor agreement/i.test(document.body.innerText), grid: !!document.querySelector(".agr-fields") }));
+    t.ck("the account screen opened, so the next check can fail", seen.tabs === true, JSON.stringify(seen));
+    t.ck("and it has no standing terms panel", seen.terms === false && seen.grid === false, JSON.stringify(seen));
+    t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
+    await ctx.close();
+  }
+
   console.log("\n-- and reset puts it back --");
   {
     issued = [];
@@ -381,8 +442,8 @@ try {
     await setField(page, "Respond to a warranty call within", 12);
     await wait(350);
     t.ck("a change is counted", /1 changed/.test((await overrideBox(page))?.toggle || ""));
-    await page.evaluate(() => [...document.querySelectorAll(".agr-over button")]
-      .find((b) => /standard terms/i.test(b.innerText))?.click());
+    await page.evaluate(() => [...document.querySelectorAll("[data-agr-edit] button")]
+      .find((b) => /my defaults/i.test(b.innerText))?.click());
     await wait(350);
     const box = await overrideBox(page);
     t.ck("reset clears the count", !/changed/i.test(box?.toggle || ""), box?.toggle);

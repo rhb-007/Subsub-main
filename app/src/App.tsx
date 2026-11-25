@@ -6723,6 +6723,7 @@ export default function SubSub() {
         .map((u) => ({ name: u.name || u.email, email: u.email }))
       : [],
     goProperties: can("properties") ? () => setTab("properties") : null,
+    isAdmin: role === "admin",
     goAccount: can("account") && role === "admin"
       ? (pane, focus) => { setTab("account"); setOpenPane({ pane, focus, n: Date.now() }); }
       : null,
@@ -25883,7 +25884,6 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
 
       {/* The terms SubSub's agreement carries. An account that cannot hire
           issues none, so this is not their question. */}
-      {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hires !== false && <StandardTermsPanel myName={me?.name || ""} />}
 
       {pane === "branding" && canManage && !canBrand && (
         <div className="portal-panel settings-panel">
@@ -38507,60 +38507,58 @@ function SignAgreement({ agreement, myName, onClose, onDone }) {
   );
 }
 
-// EVERY CLIENT'S AGREEMENT, IN ONE PLACE, and on the screen where somebody is
-// already dealing with their paperwork. That is the whole point of putting it
-// here: an agreement is one of the things a general contractor asks for, and
-// the moment to answer it is the moment you are submitting the rest.
-// The hiring side of an agreement: send one, see where it is, countersign it.
+// THE AGREEMENT IS EDITED WHERE IT IS SENT: on the contractor's card. It is
+// not one size fits all -- that is the point of the terms being editable -- so
+// the company details and every term sit open here, seeded from the account's
+// defaults, and what is typed goes on THIS agreement. The defaults change only
+// when an admin ticks "make these my defaults", which is why there is no
+// separate terms panel in Account -> Company any more.
 //
-// It sits on the contractor's own card, which is where somebody is standing
-// when they notice there is no agreement -- the same reason PortalInvite is
-// there rather than behind a blank form somewhere else.
-// The per-subcontractor override, on the subcontractor.
-//
-// Same terms, same list, same component as Account -> Your subcontractor
-// agreement; what differs is only which of them this is for. A second field
-// grid would be a second thing to keep in step with `TERM_FIELDS`, so there is
-// one and this passes it different state.
-//
-// IT COUNTS WHAT IS DIFFERENT FROM THE ACCOUNT'S STANDING TERMS, on the
-// toggle, and that is what makes folding it safe: a set somebody edited and
-// then collapsed still says so, and a set nobody touched says nothing. The
-// comparison is against the standing terms the server sent for this send, not
-// against `defaultTerms()` -- an account that has set its own 60-day payment
-// term has not "changed" anything by sending it.
-//
-// Reset is offered only when there is something to reset, because a control
-// that does nothing is a control somebody presses to find out.
-function SubTermsEditor({ fields = [], terms = {}, base = {}, company, onSet, onReset, defaultOpen = false }) {
-  const [open, setOpen] = useState(defaultOpen);
+// The count of what differs from the defaults is said, and "back to my
+// defaults" appears only when there is something to go back to.
+const PARTY_KEYS = ["name", "street", "city", "state"];
+const pickParty = (h) => Object.fromEntries(PARTY_KEYS.map((k) => [k, h?.[k] || ""]));
+function AgreementEditor({ fields = [], terms = {}, base = {}, party = {}, baseParty = {},
+  company, onSet, onSetParty, onReset, saveDefault, onSaveDefault }) {
+  const nav = React.useContext(AppNav);
   const changed = (fields || [])
     .filter((f) => f.kind !== "state")
     .filter((f) => String(terms[f.id] ?? "") !== String(base[f.id] ?? ""));
+  const partyChanged = PARTY_KEYS.filter((k) => String(party[k] ?? "") !== String(baseParty[k] ?? ""));
+  const n = changed.length + partyChanged.length;
   return (
-    <div className="agr-over">
-      <button type="button" className="agr-over-tog" onClick={() => setOpen((v) => !v)}>
-        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        <span>Terms for {company}</span>
-        {changed.length > 0 && (
-          <em className="agr-over-n">{changed.length} changed</em>
+    <div className="agr-edit" data-agr-edit>
+      <div className="agr-edit-head">
+        <b>Terms for {company}</b>
+        {n > 0 && <em className="agr-over-n">{n} changed from your defaults</em>}
+      </div>
+      <p className="cx-sub">Edit anything for {company}. It goes on this agreement only.</p>
+      <h5 className="agr-sub">Your company on the agreement</h5>
+      <div className="agr-party" data-agr-party>
+        <label>Your legal name<input value={party.name || ""} onChange={(e) => onSetParty("name", e.target.value)}
+            placeholder="As it should appear in a contract" /></label>
+        <label>Street<input value={party.street || ""} onChange={(e) => onSetParty("street", e.target.value)} /></label>
+        <label>City<input value={party.city || ""} onChange={(e) => onSetParty("city", e.target.value)} /></label>
+        <label>State<select value={party.state || ""} onChange={(e) => onSetParty("state", e.target.value)}>
+            <option value="">Select…</option>
+            {US_STATES.map(([c, nm]) => <option key={c} value={c}>{nm}</option>)}
+          </select></label>
+      </div>
+      <h5 className="agr-sub">Terms</h5>
+      <TermFields fields={fields} terms={terms} onSet={onSet} />
+      <div className="agr-edit-foot">
+        {nav?.isAdmin && (
+          <label className="agr-askdocs agr-savedef" data-save-default>
+            <input type="checkbox" checked={!!saveDefault} onChange={(e) => onSaveDefault(e.target.checked)} />
+            <span>Make these my defaults for future agreements</span>
+          </label>
         )}
-      </button>
-      {open && <>
-        <p className="cx-sub">
-          Your standard terms, for this contractor only. Changing one here does
-          not change the terms you send anybody else — those are in
-          Account&nbsp;→&nbsp;Company.
-        </p>
-        <TermFields fields={fields} terms={terms} onSet={onSet} />
-        {changed.length > 0 && (
-          <div className="form-actions">
-            <button type="button" className="btn-ghost sm" onClick={onReset}>
-              Back to my standard terms
-            </button>
-          </div>
+        {n > 0 && (
+          <button type="button" className="btn-ghost sm" data-act="reset-terms" onClick={onReset}>
+            Back to my defaults
+          </button>
         )}
-      </>}
+      </div>
     </div>
   );
 }
@@ -38578,12 +38576,15 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
   const [preview, setPreview] = useState(false);
   const [typed, setTyped] = useState("");
   const [terms, setTerms] = useState(null);
+  const [party, setParty] = useState({});
+  const [saveDefault, setSaveDefault] = useState(false);
 
   const load = async () => {
     try {
       const d = await api.subAgreement(sub.id);
       setData(d);
       setTerms(d.previewTerms);
+      setParty(pickParty(d.parties?.hiring));
     } catch (e) {
       if (e?.body?.error === "migration_needed") { setData({ migration: e.body.migration }); return; }
       console.error("[agreement] load failed:", e);
@@ -38612,7 +38613,8 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
       return renderAgreement({
         templateId: data.preview.templateId,
         templateVersion: data.preview.templateVersion,
-        parties: data.parties,
+        parties: { ...data.parties, hiring: { ...data.parties.hiring,
+          ...Object.fromEntries(Object.entries(party).filter(([, v]) => String(v ?? "").trim())) } },
         terms,
         issuedOn: new Date().toISOString().slice(0, 10),
       });
@@ -38620,7 +38622,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
       console.error("[agreement] preview render failed:", e);
       return data.preview;
     }
-  }, [data?.preview, data?.parties, terms]);
+  }, [data?.preview, data?.parties, terms, party]);
 
   // A load that has not answered, or failed, still draws the panel. Returning
   // nothing here left the Agreement tab blank with the reason hidden.
@@ -38676,6 +38678,22 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
   };
   const prev = data.previous;
   const sends = ag?.sends || [];
+  const editor = (baseTerms, baseParty) => (
+    <AgreementEditor fields={data.fields} terms={terms} base={baseTerms} party={party} baseParty={baseParty}
+      company={sub.company} onSet={(id, v) => setTerms((t) => ({ ...t, [id]: v }))}
+      onSetParty={(k, v) => setParty((x) => ({ ...x, [k]: v }))}
+      onReset={() => { setTerms(data.previewTerms); setParty(pickParty(data.parties?.hiring)); }}
+      saveDefault={saveDefault} onSaveDefault={setSaveDefault} />
+  );
+  const defaultLine = (r) => r?.savedDefault === true ? " These are now your defaults for future agreements."
+    : r?.savedDefault === "admin_only" ? " Only an admin can change your defaults, so they stayed as they were." : "";
+  // Editing one they were sent and have not signed: seeded from what was
+  // sent, and sending replaces it (the old one is kept as superseded).
+  const startRevise = () => {
+    setTerms({ ...data.previewTerms, ...(ag?.terms || {}) });
+    setParty(pickParty(ag?.parties?.hiring || data.parties?.hiring));
+    setSaveDefault(false); setErr(""); setNote(""); setMode("revise");
+  };
   const first = sends.find((x) => x.kind === "issued");
   const resends = sends.filter((x) => x.kind === "resent");
 
@@ -38727,11 +38745,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
         {canManage && mode === "standard" && (() => {
           const docsMissing = requiredDocsFor(sub.engagedAs, DOC_KINDS).filter((k) => k !== "contract" && !sub[k]);
           return <>
-            {terms && (
-              <SubTermsEditor fields={data.fields} terms={terms} base={data.previewTerms} defaultOpen
-                company={sub.company} onSet={(id, v) => setTerms((t) => ({ ...t, [id]: v }))}
-                onReset={() => setTerms(data.previewTerms)} />
-            )}
+            {terms && editor(data.previewTerms, pickParty(data.parties?.hiring))}
             {docsMissing.length > 0 && (
               <label className="agr-askdocs">
                 <input type="checkbox" checked={askDocs} onChange={(e) => setAskDocs(e.target.checked)} />
@@ -38744,7 +38758,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
                 onClick={async () => {
                   setBusy(true); setErr(""); setNote("");
                   let r = null;
-                  try { r = await api.issueAgreement(sub.id, { terms }); }
+                  try { r = await api.issueAgreement(sub.id, { terms, hiringParty: party, saveAsDefault: saveDefault }); }
                   catch (e) {
                     setBusy(false);
                     const code = e?.body?.error;
@@ -38762,7 +38776,8 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
                   }
                   const sentLine = (r?.emailed ? `The SubSub Standard Subcontractor Agreement was emailed to ${r.to}.`
                     : r?.to ? `The agreement was sent in SubSub, but the email to ${r.to} didn't go. Use Resend on their card.`
-                    : `The agreement was sent in SubSub. ${sub.company} has no email on file; they'll see it when they sign in.`) + docsLine;
+                    : `The agreement was sent in SubSub. ${sub.company} has no email on file; they'll see it when they sign in.`) + docsLine
+                    + defaultLine(r);
                   setNote(sentLine);
                   if (onFinished) { onFinished(sentLine + " They sign it, then you countersign from their card."); return; }
                   setMode(null); setBusy(false);
@@ -38848,7 +38863,38 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
             </li>
           ))}
         </ul>
-        <div className="agr-actions">
+        {canManage && mode === "revise" && ag.status === "sent" && ag.source === "subsub_standard" ? <>
+          {terms && editor({ ...data.previewTerms, ...(ag.terms || {}) }, pickParty(ag.parties?.hiring || data.parties?.hiring))}
+          <p className="cx-sub">Sending replaces the one {sub.company} has now. They're emailed the new version to sign.</p>
+          <div className="agr-actions">
+            <button className="btn-ghost sm" type="button" onClick={() => setPreview(true)}><Eye size={13} /> Preview</button>
+            <button className="btn-solid sm" type="button" data-act="send-revised" disabled={busy}
+              onClick={async () => {
+                setBusy(true); setErr(""); setNote("");
+                try {
+                  const r = await api.issueAgreement(sub.id, { terms, hiringParty: party, saveAsDefault: saveDefault, replace: true });
+                  setNote((r?.emailed ? `The updated agreement was emailed to ${r.to}.`
+                    : r?.to ? `The updated agreement is in SubSub, but the email to ${r.to} didn't go. Use Resend to try again.`
+                    : `The updated agreement is in SubSub. ${sub.company} has no email on file.`) + defaultLine(r));
+                  setMode(null);
+                  await load(); onChanged?.();
+                } catch (e) {
+                  const code = e?.body?.error;
+                  setErr(code === "already_issued" ? `${sub.company} has already signed it, so it can't be changed now. Withdraw it to start again.`
+                    : "That didn't send. Try again in a moment.");
+                }
+                setBusy(false);
+              }}>
+              <Send size={13} /> {busy ? "Sending…" : "Send the updated agreement"}
+            </button>
+            <button className="btn-ghost sm" type="button" onClick={() => setMode(null)}>Cancel</button>
+          </div>
+        </> : <div className="agr-actions">
+          {canManage && ag.status === "sent" && ag.source === "subsub_standard" && (
+            <button className="btn-ghost sm" type="button" data-act="edit-terms" onClick={startRevise}>
+              <Pencil size={13} /> Edit terms
+            </button>
+          )}
           {ag.document && (
             <button className="btn-ghost sm" type="button" data-act="view" onClick={() => setPreview(true)}>
               <Eye size={13} /> View agreement
@@ -38891,7 +38937,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
               Withdraw
             </button>
           )}
-        </div>
+        </div>}
       </>}
 
       {note && <p className="agr-note" role="status">{note}</p>}
@@ -38900,7 +38946,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
       {preview && (
         <Modal onClose={() => setPreview(false)} wide>
           <div className="form">
-            <h2>{(ag?.document || livePreview)?.title || "Subcontractor agreement"}</h2>
+            <h2>{((mode === "revise" ? livePreview : ag?.document) || livePreview)?.title || "Subcontractor agreement"}</h2>
             <p className="form-sub">
               {ag ? agreementStateText(ag, { subName: sub.company, hiringName: "you" })
                 : `SubSub's standard form, with your company and your terms filled in. This is what ${sub.company} will be asked to sign.`}
@@ -38911,7 +38957,7 @@ function AgreementPanel({ sub, canManage, myName, onChanged, onViewFile, onUploa
                 the form. It was cut back to that one line once before and is
                 now gone. `reviewed` in agreement-standard.js is untouched and
                 still null: the flag is the record. */}
-            <AgreementDoc document={ag?.document || livePreview} />
+            <AgreementDoc document={(mode === "revise" ? livePreview : ag?.document) || livePreview} />
             {canManage && ag?.waitingOn === "hiring_countersign" && <>
               <div className="agr-sign">
                 <label>
@@ -39012,69 +39058,6 @@ function TermFields({ fields = [], terms = {}, onSet }) {
           {f.note && <em className="cx-sub">{f.note}</em>}
         </label>
       ))}
-    </div>
-  );
-}
-
-function StandardTermsPanel({ myName }) {
-  const [d, setD] = useState(null);
-  const [err, setErr] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    api.agreementTerms().then(setD).catch((e) => {
-      if (e?.body?.error === "migration_needed") { setD({ migration: true }); return; }
-      console.error("[agreement-terms] load failed:", e);
-      setErr("Couldn't load your standard terms.");
-    });
-  }, []);
-
-  if (!d) return null;
-  if (d.migration) return null;
-
-  const set = (id, v) => { setD((x) => ({ ...x, terms: { ...x.terms, [id]: v } })); setSaved(false); };
-  const setParty = (k, v) => {
-    setD((x) => ({ ...x, hiringParty: { ...x.hiringParty, [k]: v } })); setSaved(false);
-  };
-
-  const save = async () => {
-    setBusy(true); setErr("");
-    try {
-      await api.saveAgreementTerms({ terms: d.terms, hiringParty: d.hiringParty });
-      setSaved(true);
-    } catch (e) {
-      console.error("[agreement-terms] save failed:", e);
-      setErr("That didn't save. Try again in a moment.");
-    }
-    setBusy(false);
-  };
-
-  return (
-    <div className="portal-panel agr-terms">
-      <h4>{tt("Your subcontractor agreement")}</h4>
-      <p className="cx-sub">{tt("The terms SubSub's agreement carries when you send one. You can change them for a particular contractor before sending.")}</p>
-
-      <div className="agr-party">
-        <label>{tt("Your legal name")}<input value={d.hiringParty?.name || ""} onChange={(e) => setParty("name", e.target.value)}
-            placeholder={tt("As it should appear in a contract")} /></label>
-        <label>{tt("Street")}<input value={d.hiringParty?.street || ""} onChange={(e) => setParty("street", e.target.value)} /></label>
-        <label>{tt("City")}<input value={d.hiringParty?.city || ""} onChange={(e) => setParty("city", e.target.value)} /></label>
-        <label>{tt("State")}<select value={d.hiringParty?.state || ""} onChange={(e) => setParty("state", e.target.value)}>
-            <option value="">{tt("Select…")}</option>
-            {US_STATES.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
-          </select></label>
-      </div>
-
-      <TermFields fields={d.fields} terms={d.terms} onSet={set} />
-
-      {err && <div className="form-err">{err}</div>}
-      <div className="form-actions">
-        {saved && <span className="cx-sub">{tt("Saved.")}</span>}
-        <button className="btn-solid sm" type="button" disabled={busy} onClick={save}>
-          {busy ? tt("Saving…") : tt("Save terms")}
-        </button>
-      </div>
     </div>
   );
 }
@@ -54345,6 +54328,12 @@ iframe.dv-frame{display:block}
    everybody, so the common case is one press and this stays shut -- with the
    count of what has been changed on the toggle, because a narrowed or
    modified thing must never be silently modified. */
+.agr-edit{margin:10px 0 12px;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.agr-edit-head{display:flex;align-items:center;gap:8px;font-size:14px}
+.agr-edit-head .agr-over-n{margin-left:auto}
+.agr-sub{margin:14px 0 4px;font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft)}
+.agr-edit-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-top:12px}
+.agr-edit-foot .agr-savedef{margin:0}
 .agr-over{margin:10px 0 12px;padding:9px 11px;border:1px solid var(--line);
   border-radius:10px;background:var(--paper)}
 .agr-over-tog{display:flex;align-items:center;gap:7px;width:100%;padding:0;

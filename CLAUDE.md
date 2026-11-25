@@ -17310,6 +17310,41 @@ refactor.
   **Paste 111** before text or letter templates, text or letter sequences, or
   lead follow-ups work.
 
+- **THE AGREEMENT'S TERMS ARE EDITED ON THE CONTRACTOR'S CARD, NOT IN
+  ACCOUNT -> COMPANY.** Reported with both screens on hand: *"SubSub standard
+  agreement edit details should be available on the modal for agreements ...
+  it's not a one size fits all contract, that's the point of making these
+  editable"*. The standing-terms panel (*Your subcontractor agreement*) is gone
+  from Company.
+  - **`AgreementEditor`** is on the Agreement tab, and in the window that opens
+    after accepting an applicant, once SubSub's agreement is chosen. It is
+    always open, not folded. It has two parts:
+    - *Your company on the agreement*: legal name, street, city, state;
+    - every term in `TERM_FIELDS`.
+    Both start from the account's defaults. A count says how many differ from
+    the defaults, and *Back to my defaults* appears only when something does.
+    The preview renders the edited company details as well as the terms.
+  - **What is typed goes on this agreement only.** `POST
+    /api/subs/:companyId/agreement` takes `hiringParty`. It is cleaned by the
+    same `cleanHiringParty` the defaults route uses and stamped into this
+    row's `parties`. A blank field keeps the account's own value.
+  - **The defaults move only by choice.** *Make these my defaults for future
+    agreements* is unticked and shown to admins only. The route also refuses a
+    project manager's tick (`savedDefault: "admin_only"`, said on screen),
+    because the standing terms were admin-only before this. The
+    `/api/agreement-terms` routes stay.
+  - **A sent agreement can be edited until they sign it.** *Edit terms* opens
+    the editor seeded from what was sent. Pressing **Send the updated
+    agreement** posts `replace: true`. The old row goes to `superseded`
+    (kept, never deleted) under an UPDATE guarded on `status = 'sent'`, and
+    the new one is emailed. Once they have signed it is `already_issued`,
+    because changing it then would put a different document under their
+    signature. Without `replace` a second send is still refused, as before.
+  `test:agreement` (172) and `test:agrterms` (55). Three mutations fire: a
+  project manager allowed to save defaults, revising seeded from the defaults,
+  and the update sent without `replace`. **Not mutation-proved:** the route's
+  `status === "sent"` check, because the guarded UPDATE refuses the same case.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -140,7 +140,7 @@ try {
     inp.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await wait(200);
-  t.ck("an edited term counts as changed", await page.evaluate(() => /1 changed/.test(document.querySelector(".accepted-app .agr-over")?.innerText || "")));
+  t.ck("an edited term counts as changed", await page.evaluate(() => /1 changed/.test(document.querySelector(".accepted-app [data-agr-edit]")?.innerText || "")));
   await page.evaluate(() => document.querySelector(".accepted-app [data-act=send-standard]")?.click());
   await wait(900);
   t.ck("sending posts the agreement", asked.includes("cmp_bay:agreement"), JSON.stringify(asked));

@@ -15407,6 +15407,20 @@ async function lastEndedAgreement(env, accountId, companyId) {
 
 // ---- the hiring account's standing terms ----------------------------------
 
+// The hiring account's details as they print on the agreement, cleaned once
+// for the standing terms and for a single send alike.
+function cleanHiringParty(hp) {
+  return {
+    name: String(hp?.name || "").trim().slice(0, 200) || null,
+    street: String(hp?.street || "").trim().slice(0, 200) || null,
+    city: String(hp?.city || "").trim().slice(0, 100) || null,
+    state: /^[A-Za-z]{2}$/.test(String(hp?.state || "").trim())
+      ? String(hp.state).trim().toUpperCase() : null,
+    zip: String(hp?.zip || "").trim().slice(0, 12) || null,
+    license: String(hp?.license || "").trim().slice(0, 60) || null,
+  };
+}
+
 app.get("/api/agreement-terms", requireRole("admin", "pm"), async (c) => {
   const { accountId } = c.get("auth");
   try {
@@ -15439,15 +15453,7 @@ app.patch("/api/agreement-terms", requireRole("admin"), async (c) => {
     // column the renderer reads directly, and a string where a number belongs
     // prints "$NaN" into a document somebody is about to sign.
     const terms = body.terms === undefined ? cur.terms : validTerms(body.terms);
-    const hiringParty = body.hiringParty === undefined ? cur.hiringParty : {
-      name: String(body.hiringParty?.name || "").trim().slice(0, 200) || null,
-      street: String(body.hiringParty?.street || "").trim().slice(0, 200) || null,
-      city: String(body.hiringParty?.city || "").trim().slice(0, 100) || null,
-      state: /^[A-Za-z]{2}$/.test(String(body.hiringParty?.state || "").trim())
-        ? String(body.hiringParty.state).trim().toUpperCase() : null,
-      zip: String(body.hiringParty?.zip || "").trim().slice(0, 12) || null,
-      license: String(body.hiringParty?.license || "").trim().slice(0, 60) || null,
-    };
+    const hiringParty = body.hiringParty === undefined ? cur.hiringParty : cleanHiringParty(body.hiringParty);
     const requireByDefault = body.requireByDefault === undefined
       ? cur.requireByDefault : !!body.requireByDefault;
     await c.env.DB.prepare(
@@ -15533,10 +15539,34 @@ app.post("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c)
     // Refused rather than quietly replaced. A live agreement is a document the
     // other party may have signed, or may be reading right now; superseding it
     // from under them is a change to terms nobody was told about.
-    if (existing) return c.json({ error: "already_issued", status: existing.status }, 409);
+    //
+    // EXCEPT WHEN SOMEBODY ASKS FOR IT BY NAME (`replace`), and only while it
+    // is still waiting on them to sign: changing the terms for one contractor
+    // after sending is the whole reason the terms are editable per contractor.
+    // The old one is superseded (kept, never deleted), and the new one is
+    // emailed, so they are told. Once they have signed, it is not ours to
+    // rewrite: that would be a different document under their signature.
+    let replaced = null;
+    if (existing) {
+      if (!(body.replace === true && existing.status === "sent")) {
+        return c.json({ error: "already_issued", status: existing.status }, 409);
+      }
+      const done = await c.env.DB.prepare(
+        `UPDATE agreements SET status = 'superseded' WHERE id = ? AND account_id = ? AND status = 'sent'`
+      ).bind(existing.id, accountId).run();
+      if (!done.meta?.changes) return c.json({ error: "already_issued", status: "signed" }, 409);
+      replaced = existing.id;
+    }
 
     const stored = await accountAgreementTerms(c.env, accountId);
     const parties = await agreementParties(c.env, accountId, companyId);
+    // The company details on THIS agreement. Typed on the contractor's card,
+    // stamped onto this row, and only made the account's standing details when
+    // somebody says so below. A blank field keeps what the account has.
+    if (body.hiringParty && typeof body.hiringParty === "object") {
+      const hp = cleanHiringParty(body.hiringParty);
+      for (const k of Object.keys(hp)) if (hp[k]) parties.hiring[k] = hp[k];
+    }
     const terms = mergeTerms(stored.terms, body.terms);
     // The hiring account's state unless somebody said otherwise. Stamped, so
     // editing an address later cannot change what a signed document meant --
@@ -15577,9 +15607,34 @@ app.post("/api/subs/:companyId/agreement", requireRole("admin", "pm"), async (c)
       catch (err) { console.error("[agreement] email on issue failed:", err?.message || err); }
     }
     await logEvent(c.env, accountId, userId, "agreement_issued", id,
-      { companyId, source, templateVersion, to: sent.to, emailed: sent.emailed, signedCopy });
+      { companyId, source, templateVersion, to: sent.to, emailed: sent.emailed, signedCopy, replaced });
+
+    // "Make these my defaults" -- an admin's choice, because the standing
+    // terms are an admin-only setting everywhere else. A project manager's
+    // tick is refused by name rather than silently ignored.
+    let savedDefault = false;
+    if (body.saveAsDefault === true && source === "subsub_standard") {
+      if (c.get("auth").role !== "admin") {
+        savedDefault = "admin_only";
+      } else {
+        const hiringParty = body.hiringParty && typeof body.hiringParty === "object"
+          ? cleanHiringParty({ ...stored.hiringParty, ...Object.fromEntries(
+              Object.entries(body.hiringParty).filter(([, v]) => String(v ?? "").trim())) })
+          : stored.hiringParty;
+        await c.env.DB.prepare(
+          `INSERT INTO agreement_terms (account_id, terms, hiring_party, require_by_default, updated_by)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(account_id) DO UPDATE SET
+             terms = excluded.terms, hiring_party = excluded.hiring_party,
+             updated_at = CURRENT_TIMESTAMP, updated_by = excluded.updated_by`
+        ).bind(accountId, JSON.stringify(validTerms(terms)), JSON.stringify(hiringParty),
+          stored.requireByDefault ? 1 : 0, userId).run();
+        savedDefault = true;
+      }
+    }
 
     return c.json({ ok: true, emailed: sent.emailed, to: sent.to, emailError: sent.error,
+      replaced, savedDefault,
       agreement: agreementToJs(row, { document: renderStored(row),
         sends: await agreementSends(c.env, id) }) });
   } catch (err) {

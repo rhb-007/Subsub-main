@@ -90,16 +90,14 @@ try {
           const touch = await touchingSections(page, ".ss-main");
           t.ck(`${where}: no two sections touch`, touch.length === 0, JSON.stringify(touch));
           if (tab === "Company" && id === "acc_gc") {
-            seenCompany = await page.evaluate(() => !!document.querySelector(".sb-panel") && !!document.querySelector(".agr-terms"));
-            const g = await page.evaluate(() => {
-              const a = document.querySelector(".sb-panel")?.getBoundingClientRect(), b = document.querySelector(".agr-terms")?.getBoundingClientRect();
-              return a && b ? Math.round(b.top - a.bottom) : null;
-            });
-            t.ck(`${w}px: the reported pair, Your other business over the agreement, has space between`, g !== null && g >= 12, String(g));
+            // The agreement terms that sat under this panel moved to each
+            // contractor's Agreement tab; the gap rule above still covers
+            // whatever sits beside it now.
+            seenCompany = await page.evaluate(() => !!document.querySelector(".sb-panel"));
           }
         }
       }
-      if (id === "acc_gc") t.ck(`${w}px: the Company tab drew both reported panels`, seenCompany);
+      if (id === "acc_gc") t.ck(`${w}px: the Company tab drew Your other business`, seenCompany);
       t.ck(`${ACCTS[id].kind} ${w}px: no page error`, crashes.length === 0, crashes.join(" | "));
       await ctx.close();
     }

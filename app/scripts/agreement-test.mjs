@@ -281,6 +281,46 @@ console.log("\n-- issuing --");
     `${notOurs.status} ${notOurs.body.error}`);
 }
 
+console.log("\n-- terms set per contractor, a sent one replaced, defaults by choice --");
+{
+  const db = seed(); const env = ENV(db);
+  const made = await call(env, `/api/subs/${SUB_CO}/agreement`, { method: "POST",
+    body: { terms: { warrantyMonths: 24 }, hiringParty: { name: "Outerhome Roofing LLC", street: "", city: "" } } });
+  ck("a send carries this contractor's terms", made.status === 200
+    && JSON.parse(db.prepare(`SELECT terms FROM agreements`).get().terms).warrantyMonths === 24);
+  const parties = JSON.parse(db.prepare(`SELECT parties FROM agreements`).get().parties);
+  ck("and the company name typed for it, stamped on this agreement", parties.hiring.name === "Outerhome Roofing LLC", parties.hiring.name);
+  ck("a blank field keeps the account's own value", parties.hiring.state === "WA", JSON.stringify(parties.hiring));
+  ck("and the account's defaults did not move, because nobody asked",
+    !db.prepare(`SELECT 1 FROM agreement_terms WHERE account_id = ?`).get(GC));
+
+  const plain = await call(env, `/api/subs/${SUB_CO}/agreement`, { method: "POST", body: { terms: { warrantyMonths: 30 } } });
+  ck("a second send without replace is still refused", plain.status === 409 && plain.body.error === "already_issued");
+
+  const rep = await call(env, `/api/subs/${SUB_CO}/agreement`, { method: "POST",
+    body: { replace: true, terms: { warrantyMonths: 30 }, saveAsDefault: true } });
+  ck("replace sends a new one while the first waits on them", rep.status === 200 && !!rep.body.replaced, `${rep.status} ${rep.body.error || ""}`);
+  const rows = db.prepare(`SELECT status, terms FROM agreements ORDER BY rowid`).all();
+  ck("the first is kept as superseded, not deleted",
+    rows.length === 2 && rows[0].status === "superseded" && rows[1].status === "sent", JSON.stringify(rows.map((r) => r.status)));
+  ck("the new one carries the new terms", JSON.parse(rows[1].terms).warrantyMonths === 30);
+  const def = db.prepare(`SELECT terms FROM agreement_terms WHERE account_id = ?`).get(GC);
+  ck("an admin's tick made them the defaults", rep.body.savedDefault === true && JSON.parse(def?.terms || "{}").warrantyMonths === 30);
+
+  const pm = await call(env, `/api/subs/${SUB_CO}/agreement`, { method: "POST", seat: { u: "u_gcpm", a: GC },
+    body: { replace: true, terms: { warrantyMonths: 12 }, saveAsDefault: true } });
+  ck("a project manager can replace it, but not change the defaults",
+    pm.status === 200 && pm.body.savedDefault === "admin_only"
+      && JSON.parse(db.prepare(`SELECT terms FROM agreement_terms WHERE account_id = ?`).get(GC).terms).warrantyMonths === 30,
+    `${pm.status} ${pm.body.savedDefault}`);
+
+  const live = db.prepare(`SELECT id FROM agreements WHERE status = 'sent'`).get().id;
+  await call(env, `/api/my-agreements/${live}/sign`, { method: "POST", seat: SUB_SEAT, body: { typedName: "Rae Okafor" } });
+  const late = await call(env, `/api/subs/${SUB_CO}/agreement`, { method: "POST", body: { replace: true, terms: { warrantyMonths: 6 } } });
+  ck("once they have signed it, it cannot be replaced", late.status === 409 && late.body.error === "already_issued",
+    `${late.status} ${late.body.error}`);
+}
+
 console.log("\n-- signing, which takes both parties --");
 {
   const db = seed(); const env = ENV(db);
