@@ -17400,8 +17400,8 @@ refactor.
   rank, the script lines, and the View as banner. Back landing on Users was a
   real bug the new suite found. `test:schemadrift` caught the 112 check as a
   new top-level group pushing the join depth to 41; it sits in the last group
-  now. **Paste 112** before markets can be added; until then the page names
-  the file and leads show no market.
+  now. **112 is pasted on the live database** (10 columns, confirmed by the
+  owner), so markets can be added there.
 
 ## Working here
 
