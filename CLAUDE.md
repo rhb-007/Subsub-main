@@ -17242,9 +17242,8 @@ refactor.
   **Not mutation-proved:** the claim guard against two sweeps at once,
   because the harness runs the sweeps one after another and the second
   never picks the claimed row up. **Not verified here:** a real email
-  client's one-click unsubscribe. **Paste 110** before any of it works on
-  the live database; until then the routes name the file and the
-  appointments and leads still load. **Not verified here:** a live email and reply round trip.
+  client's one-click unsubscribe. **110 is pasted on the live database**
+  (8, 7, 4, 8, 9 and 13 columns, confirmed by the owner). **Not verified here:** a live email and reply round trip.
 
 ## Working here
 
