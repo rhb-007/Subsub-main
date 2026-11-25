@@ -20,7 +20,8 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
   agreementSentEmail, rosterJoinedEmail, docUploadedEmail } from "./mail.js";
 import * as MAIL from "./mail.js";
 import { validAppointment, repClashes, STATUSES as APPT_STATUSES, CALLCENTER_STATUSES,
-  BOOKING_ROLES, SALES_ROLES, REP_ROLES, OFFICE_ROLES, takesAppointments, serviceLabel, apptWhenText } from "../shared/salesappt.js";
+  BOOKING_ROLES, SALES_ROLES, REP_ROLES, OFFICE_ROLES, takesAppointments, serviceLabel, apptWhenText,
+  SERVICES as APPT_SERVICE_LIST } from "../shared/salesappt.js";
 import { validLeadMessage, validLeadConsent, leadConsentFrom, leadConsentOf, channelBlock,
   leadReplyAddress, leadTokenFromAddress, LEAD_EMAILS_PER_HOUR } from "../shared/leadcontact.js";
 import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, MAX_RECORDING_BYTES,
@@ -29,7 +30,8 @@ import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_
   CALLCENTER_STAGES } from "../shared/leads.js";
 import { validDeal, optOutBlock, unsubscribeLink, UNSUB_TOKEN_RE, validDnc, BUILTIN_TEMPLATES, isBuiltin,
   validTemplate, validSequence, stepDueAt, sequenceStop, fillTemplate, leadVars, webLeadProblem,
-  WEB_CONSENT_VERSION } from "../shared/crmsales.js";
+  webConsent, webLeadServices, templateChannel, BUILTIN_SEQUENCES, isStarterSequence,
+  starterSequenceId } from "../shared/crmsales.js";
 import { NOTICES, noticeByKey, noticePlaceholders, unknownPlaceholders, renderNotice, noticeVars,
   noticeNeedsLink, NOTICE_SUBJECT_MAX, NOTICE_BODY_MAX } from "../shared/notices.js";
 import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
@@ -893,6 +895,9 @@ const CALLCENTER_ALLOWED = [
   // templates to write an email from.
   [/^\/api\/sales-leads\/[^/]+\/do-not-contact$/, ["PUT"]],
   [/^\/api\/crm-library$/, ["GET"]],
+  // 111. A follow-up on a homeowner, with or without an estimate booked.
+  [/^\/api\/sales-leads\/[^/]+\/follow-ups$/, ["POST"]],
+  [/^\/api\/sales-leads\/[^/]+\/follow-ups\/[^/]+$/, ["PATCH"]],
 ];
 
 // 109. A sales manager: the call center's routes, narrowed by crmScope to
@@ -10524,6 +10529,7 @@ export function missingSchema(err) {
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
+  if (/\blead_followups\b|crm_templates has no column named channel/i.test(m)) return "111_crm_channels";
   if (/\b(sales_deals|lead_opt_outs|lead_unsub_tokens|crm_templates|crm_sequences|crm_enrollments)\b/i.test(m)) return "110_crm_selling";
   if (/\b(lead_messages|sales_lead_consents)\b/i.test(m)) return "109_lead_contact";
   if (/\bsales_(leads|lead_links)\b/i.test(m)) return "107_crm_leads";
@@ -28466,7 +28472,7 @@ app.post("/api/public/unsubscribe/:token", async (c) => {
 // Templates and sequences: one read for both, because the compose window and
 // the sequence editor each need the other's list.
 function templateRowToJs(r) {
-  return { id: r.id, name: r.name, subject: r.subject, body: r.body, builtin: false, updatedAt: r.updated_at };
+  return { id: r.id, channel: templateChannel(r), name: r.name, subject: r.subject, body: r.body, builtin: false, updatedAt: r.updated_at };
 }
 function sequenceRowToJs(r, active = 0) {
   return { id: r.id, name: r.name, steps: apptJson(r.steps, []), stopOnBooking: r.stop_on_booking !== 0,
@@ -28478,10 +28484,39 @@ async function crmLibrary(env, accountId) {
   const { results: n } = await env.DB.prepare(`SELECT sequence_id, COUNT(*) AS n FROM crm_enrollments
     WHERE account_id = ? AND status = 'active' GROUP BY sequence_id`).bind(accountId).all();
   const running = new Map((n || []).map((r) => [r.sequence_id, r.n]));
+  // 111. The starter sequences: an account's own copy once one has been
+  // used (a fixed id per account and starter), the starter itself until then.
+  const rows = (s || []).map((r) => sequenceRowToJs(r, running.get(r.id) || 0));
+  const starters = BUILTIN_SEQUENCES.map((x) => {
+    const own = rows.find((r) => r.id === starterSequenceId(accountId, x.id));
+    return own ? null : { id: x.id, name: x.name, steps: x.steps, stopOnBooking: x.stopOnBooking, active: true, running: 0, starter: true, channel: x.channel };
+  }).filter(Boolean);
   return {
     templates: [...BUILTIN_TEMPLATES.map((x) => ({ ...x, builtin: true })), ...(t || []).map(templateRowToJs)],
-    sequences: (s || []).map((r) => sequenceRowToJs(r, running.get(r.id) || 0)),
+    sequences: [...rows.map((r) => ({ ...r, starterOf: BUILTIN_SEQUENCES.find((x) => starterSequenceId(accountId, x.id) === r.id)?.id || null })), ...starters],
   };
+}
+// 111. A starter made the account's own, once. INSERT OR IGNORE on a fixed
+// id, so two presses (or a press and an enrollment) are one row.
+async function materializeStarter(env, accountId, starterId, userId) {
+  const x = BUILTIN_SEQUENCES.find((q) => q.id === starterId);
+  if (!x) return null;
+  const id = starterSequenceId(accountId, x.id);
+  const now = new Date().toISOString();
+  await env.DB.prepare(`INSERT OR IGNORE INTO crm_sequences (id, account_id, name, steps, stop_on_booking, active, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`).bind(id, accountId, x.name, JSON.stringify(x.steps), x.stopOnBooking ? 1 : 0, userId || null, now, now).run();
+  return id;
+}
+// One template by id, a starter or the account's own, with its channel.
+async function templateFor(env, accountId, id) {
+  if (isBuiltin(id)) return BUILTIN_TEMPLATES.find((t) => t.id === id) || null;
+  const r = await env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ? AND account_id = ?`).bind(id, accountId).first();
+  return r ? templateRowToJs(r) : null;
+}
+// Whether 111's lead follow-ups table is there, which a text or letter step needs.
+async function leadFollowupsReady(env) {
+  try { await env.DB.prepare(`SELECT 1 FROM lead_followups LIMIT 1`).first(); return true; }
+  catch (err) { if (missingSchema(err)) return false; throw err; }
 }
 const officeOnly = (c) => (OFFICE_ROLES.includes(c.get("auth")?.role) ? null : c.json({ error: "office_only" }, 403));
 
@@ -28500,9 +28535,17 @@ app.post("/api/crm-templates", requireRole(...BOOKING_ROLES), async (c) => {
   return leadContactGuard(c, async () => {
     const id = uid();
     const now = new Date().toISOString();
-    await c.env.DB.prepare(`INSERT INTO crm_templates (id, account_id, name, subject, body, created_by, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, acct.id, chk.value.name, chk.value.subject, chk.value.body,
-      c.get("auth").userId, now, now).run();
+    const v = chk.value;
+    try {
+      await c.env.DB.prepare(`INSERT INTO crm_templates (id, account_id, channel, name, subject, body, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, acct.id, v.channel, v.name, v.subject, v.body, c.get("auth").userId, now, now).run();
+    } catch (err) {
+      // A database without 111 still saves an email template; a text or a
+      // letter needs the column and says which migration.
+      if (!missingSchema(err) || v.channel !== "email") throw err;
+      await c.env.DB.prepare(`INSERT INTO crm_templates (id, account_id, name, subject, body, created_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, acct.id, v.name, v.subject, v.body, c.get("auth").userId, now, now).run();
+    }
     return c.json({ template: templateRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ?`).bind(id).first()) }, 201);
   });
 });
@@ -28518,6 +28561,9 @@ app.patch("/api/crm-templates/:id", requireRole(...BOOKING_ROLES), async (c) => 
     if (!cur) return c.json({ error: "not_found" }, 404);
     const chk = validTemplate({ ...templateRowToJs(cur), ...b });
     if (!chk.ok) return c.json({ error: chk.error, field: chk.field, placeholders: chk.placeholders }, 400);
+    // The channel a template was made for does not change: a sequence step
+    // that sent an email must not start asking for a text.
+    if (chk.value.channel !== templateChannel(cur)) return c.json({ error: "channel_fixed" }, 409);
     await c.env.DB.prepare(`UPDATE crm_templates SET name = ?, subject = ?, body = ?, updated_at = ? WHERE id = ?`)
       .bind(chk.value.name, chk.value.subject, chk.value.body, new Date().toISOString(), cur.id).run();
     return c.json({ template: templateRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ?`).bind(cur.id).first()) });
@@ -28554,6 +28600,12 @@ app.post("/api/crm-sequences", requireRole(...BOOKING_ROLES), async (c) => {
   if (refused) return refused;
   const b = await c.req.json().catch(() => ({}));
   return leadContactGuard(c, async () => {
+    // 111. "Use this" on a starter: the account's own copy, once.
+    if (b.starterId) {
+      const sid = await materializeStarter(c.env, acct.id, String(b.starterId), c.get("auth").userId);
+      if (!sid) return c.json({ error: "bad_starter" }, 400);
+      return c.json({ sequence: sequenceRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ?`).bind(sid).first()) }, 201);
+    }
     const chk = validSequence(b, { templateIds: await accountTemplateIds(c.env, acct.id) });
     if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
     const id = uid();
@@ -28634,14 +28686,23 @@ app.post("/api/sales-leads/:id/sequence", requireRole(...SALES_ROLES), async (c)
     const row = await leadOfAccount(c, acct);
     if (!row) return c.json({ error: "not_found" }, 404);
     const lead = leadRowToJs(row);
-    const seq = await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ? AND account_id = ?`).bind(String(b.sequenceId || ""), acct.id).first();
+    // 111. A starter is made the account's own the first time anybody uses it.
+    const askedId = String(b.sequenceId || "");
+    const seqId = isStarterSequence(askedId) ? await materializeStarter(c.env, acct.id, askedId, userId) : askedId;
+    const seq = await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ? AND account_id = ?`).bind(seqId, acct.id).first();
     if (!seq) return c.json({ error: "bad_sequence" }, 400);
     if (!seq.active) return c.json({ error: "sequence_off" }, 409);
     const consent = await consentForLead(c.env, acct.id, lead.id);
     const optOut = await optOutFor(c.env, acct.id, lead.id);
-    // The same stops the sweep applies, asked now, so a lead the first email
-    // could never reach is refused here rather than stopped silently later.
-    const stop = sequenceStop({ lead, consent, optOut, repliedSince: false, startStage: lead.stage });
+    const firstTpl = await templateFor(c.env, acct.id, apptJson(seq.steps, [])[0]?.templateId);
+    const channels = [];
+    for (const st of apptJson(seq.steps, [])) channels.push(templateChannel(await templateFor(c.env, acct.id, st.templateId)));
+    if (channels.some((ch) => ch !== "email") && !(await leadFollowupsReady(c.env))) {
+      return c.json({ error: "migration_needed", migration: "111_crm_channels" }, 503);
+    }
+    // The same stops the sweep applies, asked now about the FIRST step, so a
+    // lead it could never reach is refused here rather than stopped later.
+    const stop = sequenceStop({ lead, consent, optOut, repliedSince: false, startStage: lead.stage, channel: templateChannel(firstTpl) });
     if (stop && stop !== "booked") return c.json({ error: stop }, 409);
     const live = await c.env.DB.prepare(`SELECT id FROM crm_enrollments WHERE lead_id = ? AND status = 'active'`).bind(lead.id).first();
     if (live) return c.json({ error: "already_on_sequence" }, 409);
@@ -28695,19 +28756,24 @@ export async function crmSequenceSweep(env, nowMs = Date.now()) {
     const consent = lead ? await consentForLead(env, e.account_id, lead.id) : null;
     const optOut = lead ? await optOutFor(env, e.account_id, lead.id) : null;
     const replied = lead ? await env.DB.prepare(`SELECT 1 FROM lead_messages WHERE lead_id = ? AND direction = 'inbound'
-      AND channel = 'email' AND created_at > ? LIMIT 1`).bind(lead.id, e.started_at).first() : null;
-    const why = !acct || !takesAppointments(acct.kind) ? "lead_gone"
-      : sequenceStop({ lead, consent, optOut, repliedSince: !!replied, startStage: e.start_stage,
-        stopOnBooking: e.stop_on_booking !== 0, sequenceActive: e.seq_active !== 0 });
-    if (why) { await stop(e, why); continue; }
+      AND created_at > ? LIMIT 1`).bind(lead.id, e.started_at).first() : null;
     const steps = apptJson(e.steps, []);
     const step = steps[e.next_step];
     if (!step) { await env.DB.prepare(`UPDATE crm_enrollments SET status = 'done', next_at = NULL WHERE id = ?`).bind(e.id).run(); continue; }
-    const tpl = isBuiltin(step.templateId) ? BUILTIN_TEMPLATES.find((t) => t.id === step.templateId)
-      : await env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ? AND account_id = ?`).bind(step.templateId, e.account_id).first();
+    const tpl = await templateFor(env, e.account_id, step.templateId);
     if (!tpl) { await stop(e, "template_gone"); continue; }
-    const rl = await rateLimit(env, "lead-email", e.account_id, { limit: LEAD_EMAILS_PER_HOUR, windowMinutes: 60 });
-    if (!rl.ok) { out.limited += 1; continue; }
+    // 111. Each step goes on its own template's channel, and is asked about
+    // that channel: a text step needs a yes to texts, a letter an address.
+    const channel = templateChannel(tpl);
+    const why = !acct || !takesAppointments(acct.kind) ? "lead_gone"
+      : sequenceStop({ lead, consent, optOut, repliedSince: !!replied, startStage: e.start_stage,
+        stopOnBooking: e.stop_on_booking !== 0, sequenceActive: e.seq_active !== 0, channel });
+    if (why) { await stop(e, why); continue; }
+    if (channel !== "email" && !(await leadFollowupsReady(env))) { await stop(e, "migration_needed"); continue; }
+    if (channel === "email") {
+      const rl = await rateLimit(env, "lead-email", e.account_id, { limit: LEAD_EMAILS_PER_HOUR, windowMinutes: 60 });
+      if (!rl.ok) { out.limited += 1; continue; }
+    }
     const last = e.next_step + 1 >= steps.length;
     const claim = await env.DB.prepare(
       `UPDATE crm_enrollments SET next_step = next_step + 1, sent_count = sent_count + 1, next_at = ?,
@@ -28717,6 +28783,17 @@ export async function crmSequenceSweep(env, nowMs = Date.now()) {
     if (!claim.meta?.changes) continue;
     const sender = e.enrolled_by ? await env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(e.enrolled_by).first() : null;
     const vars = leadVars(lead, { accountName: acct.name, senderName: sender?.name || "", serviceLabel });
+    if (channel !== "email") {
+      // SubSub cannot send a text or post a letter itself, so the step is an
+      // action item for a person, due today, with the words filled in.
+      const words = fillTemplate(tpl.body, vars);
+      await env.DB.prepare(`INSERT INTO lead_followups (id, account_id, lead_id, body, channel, due_date, assignee_id,
+          enrollment_id, template_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`)
+        .bind(uid(), e.account_id, lead.id, `${channel === "text" ? "Text them" : "Mail this letter"}: ${tpl.name}\n\n${words}`,
+          channel, now.slice(0, 10), lead.ownerId || e.enrolled_by || null, e.id, tpl.id, now).run();
+      out.queued = (out.queued || 0) + 1;
+      continue;
+    }
     const r = await sendLeadEmail(env, { acct, lead, subject: fillTemplate(tpl.subject, vars).slice(0, 200),
       body: fillTemplate(tpl.body, vars), userId: e.enrolled_by || null, sequenceId: e.sequence_id });
     if (r.ok) out.sent += 1; else out.failed += 1;
@@ -28740,12 +28817,17 @@ app.post("/api/public/lead/:subdomain", async (c) => {
   if (problem) return c.json({ error: problem }, 400);
   const chk = validLead({ firstName: b.firstName, lastName: b.lastName, phone: b.phone, email: b.email,
     address: { street: b.street, city: b.city, state: b.state, zip: b.zip },
-    services: Array.isArray(b.services) ? b.services : [], stage: "lead", source: "website" }, { role: "callcenter" });
+    services: webLeadServices(b.services, { trades: TRADES, services: APPT_SERVICE_LIST }).services, stage: "lead", source: "website" }, { role: "callcenter" });
   if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
   const acctRl = await rateLimit(c.env, "web-lead-acct", acct.id, { limit: 300, windowMinutes: 24 * 60 });
   if (!acctRl.ok) return c.json({ error: "rate_limited" }, 429);
   const v = { ...chk.value, source: "website", ownerId: null };
-  const message = String(b.message || "").trim().slice(0, 2000);
+  // 111. A trade the call script does not know is named in the note, so
+  // nothing the homeowner ticked is lost.
+  const otherWork = webLeadServices(b.services, { trades: TRADES, services: APPT_SERVICE_LIST }).other;
+  const typed = String(b.message || "").trim().slice(0, 2000);
+  const message = [otherWork.length ? `Also asked about: ${otherWork.join(", ")}.` : "", typed].filter(Boolean).join("\n\n");
+  const said = webConsent(b);
   try {
     const existing = await findLead(c.env, acct.id, { phone: v.phone, email: v.email });
     const id = existing || await insertLead(c.env, { accountId: acct.id, v, userId: null });
@@ -28758,8 +28840,8 @@ app.post("/api/public/lead/:subdomain", async (c) => {
          VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
          ON CONFLICT(lead_id) DO UPDATE SET email = excluded.email, phone = excluded.phone, text = excluded.text,
            script_version = excluded.script_version, captured_by = NULL, captured_at = excluded.captured_at`)
-        .bind(id, acct.id, n(b.consentEmail === true && v.email), n(b.consentPhone === true && v.phone),
-          n(b.consentText === true && v.phone), WEB_CONSENT_VERSION, new Date().toISOString()).run();
+        .bind(id, acct.id, n(said.email && v.email), n(said.phone && v.phone),
+          n(said.text && v.phone), said.version, new Date().toISOString()).run();
     } catch (err) { if (!missingSchema(err)) throw err; }
     // What they wrote lands in the Inbox as something to answer.
     try {
@@ -28947,14 +29029,16 @@ app.post("/api/appointments/:id/activities", requireRole(...BOOKING_ROLES), asyn
     catch (err) { console.warn("[crm] event:", err?.message || err); }
     let told = null;
     if (v.kind === "follow_up" && assignee !== userId) {
-      told = await notifyFollowUp(c.env, { acct, appt: apptRowToJs(row), v, assigneeId: assignee, actorId: userId });
+      const ap = apptRowToJs(row);
+      told = await notifyFollowUp(c.env, { acct, who: `${ap.homeowner.firstName} ${ap.homeowner.lastName}`, link: crmLink(acct, ap.id),
+        v, assigneeId: assignee, actorId: userId });
     }
     const after = await c.env.DB.prepare(`${ACT_SELECT} WHERE s.id = ?`).bind(id).first();
     return c.json({ activity: activityRowToJs(after), ...(told ? { told } : {}) }, 201);
   });
 });
 
-async function notifyFollowUp(env, { acct, appt, v, assigneeId, actorId }) {
+async function notifyFollowUp(env, { acct, who, link, v, assigneeId, actorId }) {
   try {
     const u = await env.DB.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(assigneeId).first();
     const to = realEmail(u?.email);
@@ -28962,8 +29046,8 @@ async function notifyFollowUp(env, { acct, appt, v, assigneeId, actorId }) {
     if (!notifyOf(u).email) return { sent: false, reason: "email_off" };
     const actor = await env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(actorId).first();
     const mail = MAIL.followUpAssignedEmail({ firstName: String(u.name || "").split(" ")[0], assignedBy: actor?.name || null,
-      who: `${appt.homeowner.firstName} ${appt.homeowner.lastName}`, what: v.body, due: apptWhenText(v.dueDate),
-      channel: FOLLOW_CHANNELS[v.channel]?.label || null, link: crmLink(acct, appt.id) });
+      who, what: v.body, due: apptWhenText(v.dueDate),
+      channel: FOLLOW_CHANNELS[v.channel]?.label || null, link });
     const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(env, { accountId: acct.id, companyId: null, to, kind: "followup_assigned", subject: mail.subject, result, sentBy: actorId });
     return { sent: !!result.ok };
@@ -29025,8 +29109,94 @@ app.get("/api/sales-followups", requireRole(...BOOKING_ROLES), async (c) => {
          LEFT JOIN users au ON au.id = s.assignee_id LEFT JOIN users cb ON cb.id = s.created_by
         WHERE s.account_id = ? AND s.kind = 'follow_up' AND s.done_at IS NULL${crmScopeOf(c) ? " AND (a.rep_user_id = ? OR s.assignee_id = ?)" : ""}
         ORDER BY s.due_date ASC, s.created_at ASC LIMIT 500`).bind(acct.id, ...(crmScopeOf(c) ? [crmScopeOf(c), crmScopeOf(c)] : [])).all();
-    return c.json({ followUps: (results || []).map((r) => ({ ...activityRowToJs(r),
-      who: `${r.first_name} ${r.last_name}`, phone: r.phone, apptDate: r.appt_date, apptStatus: r.appt_status })) });
+    const fromAppts = (results || []).map((r) => ({ ...activityRowToJs(r),
+      who: `${r.first_name} ${r.last_name}`, phone: r.phone, apptDate: r.appt_date, apptStatus: r.appt_status }));
+    // 111. Follow-ups on a homeowner with no estimate in them, beside the
+    // ones on an estimate. A database without 111 has only the second kind.
+    const fromLeads = await leadFollowUpList(c.env, acct.id, crmScopeOf(c));
+    const all = [...fromAppts, ...(fromLeads || [])]
+      .sort((x, y) => `${x.dueDate}${x.createdAt}`.localeCompare(`${y.dueDate}${y.createdAt}`));
+    return c.json({ followUps: all, ...(fromLeads === null ? { leadFollowUps: false } : {}) });
+  });
+});
+
+// 111. Follow-ups on leads. Same shape as one on an estimate, with leadId
+// and no appointmentId.
+const LEAD_FU_SELECT = `SELECT f.*, au.name AS assignee_name, cb.name AS created_by_name, db.name AS done_by_name,
+    l.first_name, l.last_name, l.phone, l.stage FROM lead_followups f JOIN sales_leads l ON l.id = f.lead_id
+    LEFT JOIN users au ON au.id = f.assignee_id LEFT JOIN users cb ON cb.id = f.created_by LEFT JOIN users db ON db.id = f.done_by`;
+function leadFollowUpToJs(r) {
+  return {
+    id: r.id, kind: "follow_up", appointmentId: null, leadId: r.lead_id, body: r.body, channel: r.channel,
+    dueDate: r.due_date, assigneeId: r.assignee_id || null, assigneeName: r.assignee_name || null,
+    doneAt: r.done_at || null, doneByName: r.done_by_name || null, fromSequence: !!r.enrollment_id,
+    createdBy: r.created_by || null, createdByName: r.created_by_name || null, createdAt: r.created_at,
+    who: [r.first_name, r.last_name].filter(Boolean).join(" ") || "No name", phone: r.phone || "", leadStage: r.stage,
+  };
+}
+async function leadFollowUpList(env, accountId, me) {
+  try {
+    const { results } = await env.DB.prepare(`${LEAD_FU_SELECT} WHERE f.account_id = ? AND f.done_at IS NULL
+      ${me ? ` AND (f.assignee_id = ? OR ${LEAD_IN_SCOPE})` : ""} ORDER BY f.due_date ASC, f.created_at ASC LIMIT 500`)
+      .bind(accountId, ...(me ? [me, me, me] : [])).all();
+    return (results || []).map(leadFollowUpToJs);
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+app.post("/api/sales-leads/:id/follow-ups", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const lead = leadRowToJs(row);
+    const consent = await consentForLead(c.env, acct.id, lead.id);
+    const team = await crmTeam(c.env, acct.id);
+    // The appointment rule, asked of the lead: a follow-up by call, email or
+    // text needs that yes; a letter and a visit need none.
+    const chk = validActivity({ ...b, kind: "follow_up" }, { consent, accountId: acct.id, assignees: team.map((u) => u.id) });
+    if (!chk.ok) return c.json({ error: chk.error, ...(chk.channel ? { channel: chk.channel } : {}) }, 400);
+    const v = chk.value;
+    // Do not contact closes planning to contact them, too.
+    const optOut = await optOutFor(c.env, acct.id, lead.id);
+    const ob = optOutBlock(v.channel === "call" ? "call_out" : v.channel, { optOut, consent });
+    if (ob === "do_not_contact" || (ob === "unsubscribed" && v.channel === "email")) return c.json({ error: ob }, 409);
+    const id = uid();
+    const assignee = v.assigneeId || userId;
+    await c.env.DB.prepare(`INSERT INTO lead_followups (id, account_id, lead_id, body, channel, due_date, assignee_id, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, acct.id, lead.id, v.body, v.channel, v.dueDate, assignee, userId, new Date().toISOString()).run();
+    try { await logEvent(c.env, acct.id, userId, "lead.follow_up", lead.id, { followUpId: id }); }
+    catch (err) { console.warn("[leads] follow-up event:", err?.message || err); }
+    let told = null;
+    if (assignee !== userId) {
+      told = await notifyFollowUp(c.env, { acct, who: [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "A lead",
+        link: `${accountOrigin(acct)}/?open=lead&id=${encodeURIComponent(lead.id)}`, v, assigneeId: assignee, actorId: userId });
+    }
+    const after = await c.env.DB.prepare(`${LEAD_FU_SELECT} WHERE f.id = ?`).bind(id).first();
+    return c.json({ followUp: leadFollowUpToJs(after), ...(told ? { told } : {}) }, 201);
+  });
+});
+
+app.patch("/api/sales-leads/:id/follow-ups/:fid", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  if (typeof b.done !== "boolean") return c.json({ error: "bad_request" }, 400);
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const f = await c.env.DB.prepare(`SELECT id FROM lead_followups WHERE id = ? AND lead_id = ? AND account_id = ?`)
+      .bind(c.req.param("fid"), row.id, acct.id).first();
+    if (!f) return c.json({ error: "not_found" }, 404);
+    await c.env.DB.prepare(`UPDATE lead_followups SET done_at = ?, done_by = ? WHERE id = ?`)
+      .bind(b.done ? new Date().toISOString() : null, b.done ? userId : null, f.id).run();
+    return c.json({ followUp: leadFollowUpToJs(await c.env.DB.prepare(`${LEAD_FU_SELECT} WHERE f.id = ?`).bind(f.id).first()) });
   });
 });
 
@@ -29046,8 +29216,18 @@ export async function salesCrmSweep(env, nowMs = Date.now()) {
             a.first_name, a.last_name, ac.name AS acct_name, ac.subdomain, ac.hostname_status, ac.kind
        FROM sales_activities s JOIN sales_appointments a ON a.id = s.appointment_id JOIN accounts ac ON ac.id = s.account_id
       WHERE s.kind = 'follow_up' AND s.done_at IS NULL AND s.reminded_at IS NULL AND s.due_date <= ?`).bind(today).all();
+  // 111. Follow-ups on leads, in the same digest. Tagged so the reminded_at
+  // write goes to the right table.
+  let leadDue = [];
+  try {
+    ({ results: leadDue } = await env.DB.prepare(
+      `SELECT f.id, f.account_id, f.body, f.due_date, COALESCE(f.assignee_id, f.created_by) AS uid_,
+              l.first_name, l.last_name, ac.name AS acct_name, ac.subdomain, ac.hostname_status, ac.kind, 1 AS lead_fu
+         FROM lead_followups f JOIN sales_leads l ON l.id = f.lead_id JOIN accounts ac ON ac.id = f.account_id
+        WHERE f.done_at IS NULL AND f.reminded_at IS NULL AND f.due_date <= ?`).bind(today).all());
+  } catch (err) { if (!missingSchema(err)) throw err; }
   const byUser = new Map();
-  for (const r of due || []) {
+  for (const r of [...(due || []), ...(leadDue || [])]) {
     if (!r.uid_) continue;
     const k = `${r.account_id}|${r.uid_}`;
     if (!byUser.has(k)) byUser.set(k, []);
@@ -29055,13 +29235,13 @@ export async function salesCrmSweep(env, nowMs = Date.now()) {
   }
   for (const [k, rows] of byUser) {
     const [accountId, userId] = k.split("|");
-    for (const r of rows) await env.DB.prepare(`UPDATE sales_activities SET reminded_at = ? WHERE id = ?`).bind(new Date(nowMs).toISOString(), r.id).run();
+    for (const r of rows) await env.DB.prepare(`UPDATE ${r.lead_fu ? "lead_followups" : "sales_activities"} SET reminded_at = ? WHERE id = ?`).bind(new Date(nowMs).toISOString(), r.id).run();
     const u = await env.DB.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(userId).first();
     const to = realEmail(u?.email);
     if (!to || !notifyOf(u).email) continue;
     const acct = { id: accountId, name: rows[0].acct_name, subdomain: rows[0].subdomain, hostname_status: rows[0].hostname_status, kind: rows[0].kind };
     const mail = MAIL.followUpDueEmail({ firstName: String(u.name || "").split(" ")[0],
-      items: rows.map((r) => ({ who: `${r.first_name} ${r.last_name}`, what: r.body, due: apptWhenText(r.due_date), overdue: r.due_date < today })),
+      items: rows.map((r) => ({ who: [r.first_name, r.last_name].filter(Boolean).join(" "), what: r.body, due: apptWhenText(r.due_date), overdue: r.due_date < today })),
       link: `${accountOrigin(acct)}/?open=followups` });
     const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
     await logMail(env, { accountId, companyId: null, to, kind: "followup_due", subject: mail.subject, result, sentBy: null });

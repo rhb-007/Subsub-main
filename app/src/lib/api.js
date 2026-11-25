@@ -392,6 +392,10 @@ export const api = {
   patchApptActivity: (id, actId, body) => request(`/appointments/${encodeURIComponent(id)}/activities/${encodeURIComponent(actId)}`,
     { method: "PATCH", body: JSON.stringify(body) }),
   listFollowUps: () => request("/sales-followups"),
+  // 111. A follow-up on a homeowner, with or without an estimate booked.
+  createLeadFollowUp: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}/follow-ups`, { method: "POST", body: JSON.stringify(body) }),
+  patchLeadFollowUp: (id, fid, body) => request(`/sales-leads/${encodeURIComponent(id)}/follow-ups/${encodeURIComponent(fid)}`,
+    { method: "PATCH", body: JSON.stringify(body) }),
   // 107. CRM leads.
   listLeads: () => request("/sales-leads"),
   createLead: (body) => request("/sales-leads", { method: "POST", body: JSON.stringify(body) }),

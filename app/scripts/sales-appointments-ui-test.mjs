@@ -209,7 +209,8 @@ try {
     t.ck("and no Jobs / CRM switch, since it has only the CRM", !(await page.$(".ws-switch")));
     if (process.env.DBG) console.log(await page.evaluate(() => document.body.innerText.slice(0, 1500)), crashes);
     const head = await page.evaluate(() => document.querySelector(".appt-view .dash-hello h2")?.innerText || "");
-    t.ck("and it lands on its own dashboard, not the office's", /^CRM/.test(head.trim()) && !!(await page.$("[data-caller-dash]"))
+    // 111. The CRM dashboard opens on the greeting, like the Workbench one.
+    t.ck("and it lands on its own dashboard, not the office's", /^(Good (morning|afternoon|evening)|Still up), Cara/.test(head.trim()) && !!(await page.$("[data-caller-dash]"))
       && !(await page.$("[data-funnel]")), head);
     const ck = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-ck]")].map((x) => [x.dataset.ck, x.innerText.trim()])));
     t.ck("which counts what this seat did today and this month", ck.leadsToday === "3" && ck.bookedMonth !== undefined
@@ -243,6 +244,9 @@ try {
     t.ck("Appointments lists what is booked", (await page.$$("[data-appt]")).length === 1);
 
     await click(page, "[data-new-appt]");
+    await wait(300);
+    // 111. New appointment asks who it is for; a new homeowner is the call script.
+    await click(page, "[data-appt-start-new]");
     await wait(300);
     t.ck("New appointment opens the call script on its first step", (await stepNow(page)) === "call");
     let ns = await nextState(page);

@@ -17245,6 +17245,71 @@ refactor.
   client's one-click unsubscribe. **110 is pasted on the live database**
   (8, 7, 4, 8, 9 and 13 columns, confirmed by the owner). **Not verified here:** a live email and reply round trip.
 
+- **EACH CRM PAGE HAS ONE BUTTON, FOR WHAT THAT PAGE IS FOR; TEMPLATES AND
+  SEQUENCES COVER TEXTS AND LETTERS; A FOLLOW-UP CAN HANG OFF A LEAD; AND THE
+  WEBSITE FORM ASKS CONSENT ONCE.** Asked for as a list. *New appointment* sat
+  at the top of every CRM page, whatever the page was for. Migration 111
+  (`crm_templates.channel`, `lead_followups`), in `app/shared/crmsales.js`.
+  - **The dashboard opens on the Workbench greeting** (`CrmHello`): *Good
+    morning, Richard*, then **Get after it!** (*Let's book some estimates.* for
+    a call-center seat), then today's estimates, follow-ups due and new replies.
+    Its button is **New lead**.
+  - **Each page's button:**
+    - Leads: **Add a lead**.
+    - Inbox: **New message**. Pick email, text or letter, then the lead. A lead
+      that channel cannot reach is grayed with the reason. The press lands on
+      their Contact tab with that form open.
+    - Appointments and the calendar: **New appointment** asks who it is for.
+      *Somebody in your leads* opens the call script seeded with them; *A new
+      homeowner* opens it empty, and booking adds the lead.
+    - Follow-ups: **Add a follow-up**.
+    - Reports: **Update report**. Find a lead, then set their stage and each
+      estimate's amount and expected close date, through the same
+      `ApptDealPanel` the appointment uses.
+    - Setup: none.
+  - **The CRM's Add menu is Lead, Prospect, Opportunity, Customer.** Each opens
+    the lead form at that stage; Opportunity makes *Add and book* the main
+    button. A call-center seat gets Lead and Prospect. It travels as
+    `crmAsk.newLead`, which the URL-ask effect ignores.
+  - **A follow-up on a lead** (`lead_followups`) needs no estimate. It is
+    checked by the lead's consent through the same `validActivity`, and Do not
+    contact refuses it. It is listed beside the estimate follow-ups, scoped for a
+    sales manager to their own leads or what is handed to them. It is ticked done
+    on the lead and is in the nightly digest. `FOLLOW_CHANNELS` gained
+    **Letter**, and a due date must now be a real day (Feb 31 is refused) for
+    every follow-up.
+  - **Templates have a channel.** An email needs a subject; a text (480
+    characters at most) and a letter do not. The channel is fixed once made
+    (`channel_fixed`). Starters: 14 emails (10 new), 7 texts and 5 letters, and
+    each compose offers its own channel's. Without 111 an email template still
+    saves, and a text or letter one names the migration.
+  - **Starter sequences, one per channel** (`BUILTIN_SEQUENCES`), plus *Email:
+    book the estimate*. *Use this* in Setup, or putting a lead on one, makes the
+    account's own copy under a fixed id (`starterSequenceId`, `INSERT OR
+    IGNORE`), so an enrollment always points at a real row. **A text or letter
+    step is not sent**, because SubSub cannot text or post: it becomes a
+    follow-up for whoever owns the lead, due that day, with the words filled in.
+    Each step is checked on its own channel (`sequenceStepBlock`): a text needs a
+    mobile and a yes to texts, and a letter a whole address. Any inbound contact
+    (an email reply, or a call they made) stops a sequence, not only an email
+    reply.
+  - **The website form's trades are picked in Setup** from all of `TRADES`
+    (remembered on this device, because the snippet is a copy). The four the
+    call script knows become services, and the rest are named in the Inbox note
+    (*Also asked about: Plumbing.*). **Consent is one box, unticked by default**
+    (`webConsentText`), covering call, text and email, including automated
+    technology, not a condition of purchase, message rates and STOP. Ticked is a
+    yes to all three. Forms pasted before this still send the three old boxes,
+    which are read as before and recorded under the old version. The call
+    script's three spoken questions are unchanged. **The wording has not been
+    read by a lawyer.**
+  `test:crmchannels` (62) and `test:crmpagesui` (35). Six server mutations and
+  five browser ones fire, each on its own assertion. `test:salesapptui`,
+  `test:leadcontactui` and `test:crmsellingui` were moved to the new rule: the
+  greeting, the choice before the call script, the one consent statement.
+  **Paste 111** before text or letter templates, text or letter sequences, or
+  lead follow-ups work.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -267,18 +267,90 @@ export const TEMPLATE_VARS = {
 };
 export const TEMPLATE_VAR_IDS = Object.keys(TEMPLATE_VARS);
 
+// 111. A template is for one channel. Email has a subject; a text and a
+// letter do not. A text is short, because it goes from the person's own phone.
+export const TEMPLATE_CHANNELS = {
+  email: { label: "Email", plural: "Email templates" },
+  text: { label: "Text", plural: "Text templates" },
+  mail: { label: "Letter", plural: "Letter templates" },
+};
+export const TEMPLATE_CHANNEL_IDS = Object.keys(TEMPLATE_CHANNELS);
+export const MAX_TEXT_TEMPLATE = 480;
+export const templateChannel = (t) => (TEMPLATE_CHANNEL_IDS.includes(t?.channel) ? t.channel : "email");
+
 // The starters every account has. Read-only; "Make a copy" turns one into
 // the account's own. Plain words, American English, no promises about price.
+// Ids never change once shipped: a sequence step names one.
+const E = (id, name, subject, body) => ({ id, channel: "email", name, subject, body });
+const T = (id, name, body) => ({ id, channel: "text", name, subject: "", body });
+const M = (id, name, body) => ({ id, channel: "mail", name, subject: "", body });
 export const BUILTIN_TEMPLATES = [
-  { id: "std:thanks", name: "Thanks for meeting", subject: "Thanks for having us out, {{firstName}}",
-    body: "Hi {{firstName}},\n\nThanks for having us out to look at your home. If you have any questions about what we talked about, just reply to this email.\n\nWe'll follow up shortly with your estimate." },
-  { id: "std:estimate", name: "Here's your estimate", subject: "Your estimate from {{accountName}}",
-    body: "Hi {{firstName}},\n\nYour estimate is ready. Reply to this email with any questions, or to set a start date.\n\nThanks for considering us." },
-  { id: "std:checkin", name: "Checking in", subject: "Checking in, {{firstName}}",
-    body: "Hi {{firstName}},\n\nJust checking in on your project. Is there anything you need from us to help you decide?\n\nHappy to answer any questions." },
-  { id: "std:last", name: "Last check-in", subject: "Should we close your file, {{firstName}}?",
-    body: "Hi {{firstName}},\n\nWe haven't heard back, so we'll assume now isn't the right time. If anything changes, just reply to this email and we'll pick it up from here." },
+  E("std:thanks", "Thanks for meeting", "Thanks for having us out, {{firstName}}",
+    "Hi {{firstName}},\n\nThanks for having us out to look at your home. If you have any questions about what we talked about, just reply to this email.\n\nWe'll follow up shortly with your estimate."),
+  E("std:estimate", "Here's your estimate", "Your estimate from {{accountName}}",
+    "Hi {{firstName}},\n\nYour estimate is ready. Reply to this email with any questions, or to set a start date.\n\nThanks for considering us."),
+  E("std:checkin", "Checking in", "Checking in, {{firstName}}",
+    "Hi {{firstName}},\n\nJust checking in on your project. Is there anything you need from us to help you decide?\n\nHappy to answer any questions."),
+  E("std:last", "Last check-in", "Should we close your file, {{firstName}}?",
+    "Hi {{firstName}},\n\nWe haven't heard back, so we'll assume now isn't the right time. If anything changes, just reply to this email and we'll pick it up from here."),
+  E("std:welcome", "Thanks for reaching out", "Thanks for contacting {{accountName}}",
+    "Hi {{firstName}},\n\nThanks for reaching out about {{services}}. We'd like to set up a free estimate at a time that works for you.\n\nReply with a couple of days and times that suit you, and we'll get it on the calendar."),
+  E("std:book", "Let's book your estimate", "Let's find a time, {{firstName}}",
+    "Hi {{firstName}},\n\nWe'd still like to come out and give you a free estimate. It takes about an hour and there's no obligation.\n\nReply with a day that works, or call us back whenever is easiest."),
+  E("std:confirm", "Appointment reminder", "See you soon, {{firstName}}",
+    "Hi {{firstName}},\n\nA quick reminder about your estimate with {{accountName}}. If anybody else helps make decisions about your home, it's best if they can be there too.\n\nIf you need to move it, just reply to this email."),
+  E("std:questions", "Answering questions", "Any questions about your estimate?",
+    "Hi {{firstName}},\n\nSome people have questions after an estimate: what's included, how long the work takes, or how payment works. Reply with yours and we'll answer them.\n\nNo pressure either way."),
+  E("std:financing", "Payment options", "Ways to pay for your project, {{firstName}}",
+    "Hi {{firstName}},\n\nIf the timing or the cost is what's holding you back, ask us about payment options. We're happy to walk through them.\n\nJust reply to this email."),
+  E("std:schedule", "Ready to schedule", "Ready when you are, {{firstName}}",
+    "Hi {{firstName}},\n\nWhen you're ready to go ahead, reply to this email and we'll send over the next steps and a start date.\n\nThanks again for considering {{accountName}}."),
+  E("std:won", "Welcome aboard", "Thanks for choosing {{accountName}}",
+    "Hi {{firstName}},\n\nThanks for choosing us for your project. We'll be in touch soon with your start date and what to expect.\n\nIf anything comes up before then, just reply."),
+  E("std:review", "Ask for a review", "How did we do, {{firstName}}?",
+    "Hi {{firstName}},\n\nThanks again for trusting us with your home. If you were happy with the work, a short review helps other homeowners find us.\n\nAnd if anything isn't right, reply and tell us first."),
+  E("std:referral", "Ask for a referral", "Know anyone else who needs work done?",
+    "Hi {{firstName}},\n\nIf a friend or neighbor is thinking about a project, we'd be glad to give them a free estimate too. Just reply with their name and number, or pass ours along.\n\nThank you."),
+  E("std:winback", "Checking back in", "Still thinking about your project, {{firstName}}?",
+    "Hi {{firstName}},\n\nIt's been a while since we talked about {{services}}. If it's back on your list, we'd be glad to take another look and update your estimate.\n\nJust reply to this email."),
+  T("std:text-hello", "First text", "Hi {{firstName}}, this is {{senderName}} with {{accountName}}. Thanks for reaching out about {{services}}. When's a good time for a free estimate?"),
+  T("std:text-book", "Book the estimate", "Hi {{firstName}}, it's {{accountName}}. We'd still like to give you a free estimate. Reply with a day that works for you."),
+  T("std:text-reminder", "Appointment reminder", "Hi {{firstName}}, a reminder from {{accountName}} about your estimate. Reply here if you need to move it."),
+  T("std:text-after", "After the visit", "Hi {{firstName}}, thanks for having us out. Any questions about your estimate? Just reply here."),
+  T("std:text-checkin", "Checking in", "Hi {{firstName}}, checking in from {{accountName}}. Anything we can answer to help you decide?"),
+  T("std:text-last", "Last check-in", "Hi {{firstName}}, we'll close your file for now. If anything changes, text us here anytime. - {{accountName}}"),
+  T("std:text-review", "Ask for a review", "Hi {{firstName}}, thanks for choosing {{accountName}}. If you were happy with the work, a short review would mean a lot."),
+  M("std:mail-thanks", "Thank you for meeting", "Thank you for having us out to your home in {{city}}. We enjoyed talking with you about {{services}}.\n\nYour estimate is on its way. If you have any questions in the meantime, please call or write to us."),
+  M("std:mail-estimate", "Your estimate", "Enclosed is your estimate for {{services}}. It covers the work we talked about, and we're happy to go through any part of it with you.\n\nWhen you're ready to go ahead, call us and we'll set a start date."),
+  M("std:mail-followup", "Following up", "We wanted to follow up on your estimate for {{services}}. If you have questions about the work, the schedule or payment, we'd be glad to answer them.\n\nThank you for considering us."),
+  M("std:mail-winback", "We'd like to help", "It's been a while since we talked about {{services}} at your home. If the project is back on your list, we'd be glad to come out again and update your estimate at no cost."),
+  M("std:mail-thankyou", "Thank you for your business", "Thank you for choosing us for your project. It was a pleasure working on your home.\n\nIf you ever need anything, or know someone who does, please don't hesitate to call."),
 ];
+// 111. The starter sequences, one per channel. Shown in Setup and offered
+// when putting a lead on one; the first use makes the account its own copy
+// (starterSequenceId), so an enrollment always points at a real row.
+export const BUILTIN_SEQUENCES = [
+  { id: "std:seq-email", key: "email", channel: "email", name: "Email follow-up after the estimate", stopOnBooking: true,
+    steps: [{ day: 0, templateId: "std:thanks" }, { day: 2, templateId: "std:questions" }, { day: 5, templateId: "std:checkin" },
+      { day: 10, templateId: "std:financing" }, { day: 20, templateId: "std:last" }] },
+  { id: "std:seq-book", key: "book", channel: "email", name: "Email: book the estimate", stopOnBooking: true,
+    steps: [{ day: 0, templateId: "std:welcome" }, { day: 2, templateId: "std:book" }, { day: 7, templateId: "std:last" }] },
+  { id: "std:seq-text", key: "text", channel: "text", name: "Text follow-up after the estimate", stopOnBooking: true,
+    steps: [{ day: 0, templateId: "std:text-after" }, { day: 3, templateId: "std:text-checkin" }, { day: 10, templateId: "std:text-last" }] },
+  { id: "std:seq-mail", key: "mail", channel: "mail", name: "Letter follow-up after the estimate", stopOnBooking: true,
+    steps: [{ day: 0, templateId: "std:mail-thanks" }, { day: 14, templateId: "std:mail-followup" }, { day: 45, templateId: "std:mail-winback" }] },
+];
+export const isStarterSequence = (id) => BUILTIN_SEQUENCES.some((s) => s.id === id);
+// The account's own copy of a starter: one fixed id per account and starter,
+// so making it twice is one row.
+export const starterSequenceId = (accountId, starterId) => {
+  const s = BUILTIN_SEQUENCES.find((x) => x.id === starterId);
+  return s ? `stdseq_${s.key}_${String(accountId)}` : null;
+};
+export const starterKeyOf = (id) => {
+  const m = String(id || "").match(/^stdseq_([a-z]+)_/);
+  return m ? m[1] : null;
+};
 export const isBuiltin = (id) => String(id || "").startsWith("std:");
 
 export const MAX_TEMPLATE_BODY = 6000;
@@ -290,15 +362,20 @@ export function unknownVars(text) {
 }
 export function validTemplate(b) {
   const o = b && typeof b === "object" ? b : {};
+  // 111. A template with no channel is an email, which is what every
+  // template was before there were others.
+  const channel = o.channel === undefined || o.channel === null || o.channel === "" ? "email" : o.channel;
+  if (!TEMPLATE_CHANNEL_IDS.includes(channel)) return { ok: false, error: "bad_channel", field: "channel" };
   const name = str(o.name, 80);
-  const subject = str(o.subject, 200);
+  const subject = channel === "email" ? str(o.subject, 200) : "";
   const body = String(o.body ?? "").trim().slice(0, MAX_TEMPLATE_BODY);
   if (!name) return { ok: false, error: "name_required", field: "name" };
-  if (!subject) return { ok: false, error: "subject_required", field: "subject" };
+  if (channel === "email" && !subject) return { ok: false, error: "subject_required", field: "subject" };
   if (!body) return { ok: false, error: "body_required", field: "body" };
+  if (channel === "text" && body.length > MAX_TEXT_TEMPLATE) return { ok: false, error: "text_too_long", field: "body" };
   const bad = unknownVars(`${subject}\n${body}`);
   if (bad.length) return { ok: false, error: "unknown_placeholder", field: bad[0], placeholders: bad };
-  return { ok: true, value: { name, subject, body } };
+  return { ok: true, value: { channel, name, subject, body } };
 }
 
 // A template filled in for one lead. A value we do not have becomes nothing
@@ -351,7 +428,7 @@ export function stepDueAt(startedAt, day) {
 
 // Why a running sequence must stop before its next email, or null. Every one
 // of these is somebody having answered, or somebody being told not to.
-export function sequenceStop({ lead, consent, optOut, repliedSince, startStage, stopOnBooking = true, sequenceActive = true }) {
+export function sequenceStop({ lead, consent, optOut, repliedSince, startStage, stopOnBooking = true, sequenceActive = true, channel = "email" }) {
   if (!sequenceActive) return "sequence_off";
   if (!lead) return "lead_gone";
   if (repliedSince) return "replied";
@@ -359,32 +436,75 @@ export function sequenceStop({ lead, consent, optOut, repliedSince, startStage, 
   if (stopOnBooking && ["lead", "prospect"].includes(startStage) && lead.stage === "opportunity") return "booked";
   const o = optOutBlock("sequence", { optOut, consent });
   if (o) return o;
-  if (!lead.email) return "no_email";
+  return sequenceStepBlock(channel, { lead, consent });
+}
+// 111. Why the next step cannot go on its own channel, or null. An email
+// needs an address and a yes to email; a text a mobile and a yes to texts;
+// a letter a whole mailing address.
+export function sequenceStepBlock(channel, { lead, consent }) {
+  if (channel === "text") {
+    if (!String(lead?.phone || "").replace(/\D/g, "")) return "no_phone";
+    if (consent?.text !== true) return "no_text_consent";
+    return null;
+  }
+  if (channel === "mail") {
+    const a = lead?.address || {};
+    if (!a.street || !a.city || !a.state || !a.zip) return "no_address";
+    return null;
+  }
+  if (!lead?.email) return "no_email";
   if (consent?.email !== true) return "no_email_consent";
   return null;
 }
 export const STOP_TEXT = {
   replied: "They replied", bought: "They bought", booked: "An estimate was booked", unsubscribed: "They unsubscribed",
   do_not_contact: "Marked Do not contact", no_email: "No email address", no_email_consent: "They haven't agreed to email",
-  sequence_off: "The sequence was turned off", lead_gone: "The lead was removed", stopped: "Stopped by hand", done: "Every email sent",
+  sequence_off: "The sequence was turned off", lead_gone: "The lead was removed", stopped: "Stopped by hand", done: "Every step done",
+  no_phone: "No mobile number", no_text_consent: "They haven't agreed to texts", no_address: "No full mailing address",
+  template_gone: "A template it used was deleted", migration_needed: "Text and letter steps aren't set up on this database yet",
 };
 
 // ---------------------------------------------------------------------------
 // 5. The website lead form. What a homeowner sends from the account's own
-// website, checked. Consent is asked as three checkboxes in the script's own
-// words; unticked is a no, which on a form is a real answer.
+// website, checked. 111: consent is ONE statement and one box covering calls,
+// texts and email, unticked by default, because TCPA consent has to be a
+// thing somebody does rather than a thing left on. Ticked is a yes to all
+// three (where there is something to contact them on); unticked a no.
+// Forms pasted before 111 still send the three old boxes, read as before.
 // ---------------------------------------------------------------------------
 
-export const WEB_CONSENT_VERSION = "web-2026-11-25";
-export const WEB_CONSENT_TEXT = {
-  email: "Email me about my project.",
-  phone: "Call me about my project.",
-  text: "Text me about my project. Message and data rates may apply. Reply STOP to opt out.",
-};
+export const WEB_CONSENT_VERSION = "web-one-2026-11-25";
+export const WEB_CONSENT_VERSION_OLD = "web-2026-11-25";
+export const webConsentText = (accountName) =>
+  `I agree that ${accountName || "this company"} may contact me about my project by call, text and email at the number and address above, including with automated technology. Consent is not a condition of purchase. Message frequency varies. Msg & data rates may apply. Reply STOP to opt out.`;
+// The three answers a form sent: the one box, or the old three.
+export function webConsent(b) {
+  const o = b && typeof b === "object" ? b : {};
+  if (typeof o.consent === "boolean") return { email: o.consent, phone: o.consent, text: o.consent, version: WEB_CONSENT_VERSION };
+  return { email: o.consentEmail === true, phone: o.consentPhone === true, text: o.consentText === true, version: WEB_CONSENT_VERSION_OLD };
+}
 export function webLeadProblem(b) {
   const o = b && typeof b === "object" ? b : {};
   if (!str(o.firstName) && !str(o.lastName)) return "name_required";
   const phone = String(o.phone || "").replace(/\D/g, "");
   if (!str(o.email) && phone.length < 10) return "contact_required";
   return null;
+}
+
+// 111. What the website form asked for. The form offers any of SubSub's
+// trades (the account picks which in Setup); the four the call script knows
+// become the lead's services, and the rest are named in the note that lands
+// in the Inbox, so nothing a homeowner ticked is lost. Old pasted forms sent
+// the four service ids, which are read as before.
+export function webLeadServices(raw, { trades = [], services = [] } = {}) {
+  const picked = Array.isArray(raw) ? raw.map((x) => String(x || "")) : [];
+  const out = new Set();
+  const other = [];
+  for (const id of picked) {
+    const sv = services.find((s) => s.id === id) || services.find((s) => s.trade === id);
+    if (sv) { out.add(sv.id); continue; }
+    const t = trades.find((x) => x.id === id);
+    if (t && !other.includes(t.label)) other.push(t.label);
+  }
+  return { services: [...out], other };
 }

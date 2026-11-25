@@ -136,9 +136,9 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, signInNote, cleanHomeUrl, HOME_URL_MAX, leadFormHtml } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, signInNote, cleanHomeUrl, HOME_URL_MAX, leadFormHtml, leadFormServiceIds, LEAD_FORM_SERVICES } from "../shared/embed.js";
 import { LOST_REASONS, lostReasonLabel, dollarsToCents, centsText, salesReport, OPT_OUT_TEXT, STOP_TEXT, TEMPLATE_VARS,
-  fillTemplate, leadVars, unsubscribePathToken } from "../shared/crmsales.js";
+  fillTemplate, leadVars, unsubscribePathToken, TEMPLATE_CHANNELS, MAX_TEXT_TEMPLATE, webConsentText } from "../shared/crmsales.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -4617,7 +4617,7 @@ export default function SubSub() {
   });
   const crmAimed = useRef(false);
   useEffect(() => {
-    if (!crmAsk || crmAimed.current || !loggedIn || !can("appointments")) return;
+    if (!crmAsk || crmAsk.newLead || crmAimed.current || !loggedIn || !can("appointments")) return;
     if (hydratedFor !== currentAccountId) return;
     crmAimed.current = true;
     window.history.replaceState(null, "", window.location.pathname);
@@ -6846,7 +6846,16 @@ export default function SubSub() {
             {(() => {
               if (role === "contractor" || role === "tenant") return null;
               const actions = [];
-              if (role === "owner") {
+              // 111. In the CRM the Add menu adds people to sell to, at the
+              // stage they are at. A call-center seat sets lead and prospect.
+              if (crmWs && can("appointments")) {
+                for (const st of LEAD_STAGES.filter((x) => x.id !== "former")) {
+                  if (!SALES_ROLES.includes(role) && !CALLCENTER_STAGES.includes(st.id)) continue;
+                  actions.push([`crm-${st.id}`, st.term, `New ${st.term.toLowerCase()}`, UserPlus, () => {
+                    setCrmAsk({ newLead: st.id, n: Date.now() }); setTab("appointments");
+                  }]);
+                }
+              } else if (role === "owner") {
                 actions.push(["work", "Request work", "Request work", Plus, () => tryAddJob()]);
               } else {
                 if (runsTheAccount(role, membership)) {
@@ -8890,6 +8899,7 @@ export default function SubSub() {
 
       {tab === "appointments" && can("appointments") && (
         <AppointmentsView role={role} meId={currentUserId} ask={crmAsk} onAskUsed={() => setCrmAsk(null)}
+          meName={String(me?.name || "").trim().split(/\s+/)[0] || ""} weather={weather}
           accountName={account.name} onUnread={setCrmUnread} subdomain={account.subdomain} theme={brand?.theme || null}
           pane={crmPane} onPane={setCrmPane}
           onOpenJob={can("jobs") ? (id) => openJob(id) : null}
@@ -30244,7 +30254,7 @@ function LeadStageChip({ stage }) {
 }
 
 function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob, pane = "dashboard", onPane,
-  accountName = "", onUnread = null, subdomain = "", theme = null }) {
+  accountName = "", onUnread = null, subdomain = "", theme = null, meName = "", weather = null }) {
   // 110. Templates and sequences, for compose, a lead's sequence and Setup.
   const [lib, loadLib] = useCrmLibrary();
   // 109. A sales manager records the outcome of their own visits like the
@@ -30280,7 +30290,14 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const [flowLead, setFlowLead] = useState(null); // a lead being booked
   const [open, setOpen] = useState(null);         // an appointment id
   const [openLead, setOpenLead] = useState(null); // a lead id
-  const [leadForm, setLeadForm] = useState(null); // null | "new"
+  // null | "new" | "book" | {stage, book}: a stage from the CRM's Add menu.
+  const [leadForm, setLeadForm] = useState(null);
+  // 111. The windows each page's own button opens.
+  const [compose, setCompose] = useState(false);     // Inbox: New message
+  const [apptStart, setApptStart] = useState(null);  // New appointment: {date?}
+  const [fuForm, setFuForm] = useState(null);        // Add a follow-up: true | a lead
+  const [updating, setUpdating] = useState(false);   // Reports: Update report
+  const [leadMode, setLeadMode] = useState("");      // a channel to start on a lead's Contact tab
   const [flash, setFlash] = useState("");
   const [q, setQ] = useState("");
   const [when, setWhen] = useState("upcoming");
@@ -30305,9 +30322,16 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
     for (const l of leads) for (const ap of l.appointments || []) m.set(ap.id, l);
     return m;
   }, [leads]);
+  // 111. The CRM's Add menu: a lead at the stage picked, whatever the page.
+  useEffect(() => {
+    if (!ask?.newLead) return;
+    setLeadForm({ stage: ask.newLead, book: ask.newLead === "opportunity" });
+    onAskUsed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask]);
   // Opened from an email: the appointment it named, once the list is here.
   useEffect(() => {
-    if (!ask || !data) return;
+    if (!ask || ask.newLead || !data) return;
     if (ask.appointment && list.some((a) => a.id === ask.appointment)) { setPane("appointments"); setOpen(ask.appointment); }
     if (ask.pane === "followups") setPane("followups");
     if (ask.lead) {
@@ -30345,28 +30369,53 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
     reports: "Reports", setup: "Setup" };
   const caller = role === "callcenter";
   const [calDay, setCalDay] = useState("");
+  const leadsReady = !!leadData && !leadData.migration && !leadData.failed;
+  // 111. The welcome's figures: estimates today (a sales manager's own, the
+  // office's whole calendar, what a call-center seat booked), follow-ups due
+  // for this seat, and replies nobody has opened.
+  const fuList = Array.isArray(followUps) ? followUps : [];
+  const helloToday = list.filter((a) => a.date === today && APPT_STATUSES[a.status]?.open
+    && (role === "sales" ? a.repId === meId : caller ? a.createdBy === meId : true)).length;
+  const helloOwed = fuList.filter((x) => ["due", "overdue"].includes(followUpState(x, today)) && (!x.assigneeId || x.assigneeId === meId)).length;
+  const helloUnread = inboxCounts(inboxData?.messages || []).unread || 0;
+  // 111. One button per page, for what that page is for.
+  const headCta = (<>
+      {pane === "dashboard" ? (<>
+        {caller && !leadsReady && <button className="btn-ghost" data-new-appt onClick={() => { setFlowLead(null); setFlow("new"); }}><PhoneCall size={16} /> New appointment</button>}
+        <button className="btn-solid" data-new-lead data-new-lead-book={caller ? "" : undefined}
+          onClick={() => setLeadForm(caller ? "book" : "new")}><UserPlus size={16} /> New lead</button>
+      </>)
+        : pane === "inbox" ? <button className="btn-solid" data-new-message onClick={() => setCompose(true)}><Send size={16} /> New message</button>
+        : pane === "leads" ? <button className="btn-solid" data-new-lead onClick={() => setLeadForm("new")}><UserPlus size={16} /> Add a lead</button>
+        : pane === "appointments" || pane === "calendar" ? (
+          <button className="btn-solid" data-new-appt onClick={() => setApptStart(calDay && pane === "calendar" ? { date: calDay } : {})}>
+            <PhoneCall size={16} /> New appointment</button>)
+        : pane === "followups" ? <button className="btn-solid" data-add-followup onClick={() => setFuForm(true)}><Plus size={16} /> Add a follow-up</button>
+        : pane === "reports" ? <button className="btn-solid" data-update-report onClick={() => setUpdating(true)}><Pencil size={16} /> Update report</button>
+        : null}
+  </>);
 
   return (
     <main className="ss-main appt-view" data-crm-pane={pane}>
+      {pane === "dashboard" ? (
+        <CrmHello name={meName} weather={weather} mineToday={helloToday} owed={helloOwed} unread={helloUnread} caller={caller}>
+          {headCta}
+        </CrmHello>
+      ) : (
       <PageHead title={titles[pane] || "CRM"}
-        sub={pane === "dashboard" ? (caller ? "Add the homeowner as a lead, then book their estimate. Booking makes them an opportunity."
-            : "Where every homeowner you are selling to stands, and what is coming up.")
-          : pane === "calendar" ? "Every estimate booked, by day. Press a day to see who is on it."
-          : pane === "leads" ? "Everybody you are trying to sell to, from the first call to the last job."
-          : pane === "inbox" ? "Every email, text, letter, call and note with your leads, and their replies."
-          : pane === "followups" ? "What is owed to each homeowner, and when."
-          : pane === "reports" ? "What is in the pipeline, who is closing, where sales come from and why estimates are lost."
-          : pane === "setup" ? "Email templates, follow-up sequences, and the estimate form for your own website."
-          : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
-          : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
-        {caller && pane === "dashboard" ? (<>
-          <button className="btn-ghost" data-new-appt onClick={() => { setFlowLead(null); setFlow("new"); }}><PhoneCall size={16} /> New appointment</button>
-          <button className="btn-solid" data-new-lead-book onClick={() => setLeadForm("book")}><UserPlus size={16} /> New lead</button>
-        </>) : (<>
-          {pane === "leads" && <button className="btn-ghost" data-new-lead onClick={() => setLeadForm("new")}><UserPlus size={16} /> Add a lead</button>}
-          <button className="btn-solid" data-new-appt onClick={() => { setFlowLead(calDay && pane === "calendar" ? { date: calDay } : null); setFlow("new"); }}><PhoneCall size={16} /> New appointment</button>
-        </>)}
+          sub={pane === "dashboard" ? (caller ? "Add the homeowner as a lead, then book their estimate. Booking makes them an opportunity."
+              : "Where every homeowner you are selling to stands, and what is coming up.")
+            : pane === "calendar" ? "Every estimate booked, by day. Press a day to see who is on it."
+            : pane === "leads" ? "Everybody you are trying to sell to, from the first call to the last job."
+            : pane === "inbox" ? "Every email, text, letter, call and note with your leads, and their replies."
+            : pane === "followups" ? "What is owed to each homeowner, and when."
+            : pane === "reports" ? "What is in the pipeline, who is closing, where sales come from and why estimates are lost."
+            : pane === "setup" ? "Templates for email, texts and letters, follow-up sequences, and the estimate form for your own website."
+            : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
+            : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
+          {headCta}
       </PageHead>
+      )}
       {flash && <p className="appt-flash" role="status">{flash}</p>}
       {loadErr && <p className="form-err" role="alert">{loadErr}</p>}
       {data && data.crmReady === false && (
@@ -30407,7 +30456,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       {pane === "calendar" && (
         <ApptCalendar list={list} reps={reps} selected={calDay} onSelect={setCalDay}
           onOpen={(id) => setOpen(id)}
-          onNew={(day) => { setFlowLead({ date: day }); setFlow("new"); }} />
+          onNew={(day) => setApptStart({ date: day })} />
       )}
 
       {pane === "reports" && role !== "callcenter" && (
@@ -30420,6 +30469,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
 
       {pane === "followups" && (
         <CrmFollowUps list={followUps} meId={meId} onOpen={(apptId) => { setPane("appointments"); setOpen(apptId); }}
+          onOpenLead={(leadId) => { setLeadTab(""); setOpenLead(leadId); }}
           onDone={(id) => setFollowUps((xs) => Array.isArray(xs) ? xs.filter((x) => x.id !== id) : xs)} />
       )}
       {pane === "appointments" && (<>
@@ -30448,7 +30498,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       {data && !shown.length && (
         <div className="empty appt-empty">
           <p>{list.length ? "Nothing matches." : "No appointments yet."}</p>
-          {!list.length && <button className="btn-solid" onClick={() => setFlow("new")}>Book the first one</button>}
+          {!list.length && <button className="btn-solid" onClick={() => setApptStart({})}>Book the first one</button>}
         </div>
       )}
       <ul className="appt-list">
@@ -30486,18 +30536,48 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       )}
       {leadForm && (
         <Modal onClose={() => setLeadForm(null)}>
-          <LeadForm role={role} owners={leadData?.owners || []} onCancel={() => setLeadForm(null)} bookFirst={leadForm === "book"}
+          <LeadForm role={role} owners={leadData?.owners || []} onCancel={() => setLeadForm(null)}
+            bookFirst={leadForm === "book" || !!leadForm?.book} startStage={leadForm?.stage || null}
             onSaveAndBook={(l) => { upsertLead(l); setLeadForm(null); setFlowLead(l); setFlow("new");
               setFlash(`Added ${[l.firstName, l.lastName].filter(Boolean).join(" ")} as a ${stageTerm(l.stage).toLowerCase()}. Now book their estimate.`); }}
             onOpenExisting={(id) => { setLeadForm(null); setPane("leads"); setOpenLead(id); }}
-            onSaved={(l) => { upsertLead(l); setLeadForm(null); setPane("leads"); setOpenLead(l.id);
+            onSaved={(l) => { upsertLead(l); setLeadForm(null); if (pane !== "dashboard") setPane("leads"); setOpenLead(l.id);
               setFlash(`Added ${[l.firstName, l.lastName].filter(Boolean).join(" ")} as a ${stageTerm(l.stage).toLowerCase()}.`); }} />
         </Modal>
       )}
+      {compose && (
+        <Modal onClose={() => setCompose(false)}>
+          <NewLeadMessage leads={leads} onCancel={() => setCompose(false)}
+            onPick={(l, ch) => { setCompose(false); setLeadTab("contact"); setLeadMode(ch); setOpenLead(l.id); }} />
+        </Modal>
+      )}
+      {apptStart && (
+        <Modal onClose={() => setApptStart(null)}>
+          <NewApptStart leads={leads} leadsReady={leadsReady} onCancel={() => setApptStart(null)}
+            onExisting={(l) => { const d = apptStart.date; setApptStart(null); setFlowLead(d ? { ...l, date: d } : l); setFlow("new"); }}
+            onNew={() => { const d = apptStart.date; setApptStart(null); setFlowLead(d ? { date: d } : null); setFlow("new"); }} />
+        </Modal>
+      )}
+      {fuForm && (
+        <Modal onClose={() => setFuForm(null)}>
+          <AddFollowUpForm leads={leads} team={team} meId={meId} lead={fuForm === true ? null : fuForm} onCancel={() => setFuForm(null)}
+            onSaved={(fu, l) => { setFuForm(null); loadFollowUps(); setPane("followups");
+              setFlash(`Follow-up added for ${leadName(l)}, due ${apptWhenText(fu.dueDate)}.`); }} />
+        </Modal>
+      )}
+      {updating && (
+        <Modal onClose={() => setUpdating(false)} wide>
+          <UpdateReportForm leads={leads} role={role} apptById={Object.fromEntries(list.map((a) => [a.id, a]))}
+            onLeadSaved={(l) => { const old = leads.find((x) => x.id === l.id); upsertLead({ ...(old || {}), ...l }); }}
+            onApptSaved={(a) => { upsert(a); loadLeads(); }}
+            onBook={(l) => { setUpdating(false); setFlowLead(l); setFlow("new"); }}
+            onCancel={() => setUpdating(false)} />
+        </Modal>
+      )}
       {currentLead && !flow && !current && (
-        <Modal onClose={() => { setOpenLead(null); setLeadTab(""); loadInbox(); }} wide>
+        <Modal onClose={() => { setOpenLead(null); setLeadTab(""); setLeadMode(""); loadInbox(); }} wide>
           <LeadDetail lead={currentLead} role={role} owners={leadData?.owners || []} lib={lib}
-            accountName={accountName} startTab={leadTab} onContacted={() => { loadInbox(); loadLeads(); }}
+            accountName={accountName} startTab={leadTab} startMode={leadMode} onContacted={() => { loadInbox(); loadLeads(); }}
             apptById={Object.fromEntries(list.map((a) => [a.id, a]))}
             onSaved={(l) => upsertLead({ ...currentLead, ...l })}
             onOpenAppt={(id) => setOpen(id)}
@@ -30866,14 +30946,17 @@ function leadRefusalText(e) {
 
 // Add a lead, or edit one. The stages offered follow the role: a call-center
 // seat can add a lead or a prospect and nothing that says somebody bought.
-function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpenExisting, onSaveAndBook = null, bookFirst = false }) {
+function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpenExisting, onSaveAndBook = null, bookFirst = false, startStage = null }) {
   const sales = SALES_ROLES.includes(role);
+  // 111. The CRM's Add menu starts a lead at the stage picked, where this
+  // seat may set it.
+  const firstStage = startStage && (sales || CALLCENTER_STAGES.includes(startStage)) ? startStage : "lead";
   // A sales manager's leads are theirs; who owns a lead is the office's call.
   const office = OFFICE_ROLES.includes(role);
   const [f, setF] = useState(() => ({
     firstName: existing?.firstName || "", lastName: existing?.lastName || "", phone: existing?.phone || "",
     email: existing?.email || "", services: existing?.services || [], source: existing?.source || "",
-    stage: existing?.stage || "lead", notes: existing?.notes || "", ownerId: existing?.ownerId || "",
+    stage: existing?.stage || firstStage, notes: existing?.notes || "", ownerId: existing?.ownerId || "",
     address: { street: "", city: "", state: "", zip: "", ...(existing?.address || {}) },
   }));
   const [busy, setBusy] = useState(false);
@@ -30894,7 +30977,7 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
   const toggle = (id) => set({ services: f.services.includes(id) ? f.services.filter((x) => x !== id) : [...f.services, id] });
   return (
     <div className="lead-form" data-lead-form>
-      <h3 className="form-title">{existing ? "Edit lead" : "Add a lead"}</h3>
+      <h3 className="form-title">{existing ? "Edit lead" : startStage && firstStage !== "lead" ? `Add a ${stageTerm(firstStage).toLowerCase()}` : "Add a lead"}</h3>
       <div className="fld-row">
         <label className="fld"><span>First name</span><input value={f.firstName} onChange={(e) => set({ firstName: e.target.value })} /></label>
         <label className="fld"><span>Last name</span><input value={f.lastName} onChange={(e) => set({ lastName: e.target.value })} /></label>
@@ -30962,7 +31045,7 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
 
 // One lead: who they are, their stage, their appointments, and the one press
 // that moves them forward -- booking an appointment.
-function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, accountName = "", startTab = "", onContacted, lib = null }) {
+function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, accountName = "", startTab = "", startMode = "", onContacted, lib = null }) {
   const sales = SALES_ROLES.includes(role);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState("");
@@ -30990,7 +31073,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         </div>
         <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
-      <LeadDetailTabs lead={lead} start={startTab} accountName={accountName} onContacted={onContacted} role={role} lib={lib}
+      <LeadDetailTabs lead={lead} start={startTab} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib}
         onConsent={(consent) => onSaved({ ...lead, consent })}>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
         {LEAD_STAGES.map((stg) => (
@@ -31036,7 +31119,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
 
 // 109. A lead is two tabs: who they are, and contacting them. Contact opens
 // first when the lead was opened from the Inbox.
-function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent, children, role = "admin", lib = null }) {
+function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onContacted, onConsent, children, role = "admin", lib = null }) {
   const [tab, setTab] = useState(start === "contact" ? "contact" : "overview");
   return (<>
     <div className="seg-tabs lead-tabs" role="tablist">
@@ -31044,7 +31127,7 @@ function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent,
       <button type="button" role="tab" data-lead-tab="contact" aria-selected={tab === "contact"} className={tab === "contact" ? "on" : ""} onClick={() => setTab("contact")}>Contact</button>
     </div>
     {tab === "overview" ? children
-      : <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} />}
+      : <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} startMode={startMode} />}
   </>);
 }
 
@@ -31141,7 +31224,7 @@ function LeadConsentForm({ lead, consent, onSaved, onCancel }) {
 // printed letter, a logged call or a note, then everything said both ways,
 // newest first. Each button is greyed out with the same reason the route
 // would refuse with, before it is pressed.
-function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "admin", lib = null }) {
+function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "admin", lib = null, startMode = "" }) {
   const [d, setD] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
   const [mode, setMode] = useState("");
@@ -31161,13 +31244,23 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
   // 110. Do not contact closes an outbound call as well as their no to calls.
   const callBlocked = !consent || consent.phone !== true || !!d?.callBlock;
   const sales = SALES_ROLES.includes(role);
-  const templates = lib?.templates || [];
+  // 111. Each compose offers the templates written for its own channel.
+  const templates = (lib?.templates || []).filter((t) => (t.channel || "email") === (mode === "text" || mode === "mail" ? mode : "email"));
   const applyTemplate = (id) => {
     const t = templates.find((x) => x.id === id);
     if (!t) return;
     const vars = leadVars(lead, { accountName, senderName: "", serviceLabel });
     setF((x) => ({ ...x, templateId: id, subject: fillTemplate(t.subject, vars), body: fillTemplate(t.body, vars) }));
   };
+  // 111. Opened from the Inbox's New message: that channel's form, once the
+  // contact history is here and if the channel is open for them.
+  const started = useRef(false);
+  useEffect(() => {
+    if (!startMode || started.current || !d) return;
+    started.current = true;
+    if (!(d.blocks || {})[startMode]) start(startMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d, startMode]);
   const start = (m) => {
     setMode(m); setErr(null); setFlash("");
     setF(m === "email" ? { subject: "", body: `Hi ${lead.firstName || "there"},\n\n` }
@@ -31272,6 +31365,13 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
       {mode === "text" && (
         <div className="lc-form" data-compose="text">
           <p className="note">SubSub can't send texts yet, so this opens the messages app on this device with your words filled in, to {formatPhone(lead.phone)}. Press send there.</p>
+          {templates.length > 0 && (
+            <label className="fld">Start from a template
+              <select value={f.templateId || ""} onChange={(e) => applyTemplate(e.target.value)} data-text-template>
+                <option value="">Write my own</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select></label>
+          )}
           <label className="fld">Message<textarea rows={4} maxLength={MAX_TEXT_BODY} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-text-body /></label>
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
@@ -31287,6 +31387,13 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
       {mode === "mail" && (
         <div className="lc-form" data-compose="mail">
           <p className="note">A letter to {leadAddressLine(lead.address)}, printed here for you to mail.</p>
+          {templates.length > 0 && (
+            <label className="fld">Start from a template
+              <select value={f.templateId || ""} onChange={(e) => applyTemplate(e.target.value)} data-letter-template>
+                <option value="">Write my own</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select></label>
+          )}
           <label className="fld">Letter<textarea rows={8} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-letter-body
             placeholder="Thank you for meeting with us…" /></label>
           <div className="form-actions">
@@ -31610,7 +31717,7 @@ function CrmSetup({ lib, onReload, subdomain, accountName, theme }) {
   return (
     <div className="crm-setup" data-crm-setup>
       <div className="seg-tabs" role="tablist">
-        {[["templates", "Email templates"], ["sequences", "Follow-up sequences"], ["form", "Website form"]].map(([id, label]) => (
+        {[["templates", "Templates"], ["sequences", "Follow-up sequences"], ["form", "Website form"]].map(([id, label]) => (
           <button key={id} type="button" role="tab" data-setup-tab={id} aria-selected={tab === id} className={tab === id ? "on" : ""}
             onClick={() => setTab(id)}>{label}</button>
         ))}
@@ -31628,26 +31735,38 @@ function crmSetupErrText(e) {
   if (code === "unknown_placeholder") return `{{${e.body.field}}} isn't a value a template can use.`;
   if (code === "name_required") return "Give it a name.";
   if (code === "subject_required") return "Add a subject.";
-  if (code === "body_required") return "Write the email first.";
+  if (code === "body_required") return "Write the message first.";
+  if (code === "text_too_long") return `A text template can be ${MAX_TEXT_TEMPLATE} characters at most.`;
+  if (code === "channel_fixed") return "A template stays on the channel it was made for. Make a new one instead.";
   if (code === "template_in_use") return `A sequence still sends this one: ${(e.body.sequences || []).join(", ")}. Take it out of the sequence first.`;
   if (code === "sequence_in_use") return "Leads have been on this sequence, so it keeps its history. Turn it off instead.";
-  if (code === "steps_required") return "Add at least one email.";
-  if (code === "days_out_of_order") return "Each email has to go out on a later day than the one before it.";
-  if (code === "bad_template") return "Pick a template for every email.";
+  if (code === "steps_required") return "Add at least one step.";
+  if (code === "days_out_of_order") return "Each step has to go out on a later day than the one before it.";
+  if (code === "bad_template") return "Pick a template for every step.";
   if (code === "bad_day") return "Days go from 0 to 90.";
   if (code === "office_only") return "Only an admin or project manager can change these.";
+  if (code === "migration_needed") return `Text and letter templates aren't set up on this database yet. Run migration ${e.body.migration || "111_crm_channels"}.`;
   return leadContactErrText(e);
 }
 
+// 111. Templates for each way a homeowner is contacted. Email is sent by
+// SubSub; a text opens the sender's own messages app; a letter is printed.
+const TPL_HELP = {
+  email: "Sent by SubSub in your company's name, with an unsubscribe link at the bottom.",
+  text: "Opens the messages app on the phone sending it, with these words filled in. Keep it short.",
+  mail: "Printed on a letter with your company's name, the date and their address, ready to mail.",
+};
 function CrmTemplates({ lib, onReload, accountName }) {
-  const [edit, setEdit] = useState(null); // null | {id?, name, subject, body}
+  const [ch, setCh] = useState("email");
+  const [edit, setEdit] = useState(null); // null | {id?, channel, name, subject, body}
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const templates = lib?.templates || [];
+  const all = lib?.templates || [];
+  const templates = all.filter((t) => (t.channel || "email") === ch);
   const save = async () => {
     setBusy(true); setErr(null);
     try {
-      const body = { name: edit.name, subject: edit.subject, body: edit.body };
+      const body = { channel: edit.channel, name: edit.name, subject: edit.channel === "email" ? edit.subject : "", body: edit.body };
       if (edit.id) await api.patchCrmTemplate(edit.id, body); else await api.createCrmTemplate(body);
       setEdit(null); onReload();
     } catch (e) { setErr(e); }
@@ -31659,19 +31778,29 @@ function CrmTemplates({ lib, onReload, accountName }) {
   };
   const sample = leadVars({ firstName: "Dana", lastName: "Price", services: ["roofing"], address: { city: "Tacoma" } },
     { accountName, senderName: "You", serviceLabel });
+  const blank = () => ({ channel: ch, name: "", subject: "", body: ch === "email" ? "Hi {{firstName}},\n\n" : ch === "text" ? "Hi {{firstName}}, " : "" });
   return (
     <div className="crm-tpls" data-templates>
-      <p className="note">Saved emails anybody on the CRM can start from. Use {Object.keys(TEMPLATE_VARS).map((k) => `{{${k}}}`).join(", ")} and they are filled in for each homeowner.</p>
-      {!edit && <button className="btn-solid" data-tpl-new onClick={() => setEdit({ name: "", subject: "", body: "Hi {{firstName}},\n\n" })}><Plus size={15} /> New template</button>}
+      <div className="seg-tabs sm" role="tablist" aria-label="Channel">
+        {Object.entries(TEMPLATE_CHANNELS).map(([id, c]) => (
+          <button key={id} type="button" role="tab" data-tpl-channel={id} aria-selected={ch === id} className={ch === id ? "on" : ""}
+            onClick={() => { setCh(id); setEdit(null); setErr(null); }}>{c.label} <span className="crm-card-n">{all.filter((t) => (t.channel || "email") === id).length}</span></button>
+        ))}
+      </div>
+      <p className="note">{TPL_HELP[ch]} Use {Object.keys(TEMPLATE_VARS).map((k) => `{{${k}}}`).join(", ")} and they are filled in for each homeowner.</p>
+      {!edit && <button className="btn-solid" data-tpl-new onClick={() => setEdit(blank())}><Plus size={15} /> New {TEMPLATE_CHANNELS[ch].label.toLowerCase()} template</button>}
       {edit && (
-        <div className="lc-form" data-tpl-form>
+        <div className="lc-form" data-tpl-form data-tpl-form-channel={edit.channel}>
           <label className="fld">Name<input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} data-tpl-name /></label>
-          <label className="fld">Subject<input value={edit.subject} onChange={(e) => setEdit({ ...edit, subject: e.target.value })} data-tpl-subject /></label>
-          <label className="fld">Email<textarea rows={7} value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} data-tpl-body /></label>
+          {edit.channel === "email" && <label className="fld">Subject<input value={edit.subject} onChange={(e) => setEdit({ ...edit, subject: e.target.value })} data-tpl-subject /></label>}
+          <label className="fld">{edit.channel === "email" ? "Email" : edit.channel === "text" ? "Text" : "Letter"}
+            <textarea rows={edit.channel === "text" ? 4 : 7} maxLength={edit.channel === "text" ? MAX_TEXT_TEMPLATE : undefined}
+              value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} data-tpl-body /></label>
+          {edit.channel === "text" && <p className="note">{edit.body.length} of {MAX_TEXT_TEMPLATE} characters.</p>}
           <div className="crm-tpl-vars">{Object.entries(TEMPLATE_VARS).map(([k, label]) => (
             <button key={k} type="button" className="chip" title={label} onClick={() => setEdit({ ...edit, body: `${edit.body}{{${k}}}` })}>{`{{${k}}}`}</button>
           ))}</div>
-          <div className="crm-tpl-preview" data-tpl-preview><b>{fillTemplate(edit.subject, sample)}</b><p>{fillTemplate(edit.body, sample)}</p></div>
+          <div className="crm-tpl-preview" data-tpl-preview>{edit.channel === "email" && <b>{fillTemplate(edit.subject, sample)}</b>}<p>{fillTemplate(edit.body, sample)}</p></div>
           {err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => { setEdit(null); setErr(null); }}>Cancel</button>
@@ -31683,12 +31812,12 @@ function CrmTemplates({ lib, onReload, accountName }) {
       <ul className="crm-tpl-list">
         {templates.map((t) => (
           <li key={t.id} data-tpl={t.id}>
-            <div><b>{t.name}</b>{t.builtin && <span className="tn-chip">Starter</span>}<span className="note">{t.subject}</span></div>
+            <div><b>{t.name}</b>{t.builtin && <span className="tn-chip">Starter</span>}<span className="note">{t.channel === "email" || !t.channel ? t.subject : t.body.slice(0, 90) + (t.body.length > 90 ? "…" : "")}</span></div>
             <div className="crm-tpl-acts">
               {t.builtin
-                ? <button className="btn-ghost sm" data-tpl-copy onClick={() => setEdit({ name: `${t.name} (copy)`, subject: t.subject, body: t.body })}>Make a copy</button>
+                ? <button className="btn-ghost sm" data-tpl-copy onClick={() => setEdit({ channel: t.channel || "email", name: `${t.name} (copy)`, subject: t.subject, body: t.body })}>Make a copy</button>
                 : (<>
-                  <button className="btn-ghost sm" data-tpl-edit onClick={() => setEdit({ id: t.id, name: t.name, subject: t.subject, body: t.body })}>Edit</button>
+                  <button className="btn-ghost sm" data-tpl-edit onClick={() => setEdit({ id: t.id, channel: t.channel || "email", name: t.name, subject: t.subject, body: t.body })}>Edit</button>
                   <button className="btn-ghost sm" data-tpl-delete onClick={() => remove(t)}>Delete</button>
                 </>)}
             </div>
@@ -31699,8 +31828,12 @@ function CrmTemplates({ lib, onReload, accountName }) {
   );
 }
 
+// What each step of a sequence does, by its template's channel: an email is
+// sent, a text or a letter becomes a follow-up for a person to do that day.
+const STEP_DOES = { email: "Email sent", text: "Text to send", mail: "Letter to mail" };
 function CrmSequences({ lib, onReload }) {
   const templates = lib?.templates || [];
+  const chOf = (id) => templates.find((t) => t.id === id)?.channel || "email";
   const [edit, setEdit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -31718,10 +31851,39 @@ function CrmSequences({ lib, onReload }) {
     setErr(null);
     try { await api.patchCrmSequence(s.id, { active: !s.active }); onReload(); } catch (e) { setErr(e); }
   };
+  // A starter is used as it is (made the account's own copy) or edited, which
+  // makes the copy first and then opens it.
+  const useStarter = async (s, andEdit = false) => {
+    setErr(null);
+    try {
+      const r = await api.createCrmSequence({ starterId: s.id });
+      onReload();
+      if (andEdit && r?.sequence) setEdit({ id: r.sequence.id, name: r.sequence.name, stopOnBooking: r.sequence.stopOnBooking, steps: r.sequence.steps });
+    } catch (e) { setErr(e); }
+  };
   const step = (i, k, v) => setEdit({ ...edit, steps: edit.steps.map((s, j) => (j === i ? { ...s, [k]: v } : s)) });
+  const own = (lib?.sequences || []).filter((x) => !x.starter);
+  const starters = (lib?.sequences || []).filter((x) => x.starter);
+  const row = (s) => (
+    <li key={s.id} data-seq={s.id}>
+      <div><b>{s.name}</b>{s.starter && <span className="tn-chip">Starter</span>}{!s.active && <span className="tn-chip">Off</span>}
+        <span className="note">{s.steps.map((x) => `day ${x.day}: ${STEP_DOES[chOf(x.templateId)].toLowerCase()}`).join(" · ")}{s.running ? ` · ${s.running} on it now` : ""}</span></div>
+      <div className="crm-tpl-acts">
+        {s.starter ? (<>
+          <button className="btn-ghost sm" data-seq-use onClick={() => useStarter(s)}>Use this</button>
+          <button className="btn-ghost sm" data-seq-starter-edit onClick={() => useStarter(s, true)}>Edit a copy</button>
+        </>) : (<>
+          <button className="btn-ghost sm" onClick={() => setEdit({ id: s.id, name: s.name, stopOnBooking: s.stopOnBooking, steps: s.steps })}>Edit</button>
+          <button className="btn-ghost sm" data-seq-toggle onClick={() => toggle(s)}>{s.active ? "Turn off" : "Turn on"}</button>
+        </>)}
+      </div>
+    </li>
+  );
   return (
     <div className="crm-seqs" data-sequences>
-      <p className="note">A few emails sent on a schedule after a lead is put on one. Each stops by itself the moment they reply, buy, unsubscribe or are marked Do not contact, and only goes to somebody who said yes to email.</p>
+      <p className="note">Steps on a schedule after a lead is put on one. An email step is sent by SubSub; a text or letter step becomes a follow-up
+        for whoever owns the lead, due that day, with the words filled in. Each sequence stops by itself the moment they reply, buy, unsubscribe
+        or are marked Do not contact, and a step only goes on a channel they agreed to.</p>
       {!edit && <button className="btn-solid" data-seq-new onClick={() => setEdit(blank())}><Plus size={15} /> New sequence</button>}
       {edit && (
         <div className="lc-form" data-seq-form>
@@ -31730,15 +31892,19 @@ function CrmSequences({ lib, onReload }) {
             {edit.steps.map((s, i) => (
               <li key={i} data-seq-step={i}>
                 <label className="fld">Day<input type="number" min={0} max={90} value={s.day} onChange={(e) => step(i, "day", e.target.value)} data-seq-day /></label>
-                <label className="fld">Email<select value={s.templateId} onChange={(e) => step(i, "templateId", e.target.value)} data-seq-tpl>
-                  {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                <label className="fld">Step<select value={s.templateId} onChange={(e) => step(i, "templateId", e.target.value)} data-seq-tpl>
+                  {Object.entries(TEMPLATE_CHANNELS).map(([cid, c]) => (
+                    <optgroup key={cid} label={c.plural}>
+                      {templates.filter((t) => (t.channel || "email") === cid).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </optgroup>
+                  ))}
                 </select></label>
                 {edit.steps.length > 1 && <button type="button" className="link-btn" onClick={() => setEdit({ ...edit, steps: edit.steps.filter((_, j) => j !== i) })}>Remove</button>}
               </li>
             ))}
           </ol>
           {edit.steps.length < 6 && <button type="button" className="btn-ghost sm" data-seq-add
-            onClick={() => setEdit({ ...edit, steps: [...edit.steps, { day: Number(edit.steps[edit.steps.length - 1]?.day || 0) + 4, templateId: "std:checkin" }] })}>Add an email</button>}
+            onClick={() => setEdit({ ...edit, steps: [...edit.steps, { day: Number(edit.steps[edit.steps.length - 1]?.day || 0) + 4, templateId: "std:checkin" }] })}>Add a step</button>}
           <label className="fld-check"><input type="checkbox" checked={edit.stopOnBooking} onChange={(e) => setEdit({ ...edit, stopOnBooking: e.target.checked })} />
             Stop when an estimate is booked</label>
           <p className="note">Day 0 goes out within ten minutes of putting somebody on it.</p>
@@ -31750,28 +31916,29 @@ function CrmSequences({ lib, onReload }) {
         </div>
       )}
       {!edit && err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
-      {!(lib?.sequences || []).length && !edit && <p className="note">No sequences yet.</p>}
-      <ul className="crm-tpl-list">
-        {(lib?.sequences || []).map((s) => (
-          <li key={s.id} data-seq={s.id}>
-            <div><b>{s.name}</b>{!s.active && <span className="tn-chip">Off</span>}
-              <span className="note">{s.steps.map((x) => `day ${x.day}`).join(", ")}{s.running ? ` · ${s.running} on it now` : ""}</span></div>
-            <div className="crm-tpl-acts">
-              <button className="btn-ghost sm" onClick={() => setEdit({ id: s.id, name: s.name, stopOnBooking: s.stopOnBooking, steps: s.steps })}>Edit</button>
-              <button className="btn-ghost sm" data-seq-toggle onClick={() => toggle(s)}>{s.active ? "Turn off" : "Turn on"}</button>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {!own.length && !edit && <p className="note">You haven't made a sequence of your own yet. Start from one below.</p>}
+      <ul className="crm-tpl-list" data-seq-own>{own.map(row)}</ul>
+      {starters.length > 0 && (<>
+        <span className="lead-label">Starter sequences</span>
+        <ul className="crm-tpl-list" data-seq-starters>{starters.map(row)}</ul>
+      </>)}
     </div>
   );
 }
 
 // 110. The homeowner form for the account's own website: copy the code,
 // see what it looks like. Requests land in Leads as from the website, with
-// what they wrote waiting in the Inbox.
+// what they wrote waiting in the Inbox. 111: which of SubSub's trades it
+// offers is chosen here, before the code is copied, and remembered on this
+// device; the consent is one statement and one box.
 function LeadFormEmbed({ subdomain, accountName, theme }) {
-  const html = useMemo(() => leadFormHtml({ subdomain, accountName, theme }), [subdomain, accountName, theme]);
+  const key = `ss_leadform_services:${subdomain}`;
+  const [picked, setPicked] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem(key) || "null"); return Array.isArray(v) ? leadFormServiceIds(v) : LEAD_FORM_SERVICES; }
+    catch { return LEAD_FORM_SERVICES; }
+  });
+  const setPick = (ids) => { setPicked(ids); try { localStorage.setItem(key, JSON.stringify(ids)); } catch { /* private mode */ } };
+  const html = useMemo(() => leadFormHtml({ subdomain, accountName, theme, services: picked }), [subdomain, accountName, theme, picked]);
   const [copied, setCopied] = useState("");
   const [view, setView] = useState("preview");
   if (!html) return <p className="note">This account needs a SubSub address before it can have a website form.</p>;
@@ -31779,10 +31946,28 @@ function LeadFormEmbed({ subdomain, accountName, theme }) {
     try { await navigator.clipboard.writeText(html); setCopied("yes"); setTimeout(() => setCopied(""), 2200); }
     catch { setCopied("no"); setTimeout(() => setCopied(""), 3000); }
   };
+  const toggle = (id) => {
+    const next = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
+    if (next.length) setPick(TRADES.map((t) => t.id).filter((t) => next.includes(t)));
+  };
   return (
     <div className="crm-leadform" data-lead-form-embed>
       <p className="note">Paste this on your website where homeowners ask for an estimate. Each request lands in Leads as from the website,
         what they wrote waits in the Inbox, and your admins and project managers get an email.</p>
+      <div className="fld"><span>What homeowners can ask for <span className="crm-card-n">{picked.length}</span></span>
+        <div className="chips" data-lead-form-services>
+          {TRADES.map((t) => (
+            <button key={t.id} type="button" data-lead-form-service={t.id} aria-pressed={picked.includes(t.id)}
+              className={`chip ${picked.includes(t.id) ? "on" : ""}`} onClick={() => toggle(t.id)}>{t.label}</button>
+          ))}
+        </div>
+        <span className="note">Pick at least one. A change here changes the code below; a form already on your website keeps what it had until you copy and paste it again.</span>
+      </div>
+      <div className="lf-consent" data-lead-form-consent>
+        <span className="lead-label">The consent they give</span>
+        <p>{webConsentText(accountName)}</p>
+        <span className="note">One box, left unticked, covering calls, texts and email. Ticked is a yes to all three; unticked is a no.</span>
+      </div>
       <div className="form-actions">
         <button className="btn-solid" data-lead-form-copy onClick={copy}>{copied === "yes" ? "Copied" : copied === "no" ? "Couldn't copy" : "Copy the code"}</button>
       </div>
@@ -31871,6 +32056,257 @@ function CrmInbox({ data, onRetry, onOpen }) {
       <ul className="lm-list inbox-list-crm">
         {shown.map((m) => <LeadMessageRow key={m.id} m={m} showWho onOpen={onOpen} />)}
       </ul>
+    </div>
+  );
+}
+
+// 111. A search over this seat's own leads, for every window that starts
+// from "which homeowner?". Name, phone, email and address; before anything is
+// typed, the most recently touched. `blocked(lead)` grays a row with a reason.
+const leadName = (l) => [l?.firstName, l?.lastName].filter(Boolean).join(" ") || "No name";
+function LeadPicker({ leads = [], onPick, blocked = null, autoFocus = true }) {
+  const [q, setQ] = useState("");
+  const needle = q.trim().toLowerCase();
+  const dig = needle.replace(/\D/g, "");
+  const hits = (needle ? leads.filter((l) => {
+    const hay = [l.firstName, l.lastName, l.email, l.address?.street, l.address?.city, l.address?.zip].join(" ").toLowerCase();
+    return hay.includes(needle) || (dig.length >= 3 && String(l.phone || "").includes(dig));
+  }) : [...leads].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))).slice(0, 8);
+  return (
+    <div className="lead-pick" data-lead-picker>
+      <label className="fld"><span>Find the homeowner</span>
+        <input autoFocus={autoFocus} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name, phone, email or address" data-lead-search /></label>
+      {!leads.length && <p className="note">No leads yet.</p>}
+      {leads.length > 0 && !hits.length && <p className="note">Nobody in your leads matches that.</p>}
+      <ul className="lead-pick-list">
+        {hits.map((l) => {
+          const why = blocked ? blocked(l) : null;
+          return (
+            <li key={l.id}>
+              <button type="button" className="lead-pick-row" data-pick-lead={l.id} disabled={!!why} onClick={() => onPick(l)}>
+                <span className="lead-pick-who"><b>{leadName(l)}</b>
+                  <span>{why || [l.phone ? formatPhone(l.phone) : l.email, l.address?.city].filter(Boolean).join(" · ")}</span></span>
+                <LeadStageChip stage={l.stage} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// 111. The Inbox's New message: which way, then who. A channel the lead has
+// nothing for is grayed on their row; consent and Do not contact are asked
+// on the lead's own Contact tab, which is where this lands.
+const NEW_MSG_CHANNELS = [["email", "Email", Mail], ["text", "Text", MessageSquareText], ["mail", "Letter", Printer]];
+function NewLeadMessage({ leads, onPick, onCancel }) {
+  const [channel, setChannel] = useState("email");
+  const blocked = (l) => {
+    if (l.optOut?.dncAt) return "Marked Do not contact";
+    if (channel === "email" && !l.email) return "No email address";
+    if (channel === "text" && !l.phone) return "No mobile number";
+    if (channel === "mail" && !(l.address?.street && l.address?.city && l.address?.state && l.address?.zip)) return "No full mailing address";
+    return null;
+  };
+  return (
+    <div className="lead-newmsg" data-new-message-form>
+      <h3 className="form-title">New message</h3>
+      <div className="seg-tabs" role="tablist" aria-label="How">
+        {NEW_MSG_CHANNELS.map(([id, label, Icon]) => (
+          <button key={id} type="button" role="tab" aria-selected={channel === id} className={channel === id ? "on" : ""}
+            data-new-msg-channel={id} onClick={() => setChannel(id)}><Icon size={15} /> {label}</button>
+        ))}
+      </div>
+      <LeadPicker leads={leads} blocked={blocked} onPick={(l) => onPick(l, channel)} />
+      <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Cancel</button></div>
+    </div>
+  );
+}
+
+// 111. New appointment, from Appointments or the calendar: for somebody
+// already in the leads (booking moves them to opportunity), or for a new
+// homeowner, whom booking adds as a lead and an appointment at once.
+function NewApptStart({ leads, leadsReady, onExisting, onNew, onCancel }) {
+  const [which, setWhich] = useState(leadsReady && leads.length ? "" : "new");
+  if (which === "existing") {
+    return (
+      <div className="appt-start" data-appt-start="existing">
+        <h3 className="form-title">Book an appointment for</h3>
+        <LeadPicker leads={leads} onPick={onExisting} />
+        <div className="form-actions"><button className="btn-ghost" onClick={() => setWhich("")}>Back</button></div>
+      </div>
+    );
+  }
+  return (
+    <div className="appt-start" data-appt-start="choose">
+      <h3 className="form-title">New appointment</h3>
+      <p className="note">Who is it for?</p>
+      <div className="appt-start-opts">
+        <button type="button" className="appt-start-opt" data-appt-start-existing disabled={!leadsReady || !leads.length}
+          onClick={() => setWhich("existing")}>
+          <Users size={20} /><b>Somebody in your leads</b>
+          <span>{leadsReady && leads.length ? "Find them, then book. They become an opportunity." : "You don't have any leads yet."}</span></button>
+        <button type="button" className="appt-start-opt" data-appt-start-new onClick={onNew}>
+          <UserPlus size={20} /><b>A new homeowner</b>
+          <span>The call script adds them as a lead and books the appointment together.</span></button>
+      </div>
+      <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Cancel</button></div>
+    </div>
+  );
+}
+
+function leadFollowUpErrText(e) {
+  const code = e?.body?.error;
+  if (code === "follow_up_required") return "Say what needs doing.";
+  if (code === "due_required") return "Pick the day it's due.";
+  if (code === "no_channel_consent") return `They haven't agreed to be contacted by ${FOLLOW_CHANNELS[e.body.channel]?.label.toLowerCase() || "that"}. Pick another way, or ask them first.`;
+  if (code === "do_not_contact") return "This lead is marked Do not contact.";
+  if (code === "unsubscribed") return "They unsubscribed from your emails. Pick another way.";
+  if (code === "bad_assignee") return "That person can't take follow-ups here.";
+  if (code === "migration_needed") return `Follow-ups on leads aren't set up on this database yet. Run migration ${e.body.migration || "111_crm_channels"}.`;
+  if (!e?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
+  return "That didn't save. Try again.";
+}
+
+// 111. Add a follow-up: an action item for one homeowner, what and when, by
+// which way, and for whom. Saved on the lead, so it works with or without an
+// estimate booked. A way they have not agreed to is grayed before the press.
+function AddFollowUpForm({ leads, team = [], meId, lead: start = null, onSaved, onCancel }) {
+  const [lead, setLead] = useState(start);
+  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dayKey(d); })();
+  const [f, setF] = useState({ body: "", dueDate: tomorrow, channel: "call", assigneeId: meId || "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  if (!lead) {
+    return (
+      <div className="lead-fu-form" data-add-followup-form>
+        <h3 className="form-title">Add a follow-up</h3>
+        <LeadPicker leads={leads} onPick={setLead} />
+        <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Cancel</button></div>
+      </div>
+    );
+  }
+  const consent = lead.consent || null;
+  const chOk = (ch) => !FOLLOW_CHANNELS[ch].needs || mayUse(consent, FOLLOW_CHANNELS[ch].needs);
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try { const r = await api.createLeadFollowUp(lead.id, { ...f, assigneeId: f.assigneeId || null }); onSaved(r.followUp, lead); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="lead-fu-form" data-add-followup-form data-for-lead={lead.id}>
+      <h3 className="form-title">Follow up with {leadName(lead)}</h3>
+      <p className="lead-sub">{[lead.phone ? formatPhone(lead.phone) : "", lead.email].filter(Boolean).join(" · ")}
+        {!start && <> <button type="button" className="link-btn" onClick={() => setLead(null)}>Somebody else</button></>}</p>
+      <label className="fld"><span>What needs doing</span>
+        <textarea rows={3} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} placeholder="Call back about the gutter quote" data-fu-body /></label>
+      <div className="fld-row">
+        <label className="fld"><span>Due</span><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} data-fu-due /></label>
+        <label className="fld"><span>For</span>
+          <select value={f.assigneeId} onChange={(e) => setF({ ...f, assigneeId: e.target.value })} data-fu-assignee>
+            {!team.some((u) => u.id === meId) && <option value="">Me</option>}
+            {team.map((u) => <option key={u.id} value={u.id}>{u.id === meId ? `${u.name} (me)` : u.name}</option>)}
+          </select></label>
+      </div>
+      <div className="fld"><span>How</span>
+        <div className="chips">
+          {Object.entries(FOLLOW_CHANNELS).map(([k, c]) => (
+            <button key={k} type="button" data-fu-channel={k} className={`chip ${f.channel === k ? "on" : ""}`} disabled={!chOk(k)}
+              title={chOk(k) ? "" : "They haven't agreed to this"} onClick={() => setF({ ...f, channel: k })}>{c.label}</button>
+          ))}
+        </div>
+      </div>
+      {Object.keys(FOLLOW_CHANNELS).some((k) => !chOk(k)) && <p className="note">Grayed out: ways they haven't agreed to be contacted.</p>}
+      {err && <p className="form-err" role="alert">{leadFollowUpErrText(err)}</p>}
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" data-fu-save disabled={busy || !f.body.trim() || !f.dueDate || !chOk(f.channel)} onClick={save}>
+          {busy ? "Saving…" : "Add follow-up"}</button>
+      </div>
+    </div>
+  );
+}
+
+// 111. Update report: find a homeowner, then put their numbers right in one
+// place -- the stage, and each estimate's amount and expected close date --
+// which is what every figure on Reports is read from.
+function UpdateReportForm({ leads, role, apptById = {}, onLeadSaved, onApptSaved, onBook, onCancel }) {
+  const [leadId, setLeadId] = useState(null);
+  const lead = leadId && leads.find((l) => l.id === leadId);
+  const sales = SALES_ROLES.includes(role);
+  const [stage, setStage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [saved, setSaved] = useState("");
+  if (!lead) {
+    return (
+      <div className="report-update" data-update-report-form>
+        <h3 className="form-title">Update report</h3>
+        <p className="note">Find the homeowner whose numbers need changing: their stage, the estimate amount, or when it should close.</p>
+        <LeadPicker leads={leads} onPick={(l) => { setLeadId(l.id); setStage(l.stage); setSaved(""); }} />
+        <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Close</button></div>
+      </div>
+    );
+  }
+  const saveStage = async () => {
+    setBusy(true); setErr(null);
+    try { onLeadSaved((await api.patchLead(lead.id, { stage })).lead); setSaved("Stage saved."); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const appts = (lead.appointments || []).map((x) => apptById[x.id]).filter(Boolean)
+    .sort((a, b) => `${b.date}${b.time}`.localeCompare(`${a.date}${a.time}`));
+  return (
+    <div className="report-update" data-update-report-form data-for-lead={lead.id}>
+      <h3 className="form-title">{leadName(lead)}</h3>
+      <p className="lead-sub">{[lead.phone ? formatPhone(lead.phone) : "", lead.email, lead.address?.city].filter(Boolean).join(" · ")}
+        {" "}<button type="button" className="link-btn" onClick={() => setLeadId(null)}>Somebody else</button></p>
+      <div className="fld-row report-stage">
+        <label className="fld"><span>Lead status</span>
+          <select value={stage} onChange={(e) => { setStage(e.target.value); setSaved(""); }} disabled={!sales} data-report-stage>
+            {LEAD_STAGES.map((x) => <option key={x.id} value={x.id}>{x.term} — {x.means}</option>)}
+          </select></label>
+        {sales && stage !== lead.stage && (
+          <button className="btn-solid" data-report-stage-save disabled={busy} onClick={saveStage}>{busy ? "Saving…" : "Save stage"}</button>
+        )}
+      </div>
+      {saved && <p className="appt-flash" role="status">{saved}</p>}
+      {err && <p className="form-err" role="alert">{leadRefusalText(err)}</p>}
+      <span className="lead-label">Their estimates</span>
+      {!appts.length && (
+        <p className="note">No estimate booked for them yet, so there is no amount or close date to set.
+          {onBook && <> <button type="button" className="link-btn" onClick={() => onBook(lead)}>Book one</button></>}</p>
+      )}
+      {appts.map((a) => (
+        <div key={a.id} className="report-appt" data-report-appt={a.id}>
+          <p className="report-appt-head"><b>{apptWhenText(a.date)} {apptTime12(a.time)}</b> · {a.services.map(serviceLabel).join(", ")}
+            {" "}<ApptStatusChip status={a.status} /></p>
+          <ApptDealPanel key={`${a.id}-${a.deal?.amountCents ?? ""}-${a.deal?.expectedClose ?? ""}`} a={a} sales={sales} onSaved={onApptSaved} />
+        </div>
+      ))}
+      <div className="form-actions"><button className="btn-ghost" onClick={onCancel}>Done</button></div>
+    </div>
+  );
+}
+
+// 111. The CRM's welcome: the greeting the Jobs dashboard has, and then what
+// a seller wants to know first thing -- who they are seeing today, what is
+// owed, and who has written back.
+function CrmHello({ name, weather, mineToday, owed, unread, caller, children }) {
+  const bits = [
+    mineToday ? `${mineToday} ${mineToday === 1 ? "estimate" : "estimates"} on the calendar today` : caller ? "" : "No estimates on the calendar today",
+    owed ? `${owed} ${owed === 1 ? "follow-up" : "follow-ups"} due` : "",
+    unread ? `${unread} new ${unread === 1 ? "reply" : "replies"}` : "",
+  ].filter(Boolean);
+  return (
+    <div className="dash-hello crm-hello" data-crm-hello>
+      <div>
+        <Hello name={name} weather={weather} />
+        <p><b>{caller ? "Let's book some estimates." : "Get after it!"}</b>{bits.length ? ` ${bits.join(" · ")}.` : ""}</p>
+      </div>
+      {children ? <div className="dash-cta">{children}</div> : null}
     </div>
   );
 }
@@ -32144,7 +32580,7 @@ function CallRecording({ apptId, act }) {
 // Every follow-up still to do, oldest due first, with the ones due today or
 // overdue marked. Mine first is the default, because that is the list a person
 // works from.
-function CrmFollowUps({ list, meId, onOpen, onDone }) {
+function CrmFollowUps({ list, meId, onOpen, onOpenLead, onDone }) {
   const [whose, setWhose] = useState("mine");
   const [err, setErr] = useState("");
   if (list && !Array.isArray(list)) {
@@ -32155,7 +32591,13 @@ function CrmFollowUps({ list, meId, onOpen, onDone }) {
   const shown = list.filter((x) => whose === "all" || x.assigneeId === meId);
   const done = async (x) => {
     setErr("");
-    try { await api.patchApptActivity(x.appointmentId, x.id, { done: true }); onDone(x.id); }
+    // 111. A follow-up on a lead is ticked on the lead; one on an estimate,
+    // on the estimate.
+    try {
+      if (x.leadId && !x.appointmentId) await api.patchLeadFollowUp(x.leadId, x.id, { done: true });
+      else await api.patchApptActivity(x.appointmentId, x.id, { done: true });
+      onDone(x.id);
+    }
     catch (e) { setErr(apptRefusalText(e)); }
   };
   return (
@@ -32172,10 +32614,10 @@ function CrmFollowUps({ list, meId, onOpen, onDone }) {
           const fs = followUpState(x, today);
           return (
             <li key={x.id} className={`crm-fu fu-${fs}`} data-fu={x.id}>
-              <button type="button" className="appt-row" onClick={() => onOpen(x.appointmentId)}>
+              <button type="button" className="appt-row" onClick={() => (x.appointmentId ? onOpen(x.appointmentId) : onOpenLead?.(x.leadId))}>
                 <span className="appt-row-when"><b>{apptWhenText(x.dueDate).replace(/^(\w+), /, "$1 · ")}</b>
                   <span className={`crm-fu-state ${fs}`}>{fs === "overdue" ? "Overdue" : fs === "due" ? "Due today" : "Upcoming"}</span></span>
-                <span className="appt-row-main"><b>{x.who}</b><span>{x.body}</span></span>
+                <span className="appt-row-main"><b>{x.who}</b><span>{x.fromSequence ? "From a sequence · " : ""}{x.body}</span></span>
                 <span className="appt-row-side"><span className="appt-row-rep">{FOLLOW_CHANNELS[x.channel]?.label || ""} · {x.assigneeName || "nobody"}</span></span>
               </button>
               <button type="button" className="btn-ghost crm-fu-done" data-fu-done onClick={() => done(x)}><Check size={14} /> Done</button>
@@ -55936,6 +56378,32 @@ button.job-insp:hover{border-color:#2f5577}
 .fld-check{display:flex;gap:8px;align-items:center;font-size:14px;min-height:44px}
 .crm-leadform .ecm-prev{width:100%;min-height:640px;border:1px solid var(--line);border-radius:12px;background:#fff}
 .crm-leadform .ecm-code{max-height:360px;overflow:auto;white-space:pre-wrap;font-size:12px;background:var(--paper);border-radius:12px;padding:12px}
+/* 111. The CRM windows that start from which homeowner, the new-appointment
+   choice, the welcome, and the website form's consent statement. */
+.lead-pick{display:flex;flex-direction:column;gap:8px}
+.lead-pick-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
+.lead-pick-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:52px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);text-align:left;cursor:pointer;font:inherit}
+.lead-pick-row:hover:not(:disabled){border-color:var(--brand)}
+.lead-pick-row:disabled{opacity:.55;cursor:not-allowed}
+.lead-pick-who{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lead-pick-who span{font-size:13px;color:var(--ink-soft);overflow-wrap:anywhere}
+.lead-newmsg,.appt-start,.lead-fu-form,.report-update{display:flex;flex-direction:column;gap:14px}
+.appt-start-opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.appt-start-opt{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:16px;min-height:120px;border:1px solid var(--line);
+  border-radius:12px;background:var(--card);color:var(--ink);text-align:left;cursor:pointer;font:inherit}
+.appt-start-opt svg{color:var(--brand)}
+.appt-start-opt span{font-size:13px;color:var(--ink-soft)}
+.appt-start-opt:hover:not(:disabled){border-color:var(--brand)}
+.appt-start-opt:disabled{opacity:.55;cursor:not-allowed}
+@media (max-width:560px){.appt-start-opts{grid-template-columns:1fr}}
+.crm-hello{margin-bottom:4px}
+.crm-hello p b{color:var(--brand)}
+.report-stage{align-items:flex-end}
+.report-appt{border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.report-appt-head{margin:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.lf-consent{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--paper);margin:12px 0}
+.lf-consent p{margin:6px 0;font-size:14px}
 @media (max-width:560px){.crm-months{grid-template-columns:repeat(3,minmax(0,1fr))}.crm-table{font-size:13px}}
 .lc-form{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);display:flex;flex-direction:column;gap:10px}
 .lc-form .seg-tabs{margin:0}

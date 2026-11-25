@@ -350,6 +350,8 @@
     "test:crmleads": "node --no-warnings scripts/crm-leads-test.mjs",
     "test:leadcontact": "node --no-warnings scripts/lead-contact-test.mjs",
     "test:leadcontactui": "node --no-warnings scripts/lead-contact-ui-test.mjs",
+    "test:crmchannels": "node --no-warnings scripts/crm-channels-test.mjs",
+    "test:crmpagesui": "node --no-warnings scripts/crm-pages-ui-test.mjs",
     "test:crmselling": "node --no-warnings scripts/crm-selling-test.mjs",
     "test:crmsellingui": "node --no-warnings scripts/crm-selling-ui-test.mjs"
   },

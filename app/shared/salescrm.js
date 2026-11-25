@@ -87,6 +87,7 @@ export const FOLLOW_CHANNELS = {
   call: { label: "Call", needs: "phone" },
   email: { label: "Email", needs: "email" },
   text: { label: "Text", needs: "text" },
+  mail: { label: "Letter", needs: null },
   visit: { label: "Visit or other", needs: null },
 };
 
@@ -123,7 +124,9 @@ export function validActivity(b, { consent, accountId, assignees = [] } = {}) {
   }
   if (kind === "follow_up") {
     if (!text) return { ok: false, error: "follow_up_required" };
-    const due = DATE_RE.test(body.dueDate || "") ? body.dueDate : null;
+    // A real day, not only the shape of one: 2027-02-31 is refused.
+    const real = DATE_RE.test(body.dueDate || "") && new Date(`${body.dueDate}T12:00:00Z`).toISOString().slice(0, 10) === body.dueDate;
+    const due = real ? body.dueDate : null;
     if (!due) return { ok: false, error: "due_required" };
     const ch = FOLLOW_CHANNELS[body.channel] ? body.channel : null;
     if (!ch) return { ok: false, error: "bad_channel" };

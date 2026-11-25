@@ -363,6 +363,9 @@ WITH spec(j) AS (SELECT
   ',["m110_crm_templates","col","crm_templates",["id","account_id","name","subject","body","created_by","created_at","updated_at"]]' ||
   ',["m110_crm_sequences","col","crm_sequences",["id","account_id","name","steps","stop_on_booking","active","created_by","created_at","updated_at"]]' ||
   ',["m110_crm_enrollments","col","crm_enrollments",["id","account_id","lead_id","sequence_id","start_stage","enrolled_by","started_at","next_step","next_at","sent_count","status","stopped_reason","stopped_at"]]') ||
+  -- 111. Text and letter templates (paste 1), and follow-ups on a lead (paste 2).
+  (',["m111_template_channel","col","crm_templates",["channel"]]' ||
+  ',["m111_lead_followups","col","lead_followups",["id","account_id","lead_id","body","channel","due_date","assignee_id","enrollment_id","template_id","done_at","done_by","reminded_at","created_by","created_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -954,6 +957,11 @@ WITH inv(j) AS (SELECT '['
        OR d.account_id <> a.account_id OR d.amount_cents < 0)))
   || (',' || json_array('m110_inv_sequence_opted_out', (SELECT COUNT(*) FROM crm_enrollments e JOIN lead_opt_outs o ON o.lead_id = e.lead_id
     WHERE e.status = 'active' AND o.dnc_at IS NOT NULL)))
+  -- 111. A follow-up on a lead the Follow-ups tab cannot draw, or one filed
+  -- against a lead on another account.
+  || (',' || json_array('m111_inv_bad_lead_followup', (SELECT COUNT(*) FROM lead_followups f JOIN sales_leads l ON l.id = f.lead_id
+    WHERE f.channel NOT IN ('call','email','text','mail','visit') OR l.account_id <> f.account_id
+       OR f.due_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

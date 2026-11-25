@@ -193,7 +193,13 @@ try {
   await page.evaluate(() => document.querySelector(".modal-backdrop")?.click());
   await wait(300);
 
+  // 111. New appointment lives on Appointments now, not on every CRM page.
+  await click(page, '[data-crm-nav="appointments"]');
+  await wait(300);
   await click(page, "[data-new-appt]");
+  await wait(300);
+  // 111. New appointment asks who it is for; a new homeowner is the call script.
+  await click(page, "[data-appt-start-new]");
   await wait(300);
   await page.evaluate(() => [...document.querySelectorAll(".appt-steps button")].find((b) => /schedule|when/i.test(b.innerText))?.click());
   await wait(300);

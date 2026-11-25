@@ -237,7 +237,7 @@ try {
   await page.evaluate(() => [...document.querySelectorAll("[data-lead-form-embed] .seg-tabs button")].find((b) => /code/i.test(b.innerText))?.click());
   await wait(200);
   const code = await page.evaluate(() => document.querySelector("[data-lead-form-code]")?.innerText || "");
-  t.ck("the website form posts to this account", /\/api\/public\/lead\/outerhome/.test(code) && /Text me about my project/.test(code), code.slice(0, 120));
+  t.ck("the website form posts to this account", /\/api\/public\/lead\/outerhome/.test(code) && /may contact me about my project by call, text and email/.test(code), code.slice(0, 120));
   t.ck("and nothing crashed", crashes.length === 0, crashes.join(" | "));
   await ctx.close();
 

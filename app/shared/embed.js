@@ -17,6 +17,9 @@
 // import it: the nudge email points at the panel rather than pasting eighty
 // lines of HTML into an email nobody can copy from cleanly on a phone.
 
+import { TRADES } from "./trades.js";
+import { webConsentText } from "./crmsales.js";
+
 export const API_ORIGIN = "https://api.subsub.work";
 
 // Where the hosted version lives, for the no-JavaScript fallback and for
@@ -466,17 +469,21 @@ export function cleanHomeUrl(v) {
 // plus three things a homeowner form needs: consent asked in the words the
 // call script reads, one box per channel, unticked a no; a box no person
 // sees, for bots; and the form REPLACED by the thanks, never reset.
-export const LEAD_FORM_SERVICES = [
-  { id: "roofing", label: "Roof" }, { id: "siding", label: "Siding" },
-  { id: "windows", label: "Windows" }, { id: "gutters", label: "Gutters" },
-];
-export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin = API_ORIGIN } = {}) {
+// 111. Which of SubSub's trades the form offers is the account's choice, made
+// in CRM -> Setup before the code is copied. These four are what it offers
+// when nobody has chosen.
+export const LEAD_FORM_SERVICES = ["roofing", "siding", "windows_doors", "gutters"];
+export const leadFormServiceIds = (ids) => {
+  const ok = (Array.isArray(ids) ? ids : []).filter((id) => TRADES.some((t) => t.id === id));
+  return ok.length ? [...new Set(ok)] : LEAD_FORM_SERVICES;
+};
+export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin = API_ORIGIN, services = null } = {}) {
   const sub = String(subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
   if (!sub) return "";
   const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
   const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
   const name = esc(accountName || "us");
-  const chips = LEAD_FORM_SERVICES.map((s) =>
+  const chips = leadFormServiceIds(services).map((id) => TRADES.find((t) => t.id === id)).map((s) =>
     `<label class="ss-svc"><input type="checkbox" name="services" value="${s.id}"> ${esc(s.label)}</label>`).join("\n    ");
   return `<!-- ${esc(accountName || "SubSub").replace(/-{2,}/g, "-")} estimate request form, from SubSub. Requests land in your SubSub CRM. -->
 <div id="subsub-lead">
@@ -522,9 +529,7 @@ export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin =
     ${chips}
   </div></div>
   <label>Tell us about the project<textarea name="message"></textarea></label>
-  <label class="ss-ok"><input type="checkbox" name="consentEmail" checked> Email me about my project.</label>
-  <label class="ss-ok"><input type="checkbox" name="consentPhone" checked> Call me about my project.</label>
-  <label class="ss-ok"><input type="checkbox" name="consentText"> Text me about my project. Message and data rates may apply. Reply STOP to opt out.</label>
+  <label class="ss-ok"><input type="checkbox" name="consent"> ${esc(webConsentText(accountName))}</label>
   <div class="ss-hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
   <button type="submit" class="ss-go">Request a free estimate</button>
   <p class="ss-msg" role="status"></p>
@@ -550,7 +555,7 @@ export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin =
         firstName: d.get("firstName"), lastName: d.get("lastName"), phone: d.get("phone"), email: d.get("email"),
         street: d.get("street"), city: d.get("city"), state: String(d.get("state") || "").toUpperCase(), zip: d.get("zip"),
         services: d.getAll("services"), message: d.get("message"), website: d.get("website"),
-        consentEmail: !!d.get("consentEmail"), consentPhone: !!d.get("consentPhone"), consentText: !!d.get("consentText")
+        consent: !!d.get("consent")
       })
     }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {

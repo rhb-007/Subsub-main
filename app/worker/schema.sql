@@ -2724,8 +2724,10 @@ CREATE TABLE IF NOT EXISTS crm_templates (
   body       TEXT NOT NULL,
   created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  channel    TEXT NOT NULL DEFAULT 'email'
 );
+-- 111. channel: email, text or mail.
 CREATE INDEX IF NOT EXISTS ix_crm_templates_account ON crm_templates(account_id);
 
 -- A sequence: steps is a JSON list of {day, templateId}.
@@ -2987,3 +2989,24 @@ CREATE INDEX IF NOT EXISTS ix_roster_applications_account
   ON roster_applications (account_id, state);
 -- 102: a form application waits here (pending) with its engagement paused
 -- until the account accepts or declines it.
+
+-- 111. A follow-up on a lead, with or without an estimate booked; a text or
+-- letter step in a sequence lands here too.
+CREATE TABLE IF NOT EXISTS lead_followups (
+  id            TEXT PRIMARY KEY,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  lead_id       TEXT NOT NULL REFERENCES sales_leads(id) ON DELETE CASCADE,
+  body          TEXT NOT NULL,
+  channel       TEXT NOT NULL,
+  due_date      TEXT NOT NULL,
+  assignee_id   TEXT REFERENCES users(id) ON DELETE SET NULL,
+  enrollment_id TEXT,
+  template_id   TEXT,
+  done_at       TEXT,
+  done_by       TEXT REFERENCES users(id) ON DELETE SET NULL,
+  reminded_at   TEXT,
+  created_by    TEXT REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_lead_followups_due ON lead_followups(account_id, done_at, due_date);
+CREATE INDEX IF NOT EXISTS ix_lead_followups_lead ON lead_followups(lead_id);
