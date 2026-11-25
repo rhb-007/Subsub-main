@@ -17148,7 +17148,103 @@ refactor.
   self-rep form, the greyed buttons, the Contact tab, and the owner picker.
   `test:salesapptui` pinned a CRM menu with no Inbox and was moved to the new
   rule. **109 is pasted on the live database** (16 and 8 columns, confirmed
-  by the owner). **Not verified here:** a live email and reply round trip.
+  by the owner).
+
+- **THE CRM SELLS NOW: WHAT AN ESTIMATE IS WORTH AND WHY IT WAS LOST,
+  REPORTS, AN UNSUBSCRIBE LINK AND DO NOT CONTACT, TEMPLATES WITH FOLLOW-UP
+  SEQUENCES, AND A FORM FOR THE ACCOUNT'S OWN WEBSITE.** Asked for as "do 1-5"
+  from a gap list: the CRM could count leads but not say what was in the
+  pipeline, lead emails had no opt-out, every email was typed from scratch,
+  and website inquiries had no way in. Migration 110 (six tables, no ALTER
+  TABLE), `app/shared/crmsales.js`.
+
+  **A deal is per estimate** (`sales_deals`): an amount, an expected close
+  date, and a lost reason from `LOST_REASONS`. It is the sales side's
+  (`sales_only` for a call-center seat) and rides on `PATCH
+  /api/appointments/:id` as `deal`, checked before anything is written.
+  **A lost reason is kept only while the estimate is marked not sold**:
+  marked sold later, it is cleared, and `m110_inv_bad_deal` counts one that
+  survived. **Not sold asks why first** (`LostReasonPick`), and the reason goes
+  in the same save as the status. Skipping is an answer ("No reason given",
+  its own row in the report), not a refusal, because refusing the outcome
+  over a missing reason would lose the outcome.
+
+  **Reports** (CRM, Reports; everybody but the call center) are
+  `salesReport` over the lists the CRM already holds, so a sales manager's
+  report is their own. It shows:
+  - the open pipeline's value, with unpriced estimates counted rather than
+    valued at nothing;
+  - all-time sold, close rate and average sale;
+  - sold per month;
+  - results by sales manager and by lead source;
+  - why estimates were lost;
+  - median days from lead to booking and from booking to sale.
+
+  Time in each stage is not kept as rows, so those two steps are what the
+  records can answer honestly. The CRM dashboard also gains Open pipeline.
+
+  **Every lead email says how to stop** (CAN-SPAM): words and a link to
+  `app.subsub.work/unsubscribe/<token>`, plus `List-Unsubscribe` and
+  `List-Unsubscribe-Post` headers (`sendEmail` now takes `headers`). One
+  random token per lead (`lead_unsub_tokens`). Without 110 the email says to
+  reply STOP. The page is public, says whose emails they are, and stops them
+  in one press. **Unsubscribing stops email and the running sequence, never
+  texts**. It is undone only by a yes to email given after it.
+
+  **Do not contact is the office's flag** (`lead_opt_outs.dnc_at`). Anybody
+  on the CRM can set it, because the homeowner says "stop" to whoever rang.
+  Only the office takes it off, and must give a reason. It refuses email,
+  texts, letters, outbound calls and sequences, each `409 do_not_contact`.
+  Notes and logging a call they made stay open, because recording what
+  happened is not contacting anybody. **It stops the running sequence in the
+  same request**, and `m110_inv_sequence_opted_out` counts one left running.
+  Appointment confirmations and reminders are transactional and are
+  deliberately not gated by it.
+
+  **Templates** (`crm_templates`, plus four read-only starters in code) take
+  `TEMPLATE_VARS` only. An unknown `{{placeholder}}` is refused by name,
+  because a sentence with a hole in it is read and believed. **Sequences**
+  (`crm_sequences`) are up to six emails on later and later days. A sales
+  manager or the office puts a lead on one; the call center does not.
+  `crmSequenceSweep` runs on the ten-minute cron. Before every send it asks
+  again whether the lead:
+  - replied;
+  - bought;
+  - booked (when the sequence stops on booking and it started before one);
+  - unsubscribed or was marked Do not contact;
+  - lost their yes to email.
+
+  **Each step is claimed before it is sent**, guarded on `next_step`, so two
+  sweeps send it once. A template a sequence still sends cannot be deleted,
+  and a sequence anybody has been on is turned off rather than deleted.
+
+  **The website form** (`leadFormHtml`, CRM, Setup, Website form) posts to
+  public `POST /api/public/lead/:subdomain`. It is rate-limited per visitor and
+  per account, and has a hidden box for bots. It takes consent from three
+  checkboxes in the script's words (unticked is a no). **It answers the same
+  for a new homeowner and a known one**, so it cannot ask who is in the CRM.
+  A known one gets no second lead. What they wrote lands in the Inbox as an
+  unread inbound note. The office gets `website_lead` (on the console's
+  Notifications screen), with a link that opens the lead (`?open=lead&id=`).
+
+  `test:crmselling` (88) and `test:crmsellingui` (24). The mutations fire:
+  - the Do not contact refusal: 5 assertions;
+  - stopping the sequence: 2;
+  - clearing the lost reason: 2;
+  - the hidden box: 1;
+  - the reason to take it off: 1;
+  - the footer: 6;
+  - a reply stopping the sequence: 2;
+  - a canceled estimate in the pipeline: 1;
+  - Not sold asking first, the menu gate and the template fill in the
+    browser.
+
+  **Not mutation-proved:** the claim guard against two sweeps at once,
+  because the harness runs the sweeps one after another and the second
+  never picks the claimed row up. **Not verified here:** a real email
+  client's one-click unsubscribe. **Paste 110** before any of it works on
+  the live database; until then the routes name the file and the
+  appointments and leads still load. **Not verified here:** a live email and reply round trip.
 
 ## Working here
 

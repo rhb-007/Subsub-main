@@ -458,3 +458,114 @@ export function cleanHomeUrl(v) {
   if (u.username || u.password) return null;
   return u.href;
 }
+
+// 110. The homeowner's form: "get a free estimate", pasted on the account's
+// own website, landing in the CRM as a lead from the website. Same rules as
+// the sign-up form above -- scoped under one id so it cannot restyle their
+// page, colours checked through hex(), the name escaped, no dependencies --
+// plus three things a homeowner form needs: consent asked in the words the
+// call script reads, one box per channel, unticked a no; a box no person
+// sees, for bots; and the form REPLACED by the thanks, never reset.
+export const LEAD_FORM_SERVICES = [
+  { id: "roofing", label: "Roof" }, { id: "siding", label: "Siding" },
+  { id: "windows", label: "Windows" }, { id: "gutters", label: "Gutters" },
+];
+export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin = API_ORIGIN } = {}) {
+  const sub = String(subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
+  if (!sub) return "";
+  const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
+  const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
+  const name = esc(accountName || "us");
+  const chips = LEAD_FORM_SERVICES.map((s) =>
+    `<label class="ss-svc"><input type="checkbox" name="services" value="${s.id}"> ${esc(s.label)}</label>`).join("\n    ");
+  return `<!-- ${esc(accountName || "SubSub").replace(/-{2,}/g, "-")} estimate request form, from SubSub. Requests land in your SubSub CRM. -->
+<div id="subsub-lead">
+<style>
+#subsub-lead{font:inherit;max-width:560px}
+#subsub-lead .ss-form{display:flex;flex-direction:column;gap:12px}
+#subsub-lead .ss-form[hidden]{display:none}
+#subsub-lead .ss-row{display:flex;gap:10px;flex-wrap:wrap}
+#subsub-lead .ss-row > label{flex:1 1 180px}
+#subsub-lead label{display:block;font-size:14px;font-weight:600}
+#subsub-lead input[type=text],#subsub-lead input[type=email],#subsub-lead input[type=tel],#subsub-lead textarea{
+  display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:10px 12px;min-height:44px;font:inherit;font-size:16px;
+  border:1px solid #c9ccd1;border-radius:8px;background:#fff;color:#111}
+#subsub-lead textarea{min-height:88px}
+#subsub-lead .ss-svcs{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+#subsub-lead .ss-svc{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid #c9ccd1;border-radius:999px;font-weight:600}
+#subsub-lead .ss-ok{font-weight:400;display:flex;gap:8px;align-items:flex-start;font-size:13px}
+#subsub-lead .ss-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
+#subsub-lead .ss-go{padding:12px 20px;min-height:44px;border:0;border-radius:9px;background:${accent};color:${btnText};font:inherit;font-weight:700;font-size:15px;cursor:pointer}
+#subsub-lead .ss-go:hover{background:${darken(accent)}}
+#subsub-lead .ss-go:focus-visible{outline:3px solid ${accent};outline-offset:3px}
+#subsub-lead .ss-msg{font-size:14px}
+#subsub-lead .ss-msg.bad{color:#a12c1f}
+#subsub-lead .ss-done{text-align:center;padding:24px 12px}
+#subsub-lead .ss-done b{display:block;font-size:18px;margin-bottom:6px;color:${accent}}
+</style>
+<form class="ss-form" novalidate>
+  <div class="ss-row">
+    <label>First name<input type="text" name="firstName" autocomplete="given-name"></label>
+    <label>Last name<input type="text" name="lastName" autocomplete="family-name"></label>
+  </div>
+  <div class="ss-row">
+    <label>Mobile<input type="tel" name="phone" autocomplete="tel"></label>
+    <label>Email<input type="email" name="email" autocomplete="email"></label>
+  </div>
+  <label>Street address<input type="text" name="street" autocomplete="street-address"></label>
+  <div class="ss-row">
+    <label>City<input type="text" name="city" autocomplete="address-level2"></label>
+    <label>State<input type="text" name="state" maxlength="2" autocomplete="address-level1"></label>
+    <label>ZIP<input type="text" name="zip" inputmode="numeric" maxlength="5" autocomplete="postal-code"></label>
+  </div>
+  <div><label>What do you need?</label><div class="ss-svcs">
+    ${chips}
+  </div></div>
+  <label>Tell us about the project<textarea name="message"></textarea></label>
+  <label class="ss-ok"><input type="checkbox" name="consentEmail" checked> Email me about my project.</label>
+  <label class="ss-ok"><input type="checkbox" name="consentPhone" checked> Call me about my project.</label>
+  <label class="ss-ok"><input type="checkbox" name="consentText"> Text me about my project. Message and data rates may apply. Reply STOP to opt out.</label>
+  <div class="ss-hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+  <button type="submit" class="ss-go">Request a free estimate</button>
+  <p class="ss-msg" role="status"></p>
+</form>
+<div class="ss-done" hidden><b>Thanks, we got it.</b>Someone from ${name} will be in touch soon about your estimate.</div>
+<script>
+(function () {
+  var root = document.getElementById("subsub-lead");
+  if (!root) return;
+  var form = root.querySelector(".ss-form"), msg = root.querySelector(".ss-msg"), done = root.querySelector(".ss-done");
+  var go = root.querySelector(".ss-go");
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var d = new FormData(form);
+    if (!d.get("firstName") && !d.get("lastName")) { msg.className = "ss-msg bad"; msg.textContent = "Please add your name."; return; }
+    if (!d.get("email") && String(d.get("phone") || "").replace(/\\D/g, "").length < 10) {
+      msg.className = "ss-msg bad"; msg.textContent = "Please add a mobile number or an email so we can reach you."; return;
+    }
+    go.disabled = true; msg.className = "ss-msg"; msg.textContent = "Sending\\u2026";
+    fetch("${esc(apiOrigin)}/api/public/lead/${esc(sub)}", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        firstName: d.get("firstName"), lastName: d.get("lastName"), phone: d.get("phone"), email: d.get("email"),
+        street: d.get("street"), city: d.get("city"), state: String(d.get("state") || "").toUpperCase(), zip: d.get("zip"),
+        services: d.getAll("services"), message: d.get("message"), website: d.get("website"),
+        consentEmail: !!d.get("consentEmail"), consentPhone: !!d.get("consentPhone"), consentText: !!d.get("consentText")
+      })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (body) {
+        if (!r.ok) throw body;
+        form.hidden = true; done.hidden = false;
+      });
+    }).catch(function (err) {
+      msg.className = "ss-msg bad";
+      msg.textContent = err && err.error === "rate_limited" ? "Too many requests from here just now. Try again shortly."
+        : err && (err.error === "bad_phone" || err.field === "phone") ? "That mobile number doesn't look right."
+        : err && (err.field === "email") ? "That email address doesn't look right."
+        : "That didn't send. Please try again in a moment.";
+    }).then(function () { go.disabled = false; });
+  });
+})();
+</script>
+</div>`;
+}

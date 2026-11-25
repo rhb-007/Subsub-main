@@ -1272,7 +1272,7 @@ export function fromWithName(from, name = "SubSub") {
   return `${name} <${f}>`;
 }
 
-export async function sendEmail(env, { to, subject, text, html, replyTo, fromName, notice: tag }) {
+export async function sendEmail(env, { to, subject, text, html, replyTo, fromName, notice: tag, headers }) {
   if (!env.RESEND_API_KEY || !env.MAIL_FROM) {
     return { ok: false, error: "mail_not_configured" };
   }
@@ -1313,6 +1313,9 @@ export async function sendEmail(env, { to, subject, text, html, replyTo, fromNam
         text,
         html,
         ...(replyTo ? { reply_to: replyTo } : {}),
+        // 110. List-Unsubscribe on a lead email, so the mail client's own
+        // unsubscribe button works as well as the link in the footer.
+        ...(headers && Object.keys(headers).length ? { headers } : {}),
       }),
     });
     body = await res.json().catch(() => ({}));
@@ -1632,11 +1635,29 @@ Open the conversation:
 // so it is not on the Notifications screen and not ours to shorten. The
 // marker above it is where a reply is cut, so a homeowner's answer lands in
 // the CRM Inbox without the whole thread quoted under it.
-export function leadEmail({ body, accountName, senderName = "", canReply = false }) {
+export function leadEmail({ body, accountName, senderName = "", canReply = false, unsubscribe = null }) {
   const said = String(body || "").trim();
   const sign = [senderName, accountName].filter(Boolean).join("\n");
-  const text = `${canReply ? `-- ${REPLY_MARKER} --\n\n` : ""}${said}${sign ? `\n\n${sign}` : ""}`;
+  // 110. Every email to a lead says how to stop them, in words and a link
+  // (CAN-SPAM). Without a link (a database without 110) the words still say
+  // how: a reply lands in the CRM Inbox.
+  const foot = unsubscribe
+    ? `\n\n--\nYou're getting this because you asked ${accountName || "us"} about work on your home. Don't want these emails? Unsubscribe: ${unsubscribe}`
+    : `\n\n--\nDon't want these emails? Reply STOP and we'll stop.`;
+  const text = `${canReply ? `-- ${REPLY_MARKER} --\n\n` : ""}${said}${sign ? `\n\n${sign}` : ""}${foot}`;
   return { text, html: textToHtml(text, null, { keepLines: true }) };
+}
+
+// 110. A homeowner filled in the account's own website form.
+function websiteLeadEmailRaw({ firstName, who, phone, email, services = [], message, link, repeat = false }) {
+  const text = `Hi ${firstName || "there"},
+
+${who || "A homeowner"} ${repeat ? "asked again" : "asked for an estimate"} through your website form${services.length ? `: ${services.join(", ").toLowerCase()}` : ""}.
+${[phone, email].filter(Boolean).join(" · ")}
+${message ? `\n"${String(message).slice(0, 300)}"\n` : ""}
+They're in your CRM as a lead. Open them here:
+${link}`;
+  return { subject: `New website lead: ${who || "a homeowner"}`, text, html: textToHtml(text, link) };
 }
 
 // 083. A reply by email that could not be added, told to the person it came
@@ -1723,6 +1744,7 @@ function notice(key, fn) {
 }
 export const rosterJoinedEmail = notice("roster_joined", rosterJoinedEmailRaw);
 export const appointmentBookedEmail = notice("appointment_booked", appointmentBookedEmailRaw);
+export const websiteLeadEmail = notice("website_lead", websiteLeadEmailRaw);
 export const appointmentAssignedEmail = notice("appointment_assigned", appointmentAssignedEmailRaw);
 export const followUpAssignedEmail = notice("followup_assigned", followUpAssignedEmailRaw);
 export const followUpDueEmail = notice("followup_due", followUpDueEmailRaw);

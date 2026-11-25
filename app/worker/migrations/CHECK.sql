@@ -356,6 +356,13 @@ WITH spec(j) AS (SELECT
   -- 109. Contacting a lead from the CRM, and consent asked of a lead directly.
   (',["m109_lead_messages","col","lead_messages",["id","account_id","lead_id","channel","direction","subject","body","to_addr","status","error","outcome","reply_token","sent_by","read_at","mailed_at","created_at"]]' ||
   ',["m109_sales_lead_consents","col","sales_lead_consents",["lead_id","account_id","email","phone","text","script_version","captured_by","captured_at"]]') ||
+  -- 110. Deals, opt-outs, templates and sequences.
+  (',["m110_sales_deals","col","sales_deals",["appointment_id","account_id","amount_cents","expected_close","lost_reason","lost_note","updated_by","updated_at"]]' ||
+  ',["m110_lead_opt_outs","col","lead_opt_outs",["lead_id","account_id","unsubscribed_at","dnc_at","dnc_by","dnc_reason","updated_at"]]' ||
+  ',["m110_lead_unsub_tokens","col","lead_unsub_tokens",["token","lead_id","account_id","created_at"]]' ||
+  ',["m110_crm_templates","col","crm_templates",["id","account_id","name","subject","body","created_by","created_at","updated_at"]]' ||
+  ',["m110_crm_sequences","col","crm_sequences",["id","account_id","name","steps","stop_on_booking","active","created_by","created_at","updated_at"]]' ||
+  ',["m110_crm_enrollments","col","crm_enrollments",["id","account_id","lead_id","sequence_id","start_stage","enrolled_by","started_at","next_step","next_at","sent_count","status","stopped_reason","stopped_at"]]') ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -938,6 +945,15 @@ WITH inv(j) AS (SELECT '['
        OR direction NOT IN ('outbound','inbound'))
     + (SELECT COUNT(*) FROM lead_messages m JOIN sales_leads l ON l.id = m.lead_id
        WHERE l.account_id <> m.account_id)))
+  -- 110. A lost reason the reports cannot name, a lost reason on an estimate
+  -- that is not marked not sold, or a sequence still running on a lead marked
+  -- Do not contact (marking them stops it in the same request).
+  || (',' || json_array('m110_inv_bad_deal', (SELECT COUNT(*) FROM sales_deals d JOIN sales_appointments a ON a.id = d.appointment_id
+    WHERE (d.lost_reason IS NOT NULL AND d.lost_reason NOT IN ('price','competitor','timing','no_decision','financing','insurance','diy','scope','other'))
+       OR (d.lost_reason IS NOT NULL AND a.status <> 'lost')
+       OR d.account_id <> a.account_id OR d.amount_cents < 0)))
+  || (',' || json_array('m110_inv_sequence_opted_out', (SELECT COUNT(*) FROM crm_enrollments e JOIN lead_opt_outs o ON o.lead_id = e.lead_id
+    WHERE e.status = 'active' AND o.dnc_at IS NOT NULL)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

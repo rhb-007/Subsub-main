@@ -27,6 +27,9 @@ import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, M
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
   CALLCENTER_STAGES } from "../shared/leads.js";
+import { validDeal, optOutBlock, unsubscribeLink, UNSUB_TOKEN_RE, validDnc, BUILTIN_TEMPLATES, isBuiltin,
+  validTemplate, validSequence, stepDueAt, sequenceStop, fillTemplate, leadVars, webLeadProblem,
+  WEB_CONSENT_VERSION } from "../shared/crmsales.js";
 import { NOTICES, noticeByKey, noticePlaceholders, unknownPlaceholders, renderNotice, noticeVars,
   noticeNeedsLink, NOTICE_SUBJECT_MAX, NOTICE_BODY_MAX } from "../shared/notices.js";
 import { docNotifyKind, docNotifyOn, docNotifyLabel, cleanDocNotify } from "../shared/docnotify.js";
@@ -886,6 +889,10 @@ const CALLCENTER_ALLOWED = [
   [/^\/api\/sales-leads\/[^/]+\/messages$/, ["GET", "POST"]],
   [/^\/api\/sales-leads\/[^/]+\/messages\/[^/]+$/, ["PATCH"]],
   [/^\/api\/sales-leads\/[^/]+\/consent$/, ["PUT"]],
+  // 110. Do not contact (anybody a homeowner says "stop" to), and the
+  // templates to write an email from.
+  [/^\/api\/sales-leads\/[^/]+\/do-not-contact$/, ["PUT"]],
+  [/^\/api\/crm-library$/, ["GET"]],
 ];
 
 // 109. A sales manager: the call center's routes, narrowed by crmScope to
@@ -895,6 +902,8 @@ const SALES_ALLOWED = [
   ...CALLCENTER_ALLOWED,
   [/^\/api\/google-calendar$/, ["GET", "PATCH", "DELETE"]],
   [/^\/api\/google-calendar\/(start|sync)$/, ["POST"]],
+  // 110. Putting their own lead on a follow-up sequence, and taking them off.
+  [/^\/api\/sales-leads\/[^/]+\/sequence$/, ["POST", "DELETE"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -10515,6 +10524,7 @@ export function missingSchema(err) {
   if (/\bmessage_hides\b/i.test(m)) return "103_message_hides";
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
+  if (/\b(sales_deals|lead_opt_outs|lead_unsub_tokens|crm_templates|crm_sequences|crm_enrollments)\b/i.test(m)) return "110_crm_selling";
   if (/\b(lead_messages|sales_lead_consents)\b/i.test(m)) return "109_lead_contact";
   if (/\bsales_(leads|lead_links)\b/i.test(m)) return "107_crm_leads";
   if (/\bsales_appointments\b/i.test(m)) return "105_sales_appointments";
@@ -27543,8 +27553,10 @@ app.get("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
     const { results } = await c.env.DB.prepare(`${APPT_SELECT} WHERE a.account_id = ?${me ? " AND a.rep_user_id = ?" : ""}
       ORDER BY a.date DESC, a.time DESC LIMIT 1000`).bind(acct.id, ...(me ? [me] : [])).all();
     const consents = await apptConsents(c.env, acct.id);
-    return c.json({ appointments: (results || []).map((r) => withConsent(apptRowToJs(r), consents)),
-      reps: await apptReps(c.env, acct.id), team: await crmTeam(c.env, acct.id), crmReady: consents !== null });
+    // 110. What each estimate is worth, and why a lost one was lost.
+    const deals = await apptDeals(c.env, acct.id);
+    return c.json({ appointments: (results || []).map((r) => ({ ...withConsent(apptRowToJs(r), consents), deal: deals?.get(r.id) || null })),
+      reps: await apptReps(c.env, acct.id), team: await crmTeam(c.env, acct.id), crmReady: consents !== null, dealsReady: deals !== null });
   });
 });
 
@@ -27640,7 +27652,7 @@ app.post("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
     const lead = await leadForAppointment(c.env, { accountId: acct.id, apptId: id, appt: apptRowToJs(row),
       leadId: b.leadId || null, role, userId, scopeTo: crmScopeOf(c) });
     const consents = await apptConsents(c.env, acct.id, id);
-    return c.json({ appointment: withConsent(apptRowToJs(row), consents), confirmation, repTold, lead,
+    return c.json({ appointment: { ...withConsent(apptRowToJs(row), consents), deal: null }, confirmation, repTold, lead,
       consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) }, 201);
   });
 });
@@ -27696,6 +27708,15 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
       if (!ccPatch.ok) return c.json({ error: ccPatch.error, field: ccPatch.field }, 400);
       if (ccPatch.missing.length) return c.json({ error: "incomplete", field: ccPatch.missing[0], missing: ccPatch.missing }, 400);
     }
+    // 110. The deal: the sales side's, like the outcome. Checked before
+    // anything is written, so a bad figure saves nothing.
+    let dealPatch = null;
+    if ("deal" in b && b.deal != null) {
+      if (!sales) return c.json({ error: "sales_only", field: "deal" }, 403);
+      const dc = validDeal(b.deal);
+      if (!dc.ok) return c.json({ error: dc.error, field: `deal.${dc.field}` }, 400);
+      dealPatch = dc.value;
+    }
     const outcome = sales && "outcomeNote" in b ? (String(b.outcomeNote || "").trim().slice(0, 2000) || null) : cur.outcomeNote;
     if (v) {
       await c.env.DB.prepare(
@@ -27739,7 +27760,9 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
       ? await leadAfterAppointment(c.env, { accountId: acct.id, apptId: cur.id, userId, sale: status === "sold" })
       : null;
     const consents = await apptConsents(c.env, acct.id, cur.id);
-    return c.json({ appointment: withConsent(apptRowToJs(after), consents), leadStage,
+    const dealSaved = await saveDeal(c.env, { accountId: acct.id, apptId: cur.id, patch: dealPatch, status, userId });
+    return c.json({ appointment: { ...withConsent(apptRowToJs(after), consents), deal: dealSaved.deal }, leadStage,
+      ...(dealSaved.migration ? { dealMigration: dealSaved.migration } : {}),
       ...(consentSaved ? { consentRecorded: consentSaved.recorded, ...(consentSaved.migration ? { migration: consentSaved.migration } : {}) } : {}) });
   });
 });
@@ -27911,6 +27934,8 @@ app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
       .bind(acct.id, ...(me ? [me] : [])).all();
     const consents = await apptConsents(c.env, acct.id);
     const direct = await leadConsents(c.env, acct.id);
+    const optOuts = await leadOptOuts(c.env, acct.id);
+    const enrollments = await leadEnrollments(c.env, acct.id);
     const by = new Map();
     for (const l of links || []) {
       if (!by.has(l.lead_id)) by.set(l.lead_id, []);
@@ -27921,9 +27946,10 @@ app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
       // The consent on file is the newest appointment's that has one: it is
       // what they were asked most recently.
       const consent = leadConsentFrom(direct?.get(r.id) || null, appts.map((a) => consents?.get(a.id)).filter(Boolean));
-      return { ...leadRowToJs(r), appointments: appts, consent };
+      return { ...leadRowToJs(r), appointments: appts, consent, optOut: optOuts?.get(r.id) || null,
+        enrollment: enrollments?.get(r.id) || null };
     });
-    return c.json({ leads, owners: await apptReps(c.env, acct.id) });
+    return c.json({ leads, owners: await apptReps(c.env, acct.id), sellingReady: optOuts !== null });
   });
 });
 
@@ -28096,9 +28122,13 @@ app.get("/api/sales-leads/:id/messages", requireRole(...BOOKING_ROLES), async (c
     await c.env.DB.prepare(`UPDATE lead_messages SET read_at = ? WHERE lead_id = ? AND account_id = ?
       AND direction = 'inbound' AND read_at IS NULL`).bind(new Date().toISOString(), lead.id, acct.id).run();
     const consent = await consentForLead(c.env, acct.id, lead.id);
-    const blocks = Object.fromEntries(["email", "text", "mail"].map((ch) => [ch, channelBlock(ch, { lead, consent })]));
-    return c.json({ messages: (results || []).map(leadMessageToJs), consent, blocks,
-      canReply: !!replyDomainOf(c.env), accountName: acct.name });
+    const optOut = await optOutFor(c.env, acct.id, lead.id);
+    // 110. An opt-out outranks the consent it would otherwise read.
+    const blocks = Object.fromEntries(["email", "text", "mail"].map((ch) =>
+      [ch, optOutBlock(ch, { optOut, consent }) || channelBlock(ch, { lead, consent })]));
+    const enrollment = (await leadEnrollments(c.env, acct.id, lead.id))?.get(lead.id) || null;
+    return c.json({ messages: (results || []).map(leadMessageToJs), consent, blocks, optOut, enrollment,
+      callBlock: optOutBlock("call_out", { optOut, consent }), canReply: !!replyDomainOf(c.env), accountName: acct.name });
   });
 });
 
@@ -28115,37 +28145,32 @@ app.post("/api/sales-leads/:id/messages", requireRole(...BOOKING_ROLES), async (
     const chk = validLeadMessage(b, { lead, consent });
     if (!chk.ok) return c.json({ error: chk.error }, 400);
     const v = chk.value;
+    // 110. Do not contact and an unsubscribe both refuse, by name.
+    const optOut = await optOutFor(c.env, acct.id, lead.id);
+    const ob = optOutBlock(v.channel === "call" ? (v.direction === "outbound" ? "call_out" : "call_in") : v.channel, { optOut, consent });
+    if (ob) return c.json({ error: ob }, 409);
     if (v.channel === "email") {
       const rl = await rateLimit(c.env, "lead-email", acct.id, { limit: LEAD_EMAILS_PER_HOUR, windowMinutes: 60 });
       if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+      const r = await sendLeadEmail(c.env, { acct, lead, subject: v.subject, body: v.body, userId });
+      await c.env.DB.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(lead.id).run();
+      try { await logEvent(c.env, acct.id, userId, "lead.email", lead.id, { messageId: r.id, direction: "outbound" }); }
+      catch (err) { console.warn("[leads] contact event:", err?.message || err); }
+      const sentRow = await c.env.DB.prepare(`${LEAD_MSG_SELECT} WHERE m.id = ?`).bind(r.id).first();
+      return c.json({ message: leadMessageToJs(sentRow), sent: { ok: r.ok, error: r.error } }, 201);
     }
     const id = uid();
-    const domain = replyDomainOf(c.env);
-    const token = v.channel === "email" && domain ? replyToken() : null;
     const now = new Date().toISOString();
     await c.env.DB.prepare(
       `INSERT INTO lead_messages (id, account_id, lead_id, channel, direction, subject, body, to_addr, status, outcome,
-         reply_token, sent_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+         reply_token, sent_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`)
       .bind(id, acct.id, lead.id, v.channel, v.direction, v.subject || null, v.body || null, v.to || null, v.status,
-        v.outcome || null, token, userId, now).run();
-    let sent = null;
-    if (v.channel === "email") {
-      // Written first, then sent: a send that dies halfway leaves a row that
-      // says so rather than an email nobody has a record of.
-      const me = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first();
-      const mail = MAIL.leadEmail({ body: v.body, accountName: acct.name, senderName: me?.name || "", canReply: !!token });
-      const result = await sendEmail(c.env, { to: v.to, subject: v.subject, text: mail.text, html: mail.html,
-        fromName: acct.name, ...(token ? { replyTo: leadReplyAddress(token, domain) } : {}) });
-      await logMail(c.env, { accountId: acct.id, companyId: null, to: v.to, kind: "lead_email", subject: v.subject, result, sentBy: userId });
-      await c.env.DB.prepare(`UPDATE lead_messages SET status = ?, error = ? WHERE id = ?`)
-        .bind(result.ok ? "sent" : "failed", result.ok ? null : String(result.error || "send_failed").slice(0, 300), id).run();
-      sent = { ok: !!result.ok, error: result.ok ? null : result.error || "send_failed" };
-    }
+        v.outcome || null, userId, now).run();
     await c.env.DB.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(lead.id).run();
     try { await logEvent(c.env, acct.id, userId, `lead.${v.channel}`, lead.id, { messageId: id, direction: v.direction }); }
     catch (err) { console.warn("[leads] contact event:", err?.message || err); }
     const after = await c.env.DB.prepare(`${LEAD_MSG_SELECT} WHERE m.id = ?`).bind(id).first();
-    return c.json({ message: leadMessageToJs(after), ...(sent ? { sent } : {}) }, 201);
+    return c.json({ message: leadMessageToJs(after) }, 201);
   });
 });
 
@@ -28240,6 +28265,532 @@ async function acceptLeadReply(env, mail, token) {
   await db.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(row.lead_id).run();
   return { ok: true, leadMessageId: id };
 }
+
+// ---------------------------------------------------------------------------
+// 110. The CRM's selling half: deal values and lost reasons on an estimate,
+// opt-outs (the homeowner's unsubscribe and the office's Do not contact),
+// email templates and follow-up sequences, and the website lead form.
+// shared/crmsales.js holds the rules.
+// ---------------------------------------------------------------------------
+
+function dealRowToJs(r) {
+  return r ? { amountCents: r.amount_cents ?? null, expectedClose: r.expected_close || null,
+    lostReason: r.lost_reason || null, lostNote: r.lost_note || null, updatedAt: r.updated_at } : null;
+}
+
+// Every estimate's deal on an account, by appointment id. null without 110,
+// so the appointments still load and the screen says what is missing.
+async function apptDeals(env, accountId, apptId = null) {
+  try {
+    const { results } = await env.DB.prepare(`SELECT * FROM sales_deals WHERE account_id = ?${apptId ? " AND appointment_id = ?" : ""}`)
+      .bind(...(apptId ? [accountId, apptId] : [accountId])).all();
+    return new Map((results || []).map((r) => [r.appointment_id, dealRowToJs(r)]));
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+// Writes what was sent over what is stored. A lost reason stays only while
+// the estimate is marked not sold: marked sold afterwards, the reason is
+// wrong, and a report counting it would say so for ever.
+async function saveDeal(env, { accountId, apptId, patch, status, userId }) {
+  try {
+    const cur = (await apptDeals(env, accountId, apptId))?.get(apptId) || null;
+    if (!patch && !cur) return { deal: null };
+    const next = { amountCents: null, expectedClose: null, lostReason: null, lostNote: null, ...(cur || {}), ...(patch || {}) };
+    if (status !== "lost") { next.lostReason = null; next.lostNote = null; }
+    const same = cur && ["amountCents", "expectedClose", "lostReason", "lostNote"].every((k) => (cur[k] ?? null) === (next[k] ?? null));
+    if (same) return { deal: cur };
+    await env.DB.prepare(
+      `INSERT INTO sales_deals (appointment_id, account_id, amount_cents, expected_close, lost_reason, lost_note, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(appointment_id) DO UPDATE SET amount_cents = excluded.amount_cents, expected_close = excluded.expected_close,
+         lost_reason = excluded.lost_reason, lost_note = excluded.lost_note, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+      .bind(apptId, accountId, next.amountCents, next.expectedClose, next.lostReason, next.lostNote, userId || null,
+        new Date().toISOString()).run();
+    try {
+      await logEvent(env, accountId, userId || null, "appointment.deal", apptId, { from: cur, to: next });
+    } catch (err) { console.warn("[deals] event:", err?.message || err); }
+    return { deal: (await apptDeals(env, accountId, apptId))?.get(apptId) || null };
+  } catch (err) {
+    if (missingSchema(err)) return { deal: null, migration: "110_crm_selling" };
+    throw err;
+  }
+}
+
+function optOutRowToJs(r) {
+  return r ? { unsubscribedAt: r.unsubscribed_at || null, dncAt: r.dnc_at || null, dncBy: r.dnc_by || null,
+    dncByName: r.dnc_by_name || null, dncReason: r.dnc_reason || null } : null;
+}
+// Opt-outs on an account, by lead id. null without 110.
+async function leadOptOuts(env, accountId, leadId = null) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT o.*, u.name AS dnc_by_name FROM lead_opt_outs o LEFT JOIN users u ON u.id = o.dnc_by
+        WHERE o.account_id = ?${leadId ? " AND o.lead_id = ?" : ""}`).bind(...(leadId ? [accountId, leadId] : [accountId])).all();
+    return new Map((results || []).map((r) => [r.lead_id, optOutRowToJs(r)]));
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+const optOutFor = async (env, accountId, leadId) => (await leadOptOuts(env, accountId, leadId))?.get(leadId) || null;
+
+// The lead's unsubscribe token, made the first time one is needed. null
+// without 110, and the email then says to reply STOP instead.
+async function unsubTokenFor(env, accountId, leadId) {
+  try {
+    const have = await env.DB.prepare(`SELECT token FROM lead_unsub_tokens WHERE lead_id = ?`).bind(leadId).first();
+    if (have) return have.token;
+    const token = replyToken();
+    await env.DB.prepare(`INSERT OR IGNORE INTO lead_unsub_tokens (token, lead_id, account_id, created_at) VALUES (?, ?, ?, ?)`)
+      .bind(token, leadId, accountId, new Date().toISOString()).run();
+    return (await env.DB.prepare(`SELECT token FROM lead_unsub_tokens WHERE lead_id = ?`).bind(leadId).first())?.token || null;
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+// Stops a lead's running sequence, saying why. Quiet without 110.
+async function stopEnrollments(env, leadId, reason) {
+  try {
+    await env.DB.prepare(`UPDATE crm_enrollments SET status = 'stopped', stopped_reason = ?, stopped_at = ?
+      WHERE lead_id = ? AND status = 'active'`).bind(reason, new Date().toISOString(), leadId).run();
+  } catch (err) { if (!missingSchema(err)) throw err; }
+}
+
+// One email to a lead, written first and then sent, with a reply address and
+// the unsubscribe link. Shared by the contact route and the sequence sweep,
+// so the footer and the headers cannot be on one and missing from the other.
+async function sendLeadEmail(env, { acct, lead, subject, body, userId, sequenceId = null }) {
+  const id = uid();
+  const domain = replyDomainOf(env);
+  const token = domain ? replyToken() : null;
+  const now = new Date().toISOString();
+  await env.DB.prepare(
+    `INSERT INTO lead_messages (id, account_id, lead_id, channel, direction, subject, body, to_addr, status, outcome,
+       reply_token, sent_by, created_at) VALUES (?, ?, ?, 'email', 'outbound', ?, ?, ?, 'sending', ?, ?, ?, ?)`)
+    .bind(id, acct.id, lead.id, subject, body, lead.email, sequenceId ? "sequence" : null, token, userId || null, now).run();
+  const me = userId ? await env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(userId).first() : null;
+  const unsubToken = await unsubTokenFor(env, acct.id, lead.id);
+  const unsub = unsubToken ? unsubscribeLink(unsubToken, APP_ORIGIN) : null;
+  const mail = MAIL.leadEmail({ body, accountName: acct.name, senderName: me?.name || "", canReply: !!token, unsubscribe: unsub });
+  const headers = unsubToken ? {
+    "List-Unsubscribe": `<${API_PUBLIC_ORIGIN}/api/public/unsubscribe/${unsubToken}>, <${unsub}>`,
+    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+  } : null;
+  const result = await sendEmail(env, { to: lead.email, subject, text: mail.text, html: mail.html, fromName: acct.name,
+    ...(token ? { replyTo: leadReplyAddress(token, domain) } : {}), ...(headers ? { headers } : {}) });
+  await logMail(env, { accountId: acct.id, companyId: null, to: lead.email, kind: sequenceId ? "lead_sequence" : "lead_email",
+    subject, result, sentBy: userId || null });
+  await env.DB.prepare(`UPDATE lead_messages SET status = ?, error = ? WHERE id = ?`)
+    .bind(result.ok ? "sent" : "failed", result.ok ? null : String(result.error || "send_failed").slice(0, 300), id).run();
+  return { id, ok: !!result.ok, error: result.ok ? null : result.error || "send_failed" };
+}
+const API_PUBLIC_ORIGIN = "https://api.subsub.work";
+
+// Do not contact, set or taken off. Setting it is anybody on the CRM (a
+// homeowner says "stop calling me" to whoever rang); taking it off is the
+// office's, with a reason.
+app.put("/api/sales-leads/:id/do-not-contact", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const chk = validDnc(b, { role });
+  if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, chk.error === "office_only" ? 403 : 400);
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      `INSERT INTO lead_opt_outs (lead_id, account_id, dnc_at, dnc_by, dnc_reason, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(lead_id) DO UPDATE SET dnc_at = excluded.dnc_at, dnc_by = excluded.dnc_by, dnc_reason = excluded.dnc_reason,
+         updated_at = excluded.updated_at`)
+      .bind(row.id, acct.id, chk.value.on ? now : null, userId, chk.value.reason, now).run();
+    // Stopped in the same request, so no email goes on the next sweep.
+    if (chk.value.on) await stopEnrollments(c.env, row.id, "do_not_contact");
+    const who = [row.first_name, row.last_name].filter(Boolean).join(" ");
+    try { await logEvent(c.env, acct.id, userId, chk.value.on ? "lead.dnc_on" : "lead.dnc_off", row.id, { reason: chk.value.reason }); }
+    catch (err) { console.warn("[leads] dnc event:", err?.message || err); }
+    await logActivity(c.env, acct.id, userId, "lead_dnc",
+      chk.value.on ? `Marked ${who} Do not contact` : `Took Do not contact off ${who}: ${chk.value.reason}`, { leadId: row.id });
+    return c.json({ optOut: await optOutFor(c.env, acct.id, row.id) });
+  });
+});
+
+// The homeowner's own way out, from the link in any email. Public, keyed by
+// the random token; GET says whose emails these are, POST stops them. Both
+// answer an unknown token with 404 and nothing else.
+async function unsubLookup(env, token) {
+  if (!UNSUB_TOKEN_RE.test(String(token || ""))) return null;
+  try {
+    return await env.DB.prepare(
+      `SELECT t.lead_id, t.account_id, a.name AS account_name, o.unsubscribed_at FROM lead_unsub_tokens t
+         JOIN accounts a ON a.id = t.account_id LEFT JOIN lead_opt_outs o ON o.lead_id = t.lead_id WHERE t.token = ?`).bind(token).first();
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+app.get("/api/public/unsubscribe/:token", async (c) => {
+  const rl = await rateLimit(c.env, "unsub", clientIp(c), { limit: 60, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  const r = await unsubLookup(c.env, c.req.param("token"));
+  if (!r) return c.json({ error: "not_found" }, 404);
+  return c.json({ accountName: r.account_name, unsubscribed: !!r.unsubscribed_at });
+});
+app.post("/api/public/unsubscribe/:token", async (c) => {
+  const rl = await rateLimit(c.env, "unsub", clientIp(c), { limit: 60, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  const r = await unsubLookup(c.env, c.req.param("token"));
+  if (!r) return c.json({ error: "not_found" }, 404);
+  if (!r.unsubscribed_at) {
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      `INSERT INTO lead_opt_outs (lead_id, account_id, unsubscribed_at, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(lead_id) DO UPDATE SET unsubscribed_at = excluded.unsubscribed_at, updated_at = excluded.updated_at`)
+      .bind(r.lead_id, r.account_id, now, now).run();
+    await stopEnrollments(c.env, r.lead_id, "unsubscribed");
+    try { await logEvent(c.env, r.account_id, null, "lead.unsubscribed", r.lead_id, {}); }
+    catch (err) { console.warn("[leads] unsub event:", err?.message || err); }
+    const l = await c.env.DB.prepare(`SELECT first_name, last_name FROM sales_leads WHERE id = ?`).bind(r.lead_id).first();
+    await logActivity(c.env, r.account_id, null, "lead_unsubscribed",
+      `${[l?.first_name, l?.last_name].filter(Boolean).join(" ") || "A lead"} unsubscribed from your emails`, { leadId: r.lead_id });
+  }
+  return c.json({ ok: true, accountName: r.account_name, unsubscribed: true });
+});
+
+// Templates and sequences: one read for both, because the compose window and
+// the sequence editor each need the other's list.
+function templateRowToJs(r) {
+  return { id: r.id, name: r.name, subject: r.subject, body: r.body, builtin: false, updatedAt: r.updated_at };
+}
+function sequenceRowToJs(r, active = 0) {
+  return { id: r.id, name: r.name, steps: apptJson(r.steps, []), stopOnBooking: r.stop_on_booking !== 0,
+    active: r.active !== 0, running: active, updatedAt: r.updated_at };
+}
+async function crmLibrary(env, accountId) {
+  const { results: t } = await env.DB.prepare(`SELECT * FROM crm_templates WHERE account_id = ? ORDER BY name`).bind(accountId).all();
+  const { results: s } = await env.DB.prepare(`SELECT * FROM crm_sequences WHERE account_id = ? ORDER BY name`).bind(accountId).all();
+  const { results: n } = await env.DB.prepare(`SELECT sequence_id, COUNT(*) AS n FROM crm_enrollments
+    WHERE account_id = ? AND status = 'active' GROUP BY sequence_id`).bind(accountId).all();
+  const running = new Map((n || []).map((r) => [r.sequence_id, r.n]));
+  return {
+    templates: [...BUILTIN_TEMPLATES.map((x) => ({ ...x, builtin: true })), ...(t || []).map(templateRowToJs)],
+    sequences: (s || []).map((r) => sequenceRowToJs(r, running.get(r.id) || 0)),
+  };
+}
+const officeOnly = (c) => (OFFICE_ROLES.includes(c.get("auth")?.role) ? null : c.json({ error: "office_only" }, 403));
+
+app.get("/api/crm-library", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return leadContactGuard(c, async () => c.json(await crmLibrary(c.env, acct.id)));
+});
+app.post("/api/crm-templates", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const refused = officeOnly(c);
+  if (refused) return refused;
+  const chk = validTemplate(await c.req.json().catch(() => ({})));
+  if (!chk.ok) return c.json({ error: chk.error, field: chk.field, placeholders: chk.placeholders }, 400);
+  return leadContactGuard(c, async () => {
+    const id = uid();
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(`INSERT INTO crm_templates (id, account_id, name, subject, body, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, acct.id, chk.value.name, chk.value.subject, chk.value.body,
+      c.get("auth").userId, now, now).run();
+    return c.json({ template: templateRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ?`).bind(id).first()) }, 201);
+  });
+});
+app.patch("/api/crm-templates/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const refused = officeOnly(c);
+  if (refused) return refused;
+  if (isBuiltin(c.req.param("id"))) return c.json({ error: "builtin_read_only" }, 409);
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const cur = await c.env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ? AND account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!cur) return c.json({ error: "not_found" }, 404);
+    const chk = validTemplate({ ...templateRowToJs(cur), ...b });
+    if (!chk.ok) return c.json({ error: chk.error, field: chk.field, placeholders: chk.placeholders }, 400);
+    await c.env.DB.prepare(`UPDATE crm_templates SET name = ?, subject = ?, body = ?, updated_at = ? WHERE id = ?`)
+      .bind(chk.value.name, chk.value.subject, chk.value.body, new Date().toISOString(), cur.id).run();
+    return c.json({ template: templateRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ?`).bind(cur.id).first()) });
+  });
+});
+app.delete("/api/crm-templates/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const refused = officeOnly(c);
+  if (refused) return refused;
+  if (isBuiltin(c.req.param("id"))) return c.json({ error: "builtin_read_only" }, 409);
+  return leadContactGuard(c, async () => {
+    const id = c.req.param("id");
+    const cur = await c.env.DB.prepare(`SELECT id FROM crm_templates WHERE id = ? AND account_id = ?`).bind(id, acct.id).first();
+    if (!cur) return c.json({ error: "not_found" }, 404);
+    // A template a sequence still sends is refused by name, rather than
+    // leaving a step that sends nothing.
+    const { results } = await c.env.DB.prepare(`SELECT name, steps FROM crm_sequences WHERE account_id = ?`).bind(acct.id).all();
+    const using = (results || []).filter((s) => apptJson(s.steps, []).some((st) => st.templateId === id)).map((s) => s.name);
+    if (using.length) return c.json({ error: "template_in_use", sequences: using }, 409);
+    await c.env.DB.prepare(`DELETE FROM crm_templates WHERE id = ?`).bind(id).run();
+    return c.json({ ok: true });
+  });
+});
+
+async function accountTemplateIds(env, accountId) {
+  const { results } = await env.DB.prepare(`SELECT id FROM crm_templates WHERE account_id = ?`).bind(accountId).all();
+  return (results || []).map((r) => r.id);
+}
+app.post("/api/crm-sequences", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const refused = officeOnly(c);
+  if (refused) return refused;
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const chk = validSequence(b, { templateIds: await accountTemplateIds(c.env, acct.id) });
+    if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+    const id = uid();
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(`INSERT INTO crm_sequences (id, account_id, name, steps, stop_on_booking, active, created_by, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)`).bind(id, acct.id, chk.value.name, JSON.stringify(chk.value.steps),
+      chk.value.stopOnBooking ? 1 : 0, c.get("auth").userId, now, now).run();
+    return c.json({ sequence: sequenceRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ?`).bind(id).first()) }, 201);
+  });
+});
+app.patch("/api/crm-sequences/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const refused = officeOnly(c);
+  if (refused) return refused;
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const cur = await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ? AND account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!cur) return c.json({ error: "not_found" }, 404);
+    const chk = validSequence({ ...sequenceRowToJs(cur), ...b }, { templateIds: await accountTemplateIds(c.env, acct.id) });
+    if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+    const active = "active" in b ? (b.active ? 1 : 0) : cur.active;
+    await c.env.DB.prepare(`UPDATE crm_sequences SET name = ?, steps = ?, stop_on_booking = ?, active = ?, updated_at = ? WHERE id = ?`)
+      .bind(chk.value.name, JSON.stringify(chk.value.steps), chk.value.stopOnBooking ? 1 : 0, active, new Date().toISOString(), cur.id).run();
+    // Turned off is stopped for everybody on it, said on each, so a lead's
+    // page does not claim a sequence is running that never sends again.
+    if (!active && cur.active) {
+      await c.env.DB.prepare(`UPDATE crm_enrollments SET status = 'stopped', stopped_reason = 'sequence_off', stopped_at = ?
+        WHERE sequence_id = ? AND status = 'active'`).bind(new Date().toISOString(), cur.id).run();
+    }
+    return c.json({ sequence: sequenceRowToJs(await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ?`).bind(cur.id).first()) });
+  });
+});
+app.delete("/api/crm-sequences/:id", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const refused = officeOnly(c);
+  if (refused) return refused;
+  return leadContactGuard(c, async () => {
+    const cur = await c.env.DB.prepare(`SELECT id FROM crm_sequences WHERE id = ? AND account_id = ?`).bind(c.req.param("id"), acct.id).first();
+    if (!cur) return c.json({ error: "not_found" }, 404);
+    // A sequence anybody has been put on keeps its history: turn it off.
+    const used = await c.env.DB.prepare(`SELECT 1 FROM crm_enrollments WHERE sequence_id = ? LIMIT 1`).bind(cur.id).first();
+    if (used) return c.json({ error: "sequence_in_use" }, 409);
+    await c.env.DB.prepare(`DELETE FROM crm_sequences WHERE id = ?`).bind(cur.id).run();
+    return c.json({ ok: true });
+  });
+});
+
+// The newest enrollment for each lead on an account, with its sequence. null
+// without 110.
+async function leadEnrollments(env, accountId, leadId = null) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT e.*, s.name AS sequence_name, s.steps FROM crm_enrollments e JOIN crm_sequences s ON s.id = e.sequence_id
+        WHERE e.account_id = ?${leadId ? " AND e.lead_id = ?" : ""} ORDER BY e.started_at DESC, e.rowid DESC`)
+      .bind(...(leadId ? [accountId, leadId] : [accountId])).all();
+    const m = new Map();
+    for (const r of results || []) {
+      if (m.has(r.lead_id)) continue;
+      m.set(r.lead_id, { id: r.id, sequenceId: r.sequence_id, sequenceName: r.sequence_name, status: r.status,
+        steps: apptJson(r.steps, []).length, sent: r.sent_count, nextAt: r.status === "active" ? r.next_at : null,
+        startedAt: r.started_at, stoppedReason: r.stopped_reason || null, stoppedAt: r.stopped_at || null });
+    }
+    return m;
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+
+app.post("/api/sales-leads/:id/sequence", requireRole(...SALES_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const lead = leadRowToJs(row);
+    const seq = await c.env.DB.prepare(`SELECT * FROM crm_sequences WHERE id = ? AND account_id = ?`).bind(String(b.sequenceId || ""), acct.id).first();
+    if (!seq) return c.json({ error: "bad_sequence" }, 400);
+    if (!seq.active) return c.json({ error: "sequence_off" }, 409);
+    const consent = await consentForLead(c.env, acct.id, lead.id);
+    const optOut = await optOutFor(c.env, acct.id, lead.id);
+    // The same stops the sweep applies, asked now, so a lead the first email
+    // could never reach is refused here rather than stopped silently later.
+    const stop = sequenceStop({ lead, consent, optOut, repliedSince: false, startStage: lead.stage });
+    if (stop && stop !== "booked") return c.json({ error: stop }, 409);
+    const live = await c.env.DB.prepare(`SELECT id FROM crm_enrollments WHERE lead_id = ? AND status = 'active'`).bind(lead.id).first();
+    if (live) return c.json({ error: "already_on_sequence" }, 409);
+    const id = uid();
+    const now = new Date().toISOString();
+    const steps = apptJson(seq.steps, []);
+    await c.env.DB.prepare(`INSERT INTO crm_enrollments (id, account_id, lead_id, sequence_id, start_stage, enrolled_by, started_at, next_step, next_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`).bind(id, acct.id, lead.id, seq.id, lead.stage, userId, now, stepDueAt(now, steps[0]?.day || 0)).run();
+    try { await logEvent(c.env, acct.id, userId, "lead.sequence_on", lead.id, { sequenceId: seq.id }); }
+    catch (err) { console.warn("[leads] sequence event:", err?.message || err); }
+    return c.json({ enrollment: (await leadEnrollments(c.env, acct.id, lead.id))?.get(lead.id) || null }, 201);
+  });
+});
+app.delete("/api/sales-leads/:id/sequence", requireRole(...SALES_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return leadContactGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    await stopEnrollments(c.env, row.id, "stopped");
+    return c.json({ enrollment: (await leadEnrollments(c.env, acct.id, row.id))?.get(row.id) || null });
+  });
+});
+
+// The sweep that sends each due step, on the ten-minute schedule. Every check
+// is asked again at send time, because a lead can reply, buy, unsubscribe or
+// be marked Do not contact between one email and the next. The step is
+// CLAIMED before it is sent (guarded on next_step), so two sweeps send it once.
+export async function crmSequenceSweep(env, nowMs = Date.now()) {
+  const now = new Date(nowMs).toISOString();
+  let due;
+  try {
+    ({ results: due } = await env.DB.prepare(
+      `SELECT e.*, s.steps, s.active AS seq_active, s.stop_on_booking FROM crm_enrollments e
+         JOIN crm_sequences s ON s.id = e.sequence_id WHERE e.status = 'active' AND e.next_at <= ?
+         ORDER BY e.next_at LIMIT 200`).bind(now).all());
+  } catch (err) {
+    if (missingSchema(err)) return { skipped: "110_crm_selling" };
+    throw err;
+  }
+  const out = { sent: 0, stopped: 0, failed: 0, limited: 0 };
+  const stop = async (e, reason) => {
+    await env.DB.prepare(`UPDATE crm_enrollments SET status = 'stopped', stopped_reason = ?, stopped_at = ? WHERE id = ? AND status = 'active'`)
+      .bind(reason, now, e.id).run();
+    out.stopped += 1;
+  };
+  for (const e of due || []) {
+    const acct = await env.DB.prepare(`SELECT id, name, kind FROM accounts WHERE id = ?`).bind(e.account_id).first();
+    const row = await env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ? AND l.account_id = ?`).bind(e.lead_id, e.account_id).first();
+    const lead = row ? leadRowToJs(row) : null;
+    const consent = lead ? await consentForLead(env, e.account_id, lead.id) : null;
+    const optOut = lead ? await optOutFor(env, e.account_id, lead.id) : null;
+    const replied = lead ? await env.DB.prepare(`SELECT 1 FROM lead_messages WHERE lead_id = ? AND direction = 'inbound'
+      AND channel = 'email' AND created_at > ? LIMIT 1`).bind(lead.id, e.started_at).first() : null;
+    const why = !acct || !takesAppointments(acct.kind) ? "lead_gone"
+      : sequenceStop({ lead, consent, optOut, repliedSince: !!replied, startStage: e.start_stage,
+        stopOnBooking: e.stop_on_booking !== 0, sequenceActive: e.seq_active !== 0 });
+    if (why) { await stop(e, why); continue; }
+    const steps = apptJson(e.steps, []);
+    const step = steps[e.next_step];
+    if (!step) { await env.DB.prepare(`UPDATE crm_enrollments SET status = 'done', next_at = NULL WHERE id = ?`).bind(e.id).run(); continue; }
+    const tpl = isBuiltin(step.templateId) ? BUILTIN_TEMPLATES.find((t) => t.id === step.templateId)
+      : await env.DB.prepare(`SELECT * FROM crm_templates WHERE id = ? AND account_id = ?`).bind(step.templateId, e.account_id).first();
+    if (!tpl) { await stop(e, "template_gone"); continue; }
+    const rl = await rateLimit(env, "lead-email", e.account_id, { limit: LEAD_EMAILS_PER_HOUR, windowMinutes: 60 });
+    if (!rl.ok) { out.limited += 1; continue; }
+    const last = e.next_step + 1 >= steps.length;
+    const claim = await env.DB.prepare(
+      `UPDATE crm_enrollments SET next_step = next_step + 1, sent_count = sent_count + 1, next_at = ?,
+         status = CASE WHEN ? THEN 'done' ELSE status END, stopped_reason = CASE WHEN ? THEN 'done' ELSE stopped_reason END
+       WHERE id = ? AND next_step = ? AND status = 'active'`)
+      .bind(last ? null : stepDueAt(e.started_at, steps[e.next_step + 1].day), last ? 1 : 0, last ? 1 : 0, e.id, e.next_step).run();
+    if (!claim.meta?.changes) continue;
+    const sender = e.enrolled_by ? await env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(e.enrolled_by).first() : null;
+    const vars = leadVars(lead, { accountName: acct.name, senderName: sender?.name || "", serviceLabel });
+    const r = await sendLeadEmail(env, { acct, lead, subject: fillTemplate(tpl.subject, vars).slice(0, 200),
+      body: fillTemplate(tpl.body, vars), userId: e.enrolled_by || null, sequenceId: e.sequence_id });
+    if (r.ok) out.sent += 1; else out.failed += 1;
+  }
+  return out;
+}
+
+// The website lead form. Public, by the account's subdomain, rate-limited per
+// visitor and per account. It answers the same whether the homeowner was new
+// or already a lead, so it cannot be used to ask who is in the CRM.
+app.post("/api/public/lead/:subdomain", async (c) => {
+  const rl = await rateLimit(c.env, "web-lead", clientIp(c), { limit: 10, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  const acct = await c.env.DB.prepare(`SELECT id, name, kind, subdomain FROM accounts WHERE subdomain = ?`)
+    .bind(String(c.req.param("subdomain") || "").trim().toLowerCase()).first();
+  if (!acct || !takesAppointments(acct.kind)) return c.json({ error: "unknown_account" }, 404);
+  const b = await c.req.json().catch(() => ({}));
+  // A box no person sees. Filled in is a bot, and it is told it worked.
+  if (String(b.website || "").trim()) return c.json({ ok: true });
+  const problem = webLeadProblem(b);
+  if (problem) return c.json({ error: problem }, 400);
+  const chk = validLead({ firstName: b.firstName, lastName: b.lastName, phone: b.phone, email: b.email,
+    address: { street: b.street, city: b.city, state: b.state, zip: b.zip },
+    services: Array.isArray(b.services) ? b.services : [], stage: "lead", source: "website" }, { role: "callcenter" });
+  if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+  const acctRl = await rateLimit(c.env, "web-lead-acct", acct.id, { limit: 300, windowMinutes: 24 * 60 });
+  if (!acctRl.ok) return c.json({ error: "rate_limited" }, 429);
+  const v = { ...chk.value, source: "website", ownerId: null };
+  const message = String(b.message || "").trim().slice(0, 2000);
+  try {
+    const existing = await findLead(c.env, acct.id, { phone: v.phone, email: v.email });
+    const id = existing || await insertLead(c.env, { accountId: acct.id, v, userId: null });
+    // Consent from the form's own boxes: ticked is a yes, unticked a no,
+    // each only where there is something to contact them on.
+    const n = (x) => (x ? 1 : 0);
+    try {
+      await c.env.DB.prepare(
+        `INSERT INTO sales_lead_consents (lead_id, account_id, email, phone, text, script_version, captured_by, captured_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
+         ON CONFLICT(lead_id) DO UPDATE SET email = excluded.email, phone = excluded.phone, text = excluded.text,
+           script_version = excluded.script_version, captured_by = NULL, captured_at = excluded.captured_at`)
+        .bind(id, acct.id, n(b.consentEmail === true && v.email), n(b.consentPhone === true && v.phone),
+          n(b.consentText === true && v.phone), WEB_CONSENT_VERSION, new Date().toISOString()).run();
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    // What they wrote lands in the Inbox as something to answer.
+    try {
+      await c.env.DB.prepare(`INSERT INTO lead_messages (id, account_id, lead_id, channel, direction, subject, body, status, created_at)
+        VALUES (?, ?, ?, 'note', 'inbound', 'From your website form', ?, 'received', ?)`)
+        .bind(uid(), acct.id, id, message || "Asked for an estimate through your website form.", new Date().toISOString()).run();
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    await c.env.DB.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(id).run();
+    const who = [v.firstName, v.lastName].filter(Boolean).join(" ");
+    await logActivity(c.env, acct.id, null, "lead_added", `${who} ${existing ? "asked again" : "asked for an estimate"} through your website form`, { leadId: id });
+    // The office is told, by each person's own email setting.
+    try {
+      const { results: team } = await c.env.DB.prepare(`SELECT DISTINCT u.id, u.name, u.email, u.notify FROM memberships m
+        JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND m.role IN ('admin', 'pm')`).bind(acct.id).all();
+      const seen = new Set();
+      for (const u of team || []) {
+        const to = realEmail(u.email);
+        if (!to || seen.has(to.toLowerCase()) || !notifyOf(u).email) continue;
+        seen.add(to.toLowerCase());
+        const mail = MAIL.websiteLeadEmail({ firstName: String(u.name || "").split(" ")[0], who, phone: v.phone ? `(${v.phone.slice(0,3)}) ${v.phone.slice(3,6)}-${v.phone.slice(6)}` : "",
+          email: v.email || "", services: v.services.map(serviceLabel), message, link: `${APP_ORIGIN}/?open=lead&id=${id}`, repeat: !!existing });
+        const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
+        await logMail(c.env, { accountId: acct.id, companyId: null, to, kind: "website_lead", subject: mail.subject, result, sentBy: null });
+      }
+    } catch (err) { console.warn("[leads] website alert:", err?.message || err); }
+    return c.json({ ok: true });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "not_available" }, 503);
+    throw err;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // 106. CRM / Sales: consent and activity on an appointment.
@@ -31351,7 +31902,7 @@ export default {
          ["unit-billing", unitBillingSweep], ["linked-discount", linkedDiscountSweep], ["bbb", bbbSweep],
          ["sales-crm", salesCrmSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep],
-         ["held", heldSweep], ["gcal", gcalSweep]];
+         ["held", heldSweep], ["gcal", gcalSweep], ["crm-sequences", crmSequenceSweep]];
 
     ctx.waitUntil((async () => {
       for (const [name, run] of jobs) {

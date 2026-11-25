@@ -136,7 +136,9 @@ import { STAGES, STAGE_LABEL, STAGE_NOTE, isOurs } from "../shared/stuck.js";
 import { rankQuotes, quoteSpread, requestState, stateLabel, quotableSubs,
   MAX_INVITES } from "../shared/quotes.js";
 import { PACK_KINDS, inLink, SHARE_DAYS } from "../shared/docshare.js";
-import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, signInNote, cleanHomeUrl, HOME_URL_MAX } from "../shared/embed.js";
+import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInButtonHtml, signUpButtonHtml, signUpNote, signInNote, cleanHomeUrl, HOME_URL_MAX, leadFormHtml } from "../shared/embed.js";
+import { LOST_REASONS, lostReasonLabel, dollarsToCents, centsText, salesReport, OPT_OUT_TEXT, STOP_TEXT, TEMPLATE_VARS,
+  fillTemplate, leadVars, unsubscribePathToken } from "../shared/crmsales.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
@@ -2385,6 +2387,9 @@ export default function SubSub() {
   // the app for any path it has no file for, so this reaches the bundle.
   const [claimToken] = useState(() =>
     typeof window === "undefined" ? null : claimPathToken(window.location.pathname));
+  // 110. A homeowner's unsubscribe link: /unsubscribe/<token>, read the same way.
+  const [unsubToken] = useState(() =>
+    typeof window === "undefined" ? null : unsubscribePathToken(window.location.pathname));
   // 077. A Sub Passport, /p/<slug>: the same kind of path, printed on a decal
   // and read off a QR code.
   const [passportSlug] = useState(() =>
@@ -4605,6 +4610,7 @@ export default function SubSub() {
     try {
       const q = new URLSearchParams(window.location.search);
       if (q.get("open") === "appointment" && q.get("id")) return { appointment: q.get("id") };
+      if (q.get("open") === "lead" && q.get("id")) return { lead: q.get("id") };
       if (q.get("open") === "followups") return { pane: "followups" };
     } catch { /* no address to read */ }
     return null;
@@ -4615,7 +4621,7 @@ export default function SubSub() {
     if (hydratedFor !== currentAccountId) return;
     crmAimed.current = true;
     window.history.replaceState(null, "", window.location.pathname);
-    setCrmPane(crmAsk.pane === "followups" ? "followups" : "appointments");
+    setCrmPane(crmAsk.pane === "followups" ? "followups" : crmAsk.lead ? "leads" : "appointments");
     setTab("appointments");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crmAsk, loggedIn, role, hydratedFor, currentAccountId]);
@@ -6190,7 +6196,7 @@ export default function SubSub() {
       if (v && typeof v.tab === "string" && tabAllowed(v.tab, v.pane)) {
         if (typeof v.pane === "string") setPane(v.pane);
         if (typeof v.netView === "string") setNetView(v.netView);
-        if (CRM_PANES.includes(v.crmPane)) setCrmPane(v.crmPane);
+        if (CRM_PANES.includes(v.crmPane) && crmNavFor(role).some(([id]) => id === v.crmPane)) setCrmPane(v.crmPane);
         setTab(v.tab);
       }
       return;
@@ -6379,6 +6385,14 @@ export default function SubSub() {
   // Above the logged-in gate for the pack's reason: somebody opened a link to
   // read a work order, and the page is the same whether or not they are signed
   // in -- the Worker decides whether the company can still be claimed.
+  if (unsubToken) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <UnsubscribePage token={unsubToken} />
+      </div>
+    );
+  }
   if (claimToken) {
     return (
       <div className="ss-root">
@@ -7090,7 +7104,7 @@ export default function SubSub() {
               </button>
             </>
           )}
-          {crmWs && can("appointments") && CRM_NAV.map(([id, label]) => (
+          {crmWs && can("appointments") && crmNavFor(role).map(([id, label]) => (
             <button key={id} className={crmPane === id ? "on" : ""} data-crm-nav={id}
               onClick={() => { setCrmPane(id); setTab("appointments"); }}>
               {label}{id === "inbox" && crmUnread > 0 && <LiveCount n={crmUnread} what="unread" />}
@@ -8876,7 +8890,7 @@ export default function SubSub() {
 
       {tab === "appointments" && can("appointments") && (
         <AppointmentsView role={role} meId={currentUserId} ask={crmAsk} onAskUsed={() => setCrmAsk(null)}
-          accountName={account.name} onUnread={setCrmUnread}
+          accountName={account.name} onUnread={setCrmUnread} subdomain={account.subdomain} theme={brand?.theme || null}
           pane={crmPane} onPane={setCrmPane}
           onOpenJob={can("jobs") ? (id) => openJob(id) : null}
           onConvert={can("jobs") ? (a, after) => {
@@ -30218,15 +30232,21 @@ function ApptStatusChip({ status }) {
 // 107. The CRM workspace's panes, in nav order. The tab is "appointments"
 // (the id the call-center role and its allowlist name); these are its pages.
 // 109. Inbox: every email, text, letter, call and note with a lead.
-const CRM_NAV = [["dashboard", "Dashboard"], ["inbox", "Inbox"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"]];
+// 110. Reports for everybody but the call center (which has its own
+// dashboard); Setup (templates, sequences, the website form) for the office.
+const CRM_NAV = [["dashboard", "Dashboard"], ["inbox", "Inbox"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"],
+  ["reports", "Reports"], ["setup", "Setup"]];
 const CRM_PANES = CRM_NAV.map(([id]) => id);
+const crmNavFor = (role) => CRM_NAV.filter(([id]) => (id === "reports" ? role !== "callcenter" : id === "setup" ? ["admin", "pm"].includes(role) : true));
 
 function LeadStageChip({ stage }) {
   return <span className={`tn-chip lead-st lead-st-${stage}`} data-stage={stage}>{stageTerm(stage)}</span>;
 }
 
 function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob, pane = "dashboard", onPane,
-  accountName = "", onUnread = null }) {
+  accountName = "", onUnread = null, subdomain = "", theme = null }) {
+  // 110. Templates and sequences, for compose, a lead's sequence and Setup.
+  const [lib, loadLib] = useCrmLibrary();
   // 109. A sales manager records the outcome of their own visits like the
   // office does; the office alone turns a sale into a job (onConvert).
   const sales = SALES_ROLES.includes(role);
@@ -30290,9 +30310,14 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
     if (!ask || !data) return;
     if (ask.appointment && list.some((a) => a.id === ask.appointment)) { setPane("appointments"); setOpen(ask.appointment); }
     if (ask.pane === "followups") setPane("followups");
+    if (ask.lead) {
+      // A website lead's email: the lead it names, once the leads are here.
+      if (!leadData) return;
+      if ((leadData.leads || []).some((l) => l.id === ask.lead)) { setPane("leads"); setLeadTab("contact"); setOpenLead(ask.lead); }
+    }
     onAskUsed?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ask, data]);
+  }, [ask, data, leadData]);
   const today = dayKey();
   const counts = Object.fromEntries(Object.keys(APPT_STATUSES).map((k) => [k, list.filter((a) => a.status === k).length]));
   const shown = list.filter((a) => {
@@ -30316,7 +30341,8 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
   const upsert = (a) => setData((d) => ({ ...d, appointments: [a, ...(d?.appointments || []).filter((x) => x.id !== a.id)] }));
   const upsertLead = (l) => setLeadData((d) => ({ ...(d || {}), leads: [l, ...((d?.leads) || []).filter((x) => x.id !== l.id)] }));
   const goLeads = (stage = "") => { setLeadStage(stage); setPane("leads"); };
-  const titles = { dashboard: "CRM", inbox: "Inbox", leads: "Leads", appointments: "Appointments", calendar: "Calendar", followups: "Follow-ups" };
+  const titles = { dashboard: "CRM", inbox: "Inbox", leads: "Leads", appointments: "Appointments", calendar: "Calendar", followups: "Follow-ups",
+    reports: "Reports", setup: "Setup" };
   const caller = role === "callcenter";
   const [calDay, setCalDay] = useState("");
 
@@ -30329,6 +30355,8 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
           : pane === "leads" ? "Everybody you are trying to sell to, from the first call to the last job."
           : pane === "inbox" ? "Every email, text, letter, call and note with your leads, and their replies."
           : pane === "followups" ? "What is owed to each homeowner, and when."
+          : pane === "reports" ? "What is in the pipeline, who is closing, where sales come from and why estimates are lost."
+          : pane === "setup" ? "Email templates, follow-up sequences, and the estimate form for your own website."
           : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
           : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
         {caller && pane === "dashboard" ? (<>
@@ -30380,6 +30408,14 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
         <ApptCalendar list={list} reps={reps} selected={calDay} onSelect={setCalDay}
           onOpen={(id) => setOpen(id)}
           onNew={(day) => { setFlowLead({ date: day }); setFlow("new"); }} />
+      )}
+
+      {pane === "reports" && role !== "callcenter" && (
+        <CrmReports leads={leads} appointments={list} leadsReady={!!leadData && !leadData.migration && !leadData.failed}
+          dealsReady={data ? data.dealsReady !== false : true} />
+      )}
+      {pane === "setup" && ["admin", "pm"].includes(role) && (
+        <CrmSetup lib={lib} onReload={loadLib} subdomain={subdomain} accountName={accountName} theme={theme} />
       )}
 
       {pane === "followups" && (
@@ -30460,8 +30496,8 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       )}
       {currentLead && !flow && !current && (
         <Modal onClose={() => { setOpenLead(null); setLeadTab(""); loadInbox(); }} wide>
-          <LeadDetail lead={currentLead} role={role} owners={leadData?.owners || []}
-            accountName={accountName} startTab={leadTab} onContacted={loadInbox}
+          <LeadDetail lead={currentLead} role={role} owners={leadData?.owners || []} lib={lib}
+            accountName={accountName} startTab={leadTab} onContacted={() => { loadInbox(); loadLeads(); }}
             apptById={Object.fromEntries(list.map((a) => [a.id, a]))}
             onSaved={(l) => upsertLead({ ...currentLead, ...l })}
             onOpenAppt={(id) => setOpen(id)}
@@ -30513,6 +30549,7 @@ function CrmDashboard({ leads, appointments, followUps, meId, sales, leadsReady,
             <div><dt>Appointments booked</dt><dd data-kpi="booked">{d.bookedMonth}</dd></div>
             <div><dt>Sold</dt><dd data-kpi="sold">{d.soldMonth}</dd></div>
             <div><dt>Close rate</dt><dd data-kpi="close">{d.closeRate == null ? "–" : `${d.closeRate}%`}</dd></div>
+            <div><dt>Open pipeline</dt><dd data-kpi="pipeline">{centsText(salesReport({ leads, appointments, today }).pipeline.valueCents) || "$0"}</dd></div>
           </dl>
           {d.closeRate == null && <p className="note">The close rate shows once a visit this month is marked sold or not sold.</p>}
         </section>
@@ -30800,6 +30837,9 @@ function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
                 <span className="appt-row-main"><b>{[l.firstName, l.lastName].filter(Boolean).join(" ") || "No name"}</b>
                   <span>{[l.phone ? formatPhone(l.phone) : "", l.services.map(serviceLabel).join(", "), l.address?.city].filter(Boolean).join(" · ")}</span></span>
                 <span className="appt-row-side"><LeadStageChip stage={l.stage} />
+                  {l.optOut?.dncAt ? <span className="tn-chip lead-dnc" data-lead-dnc>Do not contact</span>
+                    : l.optOut?.unsubscribedAt ? <span className="tn-chip" data-lead-unsub>Unsubscribed</span>
+                    : l.enrollment?.status === "active" ? <span className="tn-chip" data-lead-seq>On a sequence</span> : null}
                   <span className="appt-row-rep">{nx ? `Appointment ${apptWhenText(nx.date).replace(/^(\w+), /, "")}` : sourceLabel(l.source)}</span></span>
               </button>
             </li>
@@ -30922,7 +30962,7 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
 
 // One lead: who they are, their stage, their appointments, and the one press
 // that moves them forward -- booking an appointment.
-function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, accountName = "", startTab = "", onContacted }) {
+function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, accountName = "", startTab = "", onContacted, lib = null }) {
   const sales = SALES_ROLES.includes(role);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState("");
@@ -30950,7 +30990,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         </div>
         <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
-      <LeadDetailTabs lead={lead} start={startTab} accountName={accountName} onContacted={onContacted}
+      <LeadDetailTabs lead={lead} start={startTab} accountName={accountName} onContacted={onContacted} role={role} lib={lib}
         onConsent={(consent) => onSaved({ ...lead, consent })}>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
         {LEAD_STAGES.map((stg) => (
@@ -30996,7 +31036,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
 
 // 109. A lead is two tabs: who they are, and contacting them. Contact opens
 // first when the lead was opened from the Inbox.
-function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent, children }) {
+function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent, children, role = "admin", lib = null }) {
   const [tab, setTab] = useState(start === "contact" ? "contact" : "overview");
   return (<>
     <div className="seg-tabs lead-tabs" role="tablist">
@@ -31004,7 +31044,7 @@ function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent,
       <button type="button" role="tab" data-lead-tab="contact" aria-selected={tab === "contact"} className={tab === "contact" ? "on" : ""} onClick={() => setTab("contact")}>Contact</button>
     </div>
     {tab === "overview" ? children
-      : <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} />}
+      : <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} />}
   </>);
 }
 
@@ -31012,6 +31052,10 @@ function LeadDetailTabs({ lead, start = "", accountName, onContacted, onConsent,
 function leadContactErrText(e) {
   const code = e?.body?.error;
   if (BLOCK_TEXT[code]) return BLOCK_TEXT[code];
+  if (OPT_OUT_TEXT[code]) return OPT_OUT_TEXT[code];
+  if (code === "already_on_sequence") return "They're already on a sequence. Stop it first.";
+  if (code === "sequence_off") return "That sequence is turned off.";
+  if (code === "office_only") return "Only an admin or project manager can do that.";
   if (code === "subject_required") return "Add a subject.";
   if (code === "body_required") return "Write something first.";
   if (code === "rate_limited") return "That's a lot of email in an hour. Wait a few minutes and try again.";
@@ -31097,7 +31141,7 @@ function LeadConsentForm({ lead, consent, onSaved, onCancel }) {
 // printed letter, a logged call or a note, then everything said both ways,
 // newest first. Each button is greyed out with the same reason the route
 // would refuse with, before it is pressed.
-function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
+function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "admin", lib = null }) {
   const [d, setD] = useState(null);
   const [loadErr, setLoadErr] = useState(null);
   const [mode, setMode] = useState("");
@@ -31114,7 +31158,16 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
   const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || "them";
   const consent = d?.consent || null;
   const blocks = d?.blocks || {};
-  const callBlocked = !consent || consent.phone !== true;
+  // 110. Do not contact closes an outbound call as well as their no to calls.
+  const callBlocked = !consent || consent.phone !== true || !!d?.callBlock;
+  const sales = SALES_ROLES.includes(role);
+  const templates = lib?.templates || [];
+  const applyTemplate = (id) => {
+    const t = templates.find((x) => x.id === id);
+    if (!t) return;
+    const vars = leadVars(lead, { accountName, senderName: "", serviceLabel });
+    setF((x) => ({ ...x, templateId: id, subject: fillTemplate(t.subject, vars), body: fillTemplate(t.body, vars) }));
+  };
   const start = (m) => {
     setMode(m); setErr(null); setFlash("");
     setF(m === "email" ? { subject: "", body: `Hi ${lead.firstName || "there"},\n\n` }
@@ -31165,11 +31218,11 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
   if (!d) return <p className="note">Loading…</p>;
   const btn = (id, label, Icon, block) => (
     <button type="button" key={id} className={`btn-ghost lc-btn ${mode === id ? "on" : ""}`} data-contact={id}
-      disabled={!!block} title={block ? BLOCK_TEXT[block] : ""} onClick={() => start(id)}>
+      disabled={!!block} title={block ? CONTACT_BLOCK_TEXT[block] : ""} onClick={() => start(id)}>
       <Icon size={15} /> {label}</button>
   );
   const blockedNotes = ["email", "text", "mail"].filter((ch) => blocks[ch]).map((ch) => (
-    <li key={ch} data-contact-block={ch}><b>{LEAD_CHANNELS[ch].label}:</b> {BLOCK_TEXT[blocks[ch]]}</li>
+    <li key={ch} data-contact-block={ch}><b>{LEAD_CHANNELS[ch].label}:</b> {CONTACT_BLOCK_TEXT[blocks[ch]]}</li>
   ));
   return (
     <div className="lead-contact" data-lead-contact={lead.id}>
@@ -31183,6 +31236,8 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
         <LeadConsentForm lead={lead} consent={consent} onCancel={() => setAskConsent(false)}
           onSaved={(c) => { setAskConsent(false); onConsent?.(c); load(); }} />
       )}
+      <LeadDncControl lead={lead} optOut={d.optOut} role={role}
+        onChanged={(optOut) => { setD((x) => ({ ...x, optOut })); load(); onContacted?.(); }} />
       <div className="lc-btns" role="group" aria-label="Contact them">
         {btn("email", "Email", Mail, blocks.email)}
         {btn("text", "Text", MessageSquareText, blocks.text)}
@@ -31197,8 +31252,16 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
         <div className="lc-form" data-compose="email">
           <p className="note">Sent from SubSub in {accountName}'s name to {lead.email}.
             {d.canReply ? " Their reply comes back to this Inbox." : " Replies by email aren't switched on yet, so they'll reply to SubSub's address."}</p>
+          {templates.length > 0 && (
+            <label className="fld">Start from a template
+              <select value={f.templateId || ""} onChange={(e) => applyTemplate(e.target.value)} data-email-template>
+                <option value="">Write my own</option>
+                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select></label>
+          )}
           <label className="fld">Subject<input value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} data-email-subject /></label>
           <label className="fld">Message<textarea rows={7} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-email-body /></label>
+          <p className="note">An unsubscribe link is added at the bottom of every email.</p>
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
             <button className="btn-solid" data-send-email disabled={busy || !f.subject?.trim() || !f.body?.trim()}
@@ -31242,7 +31305,7 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
               onClick={() => setF({ ...f, direction: "outbound" })}>I called them</button>
             <button type="button" className={f.direction === "inbound" ? "on" : ""} onClick={() => setF({ ...f, direction: "inbound" })}>They called</button>
           </div>
-          {callBlocked && <p className="note">{BLOCK_TEXT.no_call_consent} You can still log a call they made.</p>}
+          {callBlocked && <p className="note">{d?.callBlock ? CONTACT_BLOCK_TEXT[d.callBlock] : BLOCK_TEXT.no_call_consent} You can still log a call they made.</p>}
           <label className="fld">How it went
             <select value={f.outcome} onChange={(e) => setF({ ...f, outcome: e.target.value })}>
               {CALL_OUTCOMES.map((o) => <option key={o}>{o}</option>)}
@@ -31264,11 +31327,509 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent }) {
           </div>
         </div>
       )}
+      {sales && (
+        <LeadSequencePanel lead={lead} enrollment={d.enrollment || null} sequences={lib?.sequences || []} blocked={blocks.email}
+          onChanged={(enrollment) => { setD((x) => ({ ...x, enrollment })); onContacted?.(); }} />
+      )}
       {err && <p className="form-err" role="alert">{leadContactErrText(err)}</p>}
       <ul className="lm-list" data-lead-msgs>
         {(d.messages || []).map((m) => <LeadMessageRow key={m.id} m={m} onMailed={markMailed} />)}
       </ul>
       {!(d.messages || []).length && <p className="note">Nothing yet. Every email, text, letter and call with {name} is listed here.</p>}
+    </div>
+  );
+}
+
+// 110. What a contact refused for an opt-out is called, beside the 109 ones.
+const CONTACT_BLOCK_TEXT = { ...BLOCK_TEXT, ...OPT_OUT_TEXT };
+
+// 110. The account's templates and sequences, read once per CRM visit and
+// shared by the compose window, a lead's sequence panel and Setup.
+function useCrmLibrary() {
+  const [lib, setLib] = useState(null);
+  const load = async () => {
+    try { setLib(await api.crmLibrary()); }
+    catch (e) { setLib(e?.body?.error === "migration_needed" ? { migration: e.body.migration || "110_crm_selling", templates: [], sequences: [] } : { failed: true, templates: [], sequences: [] }); }
+  };
+  useEffect(() => { load(); }, []);
+  return [lib, load, setLib];
+}
+
+// 110. Do not contact, on a lead's Contact tab. Anybody on the CRM can set it
+// (the homeowner says "stop" to whoever rang); taking it off is the office's,
+// and asks why.
+function LeadDncControl({ lead, optOut, role, onChanged }) {
+  const office = ["admin", "pm"].includes(role);
+  const [asking, setAsking] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const on = !!optOut?.dncAt;
+  const save = async (next) => {
+    setBusy(true); setErr(null);
+    try { const r = await api.putLeadDnc(lead.id, { on: next, reason: reason.trim() || null }); setAsking(false); setReason(""); onChanged?.(r.optOut); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className={`lc-dnc ${on ? "on" : ""}`} data-dnc={on ? "on" : "off"}>
+      {on ? (<>
+        <p className="lc-dnc-line"><Ban size={15} /> <b>Do not contact.</b>{" "}
+          {optOut.dncReason ? `“${optOut.dncReason}”` : "No reason given."}{optOut.dncByName ? ` Marked by ${optOut.dncByName}.` : ""}
+          {" "}Email, texts, letters, outbound calls and sequences are off.</p>
+        {office && !asking && <button type="button" className="link-btn" data-dnc-off onClick={() => setAsking(true)}>Take it off</button>}
+        {!office && <p className="note">Only an admin or project manager can take this off.</p>}
+      </>) : (
+        !asking && <button type="button" className="btn-ghost lc-dnc-btn" data-dnc-on onClick={() => setAsking(true)}><Ban size={14} /> Do not contact</button>
+      )}
+      {asking && (
+        <div className="lc-dnc-ask">
+          <label className="fld">{on ? "Why is it coming off?" : "Why? (optional)"}
+            <input value={reason} onChange={(e) => setReason(e.target.value)} data-dnc-reason
+              placeholder={on ? "They called and asked us to follow up" : "Asked us to stop calling"} /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => { setAsking(false); setErr(null); }}>Cancel</button>
+            <button className="btn-solid" data-dnc-save disabled={busy || (on && !reason.trim())} onClick={() => save(!on)}>
+              {busy ? "Saving…" : on ? "Take off Do not contact" : "Mark Do not contact"}</button>
+          </div>
+        </div>
+      )}
+      {optOut?.unsubscribedAt && <p className="note" data-unsubscribed>They unsubscribed from your emails on {stampDay(optOut.unsubscribedAt)}.</p>}
+      {err && <p className="form-err" role="alert">{err?.body?.error === "reason_required" ? "Say why it is coming off." : leadContactErrText(err)}</p>}
+    </div>
+  );
+}
+
+// 110. A lead's follow-up sequence: which one, how far it has got, and why
+// it stopped. Starting one is the sales side's.
+function LeadSequencePanel({ lead, enrollment, sequences = [], blocked, onChanged }) {
+  const live = sequences.filter((s) => s.active);
+  const [pick, setPick] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const running = enrollment?.status === "active";
+  const start = async () => {
+    setBusy(true); setErr(null);
+    try { onChanged?.((await api.enrollLead(lead.id, pick)).enrollment); setPick(""); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const stop = async () => {
+    setBusy(true); setErr(null);
+    try { onChanged?.((await api.unenrollLead(lead.id)).enrollment); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="lc-seq" data-sequence-panel>
+      <span className="lead-label">Follow-up sequence</span>
+      {running ? (
+        <p className="lc-seq-line" data-sequence-running>On <b>{enrollment.sequenceName}</b>: {enrollment.sent} of {enrollment.steps} sent
+          {enrollment.nextAt ? `, next ${stampDay(enrollment.nextAt)}` : ""}. It stops by itself if they reply, book or buy.
+          {" "}<button type="button" className="link-btn" data-sequence-stop disabled={busy} onClick={stop}>Stop it</button></p>
+      ) : (<>
+        {enrollment && <p className="note" data-sequence-last>{enrollment.sequenceName}: {STOP_TEXT[enrollment.stoppedReason] || "Stopped"}.</p>}
+        {!live.length ? <p className="note">No sequences yet. The office sets them up in CRM, Setup.</p>
+          : blocked ? <p className="note">{CONTACT_BLOCK_TEXT[blocked] || "They can't be emailed right now."}</p> : (
+          <div className="lc-seq-start">
+            <select value={pick} onChange={(e) => setPick(e.target.value)} data-sequence-pick>
+              <option value="">Choose a sequence…</option>
+              {live.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.steps.length} emails)</option>)}
+            </select>
+            <button className="btn-ghost" data-sequence-start disabled={!pick || busy} onClick={start}>Start</button>
+          </div>
+        )}
+      </>)}
+      {err && <p className="form-err" role="alert">{CONTACT_BLOCK_TEXT[err?.body?.error] || STOP_TEXT[err?.body?.error] || leadContactErrText(err)}</p>}
+    </div>
+  );
+}
+
+// 110. What an estimate is worth, when it should close, and, once marked not
+// sold, why. The sales side's to set; everybody reads it.
+function ApptDealPanel({ a, sales, onSaved }) {
+  const deal = a.deal || {};
+  const [amount, setAmount] = useState(deal.amountCents != null ? String(deal.amountCents / 100) : "");
+  const [close, setClose] = useState(deal.expectedClose || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const dirty = amount !== (deal.amountCents != null ? String(deal.amountCents / 100) : "") || close !== (deal.expectedClose || "");
+  const bad = amount.trim() && dollarsToCents(amount) === undefined;
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try { onSaved((await api.patchAppointment(a.id, { deal: { amount, expectedClose: close || null } })).appointment); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <section className="appt-deal" data-deal>
+      <span className="lead-label">The deal</span>
+      {sales && !a.jobId ? (
+        <div className="appt-deal-row">
+          <label className="fld">{a.status === "sold" ? "Sold for" : "Estimate amount"}
+            <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="$0" data-deal-amount /></label>
+          {APPT_STATUSES[a.status]?.open && (
+            <label className="fld">Expected to close by
+              <input type="date" value={close} onChange={(e) => setClose(e.target.value)} data-deal-close /></label>
+          )}
+          {dirty && <button className="btn-ghost" data-deal-save disabled={busy || bad} onClick={save}>{busy ? "Saving…" : "Save"}</button>}
+        </div>
+      ) : (
+        <p className="appt-deal-ro">{deal.amountCents != null ? centsText(deal.amountCents) : "No amount yet"}
+          {deal.expectedClose && APPT_STATUSES[a.status]?.open ? ` · expected to close by ${stampDay(deal.expectedClose)}` : ""}</p>
+      )}
+      {bad && <p className="form-err" role="alert">Type the amount in dollars, like 18,450.</p>}
+      {a.status === "lost" && (
+        <p className="appt-deal-lost" data-lost-reason>Not sold: <b>{lostReasonLabel(deal.lostReason)}</b>{deal.lostNote ? `, “${deal.lostNote}”` : ""}</p>
+      )}
+      {err && <p className="form-err" role="alert">{apptRefusalText(err)}</p>}
+    </section>
+  );
+}
+
+// 110. Marking an estimate not sold asks why, from the same list the report
+// counts. Skipping is an answer ("No reason given"), because refusing the
+// outcome over a missing reason would lose the outcome.
+function LostReasonPick({ onSave, onCancel, busy }) {
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+  return (
+    <div className="appt-lost" data-lost-pick>
+      <p className="appt-q-label">Why didn't it sell?</p>
+      <div className="chips">
+        {LOST_REASONS.map((r) => (
+          <button key={r.id} type="button" className={`chip ${reason === r.id ? "on" : ""}`} aria-pressed={reason === r.id}
+            data-lost={r.id} onClick={() => setReason(reason === r.id ? "" : r.id)}>{r.label}</button>
+        ))}
+      </div>
+      <label className="fld">Anything to add <span className="fld-note">optional</span>
+        <input value={note} onChange={(e) => setNote(e.target.value)} data-lost-note placeholder="Went with ABC Roofing at $2,000 less" /></label>
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" data-lost-save disabled={busy} onClick={() => onSave(reason || null, note)}>
+          {busy ? "Saving…" : reason ? "Mark not sold" : "Mark not sold, no reason"}</button>
+      </div>
+    </div>
+  );
+}
+
+// 110. Reports: the pipeline, who is closing, where the sales come from, why
+// estimates are lost, sold per month, and how long it takes. All of it off
+// the lists the CRM already holds, so a sales manager's report is their own.
+function CrmReports({ leads, appointments, leadsReady, dealsReady }) {
+  const today = dayKey();
+  const r = salesReport({ leads, appointments, today });
+  const max = Math.max(1, ...r.byMonth.map((m) => m.soldCents));
+  const monthName = (m) => new Date(`${m}-15T12:00:00Z`).toLocaleDateString("en-US", { month: "short" });
+  const pct = (x) => (x == null ? "–" : `${x}%`);
+  return (
+    <div className="crm-reports" data-reports>
+      {dealsReady === false && <p className="appt-warn" role="note">Estimate amounts and lost reasons aren't set up on this database yet. Run migration 110_crm_selling.</p>}
+      <div className="crm-dash-grid">
+        <section className="crm-card" data-report-pipeline>
+          <h3>Open pipeline</h3>
+          <p className="crm-big" data-pipeline-value>{centsText(r.pipeline.valueCents) || "$0"}</p>
+          <p className="note">{r.pipeline.open === 1 ? "1 open estimate" : `${r.pipeline.open} open estimates`}
+            {r.pipeline.unpriced ? `, ${r.pipeline.unpriced} with no amount yet` : ""}.
+            {r.pipeline.closingThisMonth ? ` ${r.pipeline.closingThisMonth} expected to close this month.` : ""}
+            {r.pipeline.overdue ? ` ${r.pipeline.overdue} past their expected close date.` : ""}</p>
+        </section>
+        <section className="crm-card" data-report-totals>
+          <h3>All time</h3>
+          <dl className="crm-kpis">
+            <div><dt>Sold</dt><dd data-kpi="sold-value">{centsText(r.totals.soldCents) || "$0"}</dd></div>
+            <div><dt>Close rate</dt><dd data-kpi="close-all">{pct(r.totals.closeRate)}</dd></div>
+            <div><dt>Average sale</dt><dd>{r.totals.averageSaleCents == null ? "–" : centsText(r.totals.averageSaleCents)}</dd></div>
+            <div><dt>Estimates</dt><dd>{r.totals.booked}</dd></div>
+          </dl>
+        </section>
+        <section className="crm-card crm-card-wide" data-report-months>
+          <h3>Sold by month</h3>
+          <ul className="crm-months">
+            {r.byMonth.map((m) => (
+              <li key={m.month} data-month={m.month}>
+                <span className="crm-month-bar"><i style={{ height: `${Math.round((m.soldCents / max) * 100)}%` }} /></span>
+                <b>{m.soldCents ? centsText(m.soldCents) : "$0"}</b>
+                <span>{monthName(m.month)} · {m.sold} sold</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+        <section className="crm-card crm-card-wide" data-report-reps>
+          <h3>By sales manager</h3>
+          {!r.byRep.length ? <p className="note">No estimates yet.</p> : (
+            <table className="crm-table">
+              <thead><tr><th>Sales manager</th><th>Estimates</th><th>Sold</th><th>Close rate</th><th>Sold value</th><th>Open value</th></tr></thead>
+              <tbody>{r.byRep.map((x) => (
+                <tr key={x.id} data-rep-row={x.id}><td>{x.name || "Not assigned"}</td><td>{x.booked}</td><td>{x.sold}</td>
+                  <td>{pct(x.closeRate)}</td><td>{centsText(x.soldCents) || "$0"}</td><td>{centsText(x.openCents) || "$0"}</td></tr>
+              ))}</tbody>
+            </table>
+          )}
+        </section>
+        <section className="crm-card crm-card-wide" data-report-sources>
+          <h3>By where leads came from</h3>
+          {!leadsReady || !r.bySource.length ? <p className="note">No leads yet.</p> : (
+            <table className="crm-table">
+              <thead><tr><th>Source</th><th>Leads</th><th>Got an estimate</th><th>Sold</th><th>Close rate</th><th>Sold value</th></tr></thead>
+              <tbody>{r.bySource.map((x) => (
+                <tr key={x.id} data-source-row={x.id}><td>{sourceLabel(x.id)}</td><td>{x.leads}</td><td>{x.booked}{x.bookRate != null ? ` (${x.bookRate}%)` : ""}</td>
+                  <td>{x.sold}</td><td>{pct(x.closeRate)}</td><td>{centsText(x.soldCents) || "$0"}</td></tr>
+              ))}</tbody>
+            </table>
+          )}
+        </section>
+        <section className="crm-card" data-report-lost>
+          <h3>Why estimates were lost</h3>
+          {!r.lostReasons.length ? <p className="note">Nothing marked not sold yet.</p> : (
+            <ul className="crm-bars">
+              {r.lostReasons.map((x) => (
+                <li key={x.id} data-lost-row={x.id}><span>{x.label}</span>
+                  <span className="crm-bar"><i style={{ width: `${Math.round((x.n / r.totals.lost) * 100)}%` }} /></span><b>{x.n}</b></li>
+              ))}
+            </ul>
+          )}
+        </section>
+        <section className="crm-card" data-report-timing>
+          <h3>How long it takes</h3>
+          <dl className="crm-kpis">
+            <div><dt>Lead to estimate booked</dt><dd>{r.timing.leadToBookedDays == null ? "–" : `${r.timing.leadToBookedDays} days`}</dd></div>
+            <div><dt>Estimate to sale</dt><dd data-kpi="to-sold">{r.timing.bookedToSoldDays == null ? "–" : `${r.timing.bookedToSoldDays} days`}</dd></div>
+          </dl>
+          <p className="note">The middle figure across every lead and sale, so one slow job doesn't skew it.</p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+// 110. CRM Setup, for the office: email templates, follow-up sequences, and
+// the form for the account's own website.
+function CrmSetup({ lib, onReload, subdomain, accountName, theme }) {
+  const [tab, setTab] = useState("templates");
+  return (
+    <div className="crm-setup" data-crm-setup>
+      <div className="seg-tabs" role="tablist">
+        {[["templates", "Email templates"], ["sequences", "Follow-up sequences"], ["form", "Website form"]].map(([id, label]) => (
+          <button key={id} type="button" role="tab" data-setup-tab={id} aria-selected={tab === id} className={tab === id ? "on" : ""}
+            onClick={() => setTab(id)}>{label}</button>
+        ))}
+      </div>
+      {lib?.migration && <p className="appt-warn" role="note">Templates and sequences aren't set up on this database yet. Run migration {lib.migration}.</p>}
+      {tab === "templates" && <CrmTemplates lib={lib} onReload={onReload} accountName={accountName} />}
+      {tab === "sequences" && <CrmSequences lib={lib} onReload={onReload} />}
+      {tab === "form" && <LeadFormEmbed subdomain={subdomain} accountName={accountName} theme={theme} />}
+    </div>
+  );
+}
+
+function crmSetupErrText(e) {
+  const code = e?.body?.error;
+  if (code === "unknown_placeholder") return `{{${e.body.field}}} isn't a value a template can use.`;
+  if (code === "name_required") return "Give it a name.";
+  if (code === "subject_required") return "Add a subject.";
+  if (code === "body_required") return "Write the email first.";
+  if (code === "template_in_use") return `A sequence still sends this one: ${(e.body.sequences || []).join(", ")}. Take it out of the sequence first.`;
+  if (code === "sequence_in_use") return "Leads have been on this sequence, so it keeps its history. Turn it off instead.";
+  if (code === "steps_required") return "Add at least one email.";
+  if (code === "days_out_of_order") return "Each email has to go out on a later day than the one before it.";
+  if (code === "bad_template") return "Pick a template for every email.";
+  if (code === "bad_day") return "Days go from 0 to 90.";
+  if (code === "office_only") return "Only an admin or project manager can change these.";
+  return leadContactErrText(e);
+}
+
+function CrmTemplates({ lib, onReload, accountName }) {
+  const [edit, setEdit] = useState(null); // null | {id?, name, subject, body}
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const templates = lib?.templates || [];
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const body = { name: edit.name, subject: edit.subject, body: edit.body };
+      if (edit.id) await api.patchCrmTemplate(edit.id, body); else await api.createCrmTemplate(body);
+      setEdit(null); onReload();
+    } catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const remove = async (t) => {
+    setErr(null);
+    try { await api.deleteCrmTemplate(t.id); onReload(); } catch (e) { setErr(e); }
+  };
+  const sample = leadVars({ firstName: "Dana", lastName: "Price", services: ["roofing"], address: { city: "Tacoma" } },
+    { accountName, senderName: "You", serviceLabel });
+  return (
+    <div className="crm-tpls" data-templates>
+      <p className="note">Saved emails anybody on the CRM can start from. Use {Object.keys(TEMPLATE_VARS).map((k) => `{{${k}}}`).join(", ")} and they are filled in for each homeowner.</p>
+      {!edit && <button className="btn-solid" data-tpl-new onClick={() => setEdit({ name: "", subject: "", body: "Hi {{firstName}},\n\n" })}><Plus size={15} /> New template</button>}
+      {edit && (
+        <div className="lc-form" data-tpl-form>
+          <label className="fld">Name<input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} data-tpl-name /></label>
+          <label className="fld">Subject<input value={edit.subject} onChange={(e) => setEdit({ ...edit, subject: e.target.value })} data-tpl-subject /></label>
+          <label className="fld">Email<textarea rows={7} value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} data-tpl-body /></label>
+          <div className="crm-tpl-vars">{Object.entries(TEMPLATE_VARS).map(([k, label]) => (
+            <button key={k} type="button" className="chip" title={label} onClick={() => setEdit({ ...edit, body: `${edit.body}{{${k}}}` })}>{`{{${k}}}`}</button>
+          ))}</div>
+          <div className="crm-tpl-preview" data-tpl-preview><b>{fillTemplate(edit.subject, sample)}</b><p>{fillTemplate(edit.body, sample)}</p></div>
+          {err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => { setEdit(null); setErr(null); }}>Cancel</button>
+            <button className="btn-solid" data-tpl-save disabled={busy} onClick={save}>{busy ? "Saving…" : "Save template"}</button>
+          </div>
+        </div>
+      )}
+      {!edit && err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
+      <ul className="crm-tpl-list">
+        {templates.map((t) => (
+          <li key={t.id} data-tpl={t.id}>
+            <div><b>{t.name}</b>{t.builtin && <span className="tn-chip">Starter</span>}<span className="note">{t.subject}</span></div>
+            <div className="crm-tpl-acts">
+              {t.builtin
+                ? <button className="btn-ghost sm" data-tpl-copy onClick={() => setEdit({ name: `${t.name} (copy)`, subject: t.subject, body: t.body })}>Make a copy</button>
+                : (<>
+                  <button className="btn-ghost sm" data-tpl-edit onClick={() => setEdit({ id: t.id, name: t.name, subject: t.subject, body: t.body })}>Edit</button>
+                  <button className="btn-ghost sm" data-tpl-delete onClick={() => remove(t)}>Delete</button>
+                </>)}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function CrmSequences({ lib, onReload }) {
+  const templates = lib?.templates || [];
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const blank = () => ({ name: "", stopOnBooking: true, steps: [{ day: 0, templateId: "std:thanks" }, { day: 3, templateId: "std:checkin" }] });
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const body = { name: edit.name, stopOnBooking: edit.stopOnBooking, steps: edit.steps.map((s) => ({ day: Number(s.day), templateId: s.templateId })) };
+      if (edit.id) await api.patchCrmSequence(edit.id, body); else await api.createCrmSequence(body);
+      setEdit(null); onReload();
+    } catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const toggle = async (s) => {
+    setErr(null);
+    try { await api.patchCrmSequence(s.id, { active: !s.active }); onReload(); } catch (e) { setErr(e); }
+  };
+  const step = (i, k, v) => setEdit({ ...edit, steps: edit.steps.map((s, j) => (j === i ? { ...s, [k]: v } : s)) });
+  return (
+    <div className="crm-seqs" data-sequences>
+      <p className="note">A few emails sent on a schedule after a lead is put on one. Each stops by itself the moment they reply, buy, unsubscribe or are marked Do not contact, and only goes to somebody who said yes to email.</p>
+      {!edit && <button className="btn-solid" data-seq-new onClick={() => setEdit(blank())}><Plus size={15} /> New sequence</button>}
+      {edit && (
+        <div className="lc-form" data-seq-form>
+          <label className="fld">Name<input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} data-seq-name placeholder="After the estimate" /></label>
+          <ol className="crm-seq-steps">
+            {edit.steps.map((s, i) => (
+              <li key={i} data-seq-step={i}>
+                <label className="fld">Day<input type="number" min={0} max={90} value={s.day} onChange={(e) => step(i, "day", e.target.value)} data-seq-day /></label>
+                <label className="fld">Email<select value={s.templateId} onChange={(e) => step(i, "templateId", e.target.value)} data-seq-tpl>
+                  {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select></label>
+                {edit.steps.length > 1 && <button type="button" className="link-btn" onClick={() => setEdit({ ...edit, steps: edit.steps.filter((_, j) => j !== i) })}>Remove</button>}
+              </li>
+            ))}
+          </ol>
+          {edit.steps.length < 6 && <button type="button" className="btn-ghost sm" data-seq-add
+            onClick={() => setEdit({ ...edit, steps: [...edit.steps, { day: Number(edit.steps[edit.steps.length - 1]?.day || 0) + 4, templateId: "std:checkin" }] })}>Add an email</button>}
+          <label className="fld-check"><input type="checkbox" checked={edit.stopOnBooking} onChange={(e) => setEdit({ ...edit, stopOnBooking: e.target.checked })} />
+            Stop when an estimate is booked</label>
+          <p className="note">Day 0 goes out within ten minutes of putting somebody on it.</p>
+          {err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => { setEdit(null); setErr(null); }}>Cancel</button>
+            <button className="btn-solid" data-seq-save disabled={busy} onClick={save}>{busy ? "Saving…" : "Save sequence"}</button>
+          </div>
+        </div>
+      )}
+      {!edit && err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
+      {!(lib?.sequences || []).length && !edit && <p className="note">No sequences yet.</p>}
+      <ul className="crm-tpl-list">
+        {(lib?.sequences || []).map((s) => (
+          <li key={s.id} data-seq={s.id}>
+            <div><b>{s.name}</b>{!s.active && <span className="tn-chip">Off</span>}
+              <span className="note">{s.steps.map((x) => `day ${x.day}`).join(", ")}{s.running ? ` · ${s.running} on it now` : ""}</span></div>
+            <div className="crm-tpl-acts">
+              <button className="btn-ghost sm" onClick={() => setEdit({ id: s.id, name: s.name, stopOnBooking: s.stopOnBooking, steps: s.steps })}>Edit</button>
+              <button className="btn-ghost sm" data-seq-toggle onClick={() => toggle(s)}>{s.active ? "Turn off" : "Turn on"}</button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// 110. The homeowner form for the account's own website: copy the code,
+// see what it looks like. Requests land in Leads as from the website, with
+// what they wrote waiting in the Inbox.
+function LeadFormEmbed({ subdomain, accountName, theme }) {
+  const html = useMemo(() => leadFormHtml({ subdomain, accountName, theme }), [subdomain, accountName, theme]);
+  const [copied, setCopied] = useState("");
+  const [view, setView] = useState("preview");
+  if (!html) return <p className="note">This account needs a SubSub address before it can have a website form.</p>;
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(html); setCopied("yes"); setTimeout(() => setCopied(""), 2200); }
+    catch { setCopied("no"); setTimeout(() => setCopied(""), 3000); }
+  };
+  return (
+    <div className="crm-leadform" data-lead-form-embed>
+      <p className="note">Paste this on your website where homeowners ask for an estimate. Each request lands in Leads as from the website,
+        what they wrote waits in the Inbox, and your admins and project managers get an email.</p>
+      <div className="form-actions">
+        <button className="btn-solid" data-lead-form-copy onClick={copy}>{copied === "yes" ? "Copied" : copied === "no" ? "Couldn't copy" : "Copy the code"}</button>
+      </div>
+      <div className="seg-tabs" role="tablist">
+        <button type="button" className={view === "preview" ? "on" : ""} onClick={() => setView("preview")}>The form</button>
+        <button type="button" className={view === "code" ? "on" : ""} onClick={() => setView("code")}>The code</button>
+      </div>
+      {view === "preview"
+        ? <iframe className="ecm-prev" title="Estimate request form preview" sandbox="allow-scripts allow-forms" srcDoc={html} data-lead-form-preview />
+        : <pre className="ecm-code" data-lead-form-code>{html}</pre>}
+    </div>
+  );
+}
+
+// 110. The homeowner's way out: /unsubscribe/<token>, from the link at the
+// foot of any email a lead was sent. One press, and it says what it did.
+function UnsubscribePage({ token }) {
+  const [info, setInfo] = useState(null);
+  const [gone, setGone] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    api.unsubscribeInfo(token).then((r) => { setInfo(r); if (r.unsubscribed) setDone(true); })
+      .catch((e) => (e?.status === 404 ? setGone(true) : setErr("That didn't load. Check your connection and open the link again.")));
+  }, [token]);
+  const go = async () => {
+    setBusy(true); setErr("");
+    try { await api.unsubscribe(token); setDone(true); }
+    catch { setErr("That didn't go through. Please try again."); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="pack-page unsub-page" data-unsubscribe-page>
+      <div className="pack-card">
+        {gone ? (<><h2>We couldn't find that link</h2><p>It may have been copied only in part. Open it again from the email.</p></>)
+          : !info && !err ? <p className="note">Loading…</p>
+          : done ? (<><CheckCircle2 size={26} /><h2 data-unsubscribed-done>You're unsubscribed</h2>
+              <p>{info?.accountName || "They"} won't email you about your project any more. If you change your mind, just tell them.</p></>)
+          : (<>
+            <h2>Stop emails from {info?.accountName || "this company"}?</h2>
+            <p>You'll stop getting emails about your project from them. It doesn't cancel anything you've booked.</p>
+            <button className="btn-solid" data-unsubscribe-go disabled={busy} onClick={go}>{busy ? "Saving…" : "Unsubscribe"}</button>
+          </>)}
+        {err && <p className="form-err" role="alert">{err}</p>}
+      </div>
+      <p className="pack-foot">Sent through SubSub</p>
     </div>
   );
 }
@@ -31321,9 +31882,16 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
   const open = APPT_STATUSES[a.status]?.open;
   const mayEdit = !a.jobId && (sales || open);
   const choices = (sales ? Object.keys(APPT_STATUSES) : CALLCENTER_STATUSES).filter((s) => s !== a.status);
-  const setStatus = async (status) => {
+  // 110. Not sold asks why first; the reason goes with the status, in one save.
+  const [askLost, setAskLost] = useState(false);
+  const setStatus = async (status, lost = null) => {
+    if (status === "lost" && sales && !lost) { setAskLost(true); return; }
     setBusy(status); setErr("");
-    try { const r = await api.patchAppointment(a.id, { status, ...(sales ? { outcomeNote: note } : {}) }); onSaved(r.appointment); }
+    try {
+      const r = await api.patchAppointment(a.id, { status, ...(sales ? { outcomeNote: note } : {}),
+        ...(lost ? { deal: { lostReason: lost.reason, lostNote: lost.note || null } } : {}) });
+      setAskLost(false); onSaved(r.appointment);
+    }
     catch (e) { setErr(apptRefusalText(e)); }
     finally { setBusy(""); }
   };
@@ -31342,6 +31910,7 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
       </div>
       <ApptSummary a={a} repName={repName} />
       {a.createdByName && <p className="note">Booked by {a.createdByName}.</p>}
+      <ApptDealPanel key={`${a.id}:${a.deal?.updatedAt || ""}`} a={a} sales={sales} onSaved={onSaved} />
       <CrmActivity appt={a} team={team} onFollowUpsChanged={onFollowUpsChanged} />
       {a.jobId ? (
         <div className="appt-job" data-job>
@@ -31362,6 +31931,8 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
               onClick={() => setStatus(s)}>{busy === s ? "Saving…" : APPT_STATUSES[s].label}</button>
           ))}
         </div>
+        {askLost && <LostReasonPick busy={busy === "lost"} onCancel={() => setAskLost(false)}
+          onSave={(reason, n) => setStatus("lost", { reason, note: n })} />}
         {!sales && !open && <p className="note">The outcome is recorded, so only the office can change it now.</p>}
       </>)}
       {err && <p className="form-err" role="alert">{err}</p>}
@@ -55320,6 +55891,52 @@ button.job-insp:hover{border-color:#2f5577}
 .lc-btn.on{border-color:var(--brand);color:var(--brand)}
 .lc-btn:disabled{opacity:.5;cursor:not-allowed}
 .lc-blocked{margin:0;padding-left:18px;font-size:13px;color:var(--ink-soft)}
+.lc-dnc{display:flex;flex-direction:column;gap:8px}
+.lc-dnc.on{border:1px solid var(--red);border-radius:12px;padding:12px 14px;background:var(--paper)}
+.lc-dnc-line{margin:0;display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px}
+.lc-dnc-btn{display:inline-flex;align-items:center;gap:6px;width:fit-content;min-height:44px}
+.lc-dnc-ask{display:flex;flex-direction:column;gap:8px}
+.lc-seq{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--paper);display:flex;flex-direction:column;gap:8px}
+.lc-seq-line{margin:0;font-size:14px}
+.lc-seq-start{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.lc-seq-start select{flex:1 1 220px;min-height:44px}
+.lead-dnc{color:var(--red);border-color:var(--red)}
+.appt-deal{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--paper);display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.appt-deal-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.appt-deal-row .fld{flex:1 1 180px;margin:0}
+.appt-deal-row .btn-ghost{min-height:44px}
+.appt-deal-ro,.appt-deal-lost{margin:0;font-size:14px}
+.appt-lost{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card);display:flex;flex-direction:column;gap:10px;margin-top:10px}
+.crm-big{font-size:30px;font-weight:800;margin:4px 0}
+.crm-card-wide{grid-column:1 / -1}
+.crm-months{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;align-items:end}
+.crm-months li{display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px;text-align:center}
+.crm-months b{font-size:13px}
+.crm-month-bar{display:flex;align-items:flex-end;width:100%;height:110px;background:var(--paper);border-radius:8px;overflow:hidden}
+.crm-month-bar i{display:block;width:100%;background:var(--brand);min-height:2px}
+.crm-table{width:100%;border-collapse:collapse;font-size:14px}
+.crm-table th,.crm-table td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+.crm-table th{font-size:12px;color:var(--ink-soft);font-weight:700}
+.crm-setup{display:flex;flex-direction:column;gap:14px}
+.crm-tpls,.crm-seqs,.crm-leadform{display:flex;flex-direction:column;gap:12px}
+.crm-tpls > .btn-solid,.crm-seqs > .btn-solid{width:fit-content}
+.crm-tpl-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.crm-tpl-list li{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--card)}
+.crm-tpl-list li > div:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
+.crm-tpl-list .tn-chip{width:fit-content}
+.crm-tpl-acts{display:flex;gap:6px}
+.crm-tpl-vars{display:flex;flex-wrap:wrap;gap:6px}
+.crm-tpl-preview{border:1px dashed var(--line);border-radius:10px;padding:10px 12px;font-size:14px;background:var(--paper)}
+.crm-tpl-preview p{white-space:pre-wrap;margin:6px 0 0}
+.crm-seq-steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+.crm-seq-steps li{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap}
+.crm-seq-steps .fld{margin:0}
+.crm-seq-steps .fld:first-child{flex:0 0 96px}
+.crm-seq-steps .fld:nth-child(2){flex:1 1 220px}
+.fld-check{display:flex;gap:8px;align-items:center;font-size:14px;min-height:44px}
+.crm-leadform .ecm-prev{width:100%;min-height:640px;border:1px solid var(--line);border-radius:12px;background:#fff}
+.crm-leadform .ecm-code{max-height:360px;overflow:auto;white-space:pre-wrap;font-size:12px;background:var(--paper);border-radius:12px;padding:12px}
+@media (max-width:560px){.crm-months{grid-template-columns:repeat(3,minmax(0,1fr))}.crm-table{font-size:13px}}
 .lc-form{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);display:flex;flex-direction:column;gap:10px}
 .lc-form .seg-tabs{margin:0}
 .lc-tel{display:inline-flex;align-items:center;gap:6px;width:fit-content}
