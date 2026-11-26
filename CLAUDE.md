@@ -17307,8 +17307,10 @@ refactor.
   five browser ones fire, each on its own assertion. `test:salesapptui`,
   `test:leadcontactui` and `test:crmsellingui` were moved to the new rule: the
   greeting, the choice before the call script, the one consent statement.
-  **Paste 111** before text or letter templates, text or letter sequences, or
-  lead follow-ups work.
+  **111 is pasted on the live database** (the `channel` column on
+  `crm_templates` and the `lead_followups` table, and
+  `m111_inv_bad_lead_followup` reads 0, confirmed by the owner), so text and
+  letter templates and sequences and lead follow-ups work there.
 
 - **THE AGREEMENT'S TERMS ARE EDITED ON THE CONTRACTOR'S CARD, NOT IN
   ACCOUNT -> COMPANY.** Reported with both screens on hand: *"SubSub standard
