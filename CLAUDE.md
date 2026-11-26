@@ -17435,6 +17435,20 @@ refactor.
   inputs and buttons against the sign-up form's; the old form fails eight.
   **Code already pasted keeps the old look** until it is copied again.
 
+- **WHERE YOU WORK AND WHERE YOU SELL ARE ONE TAB: MY ACCOUNT -> MY
+  MARKETS.** Asked for as combining *Where you'll work* and Markets *"under my
+  accounts ... call it my markets"*, for the Workbench side and the CRM side.
+  - **Where you work** is the same `MyCoverage` the roster uses, through
+    `HireablePanel section="markets"` (one fetch of the company row). It is
+    for an admin of a hireable account. Not open to being hired, it says so
+    rather than drawing a form nobody reads. Company now says where it went.
+  - **Where you sell** is `CrmMarkets` with its own **Add a market**, under a
+    `MarketsCtx` the pane loads, for an admin or pm of a kind that takes
+    appointments.
+  - **Markets came off the CRM menu.** The CRM still loads the markets for
+    matching leads; only the editing moved.
+  `test:accttabs` (57) and `test:subhome`; dropping the sell half fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

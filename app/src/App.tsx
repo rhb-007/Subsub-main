@@ -24964,6 +24964,26 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
   const dirty = f && loaded && ["company", "contact", "email", "phone", "license", "ubi", "city", "state", "zip"]
     .some((k) => (f[k] || "") !== (loaded[k] || ""));
 
+  // MY MARKETS: where this company works, on My account -> My markets beside
+  // where it sells. The same MyCoverage the roster uses, saved on its own.
+  if (section === "markets") {
+    if (err) return <p className="billing-err" role="alert">{err}</p>;
+    if (!loaded) return <p className="panel-note">{tt("Loading…")}</p>;
+    if (!openHire) return (
+      <div className="portal-panel" data-markets-work-closed>
+        <h4>{tt("Where you work")}</h4>
+        <p className="panel-note">{tt("You're not open to being hired right now, so nobody is matched to you by area. Turn it on under Company to set where you work.")}</p>
+      </div>
+    );
+    return (
+      <MyCoverage sub={{ ...loaded, coverage: loaded.coverage || { mode: "cities", cities: [], radii: [] } }}
+        onSave={async (coverage) => {
+          await api.saveMyCompany({ coverage });
+          setLoaded((x) => (x ? { ...x, coverage } : x));
+        }} />
+    );
+  }
+
   return (
     <div className="portal-panel settings-panel">
       <h4>{isDocs ? tt("Your compliance pack") : tt("Working as a subcontractor")}</h4>
@@ -25164,12 +25184,10 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
               should not need the profile above it re-submitted.
               Only worth asking while they are open to being hired: coverage on
               a company nobody can find is a form nobody reads. */}
+          {/* Where they work moved to My account -> My markets, beside where
+              they sell, so one place answers "where do we do business". */}
           {openHire && loaded && (
-            <MyCoverage sub={{ ...loaded, coverage: loaded.coverage || { mode: "cities", cities: [], radii: [] } }}
-              onSave={async (coverage) => {
-                await api.saveMyCompany({ coverage });
-                setLoaded((x) => (x ? { ...x, coverage } : x));
-              }} />
+            <p className="panel-note" data-markets-pointer>{tt("Where you work is set on")}{" "}<b>{tt("My markets")}</b>.</p>
           )}
 
           <div className="form-sec">{tt("Asking to work with you")}{pending.length > 0 ? ` (${pending.length})` : ""}</div>
@@ -25406,6 +25424,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
     // right edge of an iPad. The pane ids stay "docs" and "passport", so every
     // link that opens either half still lands on it.
     .concat(canManage && ACCOUNT_KINDS[accountKind]?.hireable ? [["docs", "Pack & Passport"]] : [])
+    // MY MARKETS: where the account works (the hiring side's matching) and
+    // where it sells (the CRM's markets), on one tab.
+    .concat((canManage || role === "pm") && (ACCOUNT_KINDS[accountKind]?.hireable || takesAppointments(accountKind))
+      ? [["markets", "My markets"]] : [])
     .concat(canManage ? [["users", "Users"]] : [])
     // What runs on the account's own credentials: its API key, its CRM and
     // inspection-app webhooks. The hiring side only, which is who can mint a key.
@@ -25849,6 +25871,10 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           One component, two sections, and only ever one of them mounted -- so
           there is still a single fetch and a single source of truth for the
           company row. Two components would be two of each. */}
+      {pane === "markets" && (
+        <MyMarketsPane work={canManage && ACCOUNT_KINDS[accountKind]?.hireable}
+          sell={takesAppointments(accountKind) && (canManage || role === "pm")} accountName={brand?.name} />
+      )}
       {pane === "company" && canManage && ACCOUNT_KINDS[accountKind]?.hireable && (
         <HireablePanel section="profile" accountName={brand?.name} requests={incomingConnects}
           focus={openPane?.focus} focusN={openPane?.n}
@@ -30358,11 +30384,11 @@ function ApptStatusChip({ status }) {
 // pages a call needs and nothing else: dashboard, leads, appointments and the
 // calendar. Their follow-ups are on their dashboard.
 const CRM_NAV = [["dashboard", "Dashboard"], ["inbox", "Inbox"], ["leads", "Leads"], ["appointments", "Appointments"], ["calendar", "Calendar"], ["followups", "Follow-ups"],
-  ["reports", "Reports"], ["markets", "Markets"], ["setup", "Setup"]];
+  ["reports", "Reports"], ["setup", "Setup"]];
 const CRM_PANES = CRM_NAV.map(([id]) => id);
 const CALLCENTER_PANES = ["dashboard", "leads", "appointments", "calendar"];
 const crmNavFor = (role) => CRM_NAV.filter(([id]) => (role === "callcenter" ? CALLCENTER_PANES.includes(id)
-  : id === "setup" || id === "markets" ? ["admin", "pm"].includes(role) : true));
+  : id === "setup" ? ["admin", "pm"].includes(role) : true));
 
 function LeadStageChip({ stage }) {
   return <span className={`tn-chip lead-st lead-st-${stage}`} data-stage={stage}>{stageTerm(stage)}</span>;
@@ -31969,6 +31995,44 @@ function LeadArea({ zip, city, state, services = [], compact = false }) {
 }
 
 const marketBlank = () => ({ name: "", zips: "", cities: "", services: [], active: true });
+// MY MARKETS, on My account. Two halves, because they are two questions about
+// one map: where the company WORKS (the coverage a hiring account matches
+// jobs against) and where it SELLS (the CRM's markets, which leads are
+// sorted into). Each half is drawn only where it applies.
+function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
+  const [data, setData] = useState(null);
+  const [adding, setAdding] = useState(0);
+  const load = async () => {
+    try { setData(await api.listMarkets()); }
+    catch (e) { setData(e?.body?.error === "migration_needed" ? { migration: e.body.migration || "112_markets" } : { failed: true }); }
+  };
+  useEffect(() => { if (sell) load(); }, [sell]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ctx = useMemo(() => ({ markets: data?.markets || [], ready: !!data && !data.failed,
+    migration: data?.migration || null, reload: load }), [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="my-markets" data-my-markets>
+      {work && (
+        <section className="mm-half" data-markets-work>
+          <div className="form-sec">{tt("Where you work")}</div>
+          <p className="panel-note">{tt("The areas jobs are matched to you in, when somebody hires")}{" "}{accountName || tt("your company")}.</p>
+          <HireablePanel section="markets" accountName={accountName} />
+        </section>
+      )}
+      {sell && (
+        <section className="mm-half" data-markets-sell>
+          <div className="mm-head">
+            <div className="form-sec">{tt("Where you sell")}</div>
+            <button className="btn-solid" data-add-market onClick={() => setAdding((n) => n + 1)}><Plus size={16} /> {tt("Add a market")}</button>
+          </div>
+          <p className="panel-note">{tt("The places your sales team works, by ZIP code or town, and the services you offer in each. Every lead in the CRM is sorted into one.")}</p>
+          {data?.failed && <p className="billing-err" role="alert">{tt("Couldn't load your markets.")} <button className="link-btn" onClick={load}>{tt("Try again")}</button></p>}
+          <MarketsCtx.Provider value={ctx}><CrmMarkets adding={adding} /></MarketsCtx.Provider>
+        </section>
+      )}
+    </div>
+  );
+}
+
 function CrmMarkets({ adding = 0 }) {
   const { markets, ready, migration, reload } = React.useContext(MarketsCtx);
   const [edit, setEdit] = useState(null); // null | {id?, name, zips, cities, services, active}
@@ -53350,6 +53414,9 @@ a.meas-dl{text-decoration:none}
    cut off at the screen's edge is a tab nobody knows is there. */
 .seg-tabs.acct-tabs{flex-wrap:wrap;max-width:100%}
 .seg-tabs.acct-subtabs{margin-top:-6px}
+.my-markets{display:flex;flex-direction:column;gap:26px}
+.mm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.mm-head .form-sec{margin:0}
 /* The account's own license, as the state's register last answered. */
 .own-lic{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;margin:-4px 0 14px}
 .own-lic .lic-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12.5px;font-weight:700;background:var(--paper);border:1px solid var(--line);color:var(--ink-soft)}

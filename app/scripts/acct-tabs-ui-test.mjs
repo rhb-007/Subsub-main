@@ -53,6 +53,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account") return [200, acct()];
   if (path === "/api/my-company") return [200, MY_COMPANY];
   if (path === "/api/my-work") return [200, { work: [] }];
+  if (path === "/api/markets") return [200, { markets: [{ id: "mk_t", name: "Tacoma", zips: ["98406"], cities: [], services: ["roofing"], active: true }] }];
   if (path === "/api/account-users") return [200, [
     { id: "u_r", name: "Richard Braun", email: "rb@outerhome.test", phone: null,
       role: "admin", subId: null, propertyIds: [], unit: null, hasLogin: true,
@@ -184,6 +185,26 @@ try {
   t.ck("and draws the check the save came back with", /Not found in the state register/.test(done), done);
 
   console.log("\n-- the coverage form's boxes are full-size fields --");
+  await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "My markets")?.click());
+  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
+  console.log("\n-- My markets: where you work and where you sell, on one tab --");
+  const mm = await page.evaluate(() => ({
+    work: !!document.querySelector("[data-markets-work] .cov-toggle"),
+    sell: document.querySelector("[data-markets-sell]")?.innerText || "",
+    workTop: document.querySelector("[data-markets-work]")?.getBoundingClientRect().top ?? null,
+    sellTop: document.querySelector("[data-markets-sell]")?.getBoundingClientRect().top ?? null,
+    companyCoverage: null,
+  }));
+  t.ck("My markets carries where you work", mm.work, JSON.stringify(mm));
+  t.ck("and where you sell, with the account's markets", /Tacoma/.test(mm.sell) && /Add a market/.test(mm.sell), mm.sell.slice(0, 200));
+  t.ck("work first, then sell", mm.workTop !== null && mm.sellTop !== null && mm.workTop < mm.sellTop, JSON.stringify(mm));
+  await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "Company")?.click());
+  await wait(900);
+  const co = await page.evaluate(() => ({ cov: !!document.querySelector(".cov-toggle"), ptr: document.querySelector("[data-markets-pointer]")?.innerText || "",
+    open: !!document.querySelector(".open-hire") }));
+  t.ck("Company no longer carries the coverage form, and says where it went", co.open && !co.cov && /My markets/.test(co.ptr), JSON.stringify(co));
+  await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "My markets")?.click());
+  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
   const fieldSize = () => page.evaluate(() => {
     const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
       return { h: Math.round(r.height), w: Math.round(r.width), font: parseFloat(cs.fontSize), pad: parseFloat(cs.paddingLeft),

@@ -747,7 +747,7 @@ try {
       .find((b) => /^Compliance pack/i.test(b.innerText))?.click());
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
     await page.evaluate(() => [...document.querySelectorAll("button")]
-      .find((b) => b.innerText.trim() === "Company")?.click());
+      .find((b) => b.innerText.trim() === "My markets")?.click());
     for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
 
     // Scoped to the panel the toggle is IN. `.portal-panel` nests, so a
@@ -812,6 +812,12 @@ try {
     t.ck("the Company section opened", await page.evaluate(() => !!document.querySelector(".open-hire")));
     t.ck("and there is no coverage panel on it",
       await page.evaluate(() => !document.querySelector(".cov-toggle")));
+    await page.evaluate(() => [...document.querySelectorAll("button")]
+      .find((b) => b.innerText.trim() === "My markets")?.click());
+    for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-markets-work-closed]")) break; }
+    t.ck("and My markets says why there is nothing to set", await page.evaluate(() =>
+      /not open to being hired/.test(document.querySelector("[data-markets-work-closed]")?.innerText || "")
+      && !document.querySelector(".cov-toggle")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
