@@ -1660,6 +1660,67 @@ ${link}`;
   return { subject: `New website lead: ${who || "a homeowner"}`, text, html: textToHtml(text, link) };
 }
 
+// 113. A proposal the homeowner opens and signs from a link.
+function proposalSentEmailRaw({ firstName, account, title, total, link, expires, senderName }) {
+  const text = `Hi ${firstName || "there"},
+
+Here is your proposal from ${account?.name || "us"}: ${title}, ${total}.
+
+Read it and sign it here:
+${link}
+${expires ? `\nIt's good until ${expires}.` : ""}
+Questions? Just reply or give us a call.
+
+${senderName ? `${senderName}\n` : ""}The ${account?.name || "team"} team`;
+  return { subject: `Your proposal from ${account?.name || "us"}: ${title}`, text, html: textToHtml(text, link) };
+}
+
+function proposalSignedEmailRaw({ firstName, who, title, total, signer, link }) {
+  const text = `Hi ${firstName || "there"},
+
+${who || "A homeowner"} signed your proposal: ${title}, ${total}. Signed as ${signer}.
+
+The estimate is marked sold. Open it to make the job:
+${link}`;
+  return { subject: `Signed: ${who || "a homeowner"}, ${total}`, text, html: textToHtml(text, link) };
+}
+
+function proposalDeclinedEmailRaw({ firstName, who, title, note, link }) {
+  const text = `Hi ${firstName || "there"},
+
+${who || "A homeowner"} declined your proposal: ${title}.${note ? `\n\n"${String(note).slice(0, 300)}"` : ""}
+
+Open them here:
+${link}`;
+  return { subject: `Declined: ${who || "a homeowner"}`, text, html: textToHtml(text, link) };
+}
+
+// 113. A new lead, the moment it arrives: to the sales manager it was routed
+// to, or to the office when nobody owns it.
+function leadArrivedEmailRaw({ firstName, who, phone, email, source, services = [], link, yours = false }) {
+  const text = `Hi ${firstName || "there"},
+
+${yours ? "A new lead is yours" : "A new lead just came in"}: ${who || "a homeowner"}${services.length ? `, ${services.join(", ").toLowerCase()}` : ""}${source ? ` (${source})` : ""}.
+${[phone, email].filter(Boolean).join(" · ")}
+
+Open them here:
+${link}`;
+  return { subject: `${yours ? "New lead for you" : "New lead"}: ${who || "a homeowner"}`, text, html: textToHtml(text, link) };
+}
+
+// 113. After the job: asking the homeowner for a review, in the account's
+// name, only when they agreed to email.
+function reviewRequestEmailRaw({ firstName, account, link }) {
+  const text = `Hi ${firstName || "there"},
+
+Thank you for choosing ${account?.name || "us"}. If you have a minute, would you leave us a review? It helps neighbors find us.
+
+${link}
+
+The ${account?.name || "team"} team`;
+  return { subject: `How did we do? A quick review for ${account?.name || "us"}`, text, html: textToHtml(text, link) };
+}
+
 // 083. A reply by email that could not be added, told to the person it came
 // from. Only ever sent to the address the reply address was issued to.
 export function messageReplyRefusedEmail(reason) {
@@ -1749,6 +1810,11 @@ export const appointmentAssignedEmail = notice("appointment_assigned", appointme
 export const followUpAssignedEmail = notice("followup_assigned", followUpAssignedEmailRaw);
 export const followUpDueEmail = notice("followup_due", followUpDueEmailRaw);
 export const appointmentReminderEmail = notice("appointment_reminder", appointmentReminderEmailRaw);
+export const proposalSentEmail = notice("proposal_sent", proposalSentEmailRaw);
+export const proposalSignedEmail = notice("proposal_signed", proposalSignedEmailRaw);
+export const proposalDeclinedEmail = notice("proposal_declined", proposalDeclinedEmailRaw);
+export const leadArrivedEmail = notice("lead_arrived", leadArrivedEmailRaw);
+export const reviewRequestEmail = notice("review_request", reviewRequestEmailRaw);
 export const applicationReceivedEmail = notice("application_received", applicationReceivedEmailRaw);
 export const applicationDecidedEmail = notice("application_decided", applicationDecidedEmailRaw);
 export const subInviteEmail = notice("sub_invite", subInviteEmailRaw);

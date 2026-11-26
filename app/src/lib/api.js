@@ -424,6 +424,38 @@ export const api = {
   deleteCrmSequence: (id) => request(`/crm-sequences/${encodeURIComponent(id)}`, { method: "DELETE" }),
   enrollLead: (id, sequenceId) => request(`/sales-leads/${encodeURIComponent(id)}/sequence`, { method: "POST", body: JSON.stringify({ sequenceId }) }),
   unenrollLead: (id) => request(`/sales-leads/${encodeURIComponent(id)}/sequence`, { method: "DELETE" }),
+  // 113. The rest of the CRM.
+  crmSettings: () => request("/crm-settings"),
+  saveCrmSettings: (body) => request("/crm-settings", { method: "PUT", body: JSON.stringify(body) }),
+  putLeadMeta: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}/meta`, { method: "PUT", body: JSON.stringify(body) }),
+  crmViews: () => request("/crm-views"),
+  saveCrmView: (body) => request("/crm-views", { method: "POST", body: JSON.stringify(body) }),
+  deleteCrmView: (id) => request(`/crm-views/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  bulkLeads: (body) => request("/sales-leads/bulk", { method: "POST", body: JSON.stringify(body) }),
+  mergeLeads: (keepId, dropId) => request(`/sales-leads/${encodeURIComponent(keepId)}/merge`, { method: "POST", body: JSON.stringify({ dropId }) }),
+  importLeads: (body) => request("/sales-leads/import", { method: "POST", body: JSON.stringify(body) }),
+  leadClaim: (id) => request(`/sales-leads/${encodeURIComponent(id)}/claim`),
+  putLeadClaim: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}/claim`, { method: "PUT", body: JSON.stringify(body) }),
+  leadFiles: (id) => request(`/sales-leads/${encodeURIComponent(id)}/files`),
+  addLeadFiles: (id, files) => request(`/sales-leads/${encodeURIComponent(id)}/files`, { method: "POST", body: JSON.stringify({ files }) }),
+  removeLeadFile: (id, fid) => request(`/sales-leads/${encodeURIComponent(id)}/files/${encodeURIComponent(fid)}`, { method: "DELETE" }),
+  leadFileBlob: async (id, fid) => {
+    const res = await fetch(`${API_BASE}/sales-leads/${encodeURIComponent(id)}/files/${encodeURIComponent(fid)}`,
+      { headers: await authHeaders() });
+    if (!res.ok) throw new Error(`lead_file_${res.status}`);
+    const blob = await res.blob();
+    return { url: URL.createObjectURL(blob), type: blob.type || "" };
+  },
+  leadProposals: (id) => request(`/sales-leads/${encodeURIComponent(id)}/proposals`),
+  createProposal: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}/proposals`, { method: "POST", body: JSON.stringify(body) }),
+  patchProposal: (pid, body) => request(`/proposals/${encodeURIComponent(pid)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  sendProposal: (pid, body = {}) => request(`/proposals/${encodeURIComponent(pid)}/send`, { method: "POST", body: JSON.stringify(body) }),
+  voidProposal: (pid) => request(`/proposals/${encodeURIComponent(pid)}/void`, { method: "POST", body: "{}" }),
+  publicProposal: (token) => request(`/public/proposal/${encodeURIComponent(token)}`),
+  signProposal: (token, body) => request(`/public/proposal/${encodeURIComponent(token)}/sign`, { method: "POST", body: JSON.stringify(body) }),
+  declineProposal: (token, body) => request(`/public/proposal/${encodeURIComponent(token)}/decline`, { method: "POST", body: JSON.stringify(body) }),
+  crmCommissions: () => request("/crm-commissions"),
+  payCommission: (apptId, body) => request(`/crm-commissions/${encodeURIComponent(apptId)}/pay`, { method: "POST", body: JSON.stringify(body) }),
   unsubscribeInfo: (token) => request(`/public/unsubscribe/${encodeURIComponent(token)}`),
   unsubscribe: (token) => request(`/public/unsubscribe/${encodeURIComponent(token)}`, { method: "POST", body: "{}" }),
   uploadCallRecording: (file) => putFile(`/uploads/call-recording/${encodeURIComponent(file.name)}`, file),

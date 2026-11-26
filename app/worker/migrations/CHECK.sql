@@ -367,7 +367,17 @@ WITH spec(j) AS (SELECT
   (',["m111_template_channel","col","crm_templates",["channel"]]' ||
   ',["m111_lead_followups","col","lead_followups",["id","account_id","lead_id","body","channel","due_date","assignee_id","enrollment_id","template_id","done_at","done_by","reminded_at","created_by","created_at"]]' ||
   -- 112. Markets: where an account sells, and what it sells there.
-  ',["m112_sales_markets","col","sales_markets",["id","account_id","name","zips","cities","services","active","created_by","created_at","updated_at"]]') ||
+  ',["m112_sales_markets","col","sales_markets",["id","account_id","name","zips","cities","services","active","created_by","created_at","updated_at"]]' ||
+  -- 113. The rest of the CRM: proposals, claims, settings, tags, views,
+  -- files, after-sale reminders and commissions.
+  (',["m113_sales_proposals","col","sales_proposals",["id","account_id","lead_id","appointment_id","token","title","items","total_cents","notes","status","sent_at","viewed_at","signed_at","signer_name","signed_hash","declined_at","decline_note","expires_at","created_by","created_at","updated_at"]]' ||
+  ',["m113_lead_claims","col","lead_claims",["lead_id","account_id","status","carrier","claim_number","adjuster_name","adjuster_phone","adjuster_meeting","approved_cents","deductible_cents","notes","updated_by","updated_at"]]' ||
+  ',["m113_crm_settings","col","crm_settings",["account_id","routing_mode","routing_reps","market_reps","routing_cursor","alert_new_leads","review_url","review_delay_days","repeat_months","commission_bps","rep_commission","commission_basis","custom_fields","updated_at"]]' ||
+  ',["m113_lead_meta","col","lead_meta",["lead_id","account_id","tags","custom","updated_at"]]' ||
+  ',["m113_crm_views","col","crm_views",["id","account_id","user_id","name","filters","created_at"]]' ||
+  ',["m113_lead_files","col","lead_files",["id","lead_id","account_id","file_key","name","type","size","kind","source","uploaded_by","created_at"]]' ||
+  ',["m113_crm_aftercare","col","crm_aftercare",["appointment_id","kind","account_id","lead_id","done_at","result"]]' ||
+  ',["m113_crm_commissions","col","crm_commissions",["appointment_id","account_id","rep_user_id","value_cents","value_source","bps","amount_cents","paid_at","paid_ref","paid_by"]]')) ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
@@ -964,6 +974,13 @@ WITH inv(j) AS (SELECT '['
   || (',' || json_array('m111_inv_bad_lead_followup', (SELECT COUNT(*) FROM lead_followups f JOIN sales_leads l ON l.id = f.lead_id
     WHERE f.channel NOT IN ('call','email','text','mail','visit') OR l.account_id <> f.account_id
        OR f.due_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]')))
+  -- 113. A proposal signed with the estimate behind it not marked sold (a
+  -- signature marks it sold in the same request), or a proposal or a file
+  -- filed against a lead on another account.
+  || (',' || json_array('m113_inv_signed_unsold', (SELECT COUNT(*) FROM sales_proposals p JOIN sales_appointments a ON a.id = p.appointment_id
+    WHERE p.status = 'signed' AND a.status <> 'sold')
+    + (SELECT COUNT(*) FROM sales_proposals p JOIN sales_leads l ON l.id = p.lead_id WHERE l.account_id <> p.account_id)
+    + (SELECT COUNT(*) FROM lead_files f JOIN sales_leads l ON l.id = f.lead_id WHERE l.account_id <> f.account_id)))
   || ']'),
 found(name, value) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')

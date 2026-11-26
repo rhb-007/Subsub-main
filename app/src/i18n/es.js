@@ -1263,4 +1263,13 @@ export default {
   "Add a GC": "Agregar un GC",
   "Books homeowner appointments on calls, and nothing else": "Agenda citas con propietarios por teléfono, y nada más",
   "Runs the estimates booked for them and follows up their own leads, and nothing else": "Hace las visitas de presupuesto agendadas a su nombre y da seguimiento a sus propios clientes potenciales, y nada más",
+  "Where you work": "Dónde trabaja",
+  "You're not open to being hired right now, so nobody is matched to you by area. Turn it on under Company to set where you work.": "Ahora mismo no está disponible para que lo contraten, así que nadie le asigna trabajo por zona. Actívelo en Empresa para indicar dónde trabaja.",
+  "Where you work is set on": "Dónde trabaja se configura en",
+  "My markets": "Mis mercados",
+  "The areas jobs are matched to you in, when somebody hires": "Las zonas en las que se le asignan trabajos cuando alguien contrata",
+  "Where you sell": "Dónde vende",
+  "Add a market": "Agregar un mercado",
+  "The places your sales team works, by ZIP code or town, and the services you offer in each. Every lead in the CRM is sorted into one.": "Los lugares donde trabaja su equipo de ventas, por código postal o ciudad, y los servicios que ofrece en cada uno. Cada cliente potencial del CRM se asigna a uno.",
+  "Couldn't load your markets.": "No se pudieron cargar sus mercados.",
 };

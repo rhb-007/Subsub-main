@@ -17449,6 +17449,72 @@ refactor.
     matching leads; only the editing moved.
   `test:accttabs` (57) and `test:subhome`; dropping the sell half fails two.
 
+- **THE REST OF THE CRM: PROPOSALS SIGNED FROM A LINK, AN INSURANCE CLAIM,
+  LEAD ROUTING, TAGS AND CUSTOM FIELDS, SAVED VIEWS, BULK CHANGES, MERGING,
+  FILES, IMPORT, REVIEWS AND REPEAT WORK, AND COMMISSION.** Asked for as items
+  6 to 14 of a CRM gap list. Migration 113 (`113_crm_plus`, eight tables, no
+  ALTER TABLE), `app/shared/crmplus.js`.
+  - **Proposals** are line items a sales manager (or the office) writes on a
+    lead's Proposals tab, emailed as `app.subsub.work/proposal/<token>`. The
+    homeowner signs with their typed full name and a tick, with no account.
+    **The total is worked out on the server and the signature's hash is of
+    the stored text, never the request's.** Signing marks the estimate it is
+    tied to **sold**, sets its deal amount to the total and makes the lead a
+    customer, in the same request, guarded on the status so two presses sign
+    once. `m113_inv_signed_unsold` counts a signed proposal over an estimate
+    that is not sold. A sent proposal is not edited (withdraw and make a new
+    one); expired, declined and withdrawn ones cannot be signed. Do not
+    contact refuses sending; follow-up consent does not, because a proposal is
+    something they asked for.
+  - **Insurance claim** is a tab on the lead: carrier, claim number, adjuster
+    and their phone, the adjuster meeting, approved amount and deductible.
+    Approved needs its amount.
+  - **Lead routing** (Setup → Lead routing): leave unassigned, take turns, or
+    by market with a person per market (a market with nobody falls back to
+    taking turns). It applies to a lead with no owner from the website form,
+    the API, an import or a contact-center seat, and skips anybody no longer
+    on the account. The cursor is claimed with a guarded UPDATE. With
+    **Email the owner the moment a new lead arrives** on (the default), the
+    owner gets `lead_arrived`; an API lead nobody owns goes to the office. An
+    import emails nobody.
+  - **Tags and custom fields** are `lead_meta`, per lead; the fields are the
+    account's own (Setup → Custom fields), and a value is checked against its
+    field. **Saved views** are each person's own. **Bulk changes** take
+    ticked leads: tags for anybody, owner, stage and Do not contact (with a
+    reason) for the office. A lead the caller cannot reach is named and
+    nothing changes. **Duplicates** (same phone, email, or name at a street)
+    merge into the older one: its answers stand, the other fills its blanks,
+    and every appointment, message, follow-up, proposal and file moves over.
+    The merge is logged with what the dropped lead held.
+  - **Files** go through the checked `measurement-doc` upload, or CompanyCam's
+    import, and a key must be under the account's own prefix. Hover and
+    EagleView have no integration (Hover needs partner access), so their PDFs
+    are uploaded.
+  - **Import** is a CSV, pasted or chosen, with columns matched to fields. Every
+    row is checked before any is written; a duplicate is skipped by name.
+  - **Texting, without a provider:** an estimate a homeowner said yes to texts
+    for has **Text a reminder** (opens this phone's messages app), the nightly
+    sweep makes a text-reminder follow-up for the sales manager the day before,
+    and **Log a text they sent** records an inbound text (no consent needed,
+    allowed under Do not contact). Two-way texting through SubSub still needs
+    the SMS provider.
+  - **Aftercare** (`crmAftercareSweep`, nightly, once per sale via
+    `crm_aftercare`): a review request email a few days after the job is
+    completed (needs the account's review link and the homeowner's yes to
+    email), and a repeat-business follow-up months after the sale.
+  - **Commission** (Reports, Setup → Commission): a default rate and per-rep
+    rates, times the signed proposal, the deal amount, or (if the account
+    picks it) the job's actual value, which is its accepted work orders. An
+    admin marks one paid, which stamps the value, rate and amount so a later
+    rate change cannot rewrite it. A contact-center seat sees none of it.
+  `test:crmplus` (99) and `test:crmplusui` (30). Server mutations fire on the
+  sold write, the bulk not-found check, the file prefix and the hash. The
+  review claim is covered by the sweep's own NOT EXISTS too, so its mutation
+  survives; it stays for two sweeps at once. **And Reports crashed** in two
+  older suites whose stub answers `[]` to everything: the new commission panel
+  now draws nothing for a reply that is not its shape. **Not verified here:** a
+  live email to a real inbox. **Paste 113** before any of it works.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -27,8 +27,13 @@ import { validLeadMessage, validLeadConsent, leadConsentFrom, leadConsentOf, cha
 import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, MAX_RECORDING_BYTES,
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
-  CALLCENTER_STAGES } from "../shared/leads.js";
-import { validMarket, MAX_MARKETS } from "../shared/markets.js";
+  CALLCENTER_STAGES, SOURCE_IDS, sourceLabel } from "../shared/leads.js";
+import { validMarket, MAX_MARKETS, marketFor } from "../shared/markets.js";
+import { validProposal, proposalText, proposalSignBlock, validSignature, PROPOSAL_TOKEN_RE, PROPOSAL_DAYS,
+  validClaim, routeLead, cleanTags, validCustomValues, validView, validBulk, mergedLead, MAX_LEAD_FILES,
+  LEAD_FILE_KIND_IDS, MAX_IMPORT, REVIEW_DELAY_DAYS, addDays, addMonths, realDay, commissionReport,
+  validCrmSettings, DEFAULT_CRM_SETTINGS } from "../shared/crmplus.js";
+import { centsText } from "../shared/crmsales.js";
 import { validDeal, optOutBlock, unsubscribeLink, UNSUB_TOKEN_RE, validDnc, BUILTIN_TEMPLATES, isBuiltin,
   validTemplate, validSequence, stepDueAt, sequenceStop, fillTemplate, leadVars, webLeadProblem,
   webConsent, webLeadServices, templateChannel, BUILTIN_SEQUENCES, isStarterSequence,
@@ -902,6 +907,19 @@ const CALLCENTER_ALLOWED = [
   // 112. The markets a lead is matched to, and the weather where they are.
   [/^\/api\/markets$/, ["GET"]],
   [/^\/api\/crm-weather$/, ["GET"]],
+  // 113. Tags and custom values, saved views, tags on many leads at once,
+  // the insurance claim, and files on a lead. The office-only halves (rates,
+  // routing, reassigning, merging, importing) refuse them on the route.
+  [/^\/api\/crm-settings$/, ["GET"]],
+  [/^\/api\/sales-leads\/[^/]+\/meta$/, ["PUT"]],
+  [/^\/api\/crm-views$/, ["GET", "POST"]],
+  [/^\/api\/crm-views\/[^/]+$/, ["DELETE"]],
+  [/^\/api\/sales-leads\/bulk$/, ["POST"]],
+  [/^\/api\/sales-leads\/[^/]+\/claim$/, ["GET", "PUT"]],
+  [/^\/api\/sales-leads\/[^/]+\/files$/, ["GET", "POST"]],
+  [/^\/api\/sales-leads\/[^/]+\/files\/[^/]+$/, ["GET", "DELETE"]],
+  [/^\/api\/uploads\/measurement-doc\/.+$/, ["PUT"]],
+  [/^\/api\/sales-leads\/[^/]+\/proposals$/, ["GET"]],
 ];
 
 // 109. A sales manager: the call center's routes, narrowed by crmScope to
@@ -913,6 +931,11 @@ const SALES_ALLOWED = [
   [/^\/api\/google-calendar\/(start|sync)$/, ["POST"]],
   // 110. Putting their own lead on a follow-up sequence, and taking them off.
   [/^\/api\/sales-leads\/[^/]+\/sequence$/, ["POST", "DELETE"]],
+  // 113. Writing and sending their own proposals, and their own commission.
+  [/^\/api\/sales-leads\/[^/]+\/proposals$/, ["GET", "POST"]],
+  [/^\/api\/proposals\/[^/]+$/, ["PATCH"]],
+  [/^\/api\/proposals\/[^/]+\/(send|void)$/, ["POST"]],
+  [/^\/api\/crm-commissions$/, ["GET"]],
 ];
 
 app.use("/api/*", async (c, next) => {
@@ -10542,6 +10565,7 @@ export function missingSchema(err) {
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
   if (/\bsales_markets\b/i.test(m)) return "112_markets";
+  if (/\b(sales_proposals|lead_claims|crm_settings|lead_meta|crm_views|lead_files|crm_aftercare|crm_commissions)\b/i.test(m)) return "113_crm_plus";
   if (/\blead_followups\b|crm_templates has no column named channel/i.test(m)) return "111_crm_channels";
   if (/\b(sales_deals|lead_opt_outs|lead_unsub_tokens|crm_templates|crm_sequences|crm_enrollments)\b/i.test(m)) return "110_crm_selling";
   if (/\b(lead_messages|sales_lead_consents)\b/i.test(m)) return "109_lead_contact";
@@ -28114,6 +28138,7 @@ app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
     const direct = await leadConsents(c.env, acct.id);
     const optOuts = await leadOptOuts(c.env, acct.id);
     const enrollments = await leadEnrollments(c.env, acct.id);
+    const meta = await leadMetaMap(c.env, acct.id);
     const by = new Map();
     for (const l of links || []) {
       if (!by.has(l.lead_id)) by.set(l.lead_id, []);
@@ -28125,9 +28150,9 @@ app.get("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
       // what they were asked most recently.
       const consent = leadConsentFrom(direct?.get(r.id) || null, appts.map((a) => consents?.get(a.id)).filter(Boolean));
       return { ...leadRowToJs(r), appointments: appts, consent, optOut: optOuts?.get(r.id) || null,
-        enrollment: enrollments?.get(r.id) || null };
+        enrollment: enrollments?.get(r.id) || null, tags: meta?.get(r.id)?.tags || [], custom: meta?.get(r.id)?.custom || {} };
     });
-    return c.json({ leads, owners: await apptReps(c.env, acct.id), sellingReady: optOuts !== null });
+    return c.json({ leads, owners: await apptReps(c.env, acct.id), sellingReady: optOuts !== null, plusReady: meta !== null });
   });
 });
 
@@ -28153,6 +28178,9 @@ app.post("/api/sales-leads", requireRole(...BOOKING_ROLES), async (c) => {
     const id = await insertLead(c.env, { accountId: acct.id, v, userId });
     await logActivity(c.env, acct.id, userId, "lead_added",
       `Added ${[v.firstName, v.lastName].filter(Boolean).join(" ")} to the CRM as a ${stageTerm(v.stage).toLowerCase()}`, { leadId: id });
+    // 113. A lead nobody owns is routed, and its new owner told. A person who
+    // adds a lead and names its owner has already decided.
+    if (!v.ownerId) await routeNewLead(c.env, { accountId: acct.id, leadId: id, source: sourceLabel(v.source), alertOffice: false });
     const row = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ?`).bind(id).first();
     return c.json({ lead: { ...leadRowToJs(row), appointments: [], consent: null } }, 201);
   });
@@ -28222,7 +28250,9 @@ app.post("/api/v1/leads", async (c) => {
     const id = await insertLead(c.env, { accountId: ctx.accountId, v, userId: null });
     await logActivity(c.env, ctx.accountId, null, "lead_added",
       `A lead arrived through the API: ${[v.firstName, v.lastName].filter(Boolean).join(" ")}`, { leadId: id });
-    return c.json({ ok: true, duplicate: false, leadId: id, stage: v.stage }, 201);
+    // 113. Routed to a sales manager, and whoever owns it is told now.
+    const routed = await routeNewLead(c.env, { accountId: ctx.accountId, leadId: id, source: "API / integration" });
+    return c.json({ ok: true, duplicate: false, leadId: id, stage: v.stage, ownerId: routed.ownerId }, 201);
   } catch (err) {
     const m = missingSchema(err);
     if (m) return apiError(c, 503, "migration_needed", "This SubSub environment has not had migration 107 applied yet.", { migration: m });
@@ -28325,7 +28355,7 @@ app.post("/api/sales-leads/:id/messages", requireRole(...BOOKING_ROLES), async (
     const v = chk.value;
     // 110. Do not contact and an unsubscribe both refuse, by name.
     const optOut = await optOutFor(c.env, acct.id, lead.id);
-    const ob = optOutBlock(v.channel === "call" ? (v.direction === "outbound" ? "call_out" : "call_in") : v.channel, { optOut, consent });
+    const ob = optOutBlock(v.direction === "inbound" ? "inbound" : v.channel === "call" ? "call_out" : v.channel, { optOut, consent });
     if (ob) return c.json({ error: ob }, 409);
     if (v.channel === "email") {
       const rl = await rateLimit(c.env, "lead-email", acct.id, { limit: LEAD_EMAILS_PER_HOUR, windowMinutes: 60 });
@@ -29024,6 +29054,8 @@ app.post("/api/public/lead/:subdomain", async (c) => {
     await c.env.DB.prepare(`UPDATE sales_leads SET updated_at = datetime('now') WHERE id = ?`).bind(id).run();
     const who = [v.firstName, v.lastName].filter(Boolean).join(" ");
     await logActivity(c.env, acct.id, null, "lead_added", `${who} ${existing ? "asked again" : "asked for an estimate"} through your website form`, { leadId: id });
+    // 113. Routed to a sales manager; the office hears from the email below.
+    if (!existing) await routeNewLead(c.env, { accountId: acct.id, leadId: id, source: "Website", alertOffice: false });
     // The office is told, by each person's own email setting.
     try {
       const { results: team } = await c.env.DB.prepare(`SELECT DISTINCT u.id, u.name, u.email, u.notify FROM memberships m
@@ -29448,6 +29480,947 @@ app.get("/api/cron/sales-crm", async (c) => {
     return c.json({ error: "forbidden" }, 403);
   }
   return c.json(await salesCrmSweep(c.env));
+});
+
+// ---------------------------------------------------------------------------
+// 113. The rest of the CRM. shared/crmplus.js holds the rules.
+// ---------------------------------------------------------------------------
+
+const crmPlusGuard = async (c, fn) => {
+  try { return await fn(); }
+  catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "113_crm_plus" }, 503);
+    throw err;
+  }
+};
+const proposalToken = () => {
+  const ALPHA = "abcdefghijklmnopqrstuvwxyz0123456789";
+  return [...crypto.getRandomValues(new Uint8Array(32))].map((b) => ALPHA[b % 36]).join("");
+};
+
+// The account's CRM settings, defaults filled in. `ready: false` on a
+// database without 113, so the screen can name the file.
+async function crmSettingsOf(env, accountId) {
+  try {
+    const r = await env.DB.prepare(`SELECT * FROM crm_settings WHERE account_id = ?`).bind(accountId).first();
+    if (!r) return { ...DEFAULT_CRM_SETTINGS, ready: true };
+    return {
+      ready: true, routingMode: r.routing_mode || "none", routingReps: parseJson(r.routing_reps, []) || [],
+      marketReps: parseJson(r.market_reps, {}) || {}, cursor: r.routing_cursor || 0, alertNewLeads: !!r.alert_new_leads,
+      reviewUrl: r.review_url || null, reviewDelayDays: r.review_delay_days ?? REVIEW_DELAY_DAYS,
+      repeatMonths: r.repeat_months ?? null, commissionBps: r.commission_bps ?? null,
+      repCommissionBps: parseJson(r.rep_commission, {}) || {}, commissionBasis: r.commission_basis || "sale",
+      customFields: parseJson(r.custom_fields, []) || [],
+    };
+  } catch (err) {
+    if (missingSchema(err)) return { ...DEFAULT_CRM_SETTINGS, ready: false };
+    throw err;
+  }
+}
+
+async function saveCrmSettings(env, accountId, s) {
+  await env.DB.prepare(
+    `INSERT INTO crm_settings (account_id, routing_mode, routing_reps, market_reps, routing_cursor, alert_new_leads,
+       review_url, review_delay_days, repeat_months, commission_bps, rep_commission, commission_basis, custom_fields, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(account_id) DO UPDATE SET routing_mode = excluded.routing_mode, routing_reps = excluded.routing_reps,
+       market_reps = excluded.market_reps, routing_cursor = excluded.routing_cursor, alert_new_leads = excluded.alert_new_leads,
+       review_url = excluded.review_url, review_delay_days = excluded.review_delay_days, repeat_months = excluded.repeat_months,
+       commission_bps = excluded.commission_bps, rep_commission = excluded.rep_commission,
+       commission_basis = excluded.commission_basis, custom_fields = excluded.custom_fields, updated_at = excluded.updated_at`)
+    .bind(accountId, s.routingMode, JSON.stringify(s.routingReps || []), JSON.stringify(s.marketReps || {}), s.cursor || 0,
+      s.alertNewLeads ? 1 : 0, s.reviewUrl || null, s.reviewDelayDays ?? REVIEW_DELAY_DAYS, s.repeatMonths ?? null,
+      s.commissionBps ?? null, JSON.stringify(s.repCommissionBps || {}), s.commissionBasis || "sale",
+      JSON.stringify(s.customFields || []), new Date().toISOString()).run();
+}
+
+app.get("/api/crm-settings", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const s = await crmSettingsOf(c.env, acct.id);
+  const { role } = c.get("auth");
+  // Rates are the office's business. Everybody reads the custom fields.
+  if (!OFFICE_ROLES.includes(role)) {
+    return c.json({ ready: s.ready, customFields: s.customFields, alertNewLeads: s.alertNewLeads });
+  }
+  return c.json(s);
+});
+
+app.put("/api/crm-settings", requireRole(...OFFICE_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const reps = (await apptReps(c.env, acct.id)).map((r) => r.id);
+  let markets = [];
+  try { markets = (await listMarkets(c.env, acct.id)).map((m) => m.id); } catch (err) { if (!missingSchema(err)) throw err; }
+  const chk = validCrmSettings(b, { reps, markets });
+  if (!chk.ok) return c.json({ error: chk.error, key: chk.key || null }, 400);
+  return crmPlusGuard(c, async () => {
+    const cur = await crmSettingsOf(c.env, acct.id);
+    if (!cur.ready) return c.json({ error: "migration_needed", migration: "113_crm_plus" }, 503);
+    const next = { ...cur, ...chk.value };
+    await saveCrmSettings(c.env, acct.id, next);
+    await logActivity(c.env, acct.id, c.get("auth").userId, "crm_settings", "Changed the CRM settings", { keys: Object.keys(chk.value) });
+    return c.json(await crmSettingsOf(c.env, acct.id));
+  });
+});
+
+// Tags and custom values for every lead on the account. null without 113.
+async function leadMetaMap(env, accountId) {
+  try {
+    const { results } = await env.DB.prepare(`SELECT lead_id, tags, custom FROM lead_meta WHERE account_id = ?`).bind(accountId).all();
+    return new Map((results || []).map((r) => [r.lead_id, { tags: parseJson(r.tags, []) || [], custom: parseJson(r.custom, {}) || {} }]));
+  } catch (err) {
+    if (missingSchema(err)) return null;
+    throw err;
+  }
+}
+async function saveLeadMeta(env, accountId, leadId, { tags, custom }) {
+  await env.DB.prepare(
+    `INSERT INTO lead_meta (lead_id, account_id, tags, custom, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(lead_id) DO UPDATE SET tags = excluded.tags, custom = excluded.custom, updated_at = excluded.updated_at`)
+    .bind(leadId, accountId, JSON.stringify(tags || []), JSON.stringify(custom || {}), new Date().toISOString()).run();
+}
+
+app.put("/api/sales-leads/:id/meta", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const cur = (await leadMetaMap(c.env, acct.id))?.get(row.id) || { tags: [], custom: {} };
+    const settings = await crmSettingsOf(c.env, acct.id);
+    const next = { ...cur };
+    if ("tags" in b) next.tags = cleanTags(b.tags);
+    if ("custom" in b) {
+      const v = validCustomValues(settings.customFields, b.custom);
+      if (!v.ok) return c.json({ error: v.error, key: v.key }, 400);
+      next.custom = v.value;
+    }
+    await saveLeadMeta(c.env, acct.id, row.id, next);
+    return c.json(next);
+  });
+});
+
+// Saved views of the leads list: each person's own.
+app.get("/api/crm-views", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  try {
+    const { results } = await c.env.DB.prepare(`SELECT id, name, filters FROM crm_views WHERE account_id = ? AND user_id = ? ORDER BY name`)
+      .bind(acct.id, c.get("auth").userId).all();
+    return c.json({ views: (results || []).map((r) => ({ id: r.id, name: r.name, filters: parseJson(r.filters, {}) || {} })) });
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ views: [], migration: "113_crm_plus" });
+    throw err;
+  }
+});
+app.post("/api/crm-views", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const chk = validView(await c.req.json().catch(() => ({})));
+  if (!chk.ok) return c.json({ error: chk.error, key: chk.key || null }, 400);
+  return crmPlusGuard(c, async () => {
+    const id = uid();
+    await c.env.DB.prepare(`INSERT INTO crm_views (id, account_id, user_id, name, filters, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
+      .bind(id, acct.id, c.get("auth").userId, chk.value.name, JSON.stringify(chk.value.filters), new Date().toISOString()).run();
+    return c.json({ view: { id, ...chk.value } }, 201);
+  });
+});
+app.delete("/api/crm-views/:vid", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const r = await c.env.DB.prepare(`DELETE FROM crm_views WHERE id = ? AND account_id = ? AND user_id = ?`)
+      .bind(c.req.param("vid"), acct.id, c.get("auth").userId).run();
+    if (!r.meta?.changes) return c.json({ error: "not_found" }, 404);
+    return c.json({ ok: true });
+  });
+});
+
+// Changing many leads at once. Every id is checked against this account (and
+// a sales manager's own leads); one that is not is refused by name rather
+// than skipped, so "30 reassigned" never means 29.
+app.post("/api/sales-leads/bulk", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  const chk = validBulk(await c.req.json().catch(() => ({})), { role });
+  if (!chk.ok) return c.json({ error: chk.error }, chk.error === "office_only" ? 403 : 400);
+  const v = chk.value;
+  return crmPlusGuard(c, async () => {
+    const me = crmScopeOf(c);
+    const rows = [];
+    for (const id of v.ids) {
+      const r = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ? AND l.account_id = ?${me ? ` AND ${LEAD_IN_SCOPE}` : ""}`)
+        .bind(id, acct.id, ...(me ? [me, me] : [])).first();
+      if (!r) return c.json({ error: "not_found", leadId: id }, 404);
+      rows.push(r);
+    }
+    if (v.action === "owner" && v.ownerId && !(await apptReps(c.env, acct.id)).some((r) => r.id === v.ownerId)) {
+      return c.json({ error: "bad_owner" }, 400);
+    }
+    const meta = v.action === "tag" || v.action === "untag" ? (await leadMetaMap(c.env, acct.id)) || new Map() : null;
+    let changed = 0;
+    for (const r of rows) {
+      if (v.action === "owner") {
+        await c.env.DB.prepare(`UPDATE sales_leads SET owner_id = ?, updated_at = datetime('now') WHERE id = ?`).bind(v.ownerId, r.id).run();
+        changed++;
+      } else if (v.action === "stage") {
+        if (r.stage === v.stage) continue;
+        await c.env.DB.prepare(`UPDATE sales_leads SET stage = ?, stage_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).bind(v.stage, r.id).run();
+        try { await logEvent(c.env, acct.id, userId, "lead.stage", r.id, { from: r.stage, to: v.stage, bulk: true }); }
+        catch (err) { console.warn("[leads] event:", err?.message || err); }
+        changed++;
+      } else if (v.action === "tag" || v.action === "untag") {
+        const cur = meta.get(r.id) || { tags: [], custom: {} };
+        const tags = v.action === "tag" ? cleanTags([...cur.tags, v.tag])
+          : cur.tags.filter((t) => t.toLowerCase() !== v.tag.toLowerCase());
+        if (tags.length === cur.tags.length && tags.every((t, i) => t === cur.tags[i])) continue;
+        await saveLeadMeta(c.env, acct.id, r.id, { ...cur, tags });
+        changed++;
+      } else if (v.action === "dnc") {
+        const now = new Date().toISOString();
+        await c.env.DB.prepare(`INSERT INTO lead_opt_outs (lead_id, account_id, dnc_at, dnc_by, dnc_reason, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(lead_id) DO UPDATE SET dnc_at = COALESCE(lead_opt_outs.dnc_at, excluded.dnc_at),
+            dnc_by = excluded.dnc_by, dnc_reason = excluded.dnc_reason, updated_at = excluded.updated_at`)
+          .bind(r.id, acct.id, now, userId, v.reason, now).run();
+        await stopEnrollments(c.env, r.id, "do_not_contact");
+        changed++;
+      }
+    }
+    await logActivity(c.env, acct.id, userId, "lead_bulk", `Changed ${changed} lead${changed === 1 ? "" : "s"} at once (${v.action})`, { action: v.action, count: changed });
+    return c.json({ ok: true, changed, of: rows.length });
+  });
+});
+
+// Two leads that are one person. The kept lead keeps its own answers and
+// takes what the other left blank; every appointment, contact, follow-up,
+// proposal and file moves to it; then the other is deleted, which is logged
+// with what it held.
+app.post("/api/sales-leads/:id/merge", requireRole(...OFFICE_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  return crmPlusGuard(c, async () => {
+    const keepRow = await leadOfAccount(c, acct);
+    const dropRow = b.dropId ? await leadOfAccount(c, acct, String(b.dropId)) : null;
+    if (!keepRow || !dropRow) return c.json({ error: "not_found" }, 404);
+    if (keepRow.id === dropRow.id) return c.json({ error: "same_lead" }, 400);
+    const meta = (await leadMetaMap(c.env, acct.id)) || new Map();
+    const keep = { ...leadRowToJs(keepRow), ...(meta.get(keepRow.id) || {}) };
+    const drop = { ...leadRowToJs(dropRow), ...(meta.get(dropRow.id) || {}) };
+    const m = mergedLead(keep, drop);
+    await c.env.DB.prepare(
+      `UPDATE sales_leads SET stage = ?, first_name = ?, last_name = ?, phone = ?, email = ?, street = ?, city = ?, state = ?, zip = ?,
+         services = ?, notes = ?, owner_id = ?, updated_at = datetime('now') WHERE id = ?`)
+      .bind(m.stage, m.firstName || null, m.lastName || null, m.phone || null, m.email || null, m.address?.street || null,
+        m.address?.city || null, m.address?.state || null, m.address?.zip || null, JSON.stringify(m.services), m.notes, m.ownerId, keep.id).run();
+    await saveLeadMeta(c.env, acct.id, keep.id, { tags: m.tags, custom: { ...(drop.custom || {}), ...(keep.custom || {}) } });
+    const move = async (sql) => { try { await c.env.DB.prepare(sql).bind(keep.id, drop.id).run(); } catch (err) { if (!missingSchema(err)) throw err; } };
+    await move(`UPDATE sales_lead_links SET lead_id = ? WHERE lead_id = ?`);
+    await move(`UPDATE lead_messages SET lead_id = ? WHERE lead_id = ?`);
+    await move(`UPDATE lead_followups SET lead_id = ? WHERE lead_id = ?`);
+    await move(`UPDATE sales_proposals SET lead_id = ? WHERE lead_id = ?`);
+    await move(`UPDATE lead_files SET lead_id = ? WHERE lead_id = ?`);
+    await move(`UPDATE OR IGNORE lead_claims SET lead_id = ? WHERE lead_id = ?`);
+    await move(`UPDATE crm_enrollments SET lead_id = ? WHERE lead_id = ? AND status <> 'active'`);
+    try { await logEvent(c.env, acct.id, userId, "lead.merged", keep.id, { dropped: drop.id, held: drop }); }
+    catch (err) { console.warn("[leads] event:", err?.message || err); }
+    await c.env.DB.prepare(`DELETE FROM sales_leads WHERE id = ? AND account_id = ?`).bind(drop.id, acct.id).run();
+    await logActivity(c.env, acct.id, userId, "lead_merged",
+      `Merged ${[drop.firstName, drop.lastName].filter(Boolean).join(" ") || "a lead"} into ${[m.firstName, m.lastName].filter(Boolean).join(" ")}`, { leadId: keep.id });
+    const after = await c.env.DB.prepare(`${LEAD_SELECT} WHERE l.id = ?`).bind(keep.id).first();
+    return c.json({ lead: { ...leadRowToJs(after), tags: m.tags } });
+  });
+});
+
+// 8. A new lead goes to a sales manager by the account's routing, and the
+// person it went to (or the office, with nobody) is told. Never fails the
+// caller: the lead exists by now.
+async function routeNewLead(env, { accountId, leadId, source = null, alertOffice = true, notify = true }) {
+  const out = { ownerId: null, alerted: 0 };
+  try {
+    const s = await crmSettingsOf(env, accountId);
+    const lead = await env.DB.prepare(`SELECT * FROM sales_leads WHERE id = ? AND account_id = ?`).bind(leadId, accountId).first();
+    if (!lead) return out;
+    let ownerId = lead.owner_id || null;
+    if (!ownerId && s.ready && s.routingMode !== "none") {
+      let marketId = null;
+      if (s.routingMode === "market") {
+        try { marketId = marketFor(await listMarkets(env, accountId), { zip: lead.zip, city: lead.city, state: lead.state })?.id || null; }
+        catch (err) { if (!missingSchema(err)) throw err; }
+      }
+      const reps = (await apptReps(env, accountId)).map((r) => r.id);
+      const pick = routeLead({ mode: s.routingMode, reps: s.routingReps, marketReps: s.marketReps, cursor: s.cursor }, { marketId, reps });
+      if (pick.ownerId) {
+        // The cursor is claimed before the lead is written, guarded on the
+        // value read, so two leads at once take two turns.
+        const moved = await env.DB.prepare(`UPDATE crm_settings SET routing_cursor = ? WHERE account_id = ? AND routing_cursor = ?`)
+          .bind(pick.cursor, accountId, s.cursor).run();
+        if (s.routingMode === "round_robin" && !moved.meta?.changes && pick.cursor !== s.cursor) return routeNewLead(env, { accountId, leadId, source, alertOffice, notify });
+        await env.DB.prepare(`UPDATE sales_leads SET owner_id = ? WHERE id = ? AND owner_id IS NULL`).bind(pick.ownerId, leadId).run();
+        ownerId = pick.ownerId;
+        try { await logEvent(env, accountId, null, "lead.routed", leadId, { to: ownerId, mode: s.routingMode, market: marketId }); }
+        catch (err) { console.warn("[leads] event:", err?.message || err); }
+      }
+    }
+    out.ownerId = ownerId;
+    if (!notify || !s.alertNewLeads) return out;
+    const who = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
+    let people = [];
+    if (ownerId) {
+      const u = await env.DB.prepare(`SELECT id, name, email, notify FROM users WHERE id = ?`).bind(ownerId).first();
+      if (u) people = [u];
+    } else if (alertOffice) {
+      ({ results: people } = await env.DB.prepare(`SELECT DISTINCT u.id, u.name, u.email, u.notify FROM memberships m
+        JOIN users u ON u.id = m.user_id WHERE m.account_id = ? AND m.role IN ('admin', 'pm')`).bind(accountId).all());
+    }
+    const seen = new Set();
+    const phone = lead.phone ? `(${lead.phone.slice(0, 3)}) ${lead.phone.slice(3, 6)}-${lead.phone.slice(6)}` : "";
+    for (const u of people || []) {
+      const to = realEmail(u.email);
+      if (!to || seen.has(to.toLowerCase()) || !notifyOf(u).email) continue;
+      seen.add(to.toLowerCase());
+      const mail = MAIL.leadArrivedEmail({ firstName: String(u.name || "").split(" ")[0], who, phone, email: lead.email || "",
+        source: source || null, services: (parseJson(lead.services, []) || []).map(serviceLabel),
+        link: `${APP_ORIGIN}/?open=lead&id=${leadId}`, yours: !!ownerId });
+      const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
+      await logMail(env, { accountId, companyId: null, to, kind: "lead_arrived", subject: mail.subject, result, sentBy: null });
+      if (result.ok) out.alerted++;
+    }
+  } catch (err) { console.warn("[leads] routing:", err?.message || err); }
+  return out;
+}
+
+// 12. A list of leads at once. Each row is checked with the same validLead a
+// hand-added lead is; somebody already a lead (same phone, or email with no
+// phone) is skipped and named rather than duplicated. Routing applies; no
+// email per lead, because nobody wants three hundred.
+app.post("/api/sales-leads/import", requireRole(...OFFICE_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  const b = await c.req.json().catch(() => ({}));
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  if (!rows.length) return c.json({ error: "nothing_to_import" }, 400);
+  if (rows.length > MAX_IMPORT) return c.json({ error: "too_many", max: MAX_IMPORT }, 400);
+  const source = SOURCE_IDS.includes(b.source) ? b.source : "other";
+  const extraTag = cleanTags([b.tag])[0] || null;
+  return leadsGuard(c, async () => {
+    // Every row is checked before any is written, so a refused file writes
+    // nothing and the screen can say which row.
+    const checked = [];
+    for (let i = 0; i < rows.length; i++) {
+      const chk = validLead({ ...rows[i], stage: rows[i].stage && ["lead", "prospect"].includes(rows[i].stage) ? rows[i].stage : "lead", source }, { role });
+      if (!chk.ok) return c.json({ error: chk.error, field: chk.field, row: i + 1 }, 400);
+      checked.push({ v: chk.value, tags: cleanTags([...(rows[i].tags || []), ...(extraTag ? [extraTag] : [])]) });
+    }
+    let created = 0;
+    const skipped = [];
+    const seen = new Set();
+    let metaOk = true;
+    for (let i = 0; i < checked.length; i++) {
+      const { v, tags } = checked[i];
+      const key = v.phone || (v.email ? `e:${v.email}` : null);
+      if (key && seen.has(key)) { skipped.push({ row: i + 1, why: "twice_in_file" }); continue; }
+      if (key) seen.add(key);
+      const dup = await findLead(c.env, acct.id, { phone: v.phone, email: v.phone ? null : v.email });
+      if (dup) { skipped.push({ row: i + 1, why: "already_a_lead", leadId: dup }); continue; }
+      const id = await insertLead(c.env, { accountId: acct.id, v, userId });
+      created++;
+      if (tags.length && metaOk) {
+        try { await saveLeadMeta(c.env, acct.id, id, { tags, custom: {} }); }
+        catch (err) { if (missingSchema(err)) metaOk = false; else throw err; }
+      }
+      await routeNewLead(c.env, { accountId: acct.id, leadId: id, source: sourceLabel(source), notify: false });
+    }
+    await logActivity(c.env, acct.id, userId, "lead_import", `Imported ${created} lead${created === 1 ? "" : "s"}${skipped.length ? ` (${skipped.length} skipped)` : ""}`, { created, skipped: skipped.length });
+    return c.json({ created, skipped, tagsSaved: metaOk }, 201);
+  });
+});
+
+// 7. The insurance claim on a lead.
+const claimRowToJs = (r) => (r ? {
+  status: r.status, carrier: r.carrier || "", claimNumber: r.claim_number || "", adjusterName: r.adjuster_name || "",
+  adjusterPhone: r.adjuster_phone || "", adjusterMeeting: r.adjuster_meeting || "", approvedCents: r.approved_cents ?? null,
+  deductibleCents: r.deductible_cents ?? null, notes: r.notes || "", updatedAt: r.updated_at, updatedByName: r.updated_by_name || null,
+} : null);
+
+app.get("/api/sales-leads/:id/claim", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const r = await c.env.DB.prepare(`SELECT lc.*, u.name AS updated_by_name FROM lead_claims lc LEFT JOIN users u ON u.id = lc.updated_by
+      WHERE lc.lead_id = ? AND lc.account_id = ?`).bind(row.id, acct.id).first();
+    return c.json({ claim: claimRowToJs(r) });
+  });
+});
+
+app.put("/api/sales-leads/:id/claim", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const chk = validClaim(await c.req.json().catch(() => ({})));
+  if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+  const v = chk.value;
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const { userId } = c.get("auth");
+    const before = await c.env.DB.prepare(`SELECT status FROM lead_claims WHERE lead_id = ?`).bind(row.id).first();
+    await c.env.DB.prepare(
+      `INSERT INTO lead_claims (lead_id, account_id, status, carrier, claim_number, adjuster_name, adjuster_phone, adjuster_meeting,
+         approved_cents, deductible_cents, notes, updated_by, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(lead_id) DO UPDATE SET status = excluded.status, carrier = excluded.carrier, claim_number = excluded.claim_number,
+         adjuster_name = excluded.adjuster_name, adjuster_phone = excluded.adjuster_phone, adjuster_meeting = excluded.adjuster_meeting,
+         approved_cents = excluded.approved_cents, deductible_cents = excluded.deductible_cents, notes = excluded.notes,
+         updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+      .bind(row.id, acct.id, v.status, v.carrier, v.claimNumber, v.adjusterName, v.adjusterPhone, v.adjusterMeeting,
+        v.approvedCents, v.deductibleCents, v.notes, userId, new Date().toISOString()).run();
+    if (before?.status !== v.status) {
+      try { await logEvent(c.env, acct.id, userId, "lead.claim", row.id, { from: before?.status || null, to: v.status }); }
+      catch (err) { console.warn("[leads] event:", err?.message || err); }
+    }
+    const r = await c.env.DB.prepare(`SELECT lc.*, u.name AS updated_by_name FROM lead_claims lc LEFT JOIN users u ON u.id = lc.updated_by
+      WHERE lc.lead_id = ?`).bind(row.id).first();
+    return c.json({ claim: claimRowToJs(r) });
+  });
+});
+
+// 10. Files on a lead. Uploaded through the checked measurement-doc kind (or
+// imported from CompanyCam, which stores under the same prefix), so the key
+// must be under this account's own prefix: a key from anywhere else would be
+// attached here and served back by the file route.
+const leadFileToJs = (r) => ({ id: r.id, name: r.name, type: r.type || "", size: r.size ?? null, kind: r.kind,
+  source: r.source, uploadedByName: r.uploaded_by_name || null, createdAt: r.created_at });
+
+app.get("/api/sales-leads/:id/files", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const { results } = await c.env.DB.prepare(`SELECT f.*, u.name AS uploaded_by_name FROM lead_files f LEFT JOIN users u ON u.id = f.uploaded_by
+      WHERE f.lead_id = ? AND f.account_id = ? ORDER BY f.created_at DESC`).bind(row.id, acct.id).all();
+    return c.json({ files: (results || []).map(leadFileToJs) });
+  });
+});
+
+app.post("/api/sales-leads/:id/files", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const list = (Array.isArray(b.files) ? b.files : [b]).filter(Boolean);
+  if (!list.length) return c.json({ error: "nothing_to_add" }, 400);
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const have = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM lead_files WHERE lead_id = ?`).bind(row.id).first())?.n || 0;
+    if (have + list.length > MAX_LEAD_FILES) return c.json({ error: "too_many_files", max: MAX_LEAD_FILES }, 400);
+    const prefix = `${acct.id}/measurement-doc/`;
+    for (const f of list) {
+      if (typeof f.key !== "string" || !f.key.startsWith(prefix) || f.key.includes("..")) return c.json({ error: "not_uploaded", name: f.name || null }, 400);
+      if (f.kind && !LEAD_FILE_KIND_IDS.includes(f.kind)) return c.json({ error: "bad_kind" }, 400);
+    }
+    const { userId } = c.get("auth");
+    const added = [];
+    for (const f of list) {
+      const id = uid();
+      await c.env.DB.prepare(`INSERT INTO lead_files (id, lead_id, account_id, file_key, name, type, size, kind, source, uploaded_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .bind(id, row.id, acct.id, f.key, String(f.name || "file").slice(0, 200), String(f.type || "").slice(0, 120) || null,
+          Number.isFinite(Number(f.size)) ? Number(f.size) : null, f.kind || "other",
+          f.source === "companycam" ? "companycam" : "upload", userId, new Date().toISOString()).run();
+      added.push(id);
+    }
+    const { results } = await c.env.DB.prepare(`SELECT f.*, u.name AS uploaded_by_name FROM lead_files f LEFT JOIN users u ON u.id = f.uploaded_by
+      WHERE f.lead_id = ? ORDER BY f.created_at DESC`).bind(row.id).all();
+    return c.json({ files: (results || []).map(leadFileToJs), added }, 201);
+  });
+});
+
+app.get("/api/sales-leads/:id/files/:fid", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const f = await c.env.DB.prepare(`SELECT * FROM lead_files WHERE id = ? AND lead_id = ? AND account_id = ?`)
+      .bind(c.req.param("fid"), row.id, acct.id).first();
+    if (!f) return c.json({ error: "not_found" }, 404);
+    const obj = await c.env.FILES.get(f.file_key);
+    if (!obj) return c.json({ error: "no_file" }, 404);
+    return new Response(obj.body, { headers: {
+      "Content-Type": obj.httpMetadata?.contentType || f.type || "application/octet-stream",
+      "Content-Disposition": `inline; filename="${String(f.name).replace(/[^\w.\-]/g, "_")}"`,
+      "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+    } });
+  });
+});
+
+app.delete("/api/sales-leads/:id/files/:fid", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const f = await c.env.DB.prepare(`SELECT id, name FROM lead_files WHERE id = ? AND lead_id = ? AND account_id = ?`)
+      .bind(c.req.param("fid"), row.id, acct.id).first();
+    if (!f) return c.json({ error: "not_found" }, 404);
+    await c.env.DB.prepare(`DELETE FROM lead_files WHERE id = ?`).bind(f.id).run();
+    // The object stays in R2: it is evidence, the rule the report photo follows.
+    try { await logEvent(c.env, acct.id, c.get("auth").userId, "lead.file_removed", row.id, { name: f.name }); }
+    catch (err) { console.warn("[leads] event:", err?.message || err); }
+    return c.json({ ok: true });
+  });
+});
+
+// 6. Proposals.
+const proposalToJs = (r, { withToken = true } = {}) => ({
+  id: r.id, leadId: r.lead_id, appointmentId: r.appointment_id || null, title: r.title,
+  items: parseJson(r.items, []) || [], totalCents: r.total_cents, notes: r.notes || "", status: r.status,
+  sentAt: r.sent_at || null, viewedAt: r.viewed_at || null, signedAt: r.signed_at || null, signerName: r.signer_name || null,
+  declinedAt: r.declined_at || null, declineNote: r.decline_note || null, expiresAt: r.expires_at || null,
+  createdByName: r.created_by_name || null, createdAt: r.created_at, updatedAt: r.updated_at,
+  ...(withToken && r.status !== "draft" ? { link: `${APP_ORIGIN}/proposal/${r.token}` } : {}),
+});
+const PROPOSAL_SELECT = `SELECT p.*, u.name AS created_by_name FROM sales_proposals p LEFT JOIN users u ON u.id = p.created_by`;
+
+async function proposalOfAccount(c, acct) {
+  const p = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ? AND p.account_id = ?`).bind(c.req.param("pid"), acct.id).first();
+  if (!p) return null;
+  // A sales manager reaches a proposal only through a lead they can see.
+  const lead = await leadOfAccount(c, acct, p.lead_id);
+  return lead ? { p, lead } : null;
+}
+
+app.get("/api/sales-leads/:id/proposals", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const { results } = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.lead_id = ? AND p.account_id = ? ORDER BY p.created_at DESC`)
+      .bind(row.id, acct.id).all();
+    return c.json({ proposals: (results || []).map((r) => proposalToJs(r)) });
+  });
+});
+
+// The appointment a proposal is for must be one of this lead's.
+async function leadAppointment(env, accountId, leadId, apptId) {
+  if (!apptId) return null;
+  return env.DB.prepare(`SELECT a.id, a.status FROM sales_lead_links k JOIN sales_appointments a ON a.id = k.appointment_id
+    WHERE k.lead_id = ? AND a.id = ? AND a.account_id = ?`).bind(leadId, String(apptId), accountId).first();
+}
+
+app.post("/api/sales-leads/:id/proposals", requireRole(...SALES_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const chk = validProposal(b);
+  if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+  return crmPlusGuard(c, async () => {
+    const row = await leadOfAccount(c, acct);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    let apptId = null;
+    if (b.appointmentId) {
+      const a = await leadAppointment(c.env, acct.id, row.id, b.appointmentId);
+      if (!a) return c.json({ error: "bad_appointment" }, 400);
+      if (["cancelled", "no_show"].includes(a.status)) return c.json({ error: "appointment_closed" }, 409);
+      apptId = a.id;
+    }
+    const id = uid();
+    const now = new Date().toISOString();
+    const v = chk.value;
+    await c.env.DB.prepare(`INSERT INTO sales_proposals (id, account_id, lead_id, appointment_id, token, title, items, total_cents, notes,
+      status, expires_at, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`)
+      .bind(id, acct.id, row.id, apptId, proposalToken(), v.title, JSON.stringify(v.items), v.totalCents, v.notes,
+        String(v.expiresDays), c.get("auth").userId, now, now).run();
+    const p = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(id).first();
+    return c.json({ proposal: proposalToJs(p) }, 201);
+  });
+});
+
+app.patch("/api/proposals/:pid", requireRole(...SALES_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  return crmPlusGuard(c, async () => {
+    const got = await proposalOfAccount(c, acct);
+    if (!got) return c.json({ error: "not_found" }, 404);
+    // What was sent is what they are signing; a sent proposal is withdrawn
+    // and a new one made rather than edited under them.
+    if (got.p.status !== "draft") return c.json({ error: "not_a_draft", status: got.p.status }, 409);
+    const chk = validProposal({ title: got.p.title, items: parseJson(got.p.items, []), notes: got.p.notes, ...b,
+      expiresDays: b.expiresDays ?? Number(got.p.expires_at || PROPOSAL_DAYS) });
+    if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+    let apptId = got.p.appointment_id;
+    if ("appointmentId" in b) {
+      apptId = null;
+      if (b.appointmentId) {
+        const a = await leadAppointment(c.env, acct.id, got.lead.id, b.appointmentId);
+        if (!a) return c.json({ error: "bad_appointment" }, 400);
+        apptId = a.id;
+      }
+    }
+    const v = chk.value;
+    await c.env.DB.prepare(`UPDATE sales_proposals SET title = ?, items = ?, total_cents = ?, notes = ?, appointment_id = ?, expires_at = ?,
+      updated_at = ? WHERE id = ? AND status = 'draft'`)
+      .bind(v.title, JSON.stringify(v.items), v.totalCents, v.notes, apptId, String(v.expiresDays), new Date().toISOString(), got.p.id).run();
+    const p = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(got.p.id).first();
+    return c.json({ proposal: proposalToJs(p) });
+  });
+});
+
+// Sending emails the link and starts the clock. A draft's expires_at holds
+// its number of days until then. Do not contact refuses it; a proposal is
+// otherwise something they asked for, so it is not gated on the follow-up
+// consent the way marketing email is.
+app.post("/api/proposals/:pid/send", requireRole(...SALES_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  return crmPlusGuard(c, async () => {
+    const got = await proposalOfAccount(c, acct);
+    if (!got) return c.json({ error: "not_found" }, 404);
+    const { p, lead } = got;
+    if (!["draft", "sent", "viewed"].includes(p.status)) return c.json({ error: "not_sendable", status: p.status }, 409);
+    const optOut = await optOutFor(c.env, acct.id, lead.id);
+    if (optOut?.dncAt) return c.json({ error: "do_not_contact" }, 409);
+    const to = realEmail(lead.email);
+    const byEmail = b.email !== false;
+    if (byEmail && !to) return c.json({ error: "needs_email" }, 409);
+    const now = new Date();
+    const days = p.status === "draft" ? Number(p.expires_at || PROPOSAL_DAYS) : null;
+    const expires = days ? new Date(now.getTime() + days * 86400000).toISOString() : p.expires_at;
+    if (p.status === "draft") {
+      await c.env.DB.prepare(`UPDATE sales_proposals SET status = 'sent', sent_at = ?, expires_at = ?, updated_at = ? WHERE id = ? AND status = 'draft'`)
+        .bind(now.toISOString(), expires, now.toISOString(), p.id).run();
+    }
+    let emailed = null;
+    if (byEmail) {
+      const me = await c.env.DB.prepare(`SELECT name FROM users WHERE id = ?`).bind(c.get("auth").userId).first();
+      const mail = MAIL.proposalSentEmail({ firstName: lead.first_name || "", account: acct, title: p.title,
+        total: centsText(p.total_cents), link: `${APP_ORIGIN}/proposal/${p.token}`,
+        expires: expires ? apptWhenText(expires.slice(0, 10)) : null, senderName: me?.name || "" });
+      const result = await sendEmail(c.env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html, fromName: acct.name });
+      await logMail(c.env, { accountId: acct.id, companyId: null, to, kind: "proposal_sent", subject: mail.subject, result, sentBy: c.get("auth").userId });
+      emailed = { ok: !!result.ok, to, ...(result.ok ? {} : { error: result.error || "send_failed" }) };
+    }
+    try { await logEvent(c.env, acct.id, c.get("auth").userId, "proposal.sent", p.id, { lead: lead.id, totalCents: p.total_cents, emailed: emailed?.ok ?? null }); }
+    catch (err) { console.warn("[proposals] event:", err?.message || err); }
+    const after = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(p.id).first();
+    return c.json({ proposal: proposalToJs(after), emailed });
+  });
+});
+
+app.post("/api/proposals/:pid/void", requireRole(...SALES_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  return crmPlusGuard(c, async () => {
+    const got = await proposalOfAccount(c, acct);
+    if (!got) return c.json({ error: "not_found" }, 404);
+    if (got.p.status === "signed") return c.json({ error: "already_signed" }, 409);
+    const r = await c.env.DB.prepare(`UPDATE sales_proposals SET status = 'void', updated_at = ? WHERE id = ? AND status IN ('draft','sent','viewed')`)
+      .bind(new Date().toISOString(), got.p.id).run();
+    if (!r.meta?.changes) return c.json({ error: "not_open", status: got.p.status }, 409);
+    const after = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(got.p.id).first();
+    return c.json({ proposal: proposalToJs(after) });
+  });
+});
+
+// The homeowner's side: public, keyed by the token, carrying only what the
+// proposal says and whose it is.
+async function publicProposal(env, token) {
+  if (!PROPOSAL_TOKEN_RE.test(String(token || ""))) return null;
+  return env.DB.prepare(`SELECT p.*, l.first_name, l.last_name, l.street, l.city, l.state, l.zip, a.name AS acct_name, a.subdomain,
+    a.hostname_status, a.kind, a.theme, a.logo_key FROM sales_proposals p JOIN sales_leads l ON l.id = p.lead_id
+    JOIN accounts a ON a.id = p.account_id WHERE p.token = ?`).bind(String(token)).first();
+}
+const publicProposalJs = (r) => ({
+  account: { name: r.acct_name, subdomain: r.subdomain, hasLogo: !!r.logo_key },
+  homeowner: [r.first_name, r.last_name].filter(Boolean).join(" "),
+  address: [r.street, r.city, r.state].filter(Boolean).join(", "),
+  title: r.title, items: parseJson(r.items, []) || [], totalCents: r.total_cents, notes: r.notes || "",
+  status: r.status === "viewed" ? "sent" : r.status, expiresAt: r.expires_at, signedAt: r.signed_at || null, signerName: r.signer_name || null,
+  declinedAt: r.declined_at || null, block: proposalSignBlock({ status: r.status, expiresAt: r.expires_at }),
+});
+
+app.get("/api/public/proposal/:token", async (c) => {
+  return crmPlusGuard(c, async () => {
+    const r = await publicProposal(c.env, c.req.param("token"));
+    if (!r || r.status === "draft") return c.json({ error: "not_found" }, 404);
+    if (r.status === "sent") {
+      await c.env.DB.prepare(`UPDATE sales_proposals SET status = 'viewed', viewed_at = ? WHERE id = ? AND status = 'sent'`)
+        .bind(new Date().toISOString(), r.id).run();
+    }
+    c.header("X-Robots-Tag", "noindex");
+    c.header("Cache-Control", "private, no-store");
+    return c.json(publicProposalJs(r));
+  });
+});
+
+// Signing. The hash is of the text recomputed from the stored row, never
+// taken from the request. Guarded on the status in the UPDATE, so two presses
+// sign once. The estimate behind it is marked sold and its deal amount is the
+// proposal's total, in the same request.
+app.post("/api/public/proposal/:token/sign", async (c) => {
+  if (!(await rateLimit(c.env, "proposal-sign", clientIp(c), { limit: 20, windowMinutes: 10 })).ok) return c.json({ error: "rate_limited" }, 429);
+  const sig = validSignature(await c.req.json().catch(() => ({})));
+  if (!sig.ok) return c.json({ error: sig.error }, 400);
+  return crmPlusGuard(c, async () => {
+    const r = await publicProposal(c.env, c.req.param("token"));
+    if (!r || r.status === "draft") return c.json({ error: "not_found" }, 404);
+    const block = proposalSignBlock({ status: r.status, expiresAt: r.expires_at });
+    if (block) return c.json({ error: block }, 409);
+    const p = publicProposalJs(r);
+    const hash = await sha256Hex(proposalText({ title: r.title, items: p.items, totalCents: r.total_cents, notes: r.notes },
+      { accountName: r.acct_name, homeowner: p.homeowner }));
+    const now = new Date().toISOString();
+    const won = await c.env.DB.prepare(`UPDATE sales_proposals SET status = 'signed', signed_at = ?, signer_name = ?, signed_hash = ?, updated_at = ?
+      WHERE id = ? AND status IN ('sent','viewed')`).bind(now, sig.value.name, hash, now, r.id).run();
+    if (!won.meta?.changes) return c.json({ error: "already_signed" }, 409);
+    if (r.appointment_id) {
+      await c.env.DB.prepare(`UPDATE sales_appointments SET status = 'sold', updated_at = datetime('now') WHERE id = ? AND account_id = ?`)
+        .bind(r.appointment_id, r.account_id).run();
+      try {
+        await c.env.DB.prepare(`INSERT INTO sales_deals (appointment_id, account_id, amount_cents, lost_reason, lost_note, updated_at)
+          VALUES (?, ?, ?, NULL, NULL, ?) ON CONFLICT(appointment_id) DO UPDATE SET amount_cents = excluded.amount_cents,
+          lost_reason = NULL, lost_note = NULL, updated_at = excluded.updated_at`).bind(r.appointment_id, r.account_id, r.total_cents, now).run();
+      } catch (err) { if (!missingSchema(err)) throw err; }
+      try { await logEvent(c.env, r.account_id, null, "appointment.status", r.appointment_id, { to: "sold", via: "proposal", proposal: r.id }); }
+      catch (err) { console.warn("[proposals] event:", err?.message || err); }
+    }
+    await syncLeadStage(c.env, r.account_id, r.lead_id, null, { sale: true });
+    try { await logEvent(c.env, r.account_id, null, "proposal.signed", r.id, { signer: sig.value.name, hash, ip: clientIp(c) }); }
+    catch (err) { console.warn("[proposals] event:", err?.message || err); }
+    await logActivity(c.env, r.account_id, null, "proposal_signed", `${p.homeowner || "A homeowner"} signed ${r.title} (${centsText(r.total_cents)})`, { leadId: r.lead_id });
+    await tellProposalTeam(c.env, r, "signed", { signer: sig.value.name });
+    if (r.appointment_id) {
+      const rep = await c.env.DB.prepare(`SELECT rep_user_id FROM sales_appointments WHERE id = ?`).bind(r.appointment_id).first();
+      if (rep?.rep_user_id) gcalSalesSoon(c, [rep.rep_user_id]);
+    }
+    const after = await publicProposal(c.env, c.req.param("token"));
+    return c.json(publicProposalJs(after));
+  });
+});
+
+app.post("/api/public/proposal/:token/decline", async (c) => {
+  if (!(await rateLimit(c.env, "proposal-sign", clientIp(c), { limit: 20, windowMinutes: 10 })).ok) return c.json({ error: "rate_limited" }, 429);
+  const b = await c.req.json().catch(() => ({}));
+  return crmPlusGuard(c, async () => {
+    const r = await publicProposal(c.env, c.req.param("token"));
+    if (!r || r.status === "draft") return c.json({ error: "not_found" }, 404);
+    const block = proposalSignBlock({ status: r.status, expiresAt: r.expires_at });
+    if (block) return c.json({ error: block }, 409);
+    const note = String(b.note || "").trim().slice(0, 1000) || null;
+    const now = new Date().toISOString();
+    const done = await c.env.DB.prepare(`UPDATE sales_proposals SET status = 'declined', declined_at = ?, decline_note = ?, updated_at = ?
+      WHERE id = ? AND status IN ('sent','viewed')`).bind(now, note, now, r.id).run();
+    if (!done.meta?.changes) return c.json({ error: "not_open" }, 409);
+    await logActivity(c.env, r.account_id, null, "proposal_declined", `${[r.first_name, r.last_name].filter(Boolean).join(" ") || "A homeowner"} declined ${r.title}`, { leadId: r.lead_id });
+    await tellProposalTeam(c.env, r, "declined", { note });
+    const after = await publicProposal(c.env, c.req.param("token"));
+    return c.json(publicProposalJs(after));
+  });
+});
+
+// Whoever sent it and the lead's owner, by their own email setting.
+async function tellProposalTeam(env, r, what, { signer = null, note = null } = {}) {
+  try {
+    const lead = await env.DB.prepare(`SELECT owner_id FROM sales_leads WHERE id = ?`).bind(r.lead_id).first();
+    const ids = [...new Set([r.created_by, lead?.owner_id].filter(Boolean))];
+    const who = [r.first_name, r.last_name].filter(Boolean).join(" ");
+    const seen = new Set();
+    for (const id of ids) {
+      const u = await env.DB.prepare(`SELECT name, email, notify FROM users WHERE id = ?`).bind(id).first();
+      const to = realEmail(u?.email);
+      if (!to || seen.has(to.toLowerCase()) || !notifyOf(u).email) continue;
+      seen.add(to.toLowerCase());
+      const link = `${APP_ORIGIN}/?open=lead&id=${r.lead_id}`;
+      const mail = what === "signed"
+        ? MAIL.proposalSignedEmail({ firstName: String(u.name || "").split(" ")[0], who, title: r.title, total: centsText(r.total_cents), signer, link })
+        : MAIL.proposalDeclinedEmail({ firstName: String(u.name || "").split(" ")[0], who, title: r.title, note, link });
+      const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html });
+      await logMail(env, { accountId: r.account_id, companyId: null, to, kind: `proposal_${what}`, subject: mail.subject, result, sentBy: null });
+    }
+  } catch (err) { console.warn("[proposals] tell:", err?.message || err); }
+}
+
+// 14. Commission per sales manager. Every sold estimate on the account (a
+// sales manager sees their own), with what it was worth: the signed
+// proposal, the deal amount, and the accepted work orders on the job made
+// from it -- the job's actual value, which SubSub knows because the work
+// went through it.
+async function commissionSales(env, accountId, me = null) {
+  const { results } = await env.DB.prepare(
+    `SELECT a.id, a.first_name, a.last_name, a.date, a.job_id, a.rep_user_id, r.name AS rep_name, d.amount_cents
+       FROM sales_appointments a LEFT JOIN users r ON r.id = a.rep_user_id LEFT JOIN sales_deals d ON d.appointment_id = a.id
+      WHERE a.account_id = ? AND a.status = 'sold'${me ? " AND a.rep_user_id = ?" : ""} ORDER BY a.date DESC LIMIT 1000`)
+    .bind(accountId, ...(me ? [me] : [])).all();
+  const ids = (results || []).map((r) => r.id);
+  const proposals = new Map(), paid = new Map(), jobs = new Map();
+  if (ids.length) {
+    try {
+      const { results: ps } = await env.DB.prepare(`SELECT appointment_id, total_cents FROM sales_proposals
+        WHERE account_id = ? AND status = 'signed' AND appointment_id IS NOT NULL ORDER BY signed_at`).bind(accountId).all();
+      for (const p of ps || []) proposals.set(p.appointment_id, p.total_cents);
+      const { results: cs } = await env.DB.prepare(`SELECT * FROM crm_commissions WHERE account_id = ?`).bind(accountId).all();
+      for (const x of cs || []) paid.set(x.appointment_id, x);
+    } catch (err) { if (!missingSchema(err)) throw err; }
+    const jobIds = (results || []).map((r) => r.job_id).filter(Boolean);
+    if (jobIds.length) {
+      const { results: wos } = await env.DB.prepare(`SELECT w.job_id, SUM(w.value_cents) AS v FROM work_orders w JOIN jobs j ON j.id = w.job_id
+        WHERE j.account_id = ? AND w.voided_at IS NULL AND w.status = 'accepted' AND w.job_id IN (${jobIds.map(() => "?").join(",")})
+        GROUP BY w.job_id`).bind(accountId, ...jobIds).all();
+      for (const w of wos || []) jobs.set(w.job_id, w.v || null);
+    }
+  }
+  return (results || []).map((r) => {
+    const pd = paid.get(r.id);
+    return {
+      appointmentId: r.id, who: [r.first_name, r.last_name].filter(Boolean).join(" "), date: r.date, jobId: r.job_id || null,
+      repId: r.rep_user_id || null, repName: r.rep_name || "", dealCents: r.amount_cents ?? null,
+      proposalCents: proposals.get(r.id) ?? null, jobCents: r.job_id ? (jobs.get(r.job_id) ?? null) : null,
+      paid: pd ? { valueCents: pd.value_cents, valueSource: pd.value_source, bps: pd.bps, amountCents: pd.amount_cents,
+        paidAt: pd.paid_at, reference: pd.paid_ref || null } : null,
+    };
+  });
+}
+
+app.get("/api/crm-commissions", requireRole("admin", "pm", "sales"), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const settings = await crmSettingsOf(c.env, acct.id);
+  const sales = await commissionSales(c.env, acct.id, crmScopeOf(c));
+  return c.json({ ready: settings.ready, settings: { commissionBps: settings.commissionBps, repCommissionBps: settings.repCommissionBps,
+    commissionBasis: settings.commissionBasis }, report: commissionReport(sales, settings) });
+});
+
+// Marking a commission paid stamps what it was worked out from, so a rate
+// changed next year cannot rewrite what was paid this year. Admin only:
+// it records money that moved.
+app.post("/api/crm-commissions/:apptId/pay", requireRole("admin"), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  return crmPlusGuard(c, async () => {
+    const settings = await crmSettingsOf(c.env, acct.id);
+    if (!settings.ready) return c.json({ error: "migration_needed", migration: "113_crm_plus" }, 503);
+    const sale = (await commissionSales(c.env, acct.id)).find((s) => s.appointmentId === c.req.param("apptId"));
+    if (!sale) return c.json({ error: "not_found" }, 404);
+    if (sale.paid) return c.json({ error: "already_paid" }, 409);
+    if (!sale.repId) return c.json({ error: "no_rep" }, 409);
+    const row = commissionReport([sale], settings)[0].rows[0];
+    if (!row.amountCents) return c.json({ error: row.valueCents == null ? "no_value" : "no_rate" }, 409);
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(`INSERT INTO crm_commissions (appointment_id, account_id, rep_user_id, value_cents, value_source, bps,
+      amount_cents, paid_at, paid_ref, paid_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(sale.appointmentId, acct.id, sale.repId, row.valueCents, row.valueSource, row.bps, row.amountCents, now,
+        String(b.reference || "").trim().slice(0, 120) || null, c.get("auth").userId).run();
+    await logActivity(c.env, acct.id, c.get("auth").userId, "commission_paid",
+      `Marked ${centsText(row.amountCents)} commission paid to ${sale.repName} for ${sale.who}`, { appointmentId: sale.appointmentId });
+    return c.json({ ok: true, amountCents: row.amountCents });
+  });
+});
+
+// 11 and 13. Nightly: a text reminder the day before an estimate (a
+// follow-up for the sales manager to send from their phone, because SubSub
+// cannot text yet), a review request a few days after the job is done, and a
+// repeat-business follow-up months later. Each once per sale, written before
+// anything is sent.
+export async function crmAftercareSweep(env, nowMs = Date.now()) {
+  try { await env.DB.prepare(`SELECT 1 FROM crm_aftercare LIMIT 1`).first(); }
+  catch (err) { if (missingSchema(err)) return { skipped: "113 not migrated" }; throw err; }
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+  const tomorrow = new Date(nowMs + 86400000).toISOString().slice(0, 10);
+  const claim = async (apptId, kind, accountId, leadId) => {
+    const r = await env.DB.prepare(`INSERT OR IGNORE INTO crm_aftercare (appointment_id, kind, account_id, lead_id, done_at)
+      VALUES (?, ?, ?, ?, ?)`).bind(apptId, kind, accountId, leadId || null, new Date(nowMs).toISOString()).run();
+    return !!r.meta?.changes;
+  };
+  const leadOf = async (apptId) => (await env.DB.prepare(`SELECT lead_id FROM sales_lead_links WHERE appointment_id = ?`).bind(apptId).first())?.lead_id || null;
+  const addFollowUp = async (row, leadId, body, due, channel) => {
+    if (!leadId) return false;
+    await env.DB.prepare(`INSERT INTO lead_followups (id, account_id, lead_id, body, channel, due_date, assignee_id, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`).bind(uid(), row.account_id, leadId, body, channel, due,
+      row.rep_user_id || null, new Date(nowMs).toISOString()).run();
+    return true;
+  };
+  let texts = 0, reviews = 0, repeats = 0;
+
+  // Text reminders: tomorrow's estimates with a yes to texts and a mobile.
+  const { results: soon } = await env.DB.prepare(
+    `SELECT a.*, ac.name AS acct_name FROM sales_appointments a JOIN sales_consents sc ON sc.appointment_id = a.id
+       JOIN accounts ac ON ac.id = a.account_id
+      WHERE a.date = ? AND a.status IN ('scheduled','confirmed') AND sc.text = 1 AND a.phone IS NOT NULL AND a.phone <> ''`)
+    .bind(tomorrow).all();
+  for (const row of soon || []) {
+    if (!(await claim(row.id, `text:${row.date} ${row.time}`, row.account_id, null))) continue;
+    const leadId = await leadOf(row.id);
+    const a = apptRowToJs(row);
+    const words = `Hi ${a.homeowner.firstName || "there"}, this is ${row.acct_name}. A reminder of your free estimate ${apptWhenText(a.date, a.time)}. Reply here if you need to change it.`;
+    if (await addFollowUp(row, leadId, `Text a reminder: "${words}"`, today, "text")) texts++;
+  }
+
+  const s = new Map();
+  const settingsFor = async (accountId) => { if (!s.has(accountId)) s.set(accountId, await crmSettingsOf(env, accountId)); return s.get(accountId); };
+  // Review requests: sold estimates whose job is complete, a few days on.
+  const { results: done } = await env.DB.prepare(
+    `SELECT a.*, j.completed_at AS job_done, ac.name AS acct_name, ac.kind AS acct_kind, sc.email AS email_ok
+       FROM sales_appointments a JOIN jobs j ON j.id = a.job_id JOIN accounts ac ON ac.id = a.account_id
+       LEFT JOIN sales_consents sc ON sc.appointment_id = a.id
+      WHERE a.status = 'sold' AND j.status = 'completed'
+        AND NOT EXISTS (SELECT 1 FROM crm_aftercare x WHERE x.appointment_id = a.id AND x.kind = 'review') LIMIT 500`).all();
+  for (const row of done || []) {
+    const st = await settingsFor(row.account_id);
+    if (!st.reviewUrl) continue;
+    const finished = String(row.job_done || row.updated_at || "").slice(0, 10);
+    if (!finished || addDays(finished, st.reviewDelayDays ?? REVIEW_DELAY_DAYS) > today) continue;
+    const to = realEmail(row.email);
+    const leadId = await leadOf(row.id);
+    const optOut = leadId ? await optOutFor(env, row.account_id, leadId) : null;
+    if (!(await claim(row.id, "review", row.account_id, leadId))) continue;
+    if (!to || !row.email_ok || optOut?.dncAt || optOut?.unsubscribedAt) {
+      await env.DB.prepare(`UPDATE crm_aftercare SET result = ? WHERE appointment_id = ? AND kind = 'review'`)
+        .bind(!to ? "no_email" : !row.email_ok ? "no_consent" : "opted_out", row.id).run();
+      continue;
+    }
+    const mail = MAIL.reviewRequestEmail({ firstName: row.first_name || "", account: { name: row.acct_name, kind: row.acct_kind }, link: st.reviewUrl });
+    const result = await sendEmail(env, { to, notice: mail.notice, subject: mail.subject, text: mail.text, html: mail.html, fromName: row.acct_name });
+    await logMail(env, { accountId: row.account_id, companyId: null, to, kind: "review_request", subject: mail.subject, result, sentBy: null });
+    await env.DB.prepare(`UPDATE crm_aftercare SET result = ? WHERE appointment_id = ? AND kind = 'review'`).bind(result.ok ? "sent" : "failed", row.id).run();
+    if (result.ok) reviews++;
+  }
+
+  // Repeat business: a follow-up for the lead's owner, months after the sale.
+  const { results: sold } = await env.DB.prepare(
+    `SELECT a.* FROM sales_appointments a WHERE a.status = 'sold'
+        AND NOT EXISTS (SELECT 1 FROM crm_aftercare x WHERE x.appointment_id = a.id AND x.kind = 'repeat') LIMIT 1000`).all();
+  for (const row of sold || []) {
+    const st = await settingsFor(row.account_id);
+    if (!st.repeatMonths) continue;
+    const saleDay = String(row.date || "").slice(0, 10);
+    if (!realDay(saleDay) || addMonths(saleDay, st.repeatMonths) > today) continue;
+    const leadId = await leadOf(row.id);
+    if (!(await claim(row.id, "repeat", row.account_id, leadId))) continue;
+    const a = apptRowToJs(row);
+    const owner = leadId ? (await env.DB.prepare(`SELECT owner_id FROM sales_leads WHERE id = ?`).bind(leadId).first())?.owner_id : null;
+    if (await addFollowUp({ ...row, rep_user_id: owner || row.rep_user_id }, leadId,
+      `Check in: it's been ${st.repeatMonths} months since ${a.services.map(serviceLabel).join(", ").toLowerCase() || "their project"}. Anything else on the house?`,
+      today, "call")) repeats++;
+  }
+  return { texts, reviews, repeats };
+}
+
+app.get("/api/cron/crm-aftercare", async (c) => {
+  if (!c.env.CRON_SECRET || c.req.header("Authorization") !== `Bearer ${c.env.CRON_SECRET}`) return c.json({ error: "forbidden" }, 403);
+  return c.json(await crmAftercareSweep(c.env));
 });
 
 // ---------------------------------------------------------------------------
@@ -32252,7 +33225,7 @@ export default {
          ["embed-nudge", embedNudgeSweep], ["sms-overage", smsOverageSweep],
          ["referrals", referralSweep], ["action-reminders", actionReminderSweep],
          ["unit-billing", unitBillingSweep], ["linked-discount", linkedDiscountSweep], ["bbb", bbbSweep],
-         ["sales-crm", salesCrmSweep]]
+         ["sales-crm", salesCrmSweep], ["crm-aftercare", crmAftercareSweep]]
       : [["hostnames", hostnameSweep], ["message-notify", messageNotifySweep],
          ["held", heldSweep], ["gcal", gcalSweep], ["crm-sequences", crmSequenceSweep]];
 

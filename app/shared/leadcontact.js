@@ -83,6 +83,14 @@ export function validLeadMessage(b, { lead, consent }) {
   const o = b && typeof b === "object" ? b : {};
   const channel = LEAD_CHANNEL_IDS.includes(o.channel) ? o.channel : null;
   if (!channel) return { ok: false, error: "bad_channel" };
+  // 113. Two-way texting without a text provider: a text THEY sent the sales
+  // manager's phone, logged by hand. Recording what they said is not
+  // contacting anybody, so no consent is asked and Do not contact allows it.
+  if (channel === "text" && o.direction === "inbound") {
+    const body = str(o.body, MAX_TEXT_BODY);
+    if (!body) return { ok: false, error: "body_required" };
+    return { ok: true, value: { channel, direction: "inbound", body, to: null, status: "received" } };
+  }
   const block = channelBlock(channel, { lead, consent });
   if (block) return { ok: false, error: block };
   if (channel === "email") {

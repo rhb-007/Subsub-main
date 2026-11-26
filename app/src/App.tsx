@@ -41,7 +41,7 @@ import {
   Map as MapIcon,
   Crown,
   PhoneIncoming,
-  PhoneOutgoing, Mic, CalendarClock, Briefcase,
+  PhoneOutgoing, Mic, CalendarClock, Briefcase, Tag, FileSignature, GitMerge, Bookmark,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -141,6 +141,8 @@ import { applyFormHtml, applyLink, applyUrl, applyTargetOk, signInUrl, signInBut
 import { LOST_REASONS, lostReasonLabel, dollarsToCents, centsText, salesReport, OPT_OUT_TEXT, STOP_TEXT, TEMPLATE_VARS,
   fillTemplate, leadVars, unsubscribePathToken, TEMPLATE_CHANNELS, MAX_TEXT_TEMPLATE, webConsentText } from "../shared/crmsales.js";
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
+import { PROPOSAL_STATUSES, CLAIM_STATUSES, ROUTING_MODES, LEAD_FILE_KINDS, MAX_LEAD_FILES, MAX_IMPORT, IMPORT_FIELDS,
+  COMMISSION_SOURCES, parseCsv as parseLeadCsv, guessMapping, importRow, duplicateGroups, bpsText, proposalPathToken, CRM_PLUS_TEXT } from "../shared/crmplus.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
@@ -2406,6 +2408,9 @@ export default function SubSub() {
   // 110. A homeowner's unsubscribe link: /unsubscribe/<token>, read the same way.
   const [unsubToken] = useState(() =>
     typeof window === "undefined" ? null : unsubscribePathToken(window.location.pathname));
+  // 113. A proposal a homeowner signs: /proposal/<token>, read the same way.
+  const [proposalToken] = useState(() =>
+    typeof window === "undefined" ? null : proposalPathToken(window.location.pathname));
   // 077. A Sub Passport, /p/<slug>: the same kind of path, printed on a decal
   // and read off a QR code.
   const [passportSlug] = useState(() =>
@@ -6401,6 +6406,14 @@ export default function SubSub() {
   // Above the logged-in gate for the pack's reason: somebody opened a link to
   // read a work order, and the page is the same whether or not they are signed
   // in -- the Worker decides whether the company can still be claimed.
+  if (proposalToken) {
+    return (
+      <div className="ss-root">
+        <style>{CSS}</style>
+        <ProposalPage token={proposalToken} />
+      </div>
+    );
+  }
   if (unsubToken) {
     return (
       <div className="ss-root">
@@ -30605,7 +30618,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
       {pane === "leads" && (
         <CrmLeads leads={leads} owners={leadData?.owners || []} stage={leadStage} onStage={setLeadStage}
           ready={!!leadData && !leadData.migration && !leadData.failed}
-          onOpen={(id) => setOpenLead(id)} onAdd={() => setLeadForm("new")} />
+          onOpen={(id) => setOpenLead(id)} onAdd={() => setLeadForm("new")} role={role} onReload={loadLeads} />
       )}
 
       {pane === "calendar" && (
@@ -30618,9 +30631,10 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
         <CrmReports leads={leads} appointments={list} leadsReady={!!leadData && !leadData.migration && !leadData.failed}
           dealsReady={data ? data.dealsReady !== false : true} />
       )}
+      {pane === "reports" && role !== "callcenter" && <CrmCommissions role={role} />}
       {pane === "markets" && ["admin", "pm"].includes(role) && <CrmMarkets adding={marketAdd} />}
       {pane === "setup" && ["admin", "pm"].includes(role) && (
-        <CrmSetup lib={lib} onReload={loadLib} subdomain={subdomain} accountName={accountName} theme={theme} />
+        <CrmSetup lib={lib} onReload={loadLib} subdomain={subdomain} accountName={accountName} theme={theme} owners={leadData?.owners || []} />
       )}
 
       {pane === "followups" && (
@@ -31078,10 +31092,29 @@ function CallerDashboard({ leads, appointments, followUps, meId, leadsReady, onN
 
 // 107. The leads: one line per person, the stage strip on top, the filters
 // under it. Pressing a stage narrows the list to it.
-function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
+function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd, role = "admin", onReload = () => {} }) {
   const [q, setQ] = useState("");
   const [src, setSrc] = useState("");
   const [owner, setOwner] = useState("");
+  // 113. Tags, saved views, ticking leads to change at once, importing a list
+  // and finding duplicates.
+  const [tag, setTag] = useState("");
+  const [picked, setPicked] = useState([]);
+  const [views, setViews] = useState([]);
+  const [modal, setModal] = useState("");
+  const [viewErr, setViewErr] = useState(null);
+  const office = ["admin", "pm"].includes(role);
+  useEffect(() => { api.crmViews().then((r) => setViews(r.views || [])).catch(() => setViews([])); }, []);
+  const allTags = [...new Set(leads.flatMap((l) => l.tags || []))].sort((a, b) => a.localeCompare(b));
+  const applyView = (v) => { setQ(v.filters.q || ""); setSrc(v.filters.source || ""); setOwner(v.filters.owner || ""); setTag(v.filters.tag || ""); onStage(v.filters.stage || ""); };
+  const saveView = async () => {
+    const name = window.prompt("Name this view", "");
+    if (!name?.trim()) return;
+    setViewErr(null);
+    try { const r = await api.saveCrmView({ name, filters: { q, source: src, owner, tag, stage } }); setViews((xs) => [...xs, r.view]); }
+    catch (e) { setViewErr(e); }
+  };
+  const dupes = duplicateGroups(leads).length;
   const counts = stageCounts(leads);
   const needle = q.trim().toLowerCase();
   const dig = needle.replace(/\D/g, "");
@@ -31089,6 +31122,7 @@ function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
     if (stage && l.stage !== stage) return false;
     if (src && (l.source || "other") !== src) return false;
     if (owner && (owner === "none" ? l.ownerId : l.ownerId !== owner)) return false;
+    if (tag && !(l.tags || []).includes(tag)) return false;
     if (needle) {
       const hay = [l.firstName, l.lastName, l.email, l.address?.street, l.address?.city, l.address?.zip,
         ...l.services.map(serviceLabel)].join(" ").toLowerCase();
@@ -31109,12 +31143,28 @@ function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
         ))}
       </div>
       <FilterBar q={q} onQ={setQ} placeholder="Search name, phone, email, address…" shown={shown.length} total={leads.length}
-        onClear={() => { setQ(""); setSrc(""); setOwner(""); onStage(""); }}
+        onClear={() => { setQ(""); setSrc(""); setOwner(""); setTag(""); onStage(""); }}
         filters={[
           { id: "stage", label: "Stages", value: stage, onChange: onStage, options: LEAD_STAGES.map((x) => [x.id, x.term]) },
           { id: "source", label: "Sources", value: src, onChange: setSrc, options: LEAD_SOURCES.map((x) => [x.id, x.label]) },
           { id: "owner", label: "Owners", value: owner, onChange: setOwner, options: [["none", "Nobody"], ...owners.map((o) => [o.id, o.name])] },
+          { id: "tag", label: "Tags", value: tag, onChange: setTag, options: allTags.map((x) => [x, x]) },
         ]} />
+      <div className="leads-tools" data-leads-tools>
+        <select value="" onChange={(e) => { const v = views.find((x) => x.id === e.target.value); if (v) applyView(v); }} data-saved-views aria-label="Saved views">
+          <option value="">Saved views{views.length ? ` (${views.length})` : ""}</option>
+          {views.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+        </select>
+        <button type="button" className="btn-ghost" data-save-view onClick={saveView}><Bookmark size={14} /> Save this view</button>
+        {office && <button type="button" className="btn-ghost" data-import-leads onClick={() => setModal("import")}><Upload size={14} /> Import a list</button>}
+        {office && <button type="button" className="btn-ghost" data-find-dupes onClick={() => setModal("dupes")}><GitMerge size={14} /> Duplicates{dupes ? ` (${dupes})` : ""}</button>}
+        {shown.length > 0 && <button type="button" className="link-btn" data-pick-all
+          onClick={() => setPicked(picked.length === shown.length ? [] : shown.map((l) => l.id))}>{picked.length === shown.length ? "Untick all" : `Tick all ${shown.length}`}</button>}
+      </div>
+      {viewErr && <p className="form-err" role="alert">{crmPlusErrText(viewErr)}</p>}
+      {picked.length > 0 && <LeadsBulkBar ids={picked} role={role} owners={owners} onClear={() => setPicked([])} onDone={onReload} />}
+      {modal === "import" && <Modal onClose={() => setModal("")} wide><LeadsImport onDone={onReload} onCancel={() => setModal("")} /></Modal>}
+      {modal === "dupes" && <Modal onClose={() => setModal("")} wide><LeadDuplicates leads={leads} onMerged={onReload} onCancel={() => setModal("")} /></Modal>}
       {ready && !shown.length && (
         <div className="empty appt-empty">
           <p>{leads.length ? "Nothing matches." : "No leads yet. A lead is added here whenever an appointment is booked, and you can add one by hand."}</p>
@@ -31125,7 +31175,9 @@ function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
         {shown.map((l) => {
           const nx = nextAppt(l);
           return (
-            <li key={l.id}>
+            <li key={l.id} className="lead-li">
+              <input type="checkbox" className="lead-pick" aria-label={`Tick ${[l.firstName, l.lastName].filter(Boolean).join(" ") || "lead"}`} data-pick={l.id}
+                checked={picked.includes(l.id)} onChange={(e) => setPicked(e.target.checked ? [...picked, l.id] : picked.filter((x) => x !== l.id))} />
               <button type="button" className="appt-row lead-row" data-lead={l.id} onClick={() => onOpen(l.id)}>
                 <span className="appt-row-main"><b>{[l.firstName, l.lastName].filter(Boolean).join(" ") || "No name"}</b>
                   <span>{[l.phone ? formatPhone(l.phone) : "", l.services.map(serviceLabel).join(", "), l.address?.city].filter(Boolean).join(" · ")}</span></span>
@@ -31133,6 +31185,7 @@ function CrmLeads({ leads, owners, stage, onStage, ready, onOpen, onAdd }) {
                   {l.optOut?.dncAt ? <span className="tn-chip lead-dnc" data-lead-dnc>Do not contact</span>
                     : l.optOut?.unsubscribedAt ? <span className="tn-chip" data-lead-unsub>Unsubscribed</span>
                     : l.enrollment?.status === "active" ? <span className="tn-chip" data-lead-seq>On a sequence</span> : null}
+                  {(l.tags || []).slice(0, 2).map((x) => <span key={x} className="tn-chip lead-tag"><Tag size={10} /> {x}</span>)}
                   <span className="appt-row-rep">{nx ? `Appointment ${apptWhenText(nx.date).replace(/^(\w+), /, "")}` : sourceLabel(l.source)}</span></span>
               </button>
             </li>
@@ -31292,7 +31345,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
       <LeadArea zip={lead.address?.zip} city={lead.address?.city} state={lead.address?.state} services={lead.services || []} />
-      <LeadDetailTabs lead={lead} start={startTab} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib}
+      <LeadDetailTabs lead={lead} start={startTab} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib} apptById={apptById}
         onConsent={(consent) => onSaved({ ...lead, consent })}>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
         {LEAD_STAGES.map((stg) => (
@@ -31316,6 +31369,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         {lead.consent ? <ConsentChips consent={lead.consent} /> : <p className="note">Not asked yet. It is asked when an appointment is booked.</p>}
       </div>
       {lead.notes && <div className="lead-notes"><span className="lead-label">Notes</span><p>{lead.notes}</p></div>}
+      <LeadMeta lead={lead} onSaved={(m) => onSaved({ ...lead, ...m })} />
       <section className="lead-appts">
         <div className="lead-appts-head"><span className="lead-label">Appointments</span>
           <button className="btn-solid" data-book-lead onClick={onBook}><PhoneCall size={15} /> Book an appointment</button></div>
@@ -31338,15 +31392,21 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
 
 // 109. A lead is two tabs: who they are, and contacting them. Contact opens
 // first when the lead was opened from the Inbox.
-function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onContacted, onConsent, children, role = "admin", lib = null }) {
-  const [tab, setTab] = useState(start === "contact" ? "contact" : "overview");
+// 113. Proposals, the insurance claim and the files are tabs beside them.
+const LEAD_TABS = [["overview", "Overview"], ["contact", "Contact"], ["proposals", "Proposals"], ["claim", "Insurance claim"], ["files", "Files"]];
+function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onContacted, onConsent, children, role = "admin", lib = null, apptById = {} }) {
+  const [tab, setTab] = useState(LEAD_TABS.some(([id]) => id === start) ? start : "overview");
   return (<>
     <div className="seg-tabs lead-tabs" role="tablist">
-      <button type="button" role="tab" data-lead-tab="overview" aria-selected={tab === "overview"} className={tab === "overview" ? "on" : ""} onClick={() => setTab("overview")}>Overview</button>
-      <button type="button" role="tab" data-lead-tab="contact" aria-selected={tab === "contact"} className={tab === "contact" ? "on" : ""} onClick={() => setTab("contact")}>Contact</button>
+      {LEAD_TABS.map(([id, label]) => (
+        <button key={id} type="button" role="tab" data-lead-tab={id} aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
+      ))}
     </div>
     {tab === "overview" ? children
-      : <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} startMode={startMode} />}
+      : tab === "contact" ? <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} startMode={startMode} />
+      : tab === "proposals" ? <LeadProposals lead={lead} role={role} apptById={apptById} onChanged={onContacted} />
+      : tab === "claim" ? <LeadClaim lead={lead} />
+      : <LeadFiles lead={lead} />}
   </>);
 }
 
@@ -31493,6 +31553,7 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
       setD((x) => ({ ...(x || {}), messages: [r.message, ...((x?.messages) || [])] }));
       setMode("");
       setFlash(body.channel === "email" ? (r.sent?.ok ? `Emailed ${name}.` : `Saved, but the email didn't send: ${r.sent?.error || "try again"}.`)
+        : body.channel === "text" && body.direction === "inbound" ? "Their text is on the record."
         : body.channel === "text" ? "Opened in your messages app. Press send there."
         : body.channel === "mail" ? "Letter ready to print. Mark it mailed once it goes in the mail."
         : "Logged.");
@@ -31555,6 +31616,7 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         {btn("text", "Text", MessageSquareText, blocks.text)}
         {btn("mail", "Letter", Printer, blocks.mail)}
         {btn("call", "Log a call", PhoneCall, null)}
+        {btn("textin", "Log a text they sent", MessageSquareText, null)}
         {btn("note", "Note", StickyNote, null)}
       </div>
       {blockedNotes.length > 0 && <ul className="lc-blocked">{blockedNotes}</ul>}
@@ -31620,6 +31682,17 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
             <button className="btn-solid" data-print-letter disabled={busy || !f.body?.trim()}
               onClick={async () => { const body = f.body; if (await send({ channel: "mail", body })) printLetter(body); }}>
               <Printer size={15} /> Print letter</button>
+          </div>
+        </div>
+      )}
+      {mode === "textin" && (
+        <div className="lc-form" data-compose="textin">
+          <p className="note">SubSub can't receive texts yet. Paste what they texted you here so it's on the record and anybody else can see it.</p>
+          <label className="fld">What they said<textarea rows={4} maxLength={MAX_TEXT_BODY} value={f.body || ""} onChange={(e) => setF({ ...f, body: e.target.value })} data-textin-body /></label>
+          <div className="form-actions">
+            <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
+            <button className="btn-solid" data-log-textin disabled={busy || !f.body?.trim()}
+              onClick={() => send({ channel: "text", direction: "inbound", body: f.body })}>Log their text</button>
           </div>
         </div>
       )}
@@ -32121,12 +32194,13 @@ function CrmMarkets({ adding = 0 }) {
 
 // 110. CRM Setup, for the office: email templates, follow-up sequences, and
 // the form for the account's own website.
-function CrmSetup({ lib, onReload, subdomain, accountName, theme }) {
+function CrmSetup({ lib, onReload, subdomain, accountName, theme, owners = [] }) {
   const [tab, setTab] = useState("templates");
   return (
     <div className="crm-setup" data-crm-setup>
       <div className="seg-tabs" role="tablist">
-        {[["templates", "Templates"], ["sequences", "Follow-up sequences"], ["form", "Website form"]].map(([id, label]) => (
+        {[["templates", "Templates"], ["sequences", "Follow-up sequences"], ["form", "Website form"], ["routing", "Lead routing"],
+          ["aftercare", "Reviews and repeat work"], ["commission", "Commission"], ["fields", "Custom fields"]].map(([id, label]) => (
           <button key={id} type="button" role="tab" data-setup-tab={id} aria-selected={tab === id} className={tab === id ? "on" : ""}
             onClick={() => setTab(id)}>{label}</button>
         ))}
@@ -32135,6 +32209,7 @@ function CrmSetup({ lib, onReload, subdomain, accountName, theme }) {
       {tab === "templates" && <CrmTemplates lib={lib} onReload={onReload} accountName={accountName} />}
       {tab === "sequences" && <CrmSequences lib={lib} onReload={onReload} />}
       {tab === "form" && <LeadFormEmbed subdomain={subdomain} accountName={accountName} theme={theme} />}
+      {["routing", "aftercare", "commission", "fields"].includes(tab) && <CrmPlusSetup tab={tab} owners={owners} />}
     </div>
   );
 }
@@ -32393,6 +32468,733 @@ function LeadFormEmbed({ subdomain, accountName, theme }) {
 
 // 110. The homeowner's way out: /unsubscribe/<token>, from the link at the
 // foot of any email a lead was sent. One press, and it says what it did.
+// ---------------------------------------------------------------------------
+// 113. The rest of the CRM: proposals, the insurance claim, files, tags and
+// custom fields, importing, duplicates, bulk changes, setup and commission.
+// shared/crmplus.js holds the rules.
+// ---------------------------------------------------------------------------
+
+const crmPlusErrText = (e) => {
+  const code = e?.body?.error;
+  if (CRM_PLUS_TEXT[code]) return CRM_PLUS_TEXT[code];
+  if (code === "migration_needed") return `This isn't set up on this database yet. Run migration ${e.body.migration || "113_crm_plus"}.`;
+  if (code === "not_found") return "That isn't one you can reach any more.";
+  if (e?.body?.row) return `Row ${e.body.row}: ${leadRefusalText(e)}`;
+  if (!e?.status) return "Couldn't reach SubSub just now. Check the connection and try again.";
+  return `That didn't go through (${code || e.status}). Try again.`;
+};
+
+// The account's CRM settings, read once per page and shared, because the
+// leads list, the lead and Setup all read the custom fields.
+let crmSettingsMemo = null;
+function useCrmSettings() {
+  const [s, setS] = useState(crmSettingsMemo);
+  const load = useCallback(async () => {
+    try { crmSettingsMemo = await api.crmSettings(); setS(crmSettingsMemo); }
+    catch (e) { setS({ failed: true, error: e }); }
+  }, []);
+  useEffect(() => { if (!crmSettingsMemo) load(); }, [load]);
+  return [s, (next) => { crmSettingsMemo = next; setS(next); }, load];
+}
+
+// Tags and the account's own fields, on the lead's Overview.
+function LeadMeta({ lead, onSaved }) {
+  const [settings] = useCrmSettings();
+  const [tag, setTag] = useState("");
+  const [custom, setCustom] = useState(lead.custom || {});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [saved, setSaved] = useState(false);
+  useEffect(() => { setCustom(lead.custom || {}); }, [lead.id]);
+  const tags = lead.tags || [];
+  const fields = settings?.customFields || [];
+  const save = async (body) => {
+    setBusy(true); setErr(null); setSaved(false);
+    try { const r = await api.putLeadMeta(lead.id, body); onSaved({ tags: r.tags, custom: r.custom }); setSaved(true); return true; }
+    catch (e) { setErr(e); return false; }
+    finally { setBusy(false); }
+  };
+  const dirty = JSON.stringify(custom) !== JSON.stringify(lead.custom || {});
+  return (
+    <div className="lead-meta" data-lead-meta>
+      <span className="lead-label">Tags</span>
+      <div className="lead-tags">
+        {tags.map((t) => (
+          <span key={t} className="tn-chip lead-tag" data-lead-tag={t}><Tag size={11} /> {t}
+            <button type="button" className="icon-x" aria-label={`Remove ${t}`} disabled={busy}
+              onClick={() => save({ tags: tags.filter((x) => x !== t) })}><X size={11} /></button></span>
+        ))}
+        <form className="lead-tag-add" onSubmit={async (e) => { e.preventDefault(); if (tag.trim() && await save({ tags: [...tags, tag.trim()] })) setTag(""); }}>
+          <input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Add a tag" maxLength={30} data-tag-input aria-label="Add a tag" />
+          <button className="btn-ghost" disabled={busy || !tag.trim()} data-tag-add>Add</button>
+        </form>
+      </div>
+      {fields.length > 0 && (
+        <div className="lead-custom" data-lead-custom>
+          {fields.map((f) => (
+            <label key={f.key} className="fld" data-custom-field={f.key}>{f.label}
+              {f.type === "select" ? (
+                <select value={custom[f.key] ?? ""} onChange={(e) => setCustom({ ...custom, [f.key]: e.target.value })}>
+                  <option value="">Not set</option>{f.options.map((o) => <option key={o}>{o}</option>)}
+                </select>
+              ) : f.type === "yesno" ? (
+                <select value={custom[f.key] === true ? "yes" : custom[f.key] === false ? "no" : ""}
+                  onChange={(e) => setCustom({ ...custom, [f.key]: e.target.value === "" ? null : e.target.value === "yes" })}>
+                  <option value="">Not set</option><option value="yes">Yes</option><option value="no">No</option>
+                </select>
+              ) : (
+                <input type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"} value={custom[f.key] ?? ""}
+                  onChange={(e) => setCustom({ ...custom, [f.key]: f.type === "number" && e.target.value !== "" ? Number(e.target.value) : e.target.value })} />
+              )}
+            </label>
+          ))}
+          {dirty && <div className="form-actions"><button className="btn-solid" disabled={busy} data-custom-save onClick={() => save({ custom })}>Save fields</button></div>}
+        </div>
+      )}
+      {saved && !dirty && <p className="note" role="status">Saved.</p>}
+      {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+    </div>
+  );
+}
+
+const PROPOSAL_CHIP = { draft: "", sent: "wait", viewed: "wait", signed: "ok", declined: "bad", void: "" };
+const blankLine = () => ({ label: "", qty: "1", unit: "" });
+const lineCents = (l) => {
+  const c = dollarsToCents(l.unit);
+  const q = Number(l.qty || 0);
+  return c == null || c === undefined || !Number.isFinite(q) ? 0 : Math.round(q * c);
+};
+
+function ProposalEditor({ lead, existing = null, appts = [], onSaved, onCancel }) {
+  const [title, setTitle] = useState(existing?.title || (lead.services?.length ? lead.services.map(serviceLabel).join(", ") : ""));
+  const [lines, setLines] = useState(existing ? existing.items.map((i) => ({ label: i.label, qty: String(i.qty), unit: String(i.unitCents / 100) })) : [blankLine()]);
+  const [notes, setNotes] = useState(existing?.notes || "");
+  const [days, setDays] = useState(String(existing ? Number(existing.expiresAt || 30) || 30 : 30));
+  const [apptId, setApptId] = useState(existing?.appointmentId || (appts.find((a) => !["cancelled", "no_show"].includes(a.status))?.id || ""));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const total = lines.reduce((t, l) => t + lineCents(l), 0);
+  const body = () => ({ title, notes, expiresDays: Number(days), appointmentId: apptId || null,
+    items: lines.filter((l) => l.label.trim() || l.unit).map((l) => ({ label: l.label, qty: Number(l.qty || 1), unit: l.unit })) });
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try { onSaved((existing ? await api.patchProposal(existing.id, body()) : await api.createProposal(lead.id, body())).proposal); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="lc-form proposal-editor" data-proposal-editor>
+      <label className="fld">Title<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Roof replacement" data-prop-title /></label>
+      <div className="prop-lines">
+        <div className="prop-line prop-line-head"><span>What</span><span>Qty</span><span>Price each</span><span>Line total</span><span /></div>
+        {lines.map((l, i) => (
+          <div key={i} className="prop-line" data-prop-line={i}>
+            <input value={l.label} onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, label: e.target.value } : x)))} placeholder="Tear off and replace, 30 squares" aria-label="What" />
+            <input value={l.qty} inputMode="decimal" onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, qty: e.target.value } : x)))} aria-label="Quantity" />
+            <input value={l.unit} inputMode="decimal" onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, unit: e.target.value } : x)))} placeholder="$0" aria-label="Price each" />
+            <span className="prop-line-total">{centsText(lineCents(l)) || "$0"}</span>
+            <button type="button" className="icon-x" aria-label="Remove line" disabled={lines.length === 1}
+              onClick={() => setLines(lines.filter((_, k) => k !== i))}><X size={12} /></button>
+          </div>
+        ))}
+        <button type="button" className="link-btn" data-prop-add-line onClick={() => setLines([...lines, blankLine()])}><Plus size={13} /> Add a line</button>
+      </div>
+      <p className="prop-total" data-prop-total>Total <b>{centsText(total) || "$0"}</b></p>
+      <label className="fld">Notes for the homeowner<textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)}
+        placeholder="What's included, warranty, payment terms…" /></label>
+      <div className="fld-row">
+        <label className="fld">Good for (days)<input type="number" min={1} max={180} value={days} onChange={(e) => setDays(e.target.value)} /></label>
+        <label className="fld">For the estimate
+          <select value={apptId} onChange={(e) => setApptId(e.target.value)} data-prop-appt>
+            <option value="">Not tied to an estimate</option>
+            {appts.map((a) => <option key={a.id} value={a.id}>{apptWhenText(a.date).replace(/^(\w+), /, "")} · {APPT_STATUSES[a.status]?.label || a.status}</option>)}
+          </select></label>
+      </div>
+      {apptId && <p className="note">Signing it marks that estimate sold, at this total.</p>}
+      {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+      <div className="form-actions">
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-solid" disabled={busy || !title.trim() || total <= 0} data-prop-save onClick={save}>{busy ? "Saving…" : "Save draft"}</button>
+      </div>
+    </div>
+  );
+}
+
+function LeadProposals({ lead, role, apptById = {}, onChanged }) {
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState(null);
+  const [editing, setEditing] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [flash, setFlash] = useState("");
+  const sales = SALES_ROLES.includes(role);
+  const load = async () => {
+    try { setList((await api.leadProposals(lead.id)).proposals); setErr(null); }
+    catch (e) { setErr(e); }
+  };
+  useEffect(() => { load(); }, [lead.id]);
+  const appts = (lead.appointments || []).map((a) => ({ ...a, ...(apptById[a.id] || {}) }));
+  const act = async (p, what) => {
+    setBusy(p.id + what); setErr(null); setFlash("");
+    try {
+      const r = what === "send" ? await api.sendProposal(p.id) : await api.voidProposal(p.id);
+      setList((xs) => xs.map((x) => (x.id === p.id ? r.proposal : x)));
+      setFlash(what === "send" ? (r.emailed?.ok ? `Emailed to ${r.emailed.to}.` : `It's out, but the email didn't send (${r.emailed?.error || "try again"}). Copy the link below.`) : "Withdrawn.");
+      onChanged?.();
+    } catch (e) { setErr(e); }
+    finally { setBusy(""); }
+  };
+  if (err && !list) return <p className="form-err" role="alert">{crmPlusErrText(err)} <button className="link-btn" onClick={load}>Try again</button></p>;
+  if (!list) return <p className="note">Loading…</p>;
+  return (
+    <div className="lead-proposals" data-lead-proposals>
+      <p className="note">A proposal is a priced estimate they open from a link and sign with their name. Signing marks the estimate sold.</p>
+      {sales && !editing && <button className="btn-solid" data-new-proposal onClick={() => setEditing("new")}><FileSignature size={15} /> New proposal</button>}
+      {!sales && <p className="note">Proposals are written by a sales manager or the office.</p>}
+      {editing && (
+        <ProposalEditor lead={lead} appts={appts} existing={editing === "new" ? null : editing}
+          onCancel={() => setEditing(null)}
+          onSaved={(p) => { setList((xs) => [p, ...xs.filter((x) => x.id !== p.id)]); setEditing(null); }} />
+      )}
+      {flash && <p className="appt-flash" role="status">{flash}</p>}
+      {err && list && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+      {!list.length && !editing && <p className="note">None yet.</p>}
+      <ul className="prop-list">
+        {list.map((p) => (
+          <li key={p.id} className="prop-row" data-proposal={p.id}>
+            <div className="prop-row-main"><b>{p.title}</b> <span>{centsText(p.totalCents)}</span>
+              <span className={`tn-chip ${PROPOSAL_CHIP[p.status]}`} data-proposal-status={p.status}>{PROPOSAL_STATUSES[p.status]?.label || p.status}</span></div>
+            <p className="note">
+              {p.status === "signed" ? `Signed by ${p.signerName} ${stampDay(p.signedAt)}`
+                : p.status === "declined" ? `Declined ${stampDay(p.declinedAt)}${p.declineNote ? `: "${p.declineNote}"` : ""}`
+                : p.status === "draft" ? `Draft, written by ${p.createdByName || "your team"}`
+                : `Sent ${stampDay(p.sentAt)}${p.viewedAt ? `, opened ${stampDay(p.viewedAt)}` : ", not opened yet"}${p.expiresAt ? ` · good until ${stampDay(p.expiresAt)}` : ""}`}
+            </p>
+            {p.link && ["sent", "viewed"].includes(p.status) && (
+              <p className="prop-link"><code>{p.link}</code> <button type="button" className="link-btn" onClick={() => navigator.clipboard?.writeText(p.link)}><Copy size={12} /> Copy</button></p>
+            )}
+            {sales && (
+              <div className="form-actions">
+                {p.status === "draft" && <button className="btn-ghost" onClick={() => setEditing(p)}><Pencil size={13} /> Edit</button>}
+                {p.status === "draft" && <button className="btn-solid" data-send-proposal disabled={!!busy || !lead.email} onClick={() => act(p, "send")}
+                  title={lead.email ? "" : CRM_PLUS_TEXT.needs_email}><Send size={13} /> {busy === p.id + "send" ? "Sending…" : "Email it to sign"}</button>}
+                {["sent", "viewed"].includes(p.status) && <button className="btn-ghost" disabled={!!busy || !lead.email} onClick={() => act(p, "send")}>Email it again</button>}
+                {["draft", "sent", "viewed"].includes(p.status) && <button className="btn-ghost" disabled={!!busy} onClick={() => act(p, "void")}>Withdraw</button>}
+              </div>
+            )}
+            {sales && p.status === "draft" && !lead.email && <p className="note">{CRM_PLUS_TEXT.needs_email}</p>}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function LeadClaim({ lead }) {
+  const [c, setC] = useState(null);
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const seed = (x) => ({ status: x?.status || "not_filed", carrier: x?.carrier || "", claimNumber: x?.claimNumber || "",
+    adjusterName: x?.adjusterName || "", adjusterPhone: x?.adjusterPhone ? formatPhone(x.adjusterPhone) : "",
+    adjusterMeeting: x?.adjusterMeeting || "", approved: x?.approvedCents != null ? String(x.approvedCents / 100) : "",
+    deductible: x?.deductibleCents != null ? String(x.deductibleCents / 100) : "", notes: x?.notes || "" });
+  useEffect(() => {
+    api.leadClaim(lead.id).then((r) => { setC(r.claim); setF(seed(r.claim)); }).catch((e) => { setErr(e); setF(seed(null)); });
+  }, [lead.id]);
+  if (!f) return <p className="note">Loading…</p>;
+  const set = (k) => (e) => { setF({ ...f, [k]: e.target.value }); setSaved(false); };
+  const save = async () => {
+    setBusy(true); setErr(null);
+    try { const r = await api.putLeadClaim(lead.id, f); setC(r.claim); setF(seed(r.claim)); setSaved(true); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const net = dollarsToCents(f.approved) != null && dollarsToCents(f.deductible) != null ? dollarsToCents(f.approved) - dollarsToCents(f.deductible) : null;
+  return (
+    <div className="lead-claim" data-lead-claim>
+      <p className="note">For storm work paid by the homeowner's insurance: who the carrier is, the claim, the adjuster and what was approved.</p>
+      <label className="fld">Where it stands
+        <select value={f.status} onChange={set("status")} data-claim-status>
+          {CLAIM_STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+        </select></label>
+      <div className="fld-row">
+        <label className="fld">Insurance carrier<input value={f.carrier} onChange={set("carrier")} placeholder="State Farm" data-claim-carrier /></label>
+        <label className="fld">Claim number<input value={f.claimNumber} onChange={set("claimNumber")} data-claim-number /></label>
+      </div>
+      <div className="fld-row">
+        <label className="fld">Adjuster<input value={f.adjusterName} onChange={set("adjusterName")} /></label>
+        <label className="fld">Adjuster's phone<input value={f.adjusterPhone} inputMode="tel" onChange={set("adjusterPhone")} data-claim-phone /></label>
+      </div>
+      <label className="fld">Adjuster meeting<input type="datetime-local" value={f.adjusterMeeting} onChange={set("adjusterMeeting")} data-claim-meeting /></label>
+      <div className="fld-row">
+        <label className="fld">Approved amount<input value={f.approved} inputMode="decimal" onChange={set("approved")} placeholder="$0" data-claim-approved /></label>
+        <label className="fld">Deductible<input value={f.deductible} inputMode="decimal" onChange={set("deductible")} placeholder="$0" /></label>
+      </div>
+      {net != null && <p className="note" data-claim-net>Insurance pays {centsText(Math.max(0, net))} after the deductible.</p>}
+      <label className="fld">Notes<textarea rows={3} value={f.notes} onChange={set("notes")} placeholder="Supplement for drip edge, ice and water…" /></label>
+      {c?.updatedAt && <p className="note">Last changed {stampDay(c.updatedAt)}{c.updatedByName ? ` by ${c.updatedByName}` : ""}.</p>}
+      {saved && <p className="note" role="status">Saved.</p>}
+      {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+      <div className="form-actions"><button className="btn-solid" disabled={busy} data-claim-save onClick={save}>{busy ? "Saving…" : "Save claim"}</button></div>
+    </div>
+  );
+}
+
+function LeadFileOpen({ lead, file }) {
+  const [u, setU] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true, url = null;
+    api.leadFileBlob(lead.id, file.id).then((r) => { url = r.url; if (live) setU(r); }).catch(() => live && setFailed(true));
+    return () => { live = false; if (url) URL.revokeObjectURL(url); };
+  }, [lead.id, file.id]);
+  if (failed) return <span className="note">Couldn't open it.</span>;
+  if (!u) return <span className="note">…</span>;
+  return (<>
+    {/^image\//.test(u.type) && <img className="lead-file-thumb" src={u.url} alt={file.name} />}
+    <a className="link-btn" href={u.url} target="_blank" rel="noreferrer">Open</a>
+    <a className="link-btn" href={u.url} download={file.name} target="_blank" rel="noreferrer"><Download size={12} /> Download</a>
+  </>);
+}
+
+function LeadFiles({ lead }) {
+  const [list, setList] = useState(null);
+  const [kind, setKind] = useState("photo");
+  const [busy, setBusy] = useState(0);
+  const [err, setErr] = useState(null);
+  const [cc, setCc] = useState(null);
+  const [ccOpen, setCcOpen] = useState(false);
+  const [removing, setRemoving] = useState(null);
+  useEffect(() => {
+    api.leadFiles(lead.id).then((r) => setList(r.files)).catch((e) => { setErr(e); setList([]); });
+    api.companycamStatus().then(setCc).catch(() => setCc(null));
+  }, [lead.id]);
+  const attach = async (entries) => {
+    try { setList((await api.addLeadFiles(lead.id, entries)).files); }
+    catch (e) { setErr(e); }
+  };
+  const add = async (files) => {
+    const picked = [...files];
+    if (!picked.length) return;
+    setErr(null); setBusy(picked.length);
+    const entries = [];
+    for (const file of picked) {
+      try {
+        const r = await api.uploadMeasurementDoc(file);
+        entries.push({ key: r.key, name: file.name, type: r.type || file.type || "", size: r.size ?? file.size, kind });
+      } catch (e) { setErr(e); }
+      finally { setBusy((n) => n - 1); }
+    }
+    if (entries.length) await attach(entries);
+  };
+  return (
+    <div className="lead-files" data-lead-files>
+      <p className="note">Damage photos, measurement reports, the insurance paperwork. Anything here stays with the lead and goes with them to the job.</p>
+      <div className="lead-files-add">
+        <label className="fld">What it is
+          <select value={kind} onChange={(e) => setKind(e.target.value)} data-file-kind>
+            {LEAD_FILE_KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}
+          </select></label>
+        <label className="btn-ghost meas-upload"><Upload size={14} /> Upload
+          <input type="file" hidden multiple data-file-input accept=".pdf,.png,.jpg,.jpeg,.webp,.heic,.gif,.csv,.txt,.xls,.xlsx,.doc,.docx,.zip"
+            onChange={(e) => { add(e.target.files); e.target.value = ""; }} /></label>
+        {cc?.connected && <button type="button" className="btn-ghost" onClick={() => setCcOpen(true)}><Camera size={14} /> Import from CompanyCam</button>}
+      </div>
+      <p className="note">Hover, EagleView and other measurement reports: download the PDF from them and upload it here.</p>
+      {busy > 0 && <p className="note">Uploading {busy}…</p>}
+      {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+      {ccOpen && (
+        <CompanyCamImport searchHint={lead.address?.street || ""} room={MAX_LEAD_FILES - (list?.length || 0)} onClose={() => setCcOpen(false)}
+          onImported={(entries) => { setCcOpen(false); attach(entries.map((d) => ({ ...d, kind: d.source?.kind === "photo" ? "photo" : "measurement", source: "companycam" }))); }} />
+      )}
+      {list && !list.length && <p className="note">No files yet.</p>}
+      <ul className="lead-file-list">
+        {(list || []).map((f) => (
+          <li key={f.id} className="lead-file" data-lead-file={f.id}>
+            <span className="lead-file-name"><FileText size={14} /> {f.name}</span>
+            <span className="tn-chip">{LEAD_FILE_KINDS.find((k) => k.id === f.kind)?.label || "Other"}</span>
+            <span className="note">{stampDay(f.createdAt)}{f.uploadedByName ? ` · ${f.uploadedByName}` : ""}{f.source === "companycam" ? " · CompanyCam" : ""}</span>
+            <LeadFileOpen lead={lead} file={f} />
+            <button type="button" className="icon-x" aria-label={`Remove ${f.name}`} onClick={() => setRemoving(f)}><Trash2 size={13} /></button>
+          </li>
+        ))}
+      </ul>
+      {removing && (
+        <ConfirmRemove name={removing.name} what="lead file" verb="Remove"
+          consequence="It comes off this lead. Nothing else changes."
+          explain={crmPlusErrText}
+          onCancel={() => setRemoving(null)}
+          onConfirm={async () => { await api.removeLeadFile(lead.id, removing.id); setList((xs) => xs.filter((x) => x.id !== removing.id)); setRemoving(null); }} />
+      )}
+    </div>
+  );
+}
+
+// The homeowner's page: no account, opened from the email.
+function ProposalPage({ token }) {
+  const [p, setP] = useState(null);
+  const [gone, setGone] = useState(false);
+  const [err, setErr] = useState("");
+  const [name, setName] = useState("");
+  const [agree, setAgree] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [declining, setDeclining] = useState(false);
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    api.publicProposal(token).then((r) => { setP(r); setName(r.homeowner || ""); })
+      .catch((e) => (e?.status === 404 ? setGone(true) : setErr("That didn't load. Check your connection and open the link again.")));
+  }, [token]);
+  const go = async (what) => {
+    setBusy(true); setErr("");
+    try { setP(what === "sign" ? await api.signProposal(token, { name, agree }) : await api.declineProposal(token, { note })); setDeclining(false); }
+    catch (e) { setErr(CRM_PLUS_TEXT[e?.body?.error] || (e?.body?.error === "full_name_required" ? "Type your full name, first and last." : e?.body?.error === "agree_required" ? "Tick the box to agree." : e?.body?.error === "expired" ? "This proposal has expired. Ask them for a new one." : "That didn't go through. Please try again.")); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="pack-page proposal-page" data-proposal-page>
+      <div className="pack-card">
+        {gone ? (<><h2>We couldn't find that proposal</h2><p>It may have been copied only in part. Open it again from the email.</p></>)
+          : !p && !err ? <p className="note">Loading…</p>
+          : p && (<>
+            <p className="pack-kicker">Proposal from {p.account.name}</p>
+            <h1 className="pack-name" data-proposal-title>{p.title}</h1>
+            <p className="pack-lede">For {p.homeowner}{p.address ? ` · ${p.address}` : ""}</p>
+            <table className="prop-table" data-proposal-items>
+              <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
+              <tbody>{p.items.map((it, i) => (
+                <tr key={i}><td>{it.label}</td><td>{it.qty}</td><td>{centsText(it.unitCents)}</td><td>{centsText(Math.round(it.qty * it.unitCents))}</td></tr>
+              ))}</tbody>
+              <tfoot><tr><td colSpan={3}>Total</td><td data-proposal-total>{centsText(p.totalCents)}</td></tr></tfoot>
+            </table>
+            {p.notes && <p className="prop-notes">{p.notes}</p>}
+            {p.status === "signed" ? (
+              <p className="prop-done" data-proposal-signed><CheckCircle2 size={20} /> Signed by {p.signerName} on {stampDay(p.signedAt)}. {p.account.name} will be in touch to schedule the work.</p>
+            ) : p.status === "declined" ? (
+              <p className="prop-done" data-proposal-declined>You declined this proposal. Thanks for letting {p.account.name} know.</p>
+            ) : p.block ? (
+              <p className="appt-warn" data-proposal-block>{p.block === "expired" ? "This proposal has expired. Ask them for a new one." : "This proposal can't be signed any more."}</p>
+            ) : declining ? (
+              <div className="prop-sign">
+                <label className="fld">Anything you'd like them to know? (optional)<textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></label>
+                <div className="form-actions"><button className="btn-ghost" onClick={() => setDeclining(false)}>Back</button>
+                  <button className="btn-danger" disabled={busy} onClick={() => go("decline")}>Decline the proposal</button></div>
+              </div>
+            ) : (
+              <div className="prop-sign" data-proposal-sign>
+                {p.expiresAt && <p className="note">Good until {stampDay(p.expiresAt)}.</p>}
+                <label className="fld">Your full name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" data-sign-name /></label>
+                <label className="prop-agree"><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} data-sign-agree />
+                  I accept this proposal for {centsText(p.totalCents)}, and typing my name is my signature.</label>
+                <div className="form-actions">
+                  <button className="btn-ghost" onClick={() => setDeclining(true)} data-proposal-decline>Decline</button>
+                  <button className="btn-solid" disabled={busy || !agree || name.trim().split(/\s+/).length < 2} data-sign-go onClick={() => go("sign")}>
+                    <FileSignature size={15} /> {busy ? "Signing…" : "Sign the proposal"}</button>
+                </div>
+              </div>
+            )}
+          </>)}
+        {err && <p className="form-err" role="alert">{err}</p>}
+      </div>
+      <p className="pack-foot">Sent through SubSub</p>
+    </div>
+  );
+}
+
+// 12. Importing a list: a CSV file or pasted rows, columns matched to fields,
+// a preview, and the server's answer.
+function LeadsImport({ onDone, onCancel }) {
+  const [rows, setRows] = useState(null);
+  const [map, setMap] = useState({});
+  const [source, setSource] = useState("other");
+  const [tag, setTag] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [result, setResult] = useState(null);
+  const read = (text) => { const r = parseLeadCsv(text); setRows(r); setMap(guessMapping(r[0] || [])); setResult(null); setErr(null); };
+  const data = rows ? rows.slice(1).map((r) => importRow(r, map)) : [];
+  const go = async () => {
+    setBusy(true); setErr(null);
+    try { const r = await api.importLeads({ rows: data, source, tag }); setResult(r); onDone?.(); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="form leads-import" data-leads-import>
+      <h2 className="form-title">Import a list of leads</h2>
+      {result ? (<>
+        <p data-import-result>Added <b>{result.created}</b> lead{result.created === 1 ? "" : "s"}.{result.skipped.length ? ` Skipped ${result.skipped.length}: already in your leads, or twice in the file.` : ""}</p>
+        <div className="form-actions"><button className="btn-solid" onClick={onCancel}>Done</button></div>
+      </>) : (<>
+        <p className="form-sub">A CSV with a header row: name (or first and last), phone, email, street, city, state, ZIP, notes, tags. Up to {MAX_IMPORT} rows. Somebody already in your leads is skipped.</p>
+        <label className="btn-ghost meas-upload"><Upload size={14} /> Choose a CSV file
+          <input type="file" hidden accept=".csv,text/csv" data-import-file onChange={async (e) => { const f = e.target.files?.[0]; if (f) read(await f.text()); e.target.value = ""; }} /></label>
+        <label className="fld">Or paste the rows<textarea rows={4} data-import-paste placeholder={"Name,Phone,Email\nDana Ruiz,253-555-0142,dana@example.com"}
+          onChange={(e) => read(e.target.value)} /></label>
+        {rows && rows.length > 1 && (<>
+          <div className="import-map">
+            {IMPORT_FIELDS.map((fd) => (
+              <label key={fd.id} className="fld">{fd.label}
+                <select value={map[fd.id] ?? ""} onChange={(e) => setMap({ ...map, [fd.id]: e.target.value === "" ? undefined : Number(e.target.value) })}>
+                  <option value="">Not in the file</option>
+                  {(rows[0] || []).map((h, i) => <option key={i} value={i}>{h || `Column ${i + 1}`}</option>)}
+                </select></label>
+            ))}
+          </div>
+          <p className="note" data-import-count>{data.length} row{data.length === 1 ? "" : "s"}. First: {[data[0]?.firstName, data[0]?.lastName].filter(Boolean).join(" ") || "no name"}{data[0]?.phone ? `, ${data[0].phone}` : ""}</p>
+          <div className="fld-row">
+            <label className="fld">Where they came from
+              <select value={source} onChange={(e) => setSource(e.target.value)}>{LEAD_SOURCES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
+            <label className="fld">Tag them all (optional)<input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="Home show 2027" /></label>
+          </div>
+        </>)}
+        {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+        <div className="form-actions">
+          <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn-solid" data-import-go disabled={busy || !data.length || data.length > MAX_IMPORT} onClick={go}>
+            {busy ? "Importing…" : `Import ${data.length || ""} lead${data.length === 1 ? "" : "s"}`}</button>
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+// 9. Leads that are probably one person, each pair with one press.
+function LeadDuplicates({ leads, onMerged, onCancel }) {
+  const groups = duplicateGroups(leads);
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState(null);
+  const merge = async (keep, drop) => {
+    setBusy(drop.id); setErr(null);
+    try { await api.mergeLeads(keep.id, drop.id); onMerged?.(); }
+    catch (e) { setErr(e); }
+    finally { setBusy(""); }
+  };
+  const nm = (l) => [l.firstName, l.lastName].filter(Boolean).join(" ") || "No name";
+  return (
+    <div className="form lead-dupes" data-lead-dupes>
+      <h2 className="form-title">Possible duplicates</h2>
+      <p className="form-sub">Leads with the same phone, the same email, or the same name at the same street. Merging keeps the first one's answers, fills its blanks from the other, and moves every appointment, message, file and follow-up onto it.</p>
+      {!groups.length && <p className="note" data-no-dupes>No duplicates found.</p>}
+      {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+      {groups.map((g) => (
+        <div key={g[0].id} className="dupe-group" data-dupe-group={g[0].id}>
+          {g.map((l, i) => (
+            <div key={l.id} className="dupe-row">
+              <span><b>{nm(l)}</b> · {[l.phone ? formatPhone(l.phone) : "", l.email, l.address?.street].filter(Boolean).join(" · ")} · <LeadStageChip stage={l.stage} /></span>
+              {i > 0 && <button className="btn-ghost" data-merge={l.id} disabled={!!busy} onClick={() => merge(g[0], l)}>
+                <GitMerge size={13} /> {busy === l.id ? "Merging…" : `Merge into ${nm(g[0])}`}</button>}
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="form-actions"><button className="btn-solid" onClick={onCancel}>Done</button></div>
+    </div>
+  );
+}
+
+// 9. What to do with the leads ticked on the list.
+function LeadsBulkBar({ ids, role, owners, onDone, onClear }) {
+  const office = ["admin", "pm"].includes(role);
+  const [action, setAction] = useState("tag");
+  const [val, setVal] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [flash, setFlash] = useState("");
+  const go = async () => {
+    setBusy(true); setErr(null); setFlash("");
+    const body = { ids, action, ...(action === "owner" ? { ownerId: val || null } : action === "stage" ? { stage: val }
+      : action === "dnc" ? { reason: val } : { tag: val }) };
+    try { const r = await api.bulkLeads(body); setFlash(`Changed ${r.changed} of ${r.of}.`); setVal(""); onDone?.(); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const choices = [["tag", "Add a tag"], ["untag", "Remove a tag"], ...(office ? [["owner", "Give to"], ["stage", "Move to stage"], ["dnc", "Mark Do not contact"]] : [])];
+  return (
+    <div className="bulk-bar" data-bulk-bar role="region" aria-label="Change the ticked leads">
+      <b data-bulk-count>{ids.length} ticked</b>
+      <select value={action} onChange={(e) => { setAction(e.target.value); setVal(""); }} data-bulk-action aria-label="What to do">
+        {choices.map(([id, l]) => <option key={id} value={id}>{l}</option>)}
+      </select>
+      {action === "owner" ? (
+        <select value={val} onChange={(e) => setVal(e.target.value)} data-bulk-value aria-label="Who">
+          <option value="">Nobody</option>{owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+        </select>
+      ) : action === "stage" ? (
+        <select value={val} onChange={(e) => setVal(e.target.value)} data-bulk-value aria-label="Stage">
+          <option value="">Pick a stage</option>{LEAD_STAGES.map((s) => <option key={s.id} value={s.id}>{s.term}</option>)}
+        </select>
+      ) : (
+        <input value={val} onChange={(e) => setVal(e.target.value)} placeholder={action === "dnc" ? "Why (required)" : "Tag"} data-bulk-value aria-label="Value" />
+      )}
+      <button className="btn-solid" data-bulk-go disabled={busy || (action !== "owner" && !val.trim())} onClick={go}>{busy ? "Working…" : "Apply"}</button>
+      <button className="link-btn" onClick={onClear}>Clear</button>
+      {flash && <span className="note" role="status">{flash}</span>}
+      {err && <span className="form-err" role="alert">{crmPlusErrText(err)}</span>}
+    </div>
+  );
+}
+
+// 8, 13, 14 and custom fields: the office's settings.
+function CrmPlusSetup({ owners = [], tab }) {
+  const [s, setS, reload] = useCrmSettings();
+  const [f, setF] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [saved, setSaved] = useState(false);
+  const [markets, setMarkets] = useState([]);
+  useEffect(() => { if (s && !s.failed && !Array.isArray(s)) setF({ ...s, routingReps: s.routingReps || [], marketReps: s.marketReps || {}, commissionPct: s.commissionBps != null ? String(s.commissionBps / 100) : "",
+    repPct: Object.fromEntries(Object.entries(s.repCommissionBps || {}).map(([k, v]) => [k, String(v / 100)])) }); }, [s]);
+  useEffect(() => { api.listMarkets().then((r) => setMarkets(r.markets || r || [])).catch(() => setMarkets([])); }, []);
+  if (s?.failed) return <p className="form-err" role="alert">{crmPlusErrText(s.error)} <button className="link-btn" onClick={reload}>Try again</button></p>;
+  if (!f) return <p className="note">Loading…</p>;
+  if (s.ready === false) return <p className="appt-warn" role="note" data-plus-migration>These settings aren't set up on this database yet. Run migration 113_crm_plus.</p>;
+  const save = async (body) => {
+    setBusy(true); setErr(null); setSaved(false);
+    try { setS(await api.saveCrmSettings(body)); setSaved(true); }
+    catch (e) { setErr(e); }
+    finally { setBusy(false); }
+  };
+  const toggleRep = (id) => setF({ ...f, routingReps: f.routingReps.includes(id) ? f.routingReps.filter((x) => x !== id) : [...f.routingReps, id] });
+  return (
+    <div className="crm-plus-setup" data-plus-setup={tab}>
+      {tab === "routing" && (<>
+        <p className="note">Who a new lead goes to when nobody picked an owner: from the website form, the API, an import, or a contact-center seat.</p>
+        <label className="fld">New leads
+          <select value={f.routingMode} onChange={(e) => setF({ ...f, routingMode: e.target.value })} data-routing-mode>
+            {ROUTING_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+          </select></label>
+        {f.routingMode !== "none" && (
+          <fieldset className="fld routing-reps" data-routing-reps><legend>{f.routingMode === "market" ? "Take turns between these when a market has nobody" : "Take turns between"}</legend>
+            {owners.map((o) => <label key={o.id} className="chk"><input type="checkbox" checked={f.routingReps.includes(o.id)} onChange={() => toggleRep(o.id)} /> {o.name}</label>)}
+          </fieldset>
+        )}
+        {f.routingMode === "market" && (
+          <div className="routing-markets" data-routing-markets>
+            {!markets.length && <p className="note">No markets yet. Add them on My account → My markets.</p>}
+            {markets.map((m) => (
+              <label key={m.id} className="fld">{m.name}
+                <select value={f.marketReps[m.id] || ""} onChange={(e) => setF({ ...f, marketReps: { ...f.marketReps, [m.id]: e.target.value } })}>
+                  <option value="">Take turns</option>{owners.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+                </select></label>
+            ))}
+          </div>
+        )}
+        <label className="chk"><input type="checkbox" checked={f.alertNewLeads} onChange={(e) => setF({ ...f, alertNewLeads: e.target.checked })} data-alert-new />
+          Email the owner the moment a new lead arrives (the office, when nobody owns it)</label>
+        <div className="form-actions"><button className="btn-solid" disabled={busy} data-save-routing
+          onClick={() => save({ routingMode: f.routingMode, routingReps: f.routingReps, marketReps: f.marketReps, alertNewLeads: f.alertNewLeads })}>Save</button></div>
+      </>)}
+      {tab === "aftercare" && (<>
+        <p className="note">After the job: a review request to the homeowner (only if they agreed to email), and a reminder for the owner to check back for more work.</p>
+        <label className="fld">Your review link<input value={f.reviewUrl || ""} onChange={(e) => setF({ ...f, reviewUrl: e.target.value })}
+          placeholder="https://g.page/r/your-business/review" data-review-url /></label>
+        <div className="fld-row">
+          <label className="fld">Ask this many days after the job is done<input type="number" min={0} max={60} value={f.reviewDelayDays}
+            onChange={(e) => setF({ ...f, reviewDelayDays: Number(e.target.value) })} /></label>
+          <label className="fld">Repeat-business reminder, months after the sale (blank for none)<input type="number" min={1} max={60} value={f.repeatMonths ?? ""}
+            onChange={(e) => setF({ ...f, repeatMonths: e.target.value === "" ? null : Number(e.target.value) })} data-repeat-months /></label>
+        </div>
+        <p className="note">The day before an estimate, a homeowner who agreed to texts gets a follow-up for their sales manager to send a reminder from their phone.</p>
+        <div className="form-actions"><button className="btn-solid" disabled={busy} data-save-aftercare
+          onClick={() => save({ reviewUrl: f.reviewUrl || "", reviewDelayDays: f.reviewDelayDays, repeatMonths: f.repeatMonths })}>Save</button></div>
+      </>)}
+      {tab === "commission" && (<>
+        <p className="note">Commission is the rate times what each sale was worth.</p>
+        <label className="fld">Default rate (%)<input value={f.commissionPct} inputMode="decimal" onChange={(e) => setF({ ...f, commissionPct: e.target.value })} placeholder="5" data-commission-pct /></label>
+        {owners.map((o) => (
+          <label key={o.id} className="fld">{o.name} (%)<input value={f.repPct[o.id] || ""} inputMode="decimal" placeholder="Default"
+            onChange={(e) => setF({ ...f, repPct: { ...f.repPct, [o.id]: e.target.value } })} /></label>
+        ))}
+        <label className="fld">Worked out from
+          <select value={f.commissionBasis} onChange={(e) => setF({ ...f, commissionBasis: e.target.value })} data-commission-basis>
+            <option value="sale">The signed proposal (or the deal amount)</option>
+            <option value="job">The job's actual value, once a job is made from the sale</option>
+          </select></label>
+        <p className="note">The job's value is what its accepted work orders add up to in SubSub.</p>
+        <div className="form-actions"><button className="btn-solid" disabled={busy} data-save-commission
+          onClick={() => save({ commissionPct: f.commissionPct, repCommissionPct: f.repPct, commissionBasis: f.commissionBasis })}>Save</button></div>
+      </>)}
+      {tab === "fields" && <CustomFieldsSetup fields={s.customFields || []} busy={busy} onSave={(customFields) => save({ customFields })} />}
+      {saved && <p className="note" role="status">Saved.</p>}
+      {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+    </div>
+  );
+}
+
+function CustomFieldsSetup({ fields, busy, onSave }) {
+  const [list, setList] = useState(fields);
+  useEffect(() => { setList(fields); }, [fields]);
+  const set = (i, patch) => setList(list.map((f, k) => (k === i ? { ...f, ...patch } : f)));
+  return (
+    <div className="custom-fields-setup" data-custom-setup>
+      <p className="note">Your own questions on every lead: roof age, HOA, how they found you, anything you track.</p>
+      {list.map((f, i) => (
+        <div key={i} className="fld-row" data-custom-def={i}>
+          <label className="fld">Field<input value={f.label} onChange={(e) => set(i, { label: e.target.value })} /></label>
+          <label className="fld">Kind
+            <select value={f.type} onChange={(e) => set(i, { type: e.target.value })}>
+              <option value="text">Text</option><option value="number">Number</option><option value="date">Date</option>
+              <option value="yesno">Yes or no</option><option value="select">Pick from a list</option>
+            </select></label>
+          {f.type === "select" && <label className="fld">Choices, separated by commas<input value={(f.options || []).join(", ")}
+            onChange={(e) => set(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} /></label>}
+          <button type="button" className="icon-x" aria-label={`Remove ${f.label || "field"}`} onClick={() => setList(list.filter((_, k) => k !== i))}><X size={12} /></button>
+        </div>
+      ))}
+      <button type="button" className="link-btn" data-custom-add onClick={() => setList([...list, { label: "", type: "text" }])}><Plus size={13} /> Add a field</button>
+      <div className="form-actions"><button className="btn-solid" disabled={busy} data-save-fields
+        onClick={() => onSave(list.map((f) => ({ ...(f.key ? { key: f.key } : {}), label: f.label, type: f.type, ...(f.type === "select" ? { options: f.options || [] } : {}) })))}>Save fields</button></div>
+    </div>
+  );
+}
+
+// 14. Commission per sales manager, on Reports.
+function CrmCommissions({ role }) {
+  const [d, setD] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState("");
+  const load = async () => { try { setD(await api.crmCommissions()); setErr(null); } catch (e) { setErr(e); } };
+  useEffect(() => { load(); }, []);
+  if (err) return <p className="form-err" role="alert">{crmPlusErrText(err)} <button className="link-btn" onClick={load}>Try again</button></p>;
+  if (!d) return <p className="note">Loading…</p>;
+  // An answer that is not the report's shape (an older API) draws nothing
+  // rather than taking Reports down with it.
+  if (!Array.isArray(d.report) || !d.settings) return null;
+  const pay = async (row) => {
+    const reference = window.prompt(`Mark ${centsText(row.amountCents)} paid to ${row.repName}? A check number or note (optional):`, "");
+    if (reference === null) return;
+    setBusy(row.appointmentId);
+    try { await api.payCommission(row.appointmentId, { reference }); await load(); }
+    catch (e) { setErr(e); }
+    finally { setBusy(""); }
+  };
+  const noRate = d.settings.commissionBps == null && !Object.keys(d.settings.repCommissionBps || {}).length;
+  return (
+    <section className="crm-report-card crm-commissions" data-crm-commissions>
+      <h3>Commission</h3>
+      {noRate && <p className="note">No commission rate is set. {["admin", "pm"].includes(role) ? "Set one on Setup → Commission." : "The office sets it."}</p>}
+      {!d.report.length && <p className="note">No sales yet.</p>}
+      {d.report.map((r) => (
+        <div key={r.repId} className="comm-rep" data-comm-rep={r.repId}>
+          <p className="comm-head"><b>{r.repName}</b> · {r.sales} sale{r.sales === 1 ? "" : "s"} · {centsText(r.valueCents) || "$0"} sold ·
+            owed <b data-comm-owed>{centsText(r.owedCents) || "$0"}</b> · paid {centsText(r.paidCents) || "$0"}{r.unpriced ? ` · ${r.unpriced} with no value yet` : ""}</p>
+          <ul className="comm-rows">
+            {r.rows.map((x) => (
+              <li key={x.appointmentId} data-comm-row={x.appointmentId}>
+                <span>{x.who} · {apptWhenText(x.date).replace(/^(\w+), /, "")}</span>
+                <span>{x.valueCents != null ? `${centsText(x.valueCents)} (${COMMISSION_SOURCES[x.valueSource] || ""})` : "No value yet"} × {bpsText(x.bps) || "0%"} = <b>{centsText(x.amountCents) || "$0"}</b></span>
+                {x.paid ? <span className="tn-chip ok">Paid {stampDay(x.paid.paidAt)}{x.paid.reference ? ` · ${x.paid.reference}` : ""}</span>
+                  : role === "admin" && x.amountCents > 0 ? <button className="btn-ghost" data-pay-comm disabled={!!busy} onClick={() => pay(x)}>Mark paid</button> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function UnsubscribePage({ token }) {
   const [info, setInfo] = useState(null);
   const [gone, setGone] = useState(false);
@@ -32755,6 +33557,13 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
       </div>
       <ApptSummary a={a} repName={repName} />
       {a.createdByName && <p className="note">Booked by {a.createdByName}.</p>}
+      {/* 113. A reminder by text, from this phone, while SubSub cannot send
+          texts itself. Only to somebody who agreed to texts. */}
+      {open && a.consent?.text === true && a.homeowner.phone && (
+        <a className="btn-ghost appt-text-reminder" data-text-reminder
+          href={leadSmsHref(a.homeowner.phone, `Hi ${a.homeowner.firstName || "there"}, a reminder of your free estimate ${apptWhenText(a.date)} at ${apptTime12(a.time)}. Reply here if you need to change it.`)}>
+          <MessageSquareText size={15} /> Text a reminder</a>
+      )}
       <ApptDealPanel key={`${a.id}:${a.deal?.updatedAt || ""}`} a={a} sales={sales} onSaved={onSaved} />
       <CrmActivity appt={a} team={team} onFollowUpsChanged={onFollowUpsChanged} />
       {a.jobId ? (
@@ -56714,6 +57523,57 @@ button.job-insp:hover{border-color:#2f5577}
 .lead-stage-btn.on b,.lead-stage-btn.on span{color:#fff}
 .lead-stage-btn:disabled:not(.on){opacity:.55;cursor:default}
 @media (max-width:620px){.lead-stages{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* 113. The rest of the CRM. No backticks in this block: it is inside a
+   template literal. */
+.lead-meta{margin:14px 0;display:flex;flex-direction:column;gap:8px}
+.lead-tags{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lead-tag{display:inline-flex;align-items:center;gap:4px}
+.lead-tag .icon-x{margin-left:2px}
+.lead-tag-add{display:flex;gap:6px;align-items:center}
+.lead-tag-add input{min-height:36px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px);width:150px}
+.lead-custom{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+.lead-custom .form-actions{grid-column:1/-1}
+.leads-tools{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
+.leads-tools select{min-height:40px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:14px}
+.lead-li{display:flex;align-items:center;gap:10px}
+.lead-li .lead-row{flex:1 1 auto;min-width:0}
+.lead-pick{width:20px;height:20px;flex:none;accent-color:var(--brand)}
+.bulk-bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;margin:8px 0;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
+.bulk-bar select,.bulk-bar input{min-height:40px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px)}
+.lead-proposals,.lead-claim,.lead-files{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.prop-lines{display:flex;flex-direction:column;gap:6px}
+.prop-line{display:grid;grid-template-columns:minmax(0,3fr) 64px 110px 100px 28px;gap:8px;align-items:center}
+.prop-line input{min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px);min-width:0}
+.prop-line-head{font-size:12px;color:var(--ink-soft);font-weight:700}
+.prop-line-total{text-align:right;font-variant-numeric:tabular-nums}
+.prop-total{text-align:right;font-size:17px;margin:4px 0}
+@media (max-width:560px){.prop-line{grid-template-columns:minmax(0,1fr) 56px 90px 24px}.prop-line-total,.prop-line-head span:nth-child(4){display:none}}
+.prop-list,.lead-file-list,.comm-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.prop-row{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card)}
+.prop-row-main{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.prop-link code{font-size:12px;word-break:break-all}
+.lead-files-add{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.lead-file{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card)}
+.lead-file-name{display:inline-flex;gap:6px;align-items:center;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.lead-file-thumb{width:56px;height:56px;object-fit:cover;border-radius:6px}
+.import-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
+.dupe-group{border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0;display:flex;flex-direction:column;gap:6px}
+.dupe-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between}
+.routing-reps{display:flex;flex-wrap:wrap;gap:12px;border:1px solid var(--line);border-radius:10px;padding:10px}
+.routing-markets{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.crm-plus-setup{display:flex;flex-direction:column;gap:12px;margin-top:12px}
+.comm-rep{margin:10px 0}
+.comm-rows li{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0}
+.appt-text-reminder{display:inline-flex;gap:6px;align-items:center;margin:8px 0}
+.prop-table{width:100%;border-collapse:collapse;margin:14px 0;font-variant-numeric:tabular-nums}
+.prop-table th,.prop-table td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+.prop-table th:not(:first-child),.prop-table td:not(:first-child){text-align:right}
+.prop-table tfoot td{font-weight:800;font-size:17px;border-bottom:0}
+.prop-notes{white-space:pre-wrap}
+.prop-sign{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.prop-agree{display:flex;gap:10px;align-items:flex-start;font-size:15px}
+.prop-agree input{width:20px;height:20px;margin-top:2px;flex:none}
+.prop-done{display:flex;gap:8px;align-items:center;font-weight:600}
 .lead-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
 .lead-facts dt,.lead-label{font-size:12.5px;color:var(--ink-soft);font-weight:600}
 .lead-facts dd{margin:2px 0 0;font-size:14px}
