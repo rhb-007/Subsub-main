@@ -1154,7 +1154,14 @@ function freeCrews(sub, day) {
   if (!sub.available || isOffDay(sub, day)) return [];
   return (sub.crews || []).filter((c) => crewFreeOn(c, day));
 }
-const availableOn = (s, day) => freeCrews(s, day).length > 0;
+// NO CREWS AT ALL IS NOT "NEVER FREE". Most contractors never fill My Crews
+// in, and reading an empty list as "every crew is off" drew every one of them
+// red on the availability grid with nothing to click -- while the server's
+// own rule (offDays in shared/crews.js) has always read it as free.
+const hasCrews = (s) => (s.crews || []).length > 0;
+const availableOn = (s, day) => (hasCrews(s)
+  ? freeCrews(s, day).length > 0
+  : !!s.available && !isOffDay(s, day));
 
 // IMPORTANT: pass ALL jobs here, across every account. A crew booked by another
 // hiring company is physically unavailable to you that day. Details of other
@@ -1162,6 +1169,10 @@ const availableOn = (s, day) => freeCrews(s, day).length > 0;
 function dayStatus(sub, jobs, day, ignoreJobId, viewAccountId) {
   if (!day) return null;
   if (!sub.available) return { kind: "unavailable", label: "Not taking work", crews: [] };
+  if (!hasCrews(sub)) {
+    if (isOffDay(sub, day)) return { kind: "off", label: "Marked off this day", crews: [] };
+    return { kind: "free", label: "Free (no crews listed)", crews: [] };
+  }
   const free = freeCrews(sub, day);
   if (free.length === 0) {
     return { kind: "off", label: "All crews marked off this day", crews: [] };
@@ -7936,7 +7947,10 @@ export default function SubSub() {
       {tab === "calendar" && can("calendar") && (
         <AvailabilityView subs={subs} jobs={jobs} allJobs={allJobs} accountId={account.id}
           onSchedule={(sub, date) => {
-            if (!(sub.bond && sub.insurance && sub.contract)) return;
+            // The cell is clickable only when assignReady says so. This read
+            // bond && insurance && contract, and the agreement is optional, so
+            // most presses on a green day did nothing at all.
+            if (!assignReady(sub)) return;
             setAssignSub({ sub, date });
           }}
           onRequestDocs={requestDocs} />
@@ -29657,12 +29671,15 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
             return (
               <React.Fragment key={s.id}>
                 <div className="cal-sub">
-                  <span className={`avail-dot ${s.available ? "up" : "down"}`} />
+                  <span className={`avail-dot ${rosterDot(s, ready)}`} title={rosterDotTitle(s, ready)} />
                   <span className="cal-sub-name">{s.company}</span>
                 </div>
                 {days.map((d) => {
+                  // Booked means live work: a declined or voided offer, or a job
+                  // cancelled or finished, is not a crew on site that day.
                   const dayJobs = (jobsByDay[fmt(d)] || []).filter((j) =>
-                    Object.values(j.assignments || {}).some((a) => a.subId === s.id));
+                    jobIsLive(j, fmt(d)) && Object.values(j.assignments || {}).some((a) =>
+                      a.subId === s.id && a.status !== "declined" && !a.voidedAt));
                   const booked = dayJobs.length > 0;
                   // Not named dayKey: that is the helper fmt IS, and a local
                   // shadowing it here would be one rename away from a bug
@@ -29689,7 +29706,7 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
                         : needDocs ? () => onRequestDocs(s) : undefined}>
                       {booked ? <span className="cal-job">{dayJobs.length}</span>
                         : needDocs ? <span className="cal-doc"><Mail size={11} /></span>
-                        : clickable ? <span className="cal-crews">{freeCt}</span> : null}
+                        : clickable ? <span className="cal-crews">{hasCrews(s) ? freeCt : <Check size={11} />}</span> : null}
                     </div>
                   );
                 })}

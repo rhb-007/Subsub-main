@@ -17405,6 +17405,36 @@ refactor.
   now. **112 is pasted on the live database** (10 columns, confirmed by the
   owner), so markets can be added there.
 
+- **THE AVAILABILITY GRID DRAWS A CONTRACTOR WITH NO CREWS AS FREE, AND A
+  FREE DAY OPENS THE ASSIGN WINDOW.** Reported as *"status colors aren't
+  correct, can't click on any available subcontractor dates"*. Two causes.
+  `availableOn` read "no crews listed" as "every crew off", so most of the
+  roster (who never fill My Crews in) was red on every day with nothing to
+  press, while the server's `offDays` has always read no crews as free. And
+  the click re-checked `bond && insurance && contract`, the old presence rule,
+  so a handyman could never be scheduled from a green day. Now:
+  - `availableOn` and `dayStatus` treat no crews as free unless the
+    contractor is not taking work or has the day marked off; the cell shows a
+    tick instead of a crew count;
+  - the click reads `assignReady`, the same test that makes the cell
+    clickable;
+  - "booked" counts live work only (not a declined offer, not a cancelled or
+    finished job);
+  - the row dot is `rosterDot`, amber when items are outstanding.
+
+  `test:availgrid` (13); four mutations fire.
+
+- **THE CRM WEBSITE FORM WEARS THE SIGN-UP FORM'S DESIGN.** Asked for as
+  *"make the design of the website form the same as the workbench branding
+  webform design"*. `leadFormHtml` is now two steps with dots (what they need,
+  then how to reach them), the same labels, inputs, chips and buttons as
+  `applyFormHtml`, a confirmation panel with a tick signed by the account's
+  team, and Powered by SubSub. The mark is one constant (`SUBSUB_MARK_SVG`)
+  read by both forms. Field names and the posted body are unchanged, so forms
+  pasted before this keep working. `test:leadformui` (18) measures the drawn
+  inputs and buttons against the sign-up form's; the old form fails eight.
+  **Code already pasted keeps the old look** until it is copied again.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

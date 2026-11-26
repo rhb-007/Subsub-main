@@ -66,6 +66,10 @@ const esc = (s) => String(s == null ? "" : s)
 // this lands in somebody else's stylesheet. A bare `.field` or `input{...}`
 // would restyle their whole site, which is the fastest way to have a customer
 // rip the snippet back out.
+// The SubSub mark, drawn inline so a pasted form has no dependency. One copy,
+// read by both pasted forms.
+const SUBSUB_MARK_SVG = `    <svg viewBox="36 62 502 114" height="13" role="img" aria-hidden="true" fill="currentColor"><path d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/><path d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/></svg>`;
+
 export function applyFormHtml({ subdomain, accountName, trades = [], theme = null,
   apiOrigin = API_ORIGIN } = {}) {
   const sub = String(subdomain || "").trim().toLowerCase();
@@ -149,7 +153,7 @@ ${chips}
   <a class="ss-by" href="https://subsub.work" target="_blank" rel="noopener"
     aria-label="Powered by SubSub — visit subsub.work">
     <span>Powered by</span>
-    <svg viewBox="36 62 502 114" height="13" role="img" aria-hidden="true" fill="currentColor"><path d="M124.35,80.05l-78,36.53c-1.99,0.93-4.27-0.52-4.27-2.72V98.92c0-2.66,1.54-5.07,3.94-6.2L98.82,68c2.61-1.22,5.6-1.31,8.28-0.25l17.09,6.78C126.63,75.51,126.73,78.93,124.35,80.05z"/><path d="M43.81,156.95l78-36.53c1.99-0.93,4.27,0.52,4.27,2.72v14.93c0,2.66-1.54,5.07-3.94,6.2L69.34,169c-2.61,1.22-5.6,1.31-8.28,0.25l-17.09-6.78C41.53,161.49,41.43,158.07,43.81,156.95z"/><path d="M124.51,111.55l-57.06,26.43c-2.31,1.09-4.76,0.85-7.27-0.19l-16.4-6.7c-2.37-0.98-2.45-4.42-0.13-5.52l57.16-26.43c2.7-1.15,4.5-1.1,7.52-0.06l16.05,6.94C126.75,107.01,126.83,110.45,124.51,111.55z"/><path d="M159.95,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C178.27,159.09,166.67,155.94,159.95,151.25z"/><path d="M281.36,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.82,11.47c5.49,0,10-3.63,10-12.55v-25.59H281.36z"/><path d="M345.6,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C333.93,103.69,345.6,114.19,345.6,131.05z M326.78,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S326.78,139.19,326.78,131.05z"/><path d="M345.41,151.25l6.62-14.87c6.31,4.18,15.27,7.03,23.52,7.03c8.35,0,11.61-2.34,11.61-5.8c0-11.3-40.53-3.05-40.53-29.53c0-12.73,10.39-23.11,31.57-23.11c9.27,0,18.84,2.14,25.86,6.21l-6.21,14.97c-6.82-3.67-13.54-5.5-19.75-5.5c-8.45,0-11.51,2.85-11.51,6.41c0,10.9,40.42,2.75,40.42,29.02c0,12.42-10.39,23.01-31.57,23.01C363.74,159.09,352.13,155.94,345.41,151.25z"/><path d="M466.81,104.58v53.14h-17.75v-5.69c-4.02,4.41-9.71,6.57-15.79,6.57c-13.04,0-22.55-7.45-22.55-24.32v-29.71h18.63v26.67c0,8.24,3.24,11.47,8.83,11.47c5.49,0,10-3.63,10-12.55v-25.59H466.81z"/><path d="M531.05,131.05c0,16.96-11.67,27.55-26.08,27.55c-6.96,0-12.16-1.96-15.69-6.18v5.29h-17.75V84.97h18.63v24.22c3.63-3.73,8.63-5.49,14.81-5.49C519.38,103.69,531.05,114.19,531.05,131.05z M512.22,131.05c0-8.04-4.9-12.55-11.18-12.55s-11.18,4.51-11.18,12.55c0,8.14,4.9,12.75,11.18,12.75S512.22,139.19,512.22,131.05z"/></svg>
+${SUBSUB_MARK_SVG}
   </a>
 </div>
 <style>
@@ -480,74 +484,167 @@ export const leadFormServiceIds = (ids) => {
 export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin = API_ORIGIN, services = null } = {}) {
   const sub = String(subdomain || "").toLowerCase().replace(/[^a-z0-9-]/g, "");
   if (!sub) return "";
+  // THE SAME DESIGN AS THE SIGN-UP FORM ON BRANDING (applyFormHtml): two steps
+  // with dots, the same labels, inputs and chips, a confirmation panel with a
+  // tick, and Powered by SubSub. Two forms from one account pasted onto one
+  // website must not look like two products.
   const accent = hex(theme && theme.accent, EMBED_DEFAULT_ACCENT);
   const btnText = hex(theme && theme.btnText, EMBED_DEFAULT_BTN_TEXT);
+  const accentDark = darken(accent);
   const name = esc(accountName || "us");
   const chips = leadFormServiceIds(services).map((id) => TRADES.find((t) => t.id === id)).map((s) =>
-    `<label class="ss-svc"><input type="checkbox" name="services" value="${s.id}"> ${esc(s.label)}</label>`).join("\n    ");
+    `<label class="ss-chip"><input type="checkbox" name="services" value="${s.id}"> ${esc(s.label)}</label>`).join("\n        ");
   return `<!-- ${esc(accountName || "SubSub").replace(/-{2,}/g, "-")} estimate request form, from SubSub. Requests land in your SubSub CRM. -->
 <div id="subsub-lead">
+  <form class="ss-form" novalidate>
+    <div class="ss-steps"><span class="ss-dot on"></span><span class="ss-dot"></span></div>
+
+    <div class="ss-step" data-step="1">
+      <p class="ss-lede">What can we help with?</p>
+      <span class="ss-label">What do you need?</span>
+      <div class="ss-chips">
+        ${chips}
+      </div>
+      <label class="ss-f"><span>Tell us about the project</span>
+        <textarea name="message" rows="4"></textarea></label>
+    </div>
+
+    <div class="ss-step" data-step="2" hidden>
+      <p class="ss-lede">How do we reach you?</p>
+      <div class="ss-row">
+        <label class="ss-f"><span>First name <b>*</b></span>
+          <input type="text" name="firstName" autocomplete="given-name" /></label>
+        <label class="ss-f"><span>Last name</span>
+          <input type="text" name="lastName" autocomplete="family-name" /></label>
+      </div>
+      <div class="ss-row">
+        <label class="ss-f"><span>Mobile</span>
+          <input type="tel" name="phone" autocomplete="tel" /></label>
+        <label class="ss-f"><span>Email</span>
+          <input type="email" name="email" autocomplete="email" /></label>
+      </div>
+      <label class="ss-f"><span>Street address</span>
+        <input type="text" name="street" autocomplete="street-address" /></label>
+      <div class="ss-row">
+        <label class="ss-f ss-grow"><span>City</span>
+          <input type="text" name="city" autocomplete="address-level2" /></label>
+        <label class="ss-f ss-short"><span>State</span>
+          <input type="text" name="state" maxlength="2" autocomplete="address-level1" /></label>
+        <label class="ss-f ss-short"><span>ZIP</span>
+          <input type="text" name="zip" inputmode="numeric" maxlength="5" autocomplete="postal-code" /></label>
+      </div>
+      <label class="ss-ok"><input type="checkbox" name="consent"> ${esc(webConsentText(accountName))}</label>
+      <div class="ss-hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+    </div>
+
+    <p class="ss-msg" role="status" aria-live="polite"></p>
+    <div class="ss-actions">
+      <button type="button" class="ss-back" hidden>Back</button>
+      <button type="button" class="ss-next">Continue</button>
+      <button type="submit" class="ss-go" hidden>Request a free estimate</button>
+    </div>
+  </form>
+  <div class="ss-done" role="status" aria-live="polite" hidden>
+    <svg class="ss-tick" viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"
+      fill="none" stroke="currentColor" stroke-width="2.5"
+      stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    <h3>Request sent</h3>
+    <p class="ss-done-lede">Thanks for reaching out.</p>
+    <p>Someone from ${name} will be in touch soon to set up your free estimate.</p>
+    <p class="ss-done-sig">&mdash; The ${name} team</p>
+  </div>
+  <a class="ss-by" href="https://subsub.work" target="_blank" rel="noopener"
+    aria-label="Powered by SubSub — visit subsub.work">
+    <span>Powered by</span>
+${SUBSUB_MARK_SVG}
+  </a>
+</div>
 <style>
-#subsub-lead{font:inherit;max-width:560px}
-#subsub-lead .ss-form{display:flex;flex-direction:column;gap:12px}
-#subsub-lead .ss-form[hidden]{display:none}
-#subsub-lead .ss-row{display:flex;gap:10px;flex-wrap:wrap}
-#subsub-lead .ss-row > label{flex:1 1 180px}
-#subsub-lead label{display:block;font-size:14px;font-weight:600}
+#subsub-lead .ss-form{display:flex;flex-direction:column;gap:14px;max-width:460px;font:inherit;color:inherit}
+#subsub-lead .ss-form[hidden],#subsub-lead .ss-done[hidden],#subsub-lead .ss-step[hidden],
+#subsub-lead .ss-actions button[hidden]{display:none}
+#subsub-lead .ss-steps{display:flex;gap:6px}
+#subsub-lead .ss-dot{width:26px;height:4px;border-radius:2px;background:#d9e0db}
+#subsub-lead .ss-dot.on{background:${accent}}
+#subsub-lead .ss-step{display:flex;flex-direction:column;gap:14px}
+#subsub-lead .ss-lede{margin:0;font-size:14px;opacity:.75}
+#subsub-lead .ss-f{display:flex;flex-direction:column;gap:5px;font-size:14px}
+#subsub-lead .ss-f > span,#subsub-lead .ss-label{font-weight:600;font-size:14px}
+#subsub-lead .ss-f b{color:#b5442e;font-weight:600}
+#subsub-lead .ss-row{display:flex;gap:12px;flex-wrap:wrap}
+#subsub-lead .ss-row > .ss-f{flex:1 1 150px}
+#subsub-lead .ss-row > .ss-short{flex:0 1 90px}
 #subsub-lead input[type=text],#subsub-lead input[type=email],#subsub-lead input[type=tel],#subsub-lead textarea{
-  display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:10px 12px;min-height:44px;font:inherit;font-size:16px;
-  border:1px solid #c9ccd1;border-radius:8px;background:#fff;color:#111}
-#subsub-lead textarea{min-height:88px}
-#subsub-lead .ss-svcs{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
-#subsub-lead .ss-svc{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border:1px solid #c9ccd1;border-radius:999px;font-weight:600}
-#subsub-lead .ss-ok{font-weight:400;display:flex;gap:8px;align-items:flex-start;font-size:13px}
+  font:inherit;font-size:15px;padding:9px 11px;border:1px solid #c9d2cc;border-radius:8px;
+  background:#fff;color:#16241d;width:100%;box-sizing:border-box}
+#subsub-lead textarea{min-height:88px;resize:vertical}
+#subsub-lead input:focus,#subsub-lead textarea:focus{outline:2px solid ${accent};outline-offset:1px;border-color:${accent}}
+#subsub-lead .ss-chips{display:flex;flex-wrap:wrap;gap:7px}
+#subsub-lead .ss-chip{font:inherit;font-size:13px;padding:7px 12px;border-radius:20px;
+  border:1px solid #c9d2cc;background:#fff;color:#16241d;cursor:pointer;display:inline-flex;align-items:center}
+#subsub-lead .ss-chip input{position:absolute;opacity:0;width:1px;height:1px;margin:0}
+#subsub-lead .ss-chip.on{background:${accent};border-color:${accent};color:${btnText}}
+#subsub-lead .ss-chip:focus-within{outline:2px solid ${accent};outline-offset:1px}
+#subsub-lead .ss-ok{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.45;opacity:.85}
+#subsub-lead .ss-ok input{margin-top:2px;flex:none}
 #subsub-lead .ss-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-#subsub-lead .ss-go{padding:12px 20px;min-height:44px;border:0;border-radius:9px;background:${accent};color:${btnText};font:inherit;font-weight:700;font-size:15px;cursor:pointer}
-#subsub-lead .ss-go:hover{background:${darken(accent)}}
-#subsub-lead .ss-go:focus-visible{outline:3px solid ${accent};outline-offset:3px}
-#subsub-lead .ss-msg{font-size:14px}
-#subsub-lead .ss-msg.bad{color:#a12c1f}
-#subsub-lead .ss-done{text-align:center;padding:24px 12px}
-#subsub-lead .ss-done b{display:block;font-size:18px;margin-bottom:6px;color:${accent}}
+#subsub-lead .ss-actions{display:flex;gap:10px;align-items:center}
+#subsub-lead .ss-actions button{font:inherit;font-size:15px;font-weight:600;padding:11px 18px;
+  border:0;border-radius:8px;background:${accent};color:${btnText};cursor:pointer}
+#subsub-lead .ss-back{background:transparent !important;color:inherit !important;
+  border:1px solid #c9d2cc !important;font-weight:500 !important}
+#subsub-lead .ss-actions button:hover:not(:disabled){background:${accentDark}}
+#subsub-lead .ss-back:hover{background:#f3f5f4 !important}
+#subsub-lead .ss-actions button:disabled{opacity:.6;cursor:default}
+#subsub-lead .ss-msg{margin:0;font-size:14px;line-height:1.45}
+#subsub-lead .ss-msg.bad{color:#b5442e}
+#subsub-lead .ss-done{max-width:460px;text-align:center;padding:30px 22px;
+  border:1px solid #c9d2cc;border-radius:12px;background:#f5faf7}
+#subsub-lead .ss-tick{display:block;margin:0 auto 14px;width:44px;height:44px;padding:7px;
+  box-sizing:border-box;border-radius:50%;background:${accent};color:${btnText}}
+#subsub-lead .ss-done h3{margin:0 0 10px;font:inherit;font-size:19px;font-weight:700;line-height:1.3;color:#16241d}
+#subsub-lead .ss-done p{margin:0 0 10px;font-size:14.5px;line-height:1.55;color:#4a5a51}
+#subsub-lead .ss-done-lede{font-size:15.5px !important;color:#16241d !important;font-weight:600}
+#subsub-lead .ss-done-sig{margin:0 !important;font-size:13.5px !important;font-weight:600;color:#16241d !important}
+#subsub-lead .ss-by{display:flex;align-items:center;justify-content:center;gap:6px;
+  margin:16px 0 0;max-width:460px;font-size:11.5px;opacity:.55;color:inherit;text-decoration:none}
+#subsub-lead .ss-by:hover{opacity:.9}
+#subsub-lead .ss-by svg{height:13px;width:auto;display:block;flex:none}
 </style>
-<form class="ss-form" novalidate>
-  <div class="ss-row">
-    <label>First name<input type="text" name="firstName" autocomplete="given-name"></label>
-    <label>Last name<input type="text" name="lastName" autocomplete="family-name"></label>
-  </div>
-  <div class="ss-row">
-    <label>Mobile<input type="tel" name="phone" autocomplete="tel"></label>
-    <label>Email<input type="email" name="email" autocomplete="email"></label>
-  </div>
-  <label>Street address<input type="text" name="street" autocomplete="street-address"></label>
-  <div class="ss-row">
-    <label>City<input type="text" name="city" autocomplete="address-level2"></label>
-    <label>State<input type="text" name="state" maxlength="2" autocomplete="address-level1"></label>
-    <label>ZIP<input type="text" name="zip" inputmode="numeric" maxlength="5" autocomplete="postal-code"></label>
-  </div>
-  <div><label>What do you need?</label><div class="ss-svcs">
-    ${chips}
-  </div></div>
-  <label>Tell us about the project<textarea name="message"></textarea></label>
-  <label class="ss-ok"><input type="checkbox" name="consent"> ${esc(webConsentText(accountName))}</label>
-  <div class="ss-hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
-  <button type="submit" class="ss-go">Request a free estimate</button>
-  <p class="ss-msg" role="status"></p>
-</form>
-<div class="ss-done" hidden><b>Thanks, we got it.</b>Someone from ${name} will be in touch soon about your estimate.</div>
 <script>
 (function () {
   var root = document.getElementById("subsub-lead");
   if (!root) return;
   var form = root.querySelector(".ss-form"), msg = root.querySelector(".ss-msg"), done = root.querySelector(".ss-done");
-  var go = root.querySelector(".ss-go");
+  var steps = root.querySelectorAll(".ss-step"), dots = root.querySelectorAll(".ss-dot");
+  var back = root.querySelector(".ss-back"), next = root.querySelector(".ss-next"), go = root.querySelector(".ss-go");
+  var at = 1;
+  root.querySelectorAll(".ss-chip input").forEach(function (box) {
+    box.addEventListener("change", function () { box.parentNode.classList.toggle("on", box.checked); });
+  });
+  function show(n) {
+    at = n;
+    for (var i = 0; i < steps.length; i++) steps[i].hidden = (i + 1) !== n;
+    for (var j = 0; j < dots.length; j++) { if (j < n) dots[j].classList.add("on"); else dots[j].classList.remove("on"); }
+    back.hidden = n === 1; next.hidden = n === steps.length; go.hidden = n !== steps.length;
+    msg.className = "ss-msg"; msg.textContent = "";
+  }
+  function trouble() {
+    var d = new FormData(form);
+    if (!d.get("firstName") && !d.get("lastName")) return "Please add your name.";
+    if (!d.get("email") && String(d.get("phone") || "").replace(/\\D/g, "").length < 10) {
+      return "Please add a mobile number or an email so we can reach you.";
+    }
+    return null;
+  }
+  next.addEventListener("click", function () { show(at + 1); });
+  back.addEventListener("click", function () { show(at - 1); });
   form.addEventListener("submit", function (e) {
     e.preventDefault();
+    if (at !== steps.length) { show(at + 1); return; }
+    var bad = trouble();
+    if (bad) { msg.className = "ss-msg bad"; msg.textContent = bad; return; }
     var d = new FormData(form);
-    if (!d.get("firstName") && !d.get("lastName")) { msg.className = "ss-msg bad"; msg.textContent = "Please add your name."; return; }
-    if (!d.get("email") && String(d.get("phone") || "").replace(/\\D/g, "").length < 10) {
-      msg.className = "ss-msg bad"; msg.textContent = "Please add a mobile number or an email so we can reach you."; return;
-    }
     go.disabled = true; msg.className = "ss-msg"; msg.textContent = "Sending\\u2026";
     fetch("${esc(apiOrigin)}/api/public/lead/${esc(sub)}", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -561,6 +658,7 @@ export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin =
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (!r.ok) throw body;
         form.hidden = true; done.hidden = false;
+        if (done.scrollIntoView) done.scrollIntoView({ block: "nearest" });
       });
     }).catch(function (err) {
       msg.className = "ss-msg bad";
@@ -570,7 +668,7 @@ export function leadFormHtml({ subdomain, accountName, theme = null, apiOrigin =
         : "That didn't send. Please try again in a moment.";
     }).then(function () { go.disabled = false; });
   });
+  show(1);
 })();
-</script>
-</div>`;
+</script>`;
 }
