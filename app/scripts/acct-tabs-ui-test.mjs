@@ -198,6 +198,38 @@ try {
   t.ck("My markets carries where you work", mm.work, JSON.stringify(mm));
   t.ck("and where you sell, with the account's markets", /Tacoma/.test(mm.sell) && /Add a market/.test(mm.sell), mm.sell.slice(0, 200));
   t.ck("work first, then sell", mm.workTop !== null && mm.sellTop !== null && mm.workTop < mm.sellTop, JSON.stringify(mm));
+  // ONE DESIGN FOR BOTH: each half is a card with its heading inside it, and
+  // a foot row carrying the count and the one action. And a market row fits a
+  // phone: nothing past the card, the actions on the row's own line.
+  const same = async () => page.evaluate(() => {
+    const card = (sel) => {
+      const el = document.querySelector(`${sel} .portal-panel, ${sel}.portal-panel`);
+      if (!el) return null;
+      const cs = getComputedStyle(el);
+      return { radius: cs.borderRadius, bg: cs.backgroundColor, head: el.querySelector("h4")?.innerText || "",
+        foot: !!el.querySelector(".panel-actions"), right: Math.round(el.getBoundingClientRect().right) };
+    };
+    const row = document.querySelector("[data-market]");
+    const rr = row?.getBoundingClientRect();
+    const acts = row?.querySelector(".market-acts")?.getBoundingClientRect();
+    return { work: card("[data-markets-work]"), sell: card("[data-markets-sell]"),
+      rowRight: rr ? Math.round(rr.right) : null, actsRight: acts ? Math.round(acts.right) : null,
+      actsTop: acts ? Math.round(acts.top - rr.top) : null, vw: innerWidth, oldNote: /A market is a place you sell in/.test(document.body.innerText) };
+  });
+  const cards = await same();
+  t.ck("where you work and where you sell are the same card",
+    !!cards.work && !!cards.sell && cards.work.radius === cards.sell.radius && cards.work.bg === cards.sell.bg
+      && /where you/i.test(cards.work.head) && /where you sell/i.test(cards.sell.head), JSON.stringify(cards));
+  t.ck("each ends in a foot row with the action", cards.work?.foot && cards.sell?.foot, JSON.stringify(cards));
+  t.ck("and the second explainer is gone", !cards.oldNote, "");
+  await page.setViewport({ width: 390, height: 844 });
+  await wait(400);
+  const phone = await same();
+  t.ck("on a phone a market row stays inside its card", phone.rowRight !== null && phone.rowRight <= phone.sell.right
+    && phone.actsRight <= phone.rowRight && phone.sell.right <= phone.vw, JSON.stringify(phone));
+  t.ck("with Edit and Delete at the top of the row", phone.actsTop !== null && phone.actsTop < 20, JSON.stringify(phone));
+  await page.setViewport({ width: 1180, height: 900 });
+  await wait(300);
   await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "Company")?.click());
   await wait(900);
   const co = await page.evaluate(() => ({ cov: !!document.querySelector(".cov-toggle"), ptr: document.querySelector("[data-markets-pointer]")?.innerText || "",

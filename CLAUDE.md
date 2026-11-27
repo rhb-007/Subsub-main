@@ -17568,6 +17568,21 @@ refactor.
   at 390px (one row, scrolling, nothing past the page); letting it wrap fails
   two.
 
+- **MY MARKETS IS TWO CARDS IN ONE DESIGN.** Reported from an iPhone: *Where
+  you'll work* was a card, and *Where you sell* under it was a loose heading,
+  a note, a second note saying the same thing, and an unstyled list. The list
+  ran the name into the towns and the services off the right edge. Now *Where
+  you sell* is a `portal-panel` like its sibling, with an h4 heading, one line,
+  the markets, and a `panel-actions` foot (*N markets* · **Add a market**), the
+  same shape as *1 city* · **Save coverage**. Each market is a row: a pin and
+  the name, then the first two towns (+N more) and the ZIP count on one line,
+  then the services as wrapping chips, with Edit and Delete as icon buttons at
+  the top right. The outer *Where you work* heading and note came off, because
+  the card carries its own. With no markets the card says so in the coverage
+  preview's style. `test:accttabs` compares the two cards' computed radius and
+  background, requires a foot on each, and measures a row at 390px; dropping
+  the card class fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

@@ -32091,29 +32091,32 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
     migration: data?.migration || null, reload: load }), [data]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="my-markets" data-my-markets>
+      {/* TWO CARDS IN ONE DESIGN. Where you work has always been a card with
+          its heading inside it; Where you sell was a loose heading, a note, a
+          second note saying the same thing, and an unstyled list -- so the two
+          halves of one page read as two different products. Each card carries
+          its own heading and one line, its content, and a foot with the count
+          and the one action. */}
       {work && (
         <section className="mm-half" data-markets-work>
-          <div className="form-sec">{tt("Where you work")}</div>
-          <p className="panel-note">{tt("The areas jobs are matched to you in, when somebody hires")}{" "}{accountName || tt("your company")}.</p>
           <HireablePanel section="markets" accountName={accountName} />
         </section>
       )}
       {sell && (
-        <section className="mm-half" data-markets-sell>
-          <div className="mm-head">
-            <div className="form-sec">{tt("Where you sell")}</div>
-            <button className="btn-solid" data-add-market onClick={() => setAdding((n) => n + 1)}><Plus size={16} /> {tt("Add a market")}</button>
-          </div>
-          <p className="panel-note">{tt("The places your sales team works, by ZIP code or town, and the services you offer in each. Every lead in the CRM is sorted into one.")}</p>
+        <section className="mm-half portal-panel" data-markets-sell>
+          <h4>{tt("Where you sell")}</h4>
+          <p className="panel-note">{tt("Each lead is sorted into a market by ZIP or town, so your team knows which services to offer.")}</p>
           {data?.failed && <p className="billing-err" role="alert">{tt("Couldn't load your markets.")} <button className="link-btn" onClick={load}>{tt("Try again")}</button></p>}
-          <MarketsCtx.Provider value={ctx}><CrmMarkets adding={adding} /></MarketsCtx.Provider>
+          <MarketsCtx.Provider value={ctx}>
+            <CrmMarkets adding={adding} onAdd={() => setAdding((n) => n + 1)} />
+          </MarketsCtx.Provider>
         </section>
       )}
     </div>
   );
 }
 
-function CrmMarkets({ adding = 0 }) {
+function CrmMarkets({ adding = 0, onAdd = null }) {
   const { markets, ready, migration, reload } = React.useContext(MarketsCtx);
   const [edit, setEdit] = useState(null); // null | {id?, name, zips, cities, services, active}
   const [busy, setBusy] = useState(false);
@@ -32138,8 +32141,6 @@ function CrmMarkets({ adding = 0 }) {
   return (
     <div className="crm-markets" data-markets>
       {migration && <p className="appt-warn" role="note">Markets aren't set up on this database yet. Run migration {migration}.</p>}
-      <p className="note">A market is a place you sell in: the ZIP codes or towns it covers and the services you offer there.
-        Every lead is matched to a market by their ZIP, so the contact center knows what to offer them.</p>
       {edit && (
         <div className="lc-form market-form" data-market-form>
           <label className="fld">Market name<input value={edit.name} data-market-name placeholder="South Sound"
@@ -32168,28 +32169,42 @@ function CrmMarkets({ adding = 0 }) {
       )}
       {!edit && err && <p className="form-err" role="alert">{marketErrText(err)}</p>}
       {ready && !markets.length && !edit && (
-        <div className="empty appt-empty"><p>No markets yet.</p>
-          <button className="btn-solid" onClick={() => setEdit(marketBlank())}>Add your first market</button></div>
+        <div className="cov-preview market-empty"><Target size={14} /><em>{tt("No markets yet. Add one to start sorting leads by place.")}</em></div>
       )}
-      <ul className="market-list">
-        {markets.map((m) => (
-          <li key={m.id} className={`market-row ${m.active ? "" : "off"}`} data-market={m.id}>
-            <div className="market-main">
-              <b>{m.name}</b>{!m.active && <span className="tn-chip">Paused</span>}
-              <span className="note">{[m.zips.length ? `${m.zips.length} ${m.zips.length === 1 ? "ZIP" : "ZIPs"}` : "",
-                m.cities.length ? m.cities.slice(0, 3).map((c) => `${c.city}, ${c.state}`).join(" · ") + (m.cities.length > 3 ? ` +${m.cities.length - 3}` : "") : ""]
-                .filter(Boolean).join(" · ")}</span>
-              <span className="market-svcs">{m.services.map((sv) => <span key={sv} className="tn-chip">{serviceLabel(sv)}</span>)}</span>
-            </div>
-            <div className="market-acts">
-              <button className="btn-ghost sm" data-market-edit onClick={() => { setErr(null);
-                setEdit({ id: m.id, name: m.name, zips: m.zips.join(", "), cities: m.cities.map((c) => `${c.city}, ${c.state}`).join("\n"),
-                  services: m.services, active: m.active }); }}><Pencil size={13} /> Edit</button>
-              <button className="btn-ghost sm" data-market-delete onClick={() => setRemoving(m)}><Trash2 size={13} /></button>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {markets.length > 0 && (
+        <ul className="market-list">
+          {markets.map((m) => {
+            // Where it is, in one line: the first two towns and how many more,
+            // then the ZIP count. The full list is in Edit.
+            const towns = m.cities.slice(0, 2).map((c) => `${c.city}, ${c.state}`).join(" · ")
+              + (m.cities.length > 2 ? ` +${m.cities.length - 2} more` : "");
+            const where = [towns, m.zips.length ? `${m.zips.length} ${m.zips.length === 1 ? "ZIP" : "ZIPs"}` : ""].filter(Boolean).join(" · ");
+            return (
+              <li key={m.id} className={`market-row ${m.active ? "" : "off"}`} data-market={m.id}>
+                <div className="market-main">
+                  <div className="market-name"><MapPin size={15} /><b>{m.name}</b>{!m.active && <span className="tn-chip">{tt("Paused")}</span>}</div>
+                  {where && <div className="market-where">{where}</div>}
+                  {m.services.length > 0 && (
+                    <div className="market-svcs">{m.services.map((sv) => <span key={sv} className="market-svc">{serviceLabel(sv)}</span>)}</div>
+                  )}
+                </div>
+                <div className="market-acts">
+                  <button className="icon-btn" aria-label={`Edit ${m.name}`} title={tt("Edit")} data-market-edit onClick={() => { setErr(null);
+                    setEdit({ id: m.id, name: m.name, zips: m.zips.join(", "), cities: m.cities.map((c) => `${c.city}, ${c.state}`).join("\n"),
+                      services: m.services, active: m.active }); }}><Pencil size={15} /></button>
+                  <button className="icon-btn" aria-label={`Delete ${m.name}`} title={tt("Delete")} data-market-delete onClick={() => setRemoving(m)}><Trash2 size={15} /></button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {onAdd && !edit && (
+        <div className="panel-actions">
+          <span className="panel-count">{tt(markets.length === 1 ? "{n} market" : "{n} markets", { n: markets.length })}</span>
+          <button className="btn-solid" data-add-market onClick={onAdd}><Plus size={15} />{" "}{tt("Add a market")}</button>
+        </div>
+      )}
       {removing && (
         <ConfirmRemove name={removing.name} what="market" verb="Delete"
           consequence="Leads in it are not changed; they just won't be matched to a market until another one covers their ZIP."
@@ -54331,7 +54346,23 @@ a.meas-dl{text-decoration:none}
    cut off at the screen's edge is a tab nobody knows is there. */
 .seg-tabs.acct-tabs{flex-wrap:wrap;max-width:100%}
 .seg-tabs.acct-subtabs{margin-top:-6px}
-.my-markets{display:flex;flex-direction:column;gap:26px}
+.my-markets{display:flex;flex-direction:column;gap:18px}
+.crm-markets{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.market-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.market-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 14px;
+  border:1px solid var(--line);border-radius:11px;background:var(--paper);min-width:0}
+.market-row.off{opacity:.65}
+.market-main{display:flex;flex-direction:column;gap:6px;min-width:0;flex:1}
+.market-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:15px;color:var(--ink)}
+.market-name svg{flex:none;color:var(--brand)}
+.market-where{font-size:13px;color:var(--ink-soft);overflow-wrap:anywhere}
+.market-svcs{display:flex;flex-wrap:wrap;gap:6px}
+.market-svc{font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;background:#eef5f1;color:var(--brand-dk);border:1px solid #cfe0d6}
+.market-acts{display:flex;gap:6px;flex:none}
+.market-acts .icon-btn{width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);
+  border-radius:9px;background:var(--card);color:var(--ink-soft);cursor:pointer}
+.market-acts .icon-btn:hover{color:var(--ink);border-color:var(--ink-soft)}
+.market-empty{margin:0}
 .mm-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .mm-head .form-sec{margin:0}
 /* The account's own license, as the state's register last answered. */
