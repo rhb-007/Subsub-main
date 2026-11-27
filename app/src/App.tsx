@@ -24890,6 +24890,7 @@ function payoutErrorText(e) {
 }
 
 function HireablePanel({ section = "profile", accountName, myName = "", requests = [], focus = null, focusN = 0, onRespond, onReload }) {
+  const nav = React.useContext(AppNav);
   const isDocs = section === "docs";
   const [f, setF] = useState(null);
   const [loaded, setLoaded] = useState(null);
@@ -25208,7 +25209,18 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
           {/* Where they work moved to My account -> My markets, beside where
               they sell, so one place answers "where do we do business". */}
           {openHire && loaded && (
-            <p className="panel-note" data-markets-pointer>{tt("Where you work is set on")}{" "}<b>{tt("My markets")}</b>.</p>
+            <div className="markets-pointer" data-markets-pointer>
+              <span className="mp-icon"><MapPin size={18} /></span>
+              <div className="mp-text">
+                <b>{tt("Where you work")}</b>
+                <span>{tt("The towns and ZIPs you cover are set on My markets.")}</span>
+              </div>
+              {nav?.goAccount && (
+                <button type="button" className="btn-ghost mp-go" data-markets-go onClick={() => nav.goAccount("markets")}>
+                  {tt("Open My markets")} <ChevronRight size={16} />
+                </button>
+              )}
+            </div>
           )}
 
           <div className="form-sec">{tt("Asking to work with you")}{pending.length > 0 ? ` (${pending.length})` : ""}</div>
@@ -51724,6 +51736,12 @@ p.fld-note{margin:6px 0 0}
 
 /* portal panel extras */
 .panel-note{font-size:12.5px;color:var(--ink-soft);margin:0 0 14px;line-height:1.4}
+.markets-pointer{display:flex;align-items:center;gap:12px;margin:22px 0 24px;padding:14px 16px;border:1px solid var(--line);border-radius:12px;background:var(--paper)}
+.markets-pointer .mp-icon{flex:none;display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:var(--brand-soft, #e6f0ea);color:var(--brand)}
+.markets-pointer .mp-text{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;font-size:13.5px;color:var(--ink-soft);line-height:1.35}
+.markets-pointer .mp-text b{color:var(--ink);font-size:14.5px}
+.markets-pointer .mp-go{flex:none;display:inline-flex;align-items:center;gap:4px;min-height:40px;white-space:nowrap}
+@media (max-width:560px){.markets-pointer{flex-wrap:wrap}.markets-pointer .mp-go{width:100%;justify-content:center}}
 .panel-actions{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:16px;padding-top:14px;border-top:1px solid var(--line)}
 .panel-count{font-size:12.5px;color:var(--ink-soft);font-weight:600}
 .saved-note{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700;color:var(--brand)}

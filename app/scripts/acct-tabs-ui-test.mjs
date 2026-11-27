@@ -235,6 +235,16 @@ try {
   const co = await page.evaluate(() => ({ cov: !!document.querySelector(".cov-toggle"), ptr: document.querySelector("[data-markets-pointer]")?.innerText || "",
     open: !!document.querySelector(".open-hire") }));
   t.ck("Company no longer carries the coverage form, and says where it went", co.open && !co.cov && /My markets/.test(co.ptr), JSON.stringify(co));
+  const gap = await page.evaluate(() => { const p = document.querySelector("[data-markets-pointer]");
+    const btn = [...document.querySelectorAll("button")].find((b) => /Save profile/.test(b.innerText));
+    if (!p || !btn) return null; const a = btn.getBoundingClientRect(), b = p.getBoundingClientRect();
+    return { gap: Math.round(b.top - a.bottom), border: getComputedStyle(p).borderTopStyle }; });
+  t.ck("the pointer is a boxed row with real space under Save profile", !!gap && gap.gap >= 16 && gap.border === "solid", JSON.stringify(gap));
+  await page.evaluate(() => document.querySelector("[data-markets-go]")?.click());
+  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
+  t.ck("Open My markets lands on My markets", !!(await page.$(".cov-toggle")), "");
+  await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "Company")?.click());
+  await wait(600);
   await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "My markets")?.click());
   for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
   const fieldSize = () => page.evaluate(() => {
