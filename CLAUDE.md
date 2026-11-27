@@ -17614,6 +17614,24 @@ refactor.
   filter (2), a bounding box too narrow (1), merging that drops the list (2),
   and the town not added (2).
 
+- **THE CRM DASHBOARD LEADS WITH A FUNNEL, AND A BAND OPENS THOSE LEADS.**
+  Asked for as *"a funnel visual ... where the leads are ... clickable to view
+  the leads UI with that specific filter on"*. The five stage cards became one
+  card, *Where your leads are*: a band per stage (Lead, Prospect, Opportunity,
+  Customer), each narrower than the one above. Each band shows its count and
+  its share of the leads still in the funnel, with what the stage means beside
+  it. Pressing a band opens Leads with that stage picked (`onStage`, the same
+  door the cards used). **Former customers are a line under the funnel**,
+  because they have come out of the bottom of it, and the line opens them the
+  same way. The shape is fixed rather than proportional to the counts, so a
+  stage with nobody in it is still a band to press. On a phone the bands widen
+  and the meanings drop. **The lead's weather block had no layout CSS at all**,
+  so the weather line sat on the note under it. `.lead-area` is a column with
+  8px gaps, and the note has 12px above it. `test:salesapptui` (109) reads the
+  bands, their widths and shares, the stage a band opens, the phone fit, and the
+  measured gaps. Removing the taper fails 1, a band ignoring its stage fails 2,
+  and removing the layout fails 2.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

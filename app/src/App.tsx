@@ -30793,6 +30793,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
 // 107. The CRM's first page: the pipeline by stage, this month, the week
 // ahead and what is owed. Every figure comes off the lists the screen holds,
 // through crmDashboard, and every card is a way into the list it counts.
+const FUNNEL_STAGES = ["lead", "prospect", "opportunity", "customer"];
 function CrmDashboard({ leads, appointments, followUps, meId, sales, leadsReady, onStage, onOpenAppt, onNeedsOutcome, onFollowUps }) {
   const today = dayKey();
   const d = crmDashboard({ leads, appointments, today });
@@ -30800,15 +30801,38 @@ function CrmDashboard({ leads, appointments, followUps, meId, sales, leadsReady,
   const mine = owed.filter((x) => !x.assigneeId || x.assigneeId === meId);
   return (
     <div className="crm-dash" data-crm-dash>
-      <section className="crm-funnel" data-funnel aria-label="Pipeline">
-        {LEAD_STAGES.map((stg) => (
-          <button key={stg.id} type="button" className={`crm-stage crm-stage-${stg.id}`} data-stage-card={stg.id}
-            disabled={!leadsReady} onClick={() => onStage(stg.id)}>
-            <b>{leadsReady ? d.stages[stg.id] : "–"}</b>
-            <span className="crm-stage-term">{stg.term}</span>
-            <span className="crm-stage-means">{stg.means}</span>
-          </button>
-        ))}
+      {/* THE FUNNEL: where every lead stands right now, one band per stage,
+          narrowing the way a sale does. A band is the way into Leads with
+          that stage already picked. The share is of leads still in the
+          funnel; a former customer has come out of the bottom of it, so they
+          are a line under it rather than a fifth band. */}
+      <section className="crm-card crm-funnel" data-funnel aria-label="Where your leads are">
+        <div className="crm-funnel-head">
+          <h3>Where your leads are</h3>
+          <span className="note">{leadsReady ? `${FUNNEL_STAGES.reduce((n, id) => n + d.stages[id], 0)} in the funnel` : "Loading…"}</span>
+        </div>
+        <ol className="funnel" data-funnel-bands>
+          {FUNNEL_STAGES.map((id, i) => {
+            const stg = LEAD_STAGES.find((x) => x.id === id);
+            const n = leadsReady ? d.stages[id] : 0;
+            const total = FUNNEL_STAGES.reduce((t, k) => t + d.stages[k], 0);
+            const pct = total ? Math.round((n / total) * 100) : 0;
+            return (
+              <li key={id} style={{ "--fw": `${100 - i * 14}%` }}>
+                <button type="button" className={`funnel-band funnel-${id}`} data-stage-card={id} disabled={!leadsReady}
+                  aria-label={`${stg.term}: ${n} ${n === 1 ? "lead" : "leads"}, ${pct}%. Show them.`} onClick={() => onStage(id)}>
+                  <b>{leadsReady ? n : "–"}</b>
+                  <span className="funnel-term">{stg.term}</span>
+                  {leadsReady && total > 0 && <span className="funnel-pct">{pct}%</span>}
+                </button>
+                <span className="funnel-means">{stg.means}</span>
+              </li>
+            );
+          })}
+        </ol>
+        <button type="button" className="funnel-former" data-stage-card="former" disabled={!leadsReady} onClick={() => onStage("former")}>
+          <span>Former customers</span><b>{leadsReady ? d.stages.former : "–"}</b><ChevronRight size={15} />
+        </button>
       </section>
       <div className="crm-dash-grid">
         <section className="crm-card" data-month>
@@ -57668,16 +57692,31 @@ button.job-insp:hover{border-color:#2f5577}
 .lead-st-customer{background:#e6f2ec;color:#1d5740}
 .lead-st-former{background:#efe9f6;color:#5a3f80}
 .crm-dash{display:flex;flex-direction:column;gap:18px}
-.crm-funnel{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
-.crm-stage{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:14px;border:1px solid var(--line);border-top:4px solid var(--line);border-radius:12px;background:var(--card);text-align:left;cursor:pointer;min-height:44px}
-.crm-stage:disabled{cursor:default;opacity:.7}
-.crm-stage b{font:800 26px Inter,sans-serif;color:var(--ink)}
-.crm-stage-term{font:700 14px Inter,sans-serif;color:var(--ink)}
-.crm-stage-means{font-size:12.5px;color:var(--ink-soft);line-height:1.3}
-.crm-stage-prospect{border-top-color:#6d8fc4}
-.crm-stage-opportunity{border-top-color:#e39b32}
-.crm-stage-customer{border-top-color:#2f8a5f}
-.crm-stage-former{border-top-color:#8a6bb3}
+.crm-funnel{margin:0 0 14px}
+.crm-funnel-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:0 0 10px}
+.crm-funnel-head h3{margin:0}
+.funnel{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.funnel li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,190px);align-items:center;gap:12px}
+.funnel-band{width:var(--fw);justify-self:center;min-height:52px;display:flex;align-items:center;justify-content:center;gap:10px;padding:8px 18px;border:0;border-radius:10px;cursor:pointer;color:var(--ink);clip-path:polygon(0 0,100% 0,calc(100% - 14px) 100%,14px 100%)}
+.funnel-band:disabled{cursor:default;opacity:.7}
+.funnel-band:not(:disabled):hover{filter:brightness(.96)}
+.funnel-band:focus-visible{outline:none;box-shadow:inset 0 0 0 3px var(--ink)}
+.funnel-band b{font:800 22px Inter,sans-serif}
+.funnel-term{font:700 14px Inter,sans-serif}
+.funnel-pct{font:600 13px Inter,sans-serif;color:var(--ink-soft)}
+.funnel-lead{background:#e3e8ee}
+.funnel-prospect{background:#d4e2f5}
+.funnel-opportunity{background:#f8e2bc}
+.funnel-customer{background:#cfeadb}
+.funnel-means{font-size:12.5px;color:var(--ink-soft);line-height:1.3}
+.funnel-former{display:flex;align-items:center;gap:8px;width:100%;margin:12px 0 0;padding:10px 4px 0;border:0;border-top:1px solid var(--line);background:none;color:var(--ink);font:600 14px Inter,sans-serif;cursor:pointer;min-height:44px}
+.funnel-former span{flex:1;text-align:left}
+.funnel-former:disabled{cursor:default;opacity:.7}
+@media (max-width:620px){.funnel li{grid-template-columns:1fr}.funnel-means{display:none}.funnel-band{width:calc(var(--fw) + (100% - var(--fw)) * .3)}}
+.lead-area{display:flex;flex-direction:column;gap:8px;margin:8px 0 12px}
+.lead-area-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+.lead-area-row > svg{flex:none}
+.lead-area .lead-area-talk{margin-top:4px}
 .crm-dash-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .crm-card{padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);display:flex;flex-direction:column;gap:10px;min-width:0}
 .crm-card h3{margin:0;font:700 15px Inter,sans-serif}

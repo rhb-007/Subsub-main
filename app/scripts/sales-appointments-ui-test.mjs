@@ -448,6 +448,17 @@ try {
     for (let n = 0; n < 20; n++) { await wait(150); if (await page.$("[data-lead]")) break; }
     await click(page, '[data-lead="ld_ivy"]');
     await wait(300);
+    // The weather line and the note under it were drawn touching: the block
+    // had no layout at all. Measured, not read off the stylesheet.
+    for (let n = 0; n < 20; n++) { await wait(150); if (await page.$("[data-lead-detail] [data-weather-talk]")) break; }
+    const wx = await page.evaluate(() => {
+      const a = document.querySelector("[data-lead-detail] [data-lead-weather]")?.getBoundingClientRect();
+      const b = document.querySelector("[data-lead-detail] [data-weather-talk]")?.getBoundingClientRect();
+      const m = document.querySelector("[data-lead-detail] [data-lead-market]")?.getBoundingClientRect();
+      return a && b && m ? { talkGap: Math.round(b.top - a.bottom), wxGap: Math.round(a.top - m.bottom) } : null;
+    });
+    t.ck("the weather note sits clear of the weather line", !!wx && wx.talkGap >= 10, JSON.stringify(wx));
+    t.ck("and the weather line clear of the market line", !!wx && wx.wxGap >= 6, JSON.stringify(wx));
     const btns = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-move]")].map((b) => [b.dataset.move, b.disabled])));
     t.ck("a call-center seat may qualify a lead to prospect, and nothing past it", btns.prospect === false
       && btns.opportunity === true && btns.customer === true && btns.former === true, JSON.stringify(btns));
@@ -501,6 +512,33 @@ try {
     const from = crmNav.indexOf("Dashboard");
     t.ck("the CRM has its own menu, starting with its dashboard", from >= 0 && ["Dashboard", "Inbox", "Leads", "Appointments", "Calendar", "Follow-ups"].every((l, i) => crmNav[from + i] === l)
       && !crmNav.includes("Jobs"), crmNav.join(" | "));
+    // THE FUNNEL: a band per stage, narrowing, each with its count and its
+    // share of the leads still in the funnel.
+    const fun = await page.evaluate(() => [...document.querySelectorAll("[data-funnel-bands] [data-stage-card]")].map((b) => ({
+      id: b.dataset.stageCard, w: Math.round(b.getBoundingClientRect().width), text: b.innerText.replace(/\s+/g, " ").trim() })));
+    t.ck("the dashboard draws a funnel of four stages, lead to customer", fun.map((f) => f.id).join() === "lead,prospect,opportunity,customer", JSON.stringify(fun));
+    t.ck("each band is narrower than the one above it", fun.length === 4 && fun.every((f, i) => i === 0 || f.w < fun[i - 1].w), JSON.stringify(fun.map((f) => f.w)));
+    t.ck("each band carries its count and its share", fun[0]?.text === "1 Lead 25%" && fun[1]?.text === "1 Prospect 25%"
+      && fun[2]?.text === "2 Opportunity 50%" && fun[3]?.text === "0 Customer 0%", JSON.stringify(fun.map((f) => f.text)));
+    t.ck("former customers are a line under it", !!(await page.$('[data-funnel] .funnel-former[data-stage-card="former"]')));
+    await page.setViewport({ width: 390, height: 844 });
+    await wait(400);
+    const phone = await page.evaluate(() => {
+      const card = document.querySelector("[data-funnel]").getBoundingClientRect();
+      return { fit: [...document.querySelectorAll("[data-funnel-bands] [data-stage-card]")].every((b) => {
+        const r = b.getBoundingClientRect(); return r.left >= card.left && r.right <= card.right && b.scrollWidth <= b.clientWidth + 1; }),
+        page: document.documentElement.scrollWidth > innerWidth };
+    });
+    t.ck("on a phone every band fits, with nothing cut off", phone.fit && !phone.page, JSON.stringify(phone));
+    await page.setViewport({ width: 1280, height: 900 });
+    await wait(300);
+    await click(page, '[data-stage-card="lead"]');
+    await wait(300);
+    const leadRows = await page.$$eval("[data-lead]", (xs) => xs.map((x) => x.dataset.lead));
+    t.ck("a band opens Leads with that stage picked", leadRows.join() === "ld_new"
+      && await page.evaluate(() => document.querySelector('[data-lead-stage="lead"]')?.classList.contains("on")), leadRows.join());
+    await click(page, '[data-crm-nav="dashboard"]');
+    for (let n = 0; n < 20; n++) { await wait(150); if (await page.$("[data-funnel]")) break; }
     await click(page, '[data-stage-card="opportunity"]');
     await wait(300);
     const rows = await page.$$eval("[data-lead]", (xs) => xs.map((x) => x.dataset.lead));
