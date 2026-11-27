@@ -17553,6 +17553,21 @@ refactor.
   follow-up, New message, New appointment and Update report. `test:crmpagesui`
   measures the search at 390px; the old class reads 26px and fails two.
 
+- **CRM SETUP IS ONE ROW OF SHORT TABS THAT SCROLLS, A ONE-LINE HEADER PER
+  TAB, AND THE PANE IN A CARD.** Reported from an iPhone as sloppy: seven tabs
+  in a segmented box with full-phrase labels (*Reviews and repeat work* on four
+  lines), the last one cut off at the screen's edge, and a seven-line paragraph
+  opening Sequences. `SETUP_TABS` holds each tab's short name, its icon and one
+  sentence. The bar (`.setup-nav`) never wraps and scrolls sideways inside
+  itself, and the chosen tab is scrolled into view. Under it, the tab's name and
+  that sentence; the pane sits in a card. Sequences explains itself in three
+  short lines with icons; the old paragraph is gone, and so are the long notes
+  on the website form, routing, reviews, commission and custom fields. The page
+  line is *How your CRM sends, routes and records*. Labels changed (*Sequences*,
+  *Routing*, *Reviews*); the tab ids did not. `test:crmpagesui` measures the bar
+  at 390px (one row, scrolling, nothing past the page); letting it wrap fails
+  two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

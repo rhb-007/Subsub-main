@@ -279,6 +279,26 @@ try {
   await click(page, '[data-seq="std:seq-text"] [data-seq-use]');
   await wait(300);
   t.ck("Use this makes the account's own", posts.seqPosts.some((p) => p.starterId === "std:seq-text"), JSON.stringify(posts.seqPosts));
+
+  // ON A PHONE: one row of tabs that scrolls, never wraps or runs off the
+  // page, and the sequence explainer is three short lines, not a paragraph.
+  await page.setViewport({ width: 390, height: 844 });
+  await wait(300);
+  const tabs = await page.evaluate(() => {
+    const nav = document.querySelector(".setup-nav");
+    const bs = [...document.querySelectorAll("[data-setup-tab]")].map((b) => b.getBoundingClientRect());
+    const nr = nav?.getBoundingClientRect();
+    return { n: bs.length, tops: [...new Set(bs.map((r) => Math.round(r.top)))].length,
+      maxH: Math.max(...bs.map((r) => Math.round(r.height))), navRight: nr ? Math.round(nr.right) : 9999,
+      scrolls: nav ? nav.scrollWidth > nav.clientWidth : false, pageWide: document.documentElement.scrollWidth,
+      head: document.querySelector("[data-setup-head]")?.innerText || "", how: document.querySelectorAll("[data-seq-how] li").length };
+  });
+  t.ck("on a phone the setup tabs are one row", tabs.n === 7 && tabs.tops === 1 && tabs.maxH <= 48, JSON.stringify(tabs));
+  t.ck("that scrolls inside itself rather than off the page", tabs.scrolls && tabs.navRight <= 390 && tabs.pageWide <= 390, JSON.stringify(tabs));
+  t.ck("the tab's header says what it is in one line", /^Sequences\s+Timed steps/.test(tabs.head), tabs.head);
+  t.ck("and how a sequence works is three short lines", tabs.how === 3, JSON.stringify(tabs));
+  await page.setViewport({ width: 1180, height: 900 });
+  await wait(300);
   await click(page, '[data-setup-tab="form"]');
   await wait(300);
   const consent = await page.evaluate(() => document.querySelector("[data-lead-form-consent]")?.innerText || "");

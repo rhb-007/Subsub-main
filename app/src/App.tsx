@@ -42,6 +42,7 @@ import {
   Crown,
   PhoneIncoming,
   PhoneOutgoing, Mic, CalendarClock, Briefcase, Tag, FileSignature, GitMerge, Bookmark,
+  Shuffle, Percent, SlidersHorizontal,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -30583,7 +30584,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
             : pane === "inbox" ? "Every email, text, letter, call and note with your leads, and their replies."
             : pane === "followups" ? "What is owed to each homeowner, and when."
             : pane === "reports" ? "What is in the pipeline, who is closing, where sales come from and why estimates are lost."
-            : pane === "setup" ? "Templates for email, texts and letters, follow-up sequences, and the estimate form for your own website."
+            : pane === "setup" ? "How your CRM sends, routes and records."
             : pane === "markets" ? "Where you sell, and which services you offer in each place."
             : sales ? "Homeowners booked for an estimate, what was said to them, and what is owed next. Turn a sale into a job."
             : "Book homeowners for a free estimate on inbound and outbound calls, and keep up with their follow-ups."}>
@@ -32200,22 +32201,48 @@ function CrmMarkets({ adding = 0 }) {
 
 // 110. CRM Setup, for the office: email templates, follow-up sequences, and
 // the form for the account's own website.
+// ONE ROW OF TABS THAT SCROLLS SIDEWAYS, never wraps. The labels were full
+// phrases in a segmented box, so on a phone they broke over four lines and
+// the last one ran off the edge. Short names here; what each one is goes in
+// the header under them, one line, instead of a paragraph inside the pane.
+const SETUP_TABS = [
+  ["templates", "Templates", FileText, "Saved words for emails, texts and letters."],
+  ["sequences", "Sequences", ListChecks, "Timed steps that run after you put a lead on one."],
+  ["form", "Website form", Globe, "An estimate request form for your own website."],
+  ["routing", "Routing", Shuffle, "Who gets a new lead that nobody has claimed."],
+  ["aftercare", "Reviews", Star, "Review requests and repeat-work reminders after a job."],
+  ["commission", "Commission", Percent, "Each sales manager's share of what they sell."],
+  ["fields", "Custom fields", SlidersHorizontal, "Your own questions on every lead."],
+];
 function CrmSetup({ lib, onReload, subdomain, accountName, theme, owners = [] }) {
   const [tab, setTab] = useState("templates");
+  const cur = SETUP_TABS.find((x) => x[0] === tab) || SETUP_TABS[0];
+  const navRef = useRef(null);
+  // The chosen tab is scrolled into view, so a tab picked at the far end
+  // is not left half off the edge of a phone.
+  useEffect(() => {
+    const el = navRef.current?.querySelector(`[data-setup-tab="${tab}"]`);
+    el?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, [tab]);
   return (
     <div className="crm-setup" data-crm-setup>
-      <div className="seg-tabs" role="tablist">
-        {[["templates", "Templates"], ["sequences", "Follow-up sequences"], ["form", "Website form"], ["routing", "Lead routing"],
-          ["aftercare", "Reviews and repeat work"], ["commission", "Commission"], ["fields", "Custom fields"]].map(([id, label]) => (
+      <div className="setup-nav" role="tablist" aria-label="Setup" ref={navRef}>
+        {SETUP_TABS.map(([id, label, Icon]) => (
           <button key={id} type="button" role="tab" data-setup-tab={id} aria-selected={tab === id} className={tab === id ? "on" : ""}
-            onClick={() => setTab(id)}>{label}</button>
+            onClick={() => setTab(id)}><Icon size={15} /> {label}</button>
         ))}
       </div>
+      <div className="setup-head" data-setup-head>
+        <h3>{cur[1]}</h3>
+        <p>{cur[3]}</p>
+      </div>
       {lib?.migration && <p className="appt-warn" role="note">Templates and sequences aren't set up on this database yet. Run migration {lib.migration}.</p>}
-      {tab === "templates" && <CrmTemplates lib={lib} onReload={onReload} accountName={accountName} />}
-      {tab === "sequences" && <CrmSequences lib={lib} onReload={onReload} />}
-      {tab === "form" && <LeadFormEmbed subdomain={subdomain} accountName={accountName} theme={theme} />}
-      {["routing", "aftercare", "commission", "fields"].includes(tab) && <CrmPlusSetup tab={tab} owners={owners} />}
+      <div className="setup-body">
+        {tab === "templates" && <CrmTemplates lib={lib} onReload={onReload} accountName={accountName} />}
+        {tab === "sequences" && <CrmSequences lib={lib} onReload={onReload} />}
+        {tab === "form" && <LeadFormEmbed subdomain={subdomain} accountName={accountName} theme={theme} />}
+        {["routing", "aftercare", "commission", "fields"].includes(tab) && <CrmPlusSetup tab={tab} owners={owners} />}
+      </div>
     </div>
   );
 }
@@ -32371,10 +32398,12 @@ function CrmSequences({ lib, onReload }) {
   );
   return (
     <div className="crm-seqs" data-sequences>
-      <p className="note">Steps on a schedule after a lead is put on one. An email step is sent by SubSub; a text or letter step becomes a follow-up
-        for whoever owns the lead, due that day, with the words filled in. Each sequence stops by itself the moment they reply, buy, unsubscribe
-        or are marked Do not contact, and a step only goes on a channel they agreed to.</p>
-      {!edit && <button className="btn-solid" data-seq-new onClick={() => setEdit(blank())}><Plus size={15} /> New sequence</button>}
+      <ul className="setup-how" data-seq-how>
+        <li><Mail size={14} /> Email steps send on their own.</li>
+        <li><MessageSquareText size={14} /> Text and letter steps become a follow-up for the lead's owner.</li>
+        <li><Ban size={14} /> It stops when they reply, buy, unsubscribe or are marked Do not contact.</li>
+      </ul>
+      {!edit && <button className="btn-solid setup-new" data-seq-new onClick={() => setEdit(blank())}><Plus size={15} /> New sequence</button>}
       {edit && (
         <div className="lc-form" data-seq-form>
           <label className="fld">Name<input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} data-seq-name placeholder="After the estimate" /></label>
@@ -32406,10 +32435,12 @@ function CrmSequences({ lib, onReload }) {
         </div>
       )}
       {!edit && err && <p className="form-err" role="alert">{crmSetupErrText(err)}</p>}
-      {!own.length && !edit && <p className="note">You haven't made a sequence of your own yet. Start from one below.</p>}
-      <ul className="crm-tpl-list" data-seq-own>{own.map(row)}</ul>
+      {own.length > 0 && (<>
+        <span className="lead-label">Yours</span>
+        <ul className="crm-tpl-list" data-seq-own>{own.map(row)}</ul>
+      </>)}
       {starters.length > 0 && (<>
-        <span className="lead-label">Starter sequences</span>
+        <span className="lead-label">{own.length ? "Starters" : "Start from one of these"}</span>
         <ul className="crm-tpl-list" data-seq-starters>{starters.map(row)}</ul>
       </>)}
     </div>
@@ -32442,8 +32473,7 @@ function LeadFormEmbed({ subdomain, accountName, theme }) {
   };
   return (
     <div className="crm-leadform" data-lead-form-embed>
-      <p className="note">Paste this on your website where homeowners ask for an estimate. Each request lands in Leads as from the website,
-        what they wrote waits in the Inbox, and your admins and project managers get an email.</p>
+      <p className="note">Paste it where homeowners ask for an estimate. Each request lands in Leads and the Inbox, and the office is emailed.</p>
       <div className="fld"><span>What homeowners can ask for <span className="crm-card-n">{picked.length}</span></span>
         <div className="chips" data-lead-form-services>
           {TRADES.map((t) => (
@@ -33065,7 +33095,7 @@ function CrmPlusSetup({ owners = [], tab }) {
   return (
     <div className="crm-plus-setup" data-plus-setup={tab}>
       {tab === "routing" && (<>
-        <p className="note">Who a new lead goes to when nobody picked an owner: from the website form, the API, an import, or a contact-center seat.</p>
+        <p className="note">Leads from the website form, the API, an import or the contact center.</p>
         <label className="fld">New leads
           <select value={f.routingMode} onChange={(e) => setF({ ...f, routingMode: e.target.value })} data-routing-mode>
             {ROUTING_MODES.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
@@ -33092,7 +33122,7 @@ function CrmPlusSetup({ owners = [], tab }) {
           onClick={() => save({ routingMode: f.routingMode, routingReps: f.routingReps, marketReps: f.marketReps, alertNewLeads: f.alertNewLeads })}>Save</button></div>
       </>)}
       {tab === "aftercare" && (<>
-        <p className="note">After the job: a review request to the homeowner (only if they agreed to email), and a reminder for the owner to check back for more work.</p>
+        <p className="note">The review request goes only to a homeowner who agreed to email.</p>
         <label className="fld">Your review link<input value={f.reviewUrl || ""} onChange={(e) => setF({ ...f, reviewUrl: e.target.value })}
           placeholder="https://g.page/r/your-business/review" data-review-url /></label>
         <div className="fld-row">
@@ -33106,7 +33136,7 @@ function CrmPlusSetup({ owners = [], tab }) {
           onClick={() => save({ reviewUrl: f.reviewUrl || "", reviewDelayDays: f.reviewDelayDays, repeatMonths: f.repeatMonths })}>Save</button></div>
       </>)}
       {tab === "commission" && (<>
-        <p className="note">Commission is the rate times what each sale was worth.</p>
+        <p className="note">The rate times what each sale was worth.</p>
         <label className="fld">Default rate (%)<input value={f.commissionPct} inputMode="decimal" onChange={(e) => setF({ ...f, commissionPct: e.target.value })} placeholder="5" data-commission-pct /></label>
         {owners.map((o) => (
           <label key={o.id} className="fld">{o.name} (%)<input value={f.repPct[o.id] || ""} inputMode="decimal" placeholder="Default"
@@ -33134,7 +33164,7 @@ function CustomFieldsSetup({ fields, busy, onSave }) {
   const set = (i, patch) => setList(list.map((f, k) => (k === i ? { ...f, ...patch } : f)));
   return (
     <div className="custom-fields-setup" data-custom-setup>
-      <p className="note">Your own questions on every lead: roof age, HOA, how they found you, anything you track.</p>
+      <p className="note">Roof age, HOA, how they found you, anything you track.</p>
       {list.map((f, i) => (
         <div key={i} className="fld-row" data-custom-def={i}>
           <label className="fld">Field<input value={f.label} onChange={(e) => set(i, { label: e.target.value })} /></label>
@@ -57698,7 +57728,25 @@ button.job-insp:hover{border-color:#2f5577}
 .crm-table{width:100%;border-collapse:collapse;font-size:14px}
 .crm-table th,.crm-table td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
 .crm-table th{font-size:12px;color:var(--ink-soft);font-weight:700}
-.crm-setup{display:flex;flex-direction:column;gap:14px}
+.crm-setup{display:flex;flex-direction:column;gap:16px;min-width:0}
+.setup-nav{display:flex;gap:4px;overflow-x:auto;padding:4px;border:1px solid var(--line);border-radius:12px;background:var(--card);
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-padding:4px}
+.setup-nav::-webkit-scrollbar{display:none}
+.setup-nav button{flex:none;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-height:40px;padding:0 14px;border:0;
+  border-radius:9px;background:none;font:inherit;font-size:14px;font-weight:600;color:var(--ink-soft);cursor:pointer}
+.setup-nav button.on{background:var(--ink);color:#fff}
+.setup-nav button:not(.on):hover{background:var(--paper);color:var(--ink)}
+.setup-head h3{margin:0;font-size:19px;font-weight:700;color:var(--ink)}
+.setup-head p{margin:2px 0 0;font-size:14px;color:var(--ink-soft)}
+.setup-body{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:18px;min-width:0}
+.setup-body > div{display:flex;flex-direction:column;gap:14px}
+.setup-body .note{margin:0;font-size:14px;line-height:1.45;color:var(--ink-soft)}
+.setup-body .lead-label{margin-top:6px}
+.setup-how{list-style:none;margin:0;padding:12px 14px;border-radius:10px;background:var(--paper);display:flex;flex-direction:column;gap:8px}
+.setup-how li{display:flex;align-items:flex-start;gap:8px;font-size:14px;line-height:1.4;color:var(--ink)}
+.setup-how li svg{flex:none;margin-top:2px;color:var(--brand)}
+.setup-new{align-self:flex-start}
+@media (max-width:560px){.setup-body{padding:14px;border-radius:12px}}
 .crm-tpls,.crm-seqs,.crm-leadform{display:flex;flex-direction:column;gap:12px}
 .crm-tpls > .btn-solid,.crm-seqs > .btn-solid{width:fit-content}
 .crm-tpl-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
