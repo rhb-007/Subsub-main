@@ -17632,6 +17632,16 @@ refactor.
   measured gaps. Removing the taper fails 1, a band ignoring its stage fails 2,
   and removing the layout fails 2.
 
+- **THE "WHERE YOU WORK" POINTER ON COMPANY IS A BOXED ROW WITH A WAY IN.**
+  Reported from a phone: the line *Where you work is set on My markets* sat on
+  the Save profile button and named a page with nothing to press. It is now a
+  `.markets-pointer` row 22px clear of the button: a pin, *Where you work*, one
+  line on what lives there, and **Open My markets**
+  (`nav.goAccount("markets")`, admin only, the same door every other pointer
+  uses; on a phone the button runs full width under the text).
+  `test:accttabs` (64) measures the gap and presses the button; a button wired
+  to nothing fails one assertion.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
