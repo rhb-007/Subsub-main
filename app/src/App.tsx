@@ -119,7 +119,7 @@ import { handymanCapCheck, handymanCapText,
   HANDYMAN_GLOBAL_RULES } from "../shared/handycap.js";
 import { workWhen, scheduledOn, WHEN_KINDS, windowEnd } from "../shared/schedule.js";
 import { spanView, spanText, jobSpan, spanDates, spanDaysFrom, isDayKey as isSpanDay,
-  MAX_SPAN_DAYS } from "../shared/span.js";
+  MAX_SPAN_DAYS, tradeOnDay } from "../shared/span.js";
 import { offDays as companyOffDays } from "../shared/crews.js";
 import { ACCESS_KINDS, accessChoices, canAskTenant, needsTenantConfirm,
   mayChooseAccess, maySetAccess, accessTenant } from "../shared/access.js";
@@ -1183,9 +1183,12 @@ function dayStatus(sub, jobs, day, ignoreJobId, viewAccountId) {
   const busy = new Set();
   let elsewhere = 0;
   (jobs || []).forEach((j) => {
-    if (j.date !== day || j.id === ignoreJobId) return;
-    Object.values(j.assignments || {}).forEach((a) => {
+    if (j.id === ignoreJobId) return;
+    // Every day of the trade's estimate, not only the job's start date: a
+    // crew three days into a five-day job is not free on day four.
+    Object.entries(j.assignments || {}).forEach(([trade, a]) => {
       if (a.subId !== sub.id || !a.crewName) return;
+      if (a.status === "declined" || a.voidedAt || !tradeOnDay(j, trade, day)) return;
       busy.add(a.crewName);
       // booked by a different hiring company — count it, but don't leak details
       if (viewAccountId && j.accountId && j.accountId !== viewAccountId) elsewhere += 1;
@@ -9250,7 +9253,10 @@ export default function SubSub() {
       {assignSub && <Modal onClose={() => setAssignSub(null)} wide>
         <PickJobSlot allJobs={allJobs} accountId={account.id} sub={assignSub.sub} jobs={jobs}
           onPick={(job, trade) => assignContractor(job.id, trade, assignSub.sub)}
-          onNewJob={() => { const s0 = assignSub.sub; setAssignSub(null); tryAddJob(s0); }}
+          onNewJob={() => {
+            // The day that was pressed is the start: it was dropped here, so
+            // the form opened on whatever date it defaulted to.
+            const { sub: s0, date: d0 } = assignSub; setAssignSub(null); tryAddJob(s0, null, d0); }}
           onNotify={(job, trade) => requestDocs(assignSub.sub, job, trade)}
           onRequestDocs={requestDocs}
           onCancel={() => setAssignSub(null)} /></Modal>}
@@ -29676,11 +29682,13 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
   // into the work order. A grid that quietly books Thursday when you press
   // Wednesday is worse than one that is merely wrong to look at.
   const fmt = dayKey;
-  const jobsByDay = useMemo(() => {
-    const map = {};
-    jobs.forEach((j) => { (map[j.date] ||= []).push(j); });
-    return map;
-  }, [jobs]);
+  // Which jobs hold each contractor on each day -- EVERY day of a trade's
+  // estimate, not just the day the job starts, so a thirty-day job is thirty
+  // booked cells. Booked means live work: a declined or voided offer, or a
+  // job cancelled or finished, is not a crew on site that day.
+  const bookedOn = (subId, key) => jobs.filter((j) => jobIsLive(j, key)
+    && Object.entries(j.assignments || {}).some(([trade, a]) =>
+      a.subId === subId && a.status !== "declined" && !a.voidedAt && tradeOnDay(j, trade, key)));
 
   const free = subs.filter((s) => availableOn(s, dayKey())).length;
   return (
@@ -29716,9 +29724,7 @@ function AvailabilityView({ subs, jobs, allJobs, accountId, onSchedule, onReques
                 {days.map((d) => {
                   // Booked means live work: a declined or voided offer, or a job
                   // cancelled or finished, is not a crew on site that day.
-                  const dayJobs = (jobsByDay[fmt(d)] || []).filter((j) =>
-                    jobIsLive(j, fmt(d)) && Object.values(j.assignments || {}).some((a) =>
-                      a.subId === s.id && a.status !== "declined" && !a.voidedAt));
+                  const dayJobs = bookedOn(s.id, fmt(d));
                   const booked = dayJobs.length > 0;
                   // Not named dayKey: that is the helper fmt IS, and a local
                   // shadowing it here would be one rename away from a bug
@@ -33927,6 +33933,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     accessUserId: preset?.accessUserId || "",
     measurementDocs: [],
     spans: {},
+    // HOW MANY WORKING DAYS THE JOB TAKES, asked on the When step beside the
+    // start. A job can be one day or thirty, and a job booked from the
+    // availability grid for one contractor has to hold every one of those
+    // days on their calendar. It is the estimate for each trade that does not
+    // carry one of its own on the Trades step. Empty is a one-day job.
+    jobDays: "", jobWeekends: false,
   });
   // Picking a property fills the address, so it isn't retyped per job.
   const pickProperty = (id) => {
@@ -34020,7 +34032,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     }
     return "";
   })();
+  // The job's own length, from the When step. Only on a new job: an edit
+  // changes each trade's estimate on the Trades step, where they already are.
+  const jobDaysBad = !edit && f.jobDays !== "" && f.jobDays != null && !spanDaysFrom(f.jobDays);
+  const jobDaysNoStart = !edit && !!spanDaysFrom(f.jobDays) && !isSpanDay(f.date);
   const stepOk = (n) => n === 1 ? !!(f.title && f.address && (!asOwner || f.propertyId))
+    : n === 2 ? !jobDaysBad && !jobDaysNoStart
     : n === 3 ? f.trades.length > 0 && !spanProblem : true;
   // A tab is reachable when every step before it is answered; editing an
   // existing job, every tab is, because nothing on it is unanswered.
@@ -34028,6 +34045,8 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
   const stepWhy = step === 1
     ? (asOwner && !f.propertyId ? "Choose the building."
       : !f.title ? "Give the job a name." : !f.address ? "Add the service address." : "")
+    : step === 2 && jobDaysBad ? `How long: a whole number of working days, 1 to ${MAX_SPAN_DAYS}.`
+    : step === 2 && jobDaysNoStart ? "Give it a start date to count the days from."
     : step === 3 && !f.trades.length ? "Pick at least one trade — each becomes a slot a contractor fills."
     : step === 3 && spanProblem ? spanProblem
     : "";
@@ -34039,9 +34058,12 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
     const out = {};
     for (const t of f.trades) {
       const v = f.spans?.[t];
-      const days = spanDaysFrom(v?.days);
-      const start = v?.start || f.date;
-      if (days && isSpanDay(start)) out[t] = { start, days, weekends: !!v.weekends };
+      const own = spanDaysFrom(v?.days);
+      // A trade with no length of its own takes the job's, from the When step.
+      const days = own || (edit ? null : spanDaysFrom(f.jobDays));
+      const start = (own && v?.start) || f.date;
+      const weekends = own ? !!v.weekends : !!f.jobWeekends;
+      if (days && isSpanDay(start)) out[t] = { start, days, weekends };
       else if (existing?.spans?.[t]) out[t] = null;
     }
     return out;
@@ -34211,16 +34233,64 @@ function JobForm({ onSubmit, onCancel, forSub, jobs, allJobs, accountId, account
         <label className="fld">Start time<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
       </div>
       {when && <div className="when-preview"><Calendar size={14} /> Starts <strong>{when}</strong></div>}
-      {forSub && f.date && (() => {
-        const day = dayStatus(forSub, allJobs || jobs, f.date, null, accountId);
-        if (!day || day.kind === "free") return (
-          <div className="for-sub"><CheckCircle2 size={14} /> {forSub.company} is free on {formatDay(f.date)}.</div>
-        );
+      {/* HOW LONG, beside the start rather than three steps later. A job can
+          be one day or thirty, and the days it covers are what gets checked
+          against the contractor's calendar below and booked on the grid. */}
+      {!edit && !asking && (
+        <div className="job-len">
+          <div className="fld-row">
+            <label className="fld">How many working days?
+              <input type="number" inputMode="numeric" min="1" max={MAX_SPAN_DAYS} step="1"
+                value={f.jobDays} placeholder="1"
+                onChange={(e) => set("jobDays", e.target.value.replace(/[^0-9]/g, ""))} />
+            </label>
+            <label className="spf-wk job-len-wk">
+              <input type="checkbox" checked={!!f.jobWeekends}
+                onChange={(e) => set("jobWeekends", e.target.checked)} />
+              Works weekends
+            </label>
+          </div>
+          <p className="cov-hint">The finish skips weekends unless the crew works them{forSub ? ", and any day " + forSub.company + " has marked off" : ""}.
+            A trade can have its own length on the Trades step.</p>
+        </div>
+      )}
+      {(() => {
+        if (edit || asking || !isSpanDay(f.date) || jobDaysBad) return null;
+        const n = spanDaysFrom(f.jobDays) || 1;
+        // The contractor's own days off push the finish out, the rule the
+        // server's estimate follows -- so the days listed are the days they
+        // would really be on site.
+        const off = forSub ? companyOffDays({ unavailableDays: forSub.unavailableDays || [], crews: forSub.crews || [] }).days : [];
+        const dates = spanDates({ start: f.date, days: n, weekends: !!f.jobWeekends, off });
+        if (!dates.length) return null;
+        const checks = forSub ? dates.map((d) => ({ d, st: dayStatus(forSub, allJobs || jobs, d, null, accountId) })) : [];
+        const clash = checks.filter((c) => c.st && c.st.kind !== "free");
         return (
-          <div className="for-sub warn">
-            <AlertTriangle size={14} />
-            <span>{forSub.company} {day.kind === "off" ? `has ${formatDay(f.date)} marked off`
-              : day.kind === "booked" ? `is already booked on ${formatDay(f.date)}` : "isn't taking work"} — pick another date.</span>
+          <div className="job-days" data-days={dates.length}>
+            <div className="job-days-head">
+              {dates.length === 1
+                ? <>One day: <strong>{formatDay(dates[0])}</strong></>
+                : <>{dates.length} working days: <strong>{formatDay(dates[0])}</strong> to <strong>{formatDay(dates[dates.length - 1])}</strong></>}
+            </div>
+            <ul className="job-days-list">
+              {dates.map((d) => {
+                const st = checks.find((c) => c.d === d)?.st;
+                const bad = st && st.kind !== "free";
+                return (
+                  <li key={d} data-day={d} className={bad ? "bad" : "ok"} title={st?.label || ""}>
+                    {bad ? <AlertTriangle size={12} /> : <Check size={12} />}
+                    {dayFromKey(d).toLocaleDateString(uiLocale(), { weekday: "short", month: "short", day: "numeric" })}
+                  </li>
+                );
+              })}
+            </ul>
+            {forSub && (clash.length === 0
+              ? <div className="for-sub"><CheckCircle2 size={14} /> {forSub.company} is free on {dates.length === 1 ? formatDay(dates[0]) : `all ${dates.length} days`}.</div>
+              : <div className="for-sub warn">
+                  <AlertTriangle size={14} />
+                  <span>{forSub.company} {clash[0].st.kind === "unavailable" ? "isn't taking work"
+                    : `${clash[0].st.kind === "off" ? "has" : "is already booked on"} ${clash.map((c) => formatDay(c.d)).join(", ")}${clash[0].st.kind === "off" ? " marked off" : ""}`} — pick another start or a shorter length.</span>
+                </div>)}
           </div>
         );
       })()}
@@ -51140,6 +51210,14 @@ p.fld-note{margin:6px 0 0}
 .add-crew{border:1px solid var(--brand);background:var(--card);color:var(--brand);font-size:12.5px;font-weight:700;padding:8px 12px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;align-self:flex-start}
 
 /* schedule preview */
+.job-len .fld-row{align-items:end}
+.job-len-wk{margin:0 0 14px}
+.job-days{border:1px solid var(--line);border-radius:10px;background:var(--card);padding:10px 12px;margin-bottom:14px}
+.job-days-head{font-size:13px;color:var(--ink);margin-bottom:8px}
+.job-days-list{list-style:none;margin:0 0 4px;padding:0;display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto}
+.job-days-list li{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;padding:4px 8px;border-radius:999px;background:#eef5f1;color:var(--brand-dk);border:1px solid #cfe0d6}
+.job-days-list li.bad{background:#fdecea;color:#a3321f;border-color:#f1c6bf}
+.job-days .for-sub{margin:8px 0 0}
 .when-preview{display:flex;align-items:center;gap:8px;background:#eef5f1;border:1px solid #cfe0d6;color:var(--brand-dk);font-size:13px;padding:9px 12px;border-radius:9px;margin-bottom:14px}
 .when-preview strong{font-weight:800}
 .wo-flag{display:inline-flex;align-items:center;gap:6px;background:#fbf0dd;color:#a86a18;font-size:12px;font-weight:700;padding:5px 10px;border-radius:7px;margin-bottom:14px}

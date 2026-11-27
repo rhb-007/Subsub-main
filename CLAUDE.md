@@ -17515,6 +17515,33 @@ refactor.
   now draws nothing for a reply that is not its shape. **Not verified here:** a
   live email to a real inbox. **113 is pasted on the live database** (21, 13, 14, 5, 6, 11, 6 and 10 columns, confirmed by the owner).
 
+- **A JOB BOOKED FROM THE AVAILABILITY GRID IS A RANGE OF DAYS, AND EVERY
+  DAY IN IT IS CHECKED AND BOOKED.** Asked for as *"it needs to be a date range,
+  not just a singular day of work (the work could only last one day or 30
+  days), so need to make sure to check off all the days the project is estimated
+  to take"*. The When step asked for a start and nothing else, so a five-day job
+  held one cell on the grid and the four after it still read as free.
+  - **The When step asks *How many working days?*** (with *Works weekends*), on
+    a new job, empty meaning one day. Under it the form lists every working day
+    the job covers. Weekends are skipped unless the crew works them, and so are
+    the contractor's own days off, the same rule the server's estimate follows.
+    For a job booked for one contractor, each day is ticked free or marked as a
+    clash, and the clash is named (*already booked on Dec 2*, *has Dec 2 marked
+    off*). Next waits on a whole number and a start date.
+  - **The length is each trade's estimate (079)** for any trade that does not
+    set its own on the Trades step, so nothing new is stored and no migration is
+    needed. `builtSpans` sends it.
+  - **The grid books every day of a trade's estimate**, not only the job's date
+    (`tradeOnDay` and `spanCoversDay` in `shared/span.js`). `dayStatus` reads
+    the same rule, so a crew three days into a five-day job is not offered on
+    day four, and it now skips declined and voided work orders. A day off inside
+    a span still reads as covered, because days off are checked first.
+  - **And the day pressed on the grid was being dropped.** *Create a new job for
+    them* called `tryAddJob(sub)` without the date, so the form opened on no
+    start at all. It passes the date now.
+  `test:jobrange` (16). Three mutations fire: the grid back on the job's date
+  (1 assertion), the length not sent (1), and the date dropped again (7).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

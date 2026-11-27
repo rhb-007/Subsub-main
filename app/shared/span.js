@@ -152,3 +152,27 @@ export function spanText(s, fmt = (k) => k) {
   const range = s.first === s.end ? fmt(s.first) : `${fmt(s.first)} – ${fmt(s.end)}`;
   return `${range} · ${n} ${unit}`;
 }
+
+// IS A TRADE ON SITE THAT DAY. A span covers every working day from its first
+// to its end -- a weekend only when the estimate says the crew works them --
+// and a trade with no estimate is on the job's own date and nowhere else.
+// Read by the availability grid and by the day check on the job form, so a
+// thirty-day job books thirty days rather than the day it starts.
+//
+// A crew day off inside the span still reads as covered here. The finish has
+// already been pushed past it, and the screens that call this check days off
+// before they check bookings, so it never draws a crew as booked on a day it
+// has marked off.
+export function spanCoversDay(span, day) {
+  if (!span || !isDayKey(day)) return false;
+  const first = span.first || span.start;
+  const end = span.end;
+  if (!isDayKey(first) || !isDayKey(end)) return false;
+  if (day < first || day > end) return false;
+  return !!span.weekends || !weekend(day);
+}
+export function tradeOnDay(job, trade, day) {
+  const sp = job?.spans?.[trade];
+  if (sp && sp.end) return spanCoversDay(sp, day);
+  return !!job && job.date === day;
+}

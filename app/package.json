@@ -359,7 +359,8 @@
     "test:markets": "node --no-warnings scripts/markets-test.mjs",
     "test:viewasui": "node --no-warnings scripts/view-as-ui-test.mjs",
     "test:crmplus": "node --no-warnings scripts/crm-plus-test.mjs",
-    "test:crmplusui": "node --no-warnings scripts/crm-plus-ui-test.mjs"
+    "test:crmplusui": "node --no-warnings scripts/crm-plus-ui-test.mjs",
+    "test:jobrange": "node --no-warnings scripts/job-range-ui-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
