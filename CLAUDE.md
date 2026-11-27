@@ -17513,7 +17513,7 @@ refactor.
   survives; it stays for two sweeps at once. **And Reports crashed** in two
   older suites whose stub answers `[]` to everything: the new commission panel
   now draws nothing for a reply that is not its shape. **Not verified here:** a
-  live email to a real inbox. **Paste 113** before any of it works.
+  live email to a real inbox. **113 is pasted on the live database** (21, 13, 14, 5, 6, 11, 6 and 10 columns, confirmed by the owner).
 
 ## Working here
 
