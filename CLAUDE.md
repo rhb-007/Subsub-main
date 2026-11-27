@@ -17542,6 +17542,17 @@ refactor.
   `test:jobrange` (16). Three mutations fire: the grid back on the job's date
   (1 assertion), the length not sent (1), and the date dropped again (7).
 
+- **THE HOMEOWNER SEARCH IN THE CRM'S PICK-A-LEAD WINDOWS WAS 20PX WIDE ON
+  A PHONE, BECAUSE IT SHARED A CLASS WITH A CHECKBOX.** Reported with Add a
+  follow-up open on an iPhone: *Find the homeowner* one word a line and the
+  box a sliver under Cancel. `LeadPicker` wore `.lead-pick`, which is also the
+  Leads list's 20px bulk-select checkbox (`width:20px;flex:none`), declared
+  earlier in the sheet, so its width won. On a wide screen the box happened to
+  overflow its container and still read; on a phone it did not. The picker is
+  `.lead-finder` now (and its list, rows and names). It is used by Add a
+  follow-up, New message, New appointment and Update report. `test:crmpagesui`
+  measures the search at 390px; the old class reads 26px and fails two.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

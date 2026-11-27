@@ -33290,18 +33290,18 @@ function LeadPicker({ leads = [], onPick, blocked = null, autoFocus = true }) {
     return hay.includes(needle) || (dig.length >= 3 && String(l.phone || "").includes(dig));
   }) : [...leads].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))).slice(0, 8);
   return (
-    <div className="lead-pick" data-lead-picker>
+    <div className="lead-finder" data-lead-picker>
       <label className="fld"><span>Find the homeowner</span>
         <input autoFocus={autoFocus} value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name, phone, email or address" data-lead-search /></label>
       {!leads.length && <p className="note">No leads yet.</p>}
       {leads.length > 0 && !hits.length && <p className="note">Nobody in your leads matches that.</p>}
-      <ul className="lead-pick-list">
+      <ul className="lead-finder-list">
         {hits.map((l) => {
           const why = blocked ? blocked(l) : null;
           return (
             <li key={l.id}>
-              <button type="button" className="lead-pick-row" data-pick-lead={l.id} disabled={!!why} onClick={() => onPick(l)}>
-                <span className="lead-pick-who"><b>{leadName(l)}</b>
+              <button type="button" className="lead-finder-row" data-pick-lead={l.id} disabled={!!why} onClick={() => onPick(l)}>
+                <span className="lead-finder-who"><b>{leadName(l)}</b>
                   <span>{why || [l.phone ? formatPhone(l.phone) : l.email, l.address?.city].filter(Boolean).join(" · ")}</span></span>
                 <LeadStageChip stage={l.stage} />
               </button>
@@ -57719,14 +57719,18 @@ button.job-insp:hover{border-color:#2f5577}
 .crm-leadform .ecm-code{max-height:360px;overflow:auto;white-space:pre-wrap;font-size:12px;background:var(--paper);border-radius:12px;padding:12px}
 /* 111. The CRM windows that start from which homeowner, the new-appointment
    choice, the welcome, and the website form's consent statement. */
-.lead-pick{display:flex;flex-direction:column;gap:8px}
-.lead-pick-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
-.lead-pick-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:52px;padding:10px 12px;
+/* NOT .lead-pick: that is the 20px bulk-select checkbox on the Leads list,
+   declared earlier, and sharing the name squeezed this whole search to 20px
+   wide on a phone -- the label one word a line and the box a sliver. */
+.lead-finder{display:flex;flex-direction:column;gap:8px;width:100%;min-width:0}
+.lead-finder .fld input{width:100%;box-sizing:border-box}
+.lead-finder-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
+.lead-finder-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:52px;padding:10px 12px;
   border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);text-align:left;cursor:pointer;font:inherit}
-.lead-pick-row:hover:not(:disabled){border-color:var(--brand)}
-.lead-pick-row:disabled{opacity:.55;cursor:not-allowed}
-.lead-pick-who{display:flex;flex-direction:column;gap:2px;min-width:0}
-.lead-pick-who span{font-size:13px;color:var(--ink-soft);overflow-wrap:anywhere}
+.lead-finder-row:hover:not(:disabled){border-color:var(--brand)}
+.lead-finder-row:disabled{opacity:.55;cursor:not-allowed}
+.lead-finder-who{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lead-finder-who span{font-size:13px;color:var(--ink-soft);overflow-wrap:anywhere}
 .lead-newmsg,.appt-start,.lead-fu-form,.report-update{display:flex;flex-direction:column;gap:14px}
 .appt-start-opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 .appt-start-opt{display:flex;flex-direction:column;align-items:flex-start;gap:6px;padding:16px;min-height:120px;border:1px solid var(--line);

@@ -217,6 +217,19 @@ try {
   await nav(page, "followups");
   await click(page, "[data-add-followup]");
   await wait(300);
+  // On a phone the search was squeezed to 20px: the picker shared its class
+  // with the Leads list's bulk checkbox. Measured, not read off the CSS.
+  await page.setViewport({ width: 390, height: 844 });
+  await wait(300);
+  const fit = await page.evaluate(() => {
+    const box = document.querySelector("[data-lead-search]")?.getBoundingClientRect();
+    const lab = document.querySelector("[data-lead-picker] .fld span")?.getBoundingClientRect();
+    return { box: box ? Math.round(box.width) : 0, labH: lab ? Math.round(lab.height) : 0 };
+  });
+  t.ck("on a phone the homeowner search is full width", fit.box >= 280, JSON.stringify(fit));
+  t.ck("and its label is one line", fit.labH > 0 && fit.labH < 30, JSON.stringify(fit));
+  await page.setViewport({ width: 1180, height: 900 });
+  await wait(300);
   await click(page, '[data-pick-lead="ld_ivy"]');
   await wait(300);
   const chans = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-fu-channel]")].map((b) => [b.dataset.fuChannel, b.disabled])));
