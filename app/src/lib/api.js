@@ -402,6 +402,7 @@ export const api = {
   createMarket: (body) => request("/markets", { method: "POST", body: JSON.stringify(body) }),
   patchMarket: (id, body) => request(`/markets/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteMarket: (id) => request(`/markets/${id}`, { method: "DELETE" }),
+  zipsNear: (center, miles) => request(`/markets/zips-near?center=${encodeURIComponent(center)}&miles=${encodeURIComponent(miles)}`),
   crmWeather: ({ zip = "", city = "", state = "" } = {}) =>
     request(`/crm-weather?zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}`),
   listLeads: () => request("/sales-leads"),

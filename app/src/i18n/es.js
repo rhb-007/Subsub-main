@@ -1272,4 +1272,13 @@ export default {
   "Add a market": "Agregar un mercado",
   "The places your sales team works, by ZIP code or town, and the services you offer in each. Every lead in the CRM is sorted into one.": "Los lugares donde trabaja su equipo de ventas, por código postal o ciudad, y los servicios que ofrece en cada uno. Cada cliente potencial del CRM se asigna a uno.",
   "Couldn't load your markets.": "No se pudieron cargar sus mercados.",
+  "Each lead is sorted into a market by ZIP or town, so your team knows which services to offer.": "Cada cliente potencial se asigna a un mercado por código postal o ciudad, para que su equipo sepa qué servicios ofrecer.",
+  "Add every ZIP near a place": "Agregar todos los códigos postales cerca de un lugar",
+  "Within {n} mi": "A {n} millas",
+  "Finding…": "Buscando…",
+  "Add ZIPs": "Agregar códigos",
+  "Measured from the center of each ZIP. You can still take any of them out below.": "Se mide desde el centro de cada código postal. Puede quitar cualquiera de ellos abajo.",
+  "No markets yet. Add one to start sorting leads by place.": "Todavía no hay mercados. Agregue uno para ordenar los clientes potenciales por lugar.",
+  "{n} market": "{n} mercado",
+  "{n} markets": "{n} mercados",
 };

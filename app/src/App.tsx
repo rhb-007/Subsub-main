@@ -66,7 +66,8 @@ import { LEAD_CHANNELS, BLOCK_TEXT, smsHref as leadSmsHref, telHref as leadTelHr
 import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, sourceLabel, crmDashboard, callerDashboard, RANK_WINDOWS, rankWindow, bookingLeaderboard } from "../shared/leads.js";
 import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
   AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
-import { validMarket, marketFor, servicesNotOffered, weatherTalk, marketErrText } from "../shared/markets.js";
+import { validMarket, marketFor, servicesNotOffered, weatherTalk, marketErrText, MAX_MARKET_ZIPS } from "../shared/markets.js";
+import { RADIUS_CHOICES, mergeZips, parseCenter, zipNearErrText } from "../shared/zipnear.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -32116,6 +32117,64 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
   );
 }
 
+// Fill a market's ZIPs from a place and a distance, instead of typing forty of
+// them off a map. Asked of the server (the ZIP table is not in this bundle),
+// added INTO what is listed -- nothing already there is dropped, a ZIP listed
+// twice is listed once -- and past the cap the nearest are kept and the rest
+// counted. A town used as the center is added to the towns too, and names an
+// unnamed market. The list stays a list: every ZIP can still be taken out.
+function ZipFill({ edit, setEdit }) {
+  const firstTown = String(edit.cities || "").split(/\n|;/).map((x) => x.trim()).find(Boolean) || "";
+  const [center, setCenter] = useState(firstTown);
+  const [miles, setMiles] = useState(15);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null); // {ok, text}
+  const go = async () => {
+    const p = parseCenter(center);
+    if (!p.ok) { setNote({ ok: false, text: zipNearErrText(p) }); return; }
+    setBusy(true); setNote(null);
+    try {
+      const r = await api.zipsNear(center.trim(), miles);
+      const have = String(edit.zips || "").split(/[\s,;]+/).filter(Boolean);
+      const m = mergeZips(have, r.zips || [], MAX_MARKET_ZIPS);
+      const town = r.center?.city && r.center?.state ? `${r.center.city}, ${r.center.state}` : null;
+      const towns = String(edit.cities || "").split(/\n|;/).map((x) => x.trim()).filter(Boolean);
+      const addTown = town && !towns.some((t) => t.toLowerCase().replace(/\s+/g, " ") === town.toLowerCase());
+      setEdit((x) => ({ ...x, zips: m.zips.join(", "),
+        cities: addTown ? [...towns, town].join("\n") : x.cities,
+        name: x.name.trim() ? x.name : (r.center?.city || x.name) }));
+      const where = r.center?.label || center.trim();
+      const bits = [];
+      if (!(r.zips || []).length) bits.push(`No ZIP centers are within ${miles} miles of ${where}. Try a wider distance.`);
+      else {
+        bits.push(`Added ${m.added} ${m.added === 1 ? "ZIP" : "ZIPs"} within ${miles} miles of ${where}.`);
+        if (m.already) bits.push(`${m.already} ${m.already === 1 ? "was" : "were"} already listed.`);
+        if (m.left) bits.push(`A market holds up to ${MAX_MARKET_ZIPS}, so the nearest were kept and ${m.left} farther ${m.left === 1 ? "one was" : "ones were"} left off.`);
+        if (addTown) bits.push(`${town} was added to the towns.`);
+      }
+      setNote({ ok: (r.zips || []).length > 0, text: bits.join(" ") });
+    } catch (e) { setNote({ ok: false, text: zipNearErrText(e) }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="zipfill" data-zipfill>
+      <div className="appt-q-label">{tt("Add every ZIP near a place")}</div>
+      <div className="zipfill-row">
+        <input value={center} data-zipfill-center placeholder="Tacoma, WA or 98402" aria-label="Town and state, or a ZIP"
+          onChange={(e) => setCenter(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }} />
+        <select value={miles} data-zipfill-miles aria-label="Distance" onChange={(e) => setMiles(Number(e.target.value))}>
+          {RADIUS_CHOICES.map((n) => <option key={n} value={n}>{tt("Within {n} mi", { n })}</option>)}
+        </select>
+        <button type="button" className="btn-ghost" data-zipfill-go disabled={busy || !center.trim()} onClick={go}>
+          <MapPin size={15} />{" "}{busy ? tt("Finding…") : tt("Add ZIPs")}</button>
+      </div>
+      {note
+        ? <p className={note.ok ? "zipfill-ok" : "form-err"} role={note.ok ? "status" : "alert"} data-zipfill-note>{note.text}</p>
+        : <p className="fld-note">{tt("Measured from the center of each ZIP. You can still take any of them out below.")}</p>}
+    </div>
+  );
+}
+
 function CrmMarkets({ adding = 0, onAdd = null }) {
   const { markets, ready, migration, reload } = React.useContext(MarketsCtx);
   const [edit, setEdit] = useState(null); // null | {id?, name, zips, cities, services, active}
@@ -32145,6 +32204,7 @@ function CrmMarkets({ adding = 0, onAdd = null }) {
         <div className="lc-form market-form" data-market-form>
           <label className="fld">Market name<input value={edit.name} data-market-name placeholder="South Sound"
             onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+          <ZipFill edit={edit} setEdit={setEdit} />
           <label className="fld">ZIP codes <span className="fld-note">separate with commas or spaces</span>
             <textarea rows={2} value={edit.zips} data-market-zips placeholder="98402, 98403, 98405"
               onChange={(e) => setEdit({ ...edit, zips: e.target.value })} /></label>
@@ -54349,6 +54409,14 @@ a.meas-dl{text-decoration:none}
 .my-markets{display:flex;flex-direction:column;gap:18px}
 .crm-markets{display:flex;flex-direction:column;gap:12px;margin-top:14px}
 .market-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.zipfill{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--paper);margin:4px 0 14px}
+.zipfill-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+.zipfill-row input{flex:1 1 200px;min-width:0;min-height:44px;font-size:var(--field-fs,15px);padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+.zipfill-row select{flex:0 0 auto;min-height:44px;font-size:var(--field-fs,15px);padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink)}
+.zipfill-row .btn-ghost{flex:0 0 auto;min-height:44px}
+.zipfill .fld-note,.zipfill-ok{margin:8px 0 0}
+.zipfill-ok{color:var(--brand-ink,var(--brand));font-size:13.5px;font-weight:600}
+@media (max-width:560px){.zipfill-row select,.zipfill-row .btn-ghost{flex:1 1 calc(50% - 4px)}}
 .market-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 14px;
   border:1px solid var(--line);border-radius:11px;background:var(--paper);min-width:0}
 .market-row.off{opacity:.65}

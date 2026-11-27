@@ -360,7 +360,10 @@
     "test:viewasui": "node --no-warnings scripts/view-as-ui-test.mjs",
     "test:crmplus": "node --no-warnings scripts/crm-plus-test.mjs",
     "test:crmplusui": "node --no-warnings scripts/crm-plus-ui-test.mjs",
-    "test:jobrange": "node --no-warnings scripts/job-range-ui-test.mjs"
+    "test:jobrange": "node --no-warnings scripts/job-range-ui-test.mjs",
+    "test:zipnear": "node --no-warnings scripts/zip-near-test.mjs",
+    "test:zipnearui": "node --no-warnings scripts/zip-near-ui-test.mjs",
+    "zips": "node scripts/build-zip-centroids.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
@@ -386,6 +389,7 @@
     "jsqr": "^1.4.0",
     "postman-collection": "5.3.1",
     "puppeteer-core": "^25.11.0",
+    "us-zips": "2022.9.1",
     "vite": "^5.4.11",
     "wrangler": "^4.1.0"
   }

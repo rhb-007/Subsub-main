@@ -121,7 +121,9 @@ export function serveApi({ port, routes, delay = 0 }) {
     // body) keeps working untouched.
     // A route may answer with a promise, to hold a reply open while a test
     // reads what the screen draws in the meantime.
-    const hit = await routes(path, req.method, sent, req.headers);
+    // Fifth: the whole URL, query string included, for a route whose answer
+    // follows what it was asked (the path above has the query cut off).
+    const hit = await routes(path, req.method, sent, req.headers, req.url);
     const [status, body, extra] = hit === undefined ? [200, []] : hit;
     // A third element lets a route answer with something that is not JSON.
     // Every route here has been a JSON one until compliance documents needed

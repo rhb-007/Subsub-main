@@ -29,6 +29,8 @@ import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, M
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
   CALLCENTER_STAGES, SOURCE_IDS, sourceLabel } from "../shared/leads.js";
 import { validMarket, MAX_MARKETS, marketFor } from "../shared/markets.js";
+import { parseCenter, validRadius } from "../shared/zipnear.js";
+import { zipCenter, zipsNear, ZIP_SOURCE } from "../shared/zipgeo.js";
 import { validProposal, proposalText, proposalSignBlock, validSignature, PROPOSAL_TOKEN_RE, PROPOSAL_DAYS,
   validClaim, routeLead, cleanTags, validCustomValues, validView, validBulk, mergedLead, MAX_LEAD_FILES,
   LEAD_FILE_KIND_IDS, MAX_IMPORT, REVIEW_DELAY_DAYS, addDays, addMonths, realDay, commissionReport,
@@ -28102,6 +28104,46 @@ app.delete("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
     await logEvent(c.env, acct.id, userId, "market.deleted", cur.id, { name: cur.name });
     return c.json({ ok: true });
   });
+});
+
+// Every ZIP within a distance of a town or a ZIP, for filling a market in.
+// app/shared/zipnear.js holds the rule and the Census ZIP centers. A ZIP center
+// is read from that table and nothing leaves; a town is placed by Open-Meteo,
+// the lookup the weather card already makes, and only the town and its state
+// go. Held to the state typed, through pickPlace, because "Springfield" placed
+// in the wrong state fills a market with somebody else's ZIPs. Office only, the
+// same as changing a market, and rate-limited per account.
+app.get("/api/markets/zips-near", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  if (!["admin", "pm"].includes(c.get("auth").role)) return c.json({ error: "office_only" }, 403);
+  const p = parseCenter(c.req.query("center"));
+  if (!p.ok) return c.json({ error: p.error }, 400);
+  const miles = validRadius(c.req.query("miles"));
+  if (!miles) return c.json({ error: "bad_radius" }, 400);
+  const rl = await rateLimit(c.env, "zips-near", acct.id, { limit: 120, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  let center = null, label = "";
+  if (p.zip) {
+    center = zipCenter(p.zip);
+    if (!center) return c.json({ error: "zip_not_found" }, 404);
+    label = p.zip;
+  } else {
+    let results = null;
+    try {
+      const r = await fetch(`${OPEN_METEO_GEOCODER}?count=20&language=en&format=json&countryCode=US`
+        + `&name=${encodeURIComponent(p.city)}`, { signal: AbortSignal.timeout(8000) });
+      if (r.ok) results = (await r.json())?.results;
+      else return c.json({ error: "lookup_failed" }, 502);
+    } catch { return c.json({ error: "lookup_failed" }, 502); }
+    const hit = pickPlace(results, { city: p.city, state: p.state });
+    if (!hit) return c.json({ error: "place_not_found" }, 404);
+    center = { lat: hit.latitude, lng: hit.longitude };
+    label = `${hit.name || p.city}, ${p.state}`;
+  }
+  const zips = zipsNear(center, miles);
+  return c.json({ center: { ...center, label, city: p.city ? label.replace(/,\s*[A-Z]{2}$/, "") : null, state: p.state || null },
+    miles, zips, source: ZIP_SOURCE });
 });
 
 // The weather where a homeowner is, so the rep on the call can talk to it.
