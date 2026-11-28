@@ -773,7 +773,6 @@ export default {
   "Pressing your logo opens": "Al tocar su logotipo se abre",
   "Left blank, pressing your logo opens your sign-in page at": "Si lo deja en blanco, al tocar su logotipo se abre su página de inicio de sesión en",
   "Go to {name}'s website": "Ir al sitio web de {name}",
-  "What the browser tab says on those same two pages. They are filled in from your company name already, so there is nothing to do here unless you want different words — a contractor opening your application form from your own website sees this before they see anything else on the page.": "Lo que dice la pestaña del navegador en esas dos páginas. Ya se llenan con el nombre de su empresa, así que no hay que hacer nada a menos que quiera otras palabras; un contratista que abre su formulario desde su sitio web ve esto antes que cualquier otra cosa.",
   "SubSub stays on every page title": "SubSub siempre aparece en el título de la página",
   "· SubSub": "· SubSub",
   "The tab will read": "La pestaña dirá",
@@ -1282,4 +1281,7 @@ export default {
   "No markets yet. Add one to start sorting leads by place.": "Todavía no hay mercados. Agregue uno para ordenar los clientes potenciales por lugar.",
   "{n} market": "{n} mercado",
   "{n} markets": "{n} mercados",
+  "What the browser tab says on your sign-in page, your application form and every page inside the app once you're signed in. They are filled in from your company name already, so there is nothing to do here unless you want different words.": "Lo que dice la pestaña del navegador en su página de inicio de sesión, su formulario de solicitud y cada página dentro de la aplicación una vez que inicia sesión. Ya se completan con el nombre de su empresa, así que no hay nada que hacer aquí a menos que quiera otras palabras.",
+  "Signed-in pages": "Páginas con sesión iniciada",
+  "Each tab will read, for example,": "Cada pestaña dirá, por ejemplo,",
 };

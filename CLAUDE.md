@@ -17642,6 +17642,26 @@ refactor.
   `test:accttabs` (64) measures the gap and presses the button; a button wired
   to nothing fails one assertion.
 
+
+- **EVERY SIGNED-IN PAGE NAMES ITSELF IN THE BROWSER TAB, AND BRANDING ->
+  PAGE TITLES HAS A THIRD BOX FOR THEM.** Asked for as *"a page title editor
+  on all other signed in pages"*. Inside the app every tab read the same, so a
+  row of open tabs could not be told apart. Each now reads *Jobs · Outerhome
+  Roofing · SubSub*: the page in the nav's own words (the roster's word, the
+  portal pane, the CRM page with *· CRM*), then the account's title, then
+  SubSub once. **Signed-in pages** sets the middle part, in `theme.appTitle`
+  beside the two titles that existed (no migration). It is cleaned by the same
+  `validTheme` loop, and `themeWithoutTitles` leaves it off a second business.
+  Blank, it is the company name. It follows the plan like the other two (a
+  Basic account gets the default), and it is set only once the account's own
+  data has loaded, so a switch never names the account being left.
+
+  **And all three boxes trimmed on every keystroke**, so the space before a
+  second word was eaten as it was typed. `titleBox` strips the SubSub suffix
+  without trimming while somebody types; `stripSuffix` still trims what is
+  stored and drawn. `test:apptitle` (12); dropping the custom title fails 2,
+  dropping the page name fails 6, and the trimming fails 4. `test:linked`
+  pins the second-business half.
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

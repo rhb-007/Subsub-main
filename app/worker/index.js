@@ -7680,7 +7680,7 @@ function validTheme(theme) {
   // customer's own. It is stripped on the way in and added on the way out,
   // so a customer who types it gets one and a customer who deletes it gets
   // one anyway.
-  for (const k of ["signInTitle", "applyTitle"]) {
+  for (const k of ["signInTitle", "applyTitle", "appTitle"]) {
     if (theme[k] === undefined || theme[k] === null) continue;
     if (typeof theme[k] !== "string") return null;
     const own = String(theme[k])
@@ -30525,7 +30525,7 @@ function themeWithoutTitles(raw) {
   let t;
   try { t = typeof raw === "string" ? JSON.parse(raw) : raw; } catch { return null; }
   if (!t || typeof t !== "object") return null;
-  const { signInTitle: _s, applyTitle: _a, ...rest } = t;
+  const { signInTitle: _s, applyTitle: _a, appTitle: _p, ...rest } = t;
   return JSON.stringify(rest);
 }
 

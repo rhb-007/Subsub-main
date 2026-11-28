@@ -80,7 +80,7 @@ const seed = ({ migrated = true } = {}) => {
   if (!migrated) db.exec(`DROP TABLE business_links;`);
   db.exec(`
     INSERT INTO accounts(id,name,subdomain,kind,plan,billing,trades,theme,use_default_mark)
-      VALUES ('acc_gc','Rudd Development','rudddev','general_contractor','basic','monthly','["roofing","painting"]','{"accent":"#123456","signInTitle":"Rudd-Development-Sign-in","applyTitle":"Rudd-Development-Sign-up"}',0),
+      VALUES ('acc_gc','Rudd Development','rudddev','general_contractor','basic','monthly','["roofing","painting"]','{"accent":"#123456","signInTitle":"Rudd-Development-Sign-in","applyTitle":"Rudd-Development-Sign-up","appTitle":"Rudd Development"}',0),
              ('acc_pm2','Other PM','otherpm','property_manager','basic','monthly',NULL,NULL,1);
     INSERT INTO users(id,name,email,phone) VALUES ('u_marc','Marc Rudd','marc@rudd.test','2065550100'),
       ('u_pmx','Pat','pat@rudd.test',NULL),('u_ten','Ten','ten@x.test',NULL),('u_o','Ollie','o@x.test',NULL);
@@ -142,7 +142,7 @@ let pmId;
   // The titles name the first business, so copied they put its name in the
   // second one's tabs. Left off, the pages build them from its own name.
   const t2 = JSON.parse(a?.theme || "{}");
-  ck("but not the first business's page titles", !("signInTitle" in t2) && !("applyTitle" in t2), a?.theme);
+  ck("but not the first business's page titles", !("signInTitle" in t2) && !("applyTitle" in t2) && !("appTitle" in t2), a?.theme);
   const seat = db.prepare(`SELECT role FROM memberships WHERE user_id = 'u_marc' AND account_id = ?`).get(pmId);
   ck("the same person is its admin", seat?.role === "admin");
   ck("and nobody else was moved", !db.prepare(`SELECT 1 FROM memberships WHERE user_id = 'u_pmx' AND account_id = ? AND role <> 'contractor'`).get(pmId));

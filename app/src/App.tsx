@@ -1819,6 +1819,41 @@ const defaultTitles = (name) => ({
 // Whatever was typed, without our name on the end of it. Run on the way in
 // AND on the way out, so the box never shows the suffix and the tab never
 // shows it twice.
+// The signed-in app. One title the account names (its company name unless
+// somebody typed another), with the page in front of it, so a row of open
+// tabs says which page each one is: "Jobs · Outerhome · SubSub".
+const defaultAppTitle = (name) => name || "SubSub";
+const appTabTitle = (page, custom, name) => {
+  const own = stripSuffix(custom).slice(0, TITLE_MAX) || defaultAppTitle(name);
+  const parts = [page, own].filter(Boolean);
+  if (own === TITLE_SUFFIX) return parts.join(" · ");
+  return `${parts.join(" · ")} · ${TITLE_SUFFIX}`;
+};
+// Which page the signed-in app is on, in the words its own nav uses.
+const APP_TAB_NAMES = {
+  dashboard: "Dashboard", jobs: "Jobs", properties: "Properties", inspections: "Inspections",
+  tenants: "Tenants", uniforms: "Uniforms", calendar: "Availability", account: "My account",
+  inbox: "Inbox", tenant: "Tenant HQ",
+};
+const PORTAL_PANE_NAMES = {
+  dashboard: "Dashboard", jobs: "My Jobs", calendar: "My Jobs", settings: "Job Settings",
+  crews: "My Crews", docs: "Compliance pack", passport: "Passport", uniforms: "Uniforms", refer: "Add a GC",
+};
+const appPageName = ({ tab, pane, crmPane, rosterMany }) => {
+  if (tab === "appointments") {
+    const crm = (CRM_NAV.find(([id]) => id === crmPane) || [null, "Dashboard"])[1];
+    return `${tt(crm)} · CRM`;
+  }
+  if (tab === "network") return tt(rosterMany || "Contractors");
+  if (tab === "portal") return tt(PORTAL_PANE_NAMES[pane] || "Dashboard");
+  return APP_TAB_NAMES[tab] ? tt(APP_TAB_NAMES[tab]) : "";
+};
+// What the box shows while somebody types: the suffix off, nothing trimmed.
+// Trimming here ate the space before the next word on every keystroke, so a
+// title of two words could not be typed one key at a time.
+const titleBox = (v) => String(v || "")
+  .replace(/\s*[·|\-–—]\s*SubSub\s*$/i, "")
+  .replace(/\s*\bSubSub\b\s*$/i, "");
 const stripSuffix = (v) => String(v || "")
   .replace(/\s*[·|\-–—]\s*SubSub\s*$/i, "")
   .replace(/\s*\bSubSub\b\s*$/i, "")
@@ -6239,6 +6274,14 @@ export default function SubSub() {
     if (loggedIn && CRM_ONLY_ROLES.includes(role) && tab !== "appointments" && tab !== "account") setTab("appointments");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [account.id, account.kind, loggedIn, tab, role]);
+
+  // The browser tab, once signed in. The company's own title (Branding ->
+  // Page titles), with the page in front. Only while the account's own data
+  // is drawn, so a switch never names the account being left.
+  usePageTitle(BUILD === "tenant" && loggedIn && hydratedFor === currentAccountId && !switchingTo
+    ? appTabTitle(appPageName({ tab, pane, crmPane, rosterMany: rosterWords(account).Many }),
+        PLANS[account.plan]?.branding ? account.theme?.appTitle : "", account.name)
+    : "");
 
   if (!loggedIn && chooser) {
     return (
@@ -26072,7 +26115,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
           </div>
 
           <div className="form-sec">{tt("Page titles")}</div>
-          <p className="panel-note">{tt("What the browser tab says on those same two pages. They are filled in from your company name already, so there is nothing to do here unless you want different words — a contractor opening your application form from your own website sees this before they see anything else on the page.")}</p>
+          <p className="panel-note">{tt("What the browser tab says on your sign-in page, your application form and every page inside the app once you're signed in. They are filled in from your company name already, so there is nothing to do here unless you want different words.")}</p>
           {[
             ["signInTitle", "Sign-in page", defaultTitles(b.name).signIn],
             ["applyTitle", "Application form", defaultTitles(b.name).apply],
@@ -26080,7 +26123,7 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
             <label key={key} className="fld">{label}
               <span className="fld-note">{stripSuffix(th[key]) ? tt("yours") : tt("from your company name")}</span>
               <div className="subdomain-row">
-                <input value={stripSuffix(th[key] || "")} maxLength={TITLE_MAX}
+                <input value={titleBox(th[key] || "")} maxLength={TITLE_MAX}
                   placeholder={fallback}
                   onChange={(e) => { setTh({ ...th, [key]: e.target.value }); setBSaved(false); setBErr(""); }} />
                 {/* Fixed, not a field. These pages are on a subsub.work
@@ -26094,6 +26137,20 @@ function AccountView({ me, users, subs, jobs, brand, plan, role, canManage, mySu
               </span>
             </label>
           ))}
+          {/* THE SIGNED-IN APP. One name for every page inside it; the page
+              itself goes in front, so a row of open tabs still says which is
+              Jobs and which is the roster. */}
+          <label className="fld" data-app-title>{tt("Signed-in pages")}
+            <span className="fld-note">{stripSuffix(th.appTitle) ? tt("yours") : tt("from your company name")}</span>
+            <div className="subdomain-row">
+              <input value={titleBox(th.appTitle || "")} maxLength={TITLE_MAX}
+                placeholder={defaultAppTitle(b.name)}
+                onChange={(e) => { setTh({ ...th, appTitle: e.target.value }); setBSaved(false); setBErr(""); }} />
+              <span className="sd-suffix" title={tt("SubSub stays on every page title")}>{tt("· SubSub")}</span>
+            </div>
+            <span className="cov-hint">{tt("Each tab will read, for example,")}{" "}<b data-app-title-preview>{appTabTitle(tt("Jobs"), th.appTitle, b.name)}</b>
+            </span>
+          </label>
 
           <div className="form-sec">{tt("Logo link")}</div>
           <label className="fld">{tt("Your website")}{" "}
