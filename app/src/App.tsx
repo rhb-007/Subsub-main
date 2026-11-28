@@ -31509,7 +31509,7 @@ function SaleProgress({ lead, estimates, appts, sales, onBook, onWrite, onOpenEs
       <ol className="sale-steps" aria-label={tt("Where the sale stands")}>
         {SALE_STEPS.map((x, i) => (
           <li key={x.id} className={i <= doneThrough ? "done" : i === doneThrough + 1 ? "now" : ""} data-sale-step={x.id}>
-            <span className="sale-dot">{i <= doneThrough ? <Check size={12} /> : i + 1}</span>{tt(x.label)}
+            <span className="sale-dot">{i <= doneThrough ? <Check size={13} /> : i + 1}</span><span className="sale-lbl">{tt(x.label)}</span>
           </li>
         ))}
       </ol>
@@ -31575,15 +31575,25 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
   const hasSale = (estimates.list || []).some((p) => p.status === "signed") || appts.some((x) => x.status === "sold");
   return (
     <div className="lead-detail" data-lead-detail={lead.id}>
+      {/* The same shape as the appointment window: the name and where they
+          stand at the top, then each part in its own section, one answer per
+          row. The head keeps clear of the window's close button. */}
       <div className="lead-head">
-        <div>
+        <div className="lead-head-name">
           <h3 className="form-title">{name}</h3>
-          <p className="lead-sub">{[lead.phone ? formatPhone(lead.phone) : "", lead.email,
-            [lead.address?.street, lead.address?.city, lead.address?.state].filter(Boolean).join(", ")].filter(Boolean).join(" · ")}</p>
+          <LeadStageChip stage={lead.stage} />
         </div>
-        <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
+        <button className="btn-ghost lead-edit" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
-      <LeadArea zip={lead.address?.zip} city={lead.address?.city} state={lead.address?.state} services={lead.services || []} />
+      <section className="appt-sec" data-lead-contact-card>
+        <h4>Contact</h4>
+        <dl className="appt-rows">
+          {lead.phone && <div><dt>Phone</dt><dd><a href={`tel:${lead.phone}`}>{formatPhone(lead.phone)}</a></dd></div>}
+          {lead.email && <div><dt>Email</dt><dd className="appt-wrap"><a href={`mailto:${lead.email}`}>{lead.email}</a></dd></div>}
+          <div><dt>Address</dt><dd>{[lead.address?.street, lead.address?.city, [lead.address?.state, lead.address?.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ") || "Not given"}</dd></div>
+        </dl>
+        <LeadArea zip={lead.address?.zip} city={lead.address?.city} state={lead.address?.state} services={lead.services || []} />
+      </section>
       <LeadDetailTabs lead={lead} tab={tab} onTab={(t) => { setTab(t); if (t !== "proposals") setWriteNew(0); }} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib} apptById={apptById}
         estimates={estimates} writeNew={writeNew} onOpenJob={onOpenJob}
         onConvert={onConvertEstimate}
@@ -31591,6 +31601,8 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
       <SaleProgress lead={lead} estimates={estimates} appts={appts} sales={sales} onBook={onBook}
         onWrite={() => { setTab("proposals"); setWriteNew((n) => n + 1); }} onOpenEstimates={() => setTab("proposals")}
         onConvert={onConvertEstimate} onOpenJob={onOpenJob} />
+      <section className="appt-sec lead-stage-sec">
+      <h4>Stage</h4>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
         {LEAD_STAGES.map((stg) => (
           <button key={stg.id} type="button" data-move={stg.id} aria-pressed={lead.stage === stg.id}
@@ -31598,27 +31610,35 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
             disabled={lead.stage === stg.id || !mayPick(stg.id) || !!busy || (stg.id === "customer" && !hasSale && lead.stage !== "former")} onClick={() => move(stg.id)}
             title={stg.id === "customer" && !hasSale && lead.stage !== "former" ? "Set when they sign an estimate"
               : mayPick(stg.id) ? stg.means : stg.id === "opportunity" ? "Set by booking an appointment" : "The office sets this"}>
-            <b>{stg.term}</b><span>{stg.means}</span>
+            {stg.term}
           </button>
         ))}
       </div>
-      <p className="note">{sales ? "Booking an appointment makes them an opportunity. Signing an estimate makes them a customer." : "Booking an appointment makes them an opportunity. A signed estimate makes them a customer."}</p>
+      <p className="lead-stage-means">{LEAD_STAGES.find((x) => x.id === lead.stage)?.means}.{" "}
+        {sales ? "Booking an appointment makes them an opportunity; signing an estimate makes them a customer." : "Booking an appointment makes them an opportunity; a signed estimate makes them a customer."}</p>
       {err && <p className="form-err" role="alert">{leadRefusalText(err)}</p>}
-      <dl className="lead-facts">
-        <div><dt>Interested in</dt><dd>{lead.services.length ? lead.services.map(serviceLabel).join(", ") : "Not said yet"}</dd></div>
-        <div><dt>Source</dt><dd>{sourceLabel(lead.source)}</dd></div>
-        <div><dt>Owner</dt><dd>{lead.ownerName || "Nobody"}</dd></div>
-        <div><dt>Added</dt><dd>{stampDay(lead.createdAt)}{lead.createdByName ? ` by ${lead.createdByName}` : ""}</dd></div>
-      </dl>
-      <div className="lead-consent"><span className="lead-label">Follow-up consent</span>
-        {lead.consent ? <ConsentChips consent={lead.consent} /> : <p className="note">Not asked yet. It is asked when an appointment is booked.</p>}
-      </div>
-      {lead.notes && <div className="lead-notes"><span className="lead-label">Notes</span><p>{lead.notes}</p></div>}
-      <LeadMeta lead={lead} onSaved={(m) => onSaved({ ...lead, ...m })} />
-      <section className="lead-appts">
-        <div className="lead-appts-head"><span className="lead-label">Appointments</span>
+      </section>
+      <section className="appt-sec">
+        <h4>Details</h4>
+        <dl className="appt-rows lead-facts">
+          <div><dt>Interested in</dt><dd>{lead.services.length ? lead.services.map(serviceLabel).join(", ") : "Not said yet"}</dd></div>
+          <div><dt>Source</dt><dd>{sourceLabel(lead.source)}</dd></div>
+          <div><dt>Owner</dt><dd>{lead.ownerName || "Nobody"}</dd></div>
+          <div><dt>Added</dt><dd>{stampDay(lead.createdAt)}{lead.createdByName ? ` by ${lead.createdByName}` : ""}</dd></div>
+        </dl>
+      </section>
+      <section className="appt-sec">
+        <h4>Follow-up consent</h4>
+        <div className="appt-consent">{lead.consent ? <ConsentChips consent={lead.consent} /> : <p className="appt-none">Not asked yet. It is asked when an appointment is booked.</p>}</div>
+      </section>
+      {lead.notes && <section className="appt-sec"><h4>Notes</h4><p className="appt-notes">{lead.notes}</p></section>}
+      <section className="appt-sec"><h4>Tags and fields</h4>
+        <LeadMeta lead={lead} onSaved={(m) => onSaved({ ...lead, ...m })} />
+      </section>
+      <section className="appt-sec lead-appts">
+        <div className="lead-appts-head"><h4>Appointments</h4>
           <button className="btn-solid" data-book-lead onClick={onBook}><PhoneCall size={15} /> Book an appointment</button></div>
-        {!appts.length && <p className="note">None yet. Booking one makes them an opportunity.</p>}
+        {!appts.length && <p className="appt-none">None yet. Booking one makes them an opportunity.</p>}
         <ul className="appt-list">
           {appts.map((x) => (
             <li key={x.id}><button type="button" className="appt-row" data-lead-appt={x.id} onClick={() => onOpenAppt(x.id)}>
@@ -58512,14 +58532,19 @@ button.job-insp:hover{border-color:#2f5577}
 .lead-pipe .crm-pipe-st{flex:1 1 0}
 .crm-lead-link{display:inline-flex;align-items:center;gap:8px;margin:0 0 12px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--paper);font:600 13px Inter,sans-serif;cursor:pointer;min-height:36px}
 .lead-detail{display:flex;flex-direction:column;gap:14px}
-.lead-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.lead-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding-right:44px}
+.lead-head-name{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;min-width:0}
+.lead-head-name .form-title{margin:0;overflow-wrap:anywhere}
+.lead-edit{flex:none}
+.appt-sec .lead-area{margin:6px 0 10px;padding-top:10px;border-top:1px solid var(--line)}
 .lead-sub{margin:4px 0 0;color:var(--ink-soft);font-size:14px;overflow-wrap:anywhere}
-.lead-stages{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
-.lead-stage-btn{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-height:56px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--card);text-align:left;cursor:pointer}
-.lead-stage-btn b{font:700 13.5px Inter,sans-serif;color:var(--ink)}
-.lead-stage-btn span{font-size:11.5px;color:var(--ink-soft);line-height:1.25}
-.lead-stage-btn.on{background:var(--ink);border-color:var(--ink)}
-.lead-stage-btn.on b,.lead-stage-btn.on span{color:#fff}
+/* Stage: one row of short buttons, what the chosen one means said once under
+   it, so five cards of wrapped definitions no longer fight for one line. */
+.lead-stage-sec{padding-bottom:12px}
+.lead-stages{display:flex;flex-wrap:wrap;gap:10px 8px;margin:6px 0 0}
+.lead-stage-btn{flex:0 1 auto;min-height:40px;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:var(--card);font:600 13.5px Inter,sans-serif;color:var(--ink);cursor:pointer;white-space:nowrap}
+.lead-stage-btn.on{background:var(--ink);border-color:var(--ink);color:#fff}
+.lead-stage-means{margin:10px 0 0;font-size:13.5px;color:var(--ink-soft);line-height:1.45}
 .lead-stage-btn:disabled:not(.on){opacity:.55;cursor:default}
 @media (max-width:620px){.lead-stages{grid-template-columns:repeat(2,minmax(0,1fr))}}
 /* 113. The rest of the CRM. No backticks in this block: it is inside a
@@ -58692,13 +58717,19 @@ button.job-insp:hover{border-color:#2f5577}
 .est-list-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 /* 115. Where the sale stands: four steps and the one press that moves it. */
 .sale-prog{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:14px 16px;margin:0 0 16px;display:flex;flex-direction:column;gap:12px}
-.sale-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
-.sale-steps li{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--ink-soft);min-width:0;padding:6px 8px;border-radius:9px;background:var(--paper)}
-.sale-steps li.done{color:var(--brand-ink,var(--ink));background:color-mix(in srgb,var(--brand) 12%,transparent)}
-.sale-steps li.now{color:var(--ink);box-shadow:inset 0 0 0 2px var(--brand)}
-.sale-dot{flex:none;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;background:var(--line);color:var(--ink)}
-.sale-steps li.done .sale-dot{background:var(--brand);color:#fff}
-.sale-next{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+/* A stepper, not four boxes: a dot over its word, joined by a line, so a long
+   word never runs out of a box. */
+.sale-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0}
+.sale-steps li{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--ink-soft);min-width:0;text-align:center}
+.sale-steps li+li::before{content:"";position:absolute;top:13px;right:50%;width:100%;height:2px;background:var(--line);z-index:0}
+.sale-steps li.done+li::before{background:var(--brand)}
+.sale-lbl{max-width:100%;overflow-wrap:anywhere;line-height:1.2}
+.sale-steps li.now{color:var(--ink)}
+.sale-steps li.done{color:var(--ink)}
+.sale-dot{position:relative;z-index:1;flex:none;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:13px;background:var(--card);border:2px solid var(--line);color:var(--ink-soft)}
+.sale-steps li.now .sale-dot{border-color:var(--brand);color:var(--brand);box-shadow:0 0 0 4px color-mix(in srgb,var(--brand) 15%,transparent)}
+.sale-steps li.done .sale-dot{background:var(--brand);border-color:var(--brand);color:#fff}
+.sale-next{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:6px;padding-top:12px;border-top:1px solid var(--line)}
 .sale-next>p{flex:1 1 280px;margin:0;font-size:14px;line-height:1.45}
 .sale-next>p b{display:block;font-size:15.5px;margin-bottom:2px}
 .sale-next>.note{flex:1 1 100%;margin:0}
@@ -58708,7 +58739,7 @@ button.job-insp:hover{border-color:#2f5577}
 .sale-gate{background:color-mix(in srgb,var(--amber) 12%,transparent);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent)}
 .est-sold{background:color-mix(in srgb,var(--brand) 10%,transparent);border:1px solid color-mix(in srgb,var(--brand) 35%,transparent)}
 .sale-gate span,.est-sold>span{flex:1 1 200px}
-@media (max-width:560px){.sale-steps{grid-template-columns:repeat(2,minmax(0,1fr))}.sale-next>.btn-solid,.sale-acts{width:100%}.sale-acts>*{flex:1 1 auto;justify-content:center}}
+@media (max-width:560px){.sale-steps li{font-size:12px}.sale-next>.btn-solid,.sale-acts{width:100%}.sale-acts>*{flex:1 1 auto;justify-content:center}}
 .est-list-head .note{flex:1 1 260px;margin:0}
 .est-row .prop-row-main{gap:10px}
 .est-row-title{display:flex;flex-direction:column;min-width:0;flex:1 1 180px}
@@ -58716,13 +58747,14 @@ button.job-insp:hover{border-color:#2f5577}
 .est-row-num{font-size:12px;color:var(--ink-soft);font-weight:600;letter-spacing:.03em}
 .est-row-total{font-weight:800;font-size:16px;font-variant-numeric:tabular-nums}
 .est-view{display:inline-flex;gap:6px;align-items:center}
-.lead-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
-.lead-facts dt,.lead-label{font-size:12.5px;color:var(--ink-soft);font-weight:600}
-.lead-facts dd{margin:2px 0 0;font-size:14px}
+.lead-label{font-size:12.5px;color:var(--ink-soft);font-weight:600}
 .lead-consent,.lead-notes{display:flex;flex-direction:column;gap:6px}
 .lead-notes p{margin:0;white-space:pre-wrap;font-size:14px}
 .lead-appts{display:flex;flex-direction:column;gap:8px}
-.lead-appts-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.lead-appts-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.lead-appts-head h4{margin:0}
+.appt-sec.lead-appts{padding-bottom:12px}
+.appt-sec .lead-meta{margin:4px 0 10px}
 /* 109. Contacting a lead, and the CRM Inbox. */
 .lead-tabs{margin:12px 0 14px}
 .lead-contact{display:flex;flex-direction:column;gap:12px}

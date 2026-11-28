@@ -130,6 +130,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
     LEADS = [l, ...LEADS];
     return [201, { lead: l }];
   }
+  if (/^\/api\/sales-leads\/[^/]+\/proposals$/.test(path)) return [200, { proposals: [] }];
   const lm = path.match(/^\/api\/sales-leads\/([^/]+)$/);
   if (lm && method === "PATCH") {
     leadsPatched.push({ id: lm[1], body });
@@ -458,6 +459,24 @@ try {
       return a && b && m ? { talkGap: Math.round(b.top - a.bottom), wxGap: Math.round(a.top - m.bottom) } : null;
     });
     t.ck("the weather note sits clear of the weather line", !!wx && wx.talkGap >= 10, JSON.stringify(wx));
+    // The lead window, laid out like the appointment one: nothing overlaps.
+    const lw = await page.evaluate(() => {
+      const ov = (a, b) => !!a && !!b && a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      const edit = document.querySelector(".lead-head .lead-edit")?.getBoundingClientRect();
+      const x = [...document.querySelectorAll(".modal-close")].pop()?.getBoundingClientRect();
+      const steps = [...document.querySelectorAll("[data-sale-step]")].map((li) => {
+        const l = li.querySelector(".sale-lbl"); const r = li.getBoundingClientRect(), lr = l?.getBoundingClientRect();
+        return !!lr && lr.left >= r.left - 1 && lr.right <= r.right + 1;
+      });
+      const d = document.querySelector("[data-lead-detail]");
+      return { editHitsClose: ov(edit, x), steps, sections: d?.querySelectorAll(".appt-sec").length || 0,
+        stageRow: [...document.querySelectorAll("[data-move]")].every((b) => b.scrollWidth <= b.clientWidth + 1) };
+    });
+    t.ck("the lead window: Edit clears the close button, each step's word stays in its step, stages fit", !lw.editHitsClose
+      && lw.steps.length === 4 && lw.steps.every(Boolean) && lw.sections >= 4 && lw.stageRow, JSON.stringify(lw));
+    const ltouch = await touchingSections(page, "[data-lead-detail]");
+    t.ck("and no two sections in it touch", ltouch.length === 0, JSON.stringify(ltouch));
+    if (process.env.SHOT2) await page.screenshot({ path: process.env.SHOT2 });
     t.ck("and the weather line clear of the market line", !!wx && wx.wxGap >= 6, JSON.stringify(wx));
     const btns = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-move]")].map((b) => [b.dataset.move, b.disabled])));
     t.ck("a call-center seat may qualify a lead to prospect, and nothing past it", btns.prospect === false

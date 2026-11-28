@@ -17880,6 +17880,33 @@ refactor.
   - `test:workareas` (18). `test:zipnearui`, `test:accttabs` and
     `test:subhome` were moved to the new editor rather than loosened.
 
+- **THE LEAD WINDOW IS LAID OUT LIKE THE APPOINTMENT WINDOW.** Reported
+  with *Appointment* running out of its step box and Edit sitting under the
+  window's close X: *"overlapping content etc."*
+  - **The head** holds the name and a stage chip, with Edit clear of the close
+    button (`padding-right:44px`).
+  - **Then sections, one answer per row**, the appointment window's own
+    `.appt-sec`/`.appt-rows`:
+    - Contact (phone and email as links, the address, and the market and
+      weather inside the same card);
+    - Stage;
+    - Details;
+    - Follow-up consent;
+    - Notes;
+    - Tags and fields;
+    - Appointments.
+  - **The sale steps are a stepper**: a dot over its word, joined by a line,
+    so no word can run out of a box.
+  - **The stage is a row of short pill buttons**, and what the chosen stage
+    means is said once under it, instead of five cards of wrapped definitions.
+  - `test:salesapptui` measures it:
+    - Edit does not overlap the close button;
+    - each step's word sits inside its step;
+    - no stage button scrolls;
+    - `touchingSections` passes over the window.
+    Its stub now answers the lead's estimates, or the step strip never drew
+    there.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
