@@ -31876,9 +31876,10 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
     <li key={ch} data-contact-block={ch}><b>{LEAD_CHANNELS[ch].label}:</b> {CONTACT_BLOCK_TEXT[blocks[ch]]}</li>
   ));
   return (
-    <div className="lead-contact" data-lead-contact={lead.id}>
+    <div className="lead-contact lead-tab" data-lead-contact={lead.id}>
+      <section className="appt-sec lc-reach">
+      <h4>Reach {lead.firstName || "them"}</h4>
       <div className="lc-consent-line">
-        <span className="lead-label">Follow-up consent</span>
         {consent ? <ConsentChips consent={consent} noRecord /> : <p className="note">Not asked yet.</p>}
         <button type="button" className="link-btn" data-ask-consent onClick={() => setAskConsent(true)}>
           {consent ? "Ask again" : "Ask them now"}</button>
@@ -31899,9 +31900,11 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
       </div>
       {blockedNotes.length > 0 && <ul className="lc-blocked">{blockedNotes}</ul>}
       {flash && <p className="appt-flash" role="status">{flash}</p>}
+      </section>
 
       {mode === "email" && (
-        <div className="lc-form" data-compose="email">
+        <div className="lc-form appt-sec" data-compose="email">
+          <h4>New email</h4>
           <p className="note">Sent from SubSub in {accountName}'s name to {lead.email}.
             {d.canReply ? " Their reply comes back to this Inbox." : " Replies by email aren't switched on yet, so they'll reply to SubSub's address."}</p>
           {templates.length > 0 && (
@@ -31922,7 +31925,8 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         </div>
       )}
       {mode === "text" && (
-        <div className="lc-form" data-compose="text">
+        <div className="lc-form appt-sec" data-compose="text">
+          <h4>New text</h4>
           <p className="note">SubSub can't send texts yet, so this opens the messages app on this device with your words filled in, to {formatPhone(lead.phone)}. Press send there.</p>
           {templates.length > 0 && (
             <label className="fld">Start from a template
@@ -31944,7 +31948,8 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         </div>
       )}
       {mode === "mail" && (
-        <div className="lc-form" data-compose="mail">
+        <div className="lc-form appt-sec" data-compose="mail">
+          <h4>New letter</h4>
           <p className="note">A letter to {leadAddressLine(lead.address)}, printed here for you to mail.</p>
           {templates.length > 0 && (
             <label className="fld">Start from a template
@@ -31964,7 +31969,8 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         </div>
       )}
       {mode === "textin" && (
-        <div className="lc-form" data-compose="textin">
+        <div className="lc-form appt-sec" data-compose="textin">
+          <h4>Log a text they sent</h4>
           <p className="note">SubSub can't receive texts yet. Paste what they texted you here so it's on the record and anybody else can see it.</p>
           <label className="fld">What they said<textarea rows={4} maxLength={MAX_TEXT_BODY} value={f.body || ""} onChange={(e) => setF({ ...f, body: e.target.value })} data-textin-body /></label>
           <div className="form-actions">
@@ -31975,7 +31981,8 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         </div>
       )}
       {mode === "call" && (
-        <div className="lc-form" data-compose="call">
+        <div className="lc-form appt-sec" data-compose="call">
+          <h4>Log a call</h4>
           {lead.phone && <a className="btn-ghost lc-tel" href={leadTelHref(lead.phone)}><PhoneCall size={15} /> Call {formatPhone(lead.phone)}</a>}
           <div className="seg-tabs">
             <button type="button" className={f.direction === "outbound" ? "on" : ""} disabled={callBlocked}
@@ -31996,7 +32003,8 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         </div>
       )}
       {mode === "note" && (
-        <div className="lc-form" data-compose="note">
+        <div className="lc-form appt-sec" data-compose="note">
+          <h4>Note</h4>
           <label className="fld">Note<textarea rows={3} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} data-note-body /></label>
           <div className="form-actions">
             <button className="btn-ghost" onClick={() => setMode("")}>Cancel</button>
@@ -32005,14 +32013,19 @@ function LeadContact({ lead, accountName = "", onContacted, onConsent, role = "a
         </div>
       )}
       {sales && (
+        <section className="appt-sec"><h4>Follow-up sequence</h4>
         <LeadSequencePanel lead={lead} enrollment={d.enrollment || null} sequences={lib?.sequences || []} blocked={blocks.email}
           onChanged={(enrollment) => { setD((x) => ({ ...x, enrollment })); onContacted?.(); }} />
+        </section>
       )}
       {err && <p className="form-err" role="alert">{leadContactErrText(err)}</p>}
-      <ul className="lm-list" data-lead-msgs>
-        {(d.messages || []).map((m) => <LeadMessageRow key={m.id} m={m} onMailed={markMailed} />)}
-      </ul>
-      {!(d.messages || []).length && <p className="note">Nothing yet. Every email, text, letter and call with {name} is listed here.</p>}
+      <section className="appt-sec lc-history">
+        <h4>History</h4>
+        <ul className="lm-list" data-lead-msgs>
+          {(d.messages || []).map((m) => <LeadMessageRow key={m.id} m={m} onMailed={markMailed} />)}
+        </ul>
+        {!(d.messages || []).length && <p className="appt-none">Nothing yet. Every email, text, letter and call with {name} is listed here.</p>}
+      </section>
     </div>
   );
 }
@@ -32099,7 +32112,6 @@ function LeadSequencePanel({ lead, enrollment, sequences = [], blocked, onChange
   };
   return (
     <div className="lc-seq" data-sequence-panel>
-      <span className="lead-label">Follow-up sequence</span>
       {running ? (
         <p className="lc-seq-line" data-sequence-running>On <b>{enrollment.sequenceName}</b>: {enrollment.sent} of {enrollment.steps} sent
           {enrollment.nextAt ? `, next ${stampDay(enrollment.nextAt)}` : ""}. It stops by itself if they reply, book or buy.
@@ -33390,13 +33402,16 @@ function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "",
   if (store.err && !list) return <p className="form-err" role="alert">{crmPlusErrText(store.err)} <button className="link-btn" onClick={load}>{tt("Try again")}</button></p>;
   if (!list) return <p className="note">{tt("Loading…")}</p>;
   return (
-    <div className="lead-proposals" data-lead-proposals>
+    <div className="lead-proposals lead-tab" data-lead-proposals>
+      <section className="appt-sec">
+      <h4>{tt("Estimates")}</h4>
       <div className="est-list-head">
         <p className="note">{tt("A priced estimate they open from a link and sign with their name. Signing is the sale: it marks the appointment sold, and the job is made from what they signed.")}</p>
         {sales && !editing && <button className="btn-solid" data-new-proposal onClick={() => setEditing("new")}><FileSignature size={15} />{" "}{tt("New estimate")}</button>}
       </div>
       {!sales && <p className="note">{tt("Estimates are written by a sales manager or the office.")}</p>}
       {migration && <p className="appt-warn" role="note">{tt("Run migration {m} to keep the schedule, project details, tasks and cost.", { m: migration })}</p>}
+      </section>
       {editing && (
         <ProposalEditor lead={lead} appts={appts} existing={editing === "new" ? null : editing} logo={logo} accountName={accountName} rep={meName}
           onCancel={() => setEditing(null)}
@@ -33404,7 +33419,7 @@ function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "",
       )}
       {flash && <p className="appt-flash" role="status">{flash}</p>}
       {err && list && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
-      {!list.length && !editing && <div className="cov-preview"><FileSignature size={14} /><em>{tt("No estimates yet.")}</em></div>}
+      {!list.length && !editing && <div className="cov-preview est-empty"><FileSignature size={14} /><em>{tt("No estimates yet.")}</em></div>}
       <ul className="prop-list">
         {list.map((p) => {
           const open = (p.tasks || []).filter((t) => !t.done).length;
@@ -33491,8 +33506,10 @@ function LeadClaim({ lead }) {
   };
   const net = dollarsToCents(f.approved) != null && dollarsToCents(f.deductible) != null ? dollarsToCents(f.approved) - dollarsToCents(f.deductible) : null;
   return (
-    <div className="lead-claim" data-lead-claim>
-      <p className="note">For storm work paid by the homeowner's insurance: who the carrier is, the claim, the adjuster and what was approved.</p>
+    <div className="lead-claim lead-tab" data-lead-claim>
+      <section className="appt-sec lc-claim-sec">
+      <h4>Insurance claim</h4>
+      <p className="panel-note">For storm work paid by the homeowner's insurance: the carrier, the claim, the adjuster and what was approved.</p>
       <label className="fld">Where it stands
         <select value={f.status} onChange={set("status")} data-claim-status>
           {CLAIM_STATUSES.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -33516,6 +33533,7 @@ function LeadClaim({ lead }) {
       {saved && <p className="note" role="status">Saved.</p>}
       {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
       <div className="form-actions"><button className="btn-solid" disabled={busy} data-claim-save onClick={save}>{busy ? "Saving…" : "Save claim"}</button></div>
+      </section>
     </div>
   );
 }
@@ -33568,8 +33586,10 @@ function LeadFiles({ lead }) {
     if (entries.length) await attach(entries);
   };
   return (
-    <div className="lead-files" data-lead-files>
-      <p className="note">Damage photos, measurement reports, the insurance paperwork. Anything here stays with the lead and goes with them to the job.</p>
+    <div className="lead-files lead-tab" data-lead-files>
+      <section className="appt-sec">
+      <h4>Add files</h4>
+      <p className="panel-note">Damage photos, measurement reports, the insurance paperwork. Anything here stays with the lead and goes with them to the job.</p>
       <div className="lead-files-add">
         <label className="fld">What it is
           <select value={kind} onChange={(e) => setKind(e.target.value)} data-file-kind>
@@ -33580,25 +33600,34 @@ function LeadFiles({ lead }) {
             onChange={(e) => { add(e.target.files); e.target.value = ""; }} /></label>
         {cc?.connected && <button type="button" className="btn-ghost" onClick={() => setCcOpen(true)}><Camera size={14} /> Import from CompanyCam</button>}
       </div>
-      <p className="note">Hover, EagleView and other measurement reports: download the PDF from them and upload it here.</p>
+      <p className="fld-note lead-files-hint">Hover, EagleView and other measurement reports: download the PDF from them and upload it here.</p>
       {busy > 0 && <p className="note">Uploading {busy}…</p>}
       {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
+      </section>
       {ccOpen && (
         <CompanyCamImport searchHint={lead.address?.street || ""} room={MAX_LEAD_FILES - (list?.length || 0)} onClose={() => setCcOpen(false)}
           onImported={(entries) => { setCcOpen(false); attach(entries.map((d) => ({ ...d, kind: d.source?.kind === "photo" ? "photo" : "measurement", source: "companycam" }))); }} />
       )}
-      {list && !list.length && <p className="note">No files yet.</p>}
+      <section className="appt-sec">
+      <h4>Files{list?.length ? ` (${list.length})` : ""}</h4>
+      {list && !list.length && <p className="appt-none">No files yet.</p>}
       <ul className="lead-file-list">
         {(list || []).map((f) => (
           <li key={f.id} className="lead-file" data-lead-file={f.id}>
-            <span className="lead-file-name"><FileText size={14} /> {f.name}</span>
-            <span className="tn-chip">{LEAD_FILE_KINDS.find((k) => k.id === f.kind)?.label || "Other"}</span>
-            <span className="note">{stampDay(f.createdAt)}{f.uploadedByName ? ` · ${f.uploadedByName}` : ""}{f.source === "companycam" ? " · CompanyCam" : ""}</span>
-            <LeadFileOpen lead={lead} file={f} />
-            <button type="button" className="icon-x" aria-label={`Remove ${f.name}`} onClick={() => setRemoving(f)}><Trash2 size={13} /></button>
+            <span className="lead-file-ico"><FileText size={16} /></span>
+            <span className="lead-file-main">
+              <b className="lead-file-name">{f.name}</b>
+              <span className="lead-file-sub"><span className="tn-chip">{LEAD_FILE_KINDS.find((k) => k.id === f.kind)?.label || "Other"}</span>
+                {stampDay(f.createdAt)}{f.uploadedByName ? ` · ${f.uploadedByName}` : ""}{f.source === "companycam" ? " · CompanyCam" : ""}</span>
+            </span>
+            <span className="lead-file-acts">
+              <LeadFileOpen lead={lead} file={f} />
+              <button type="button" className="icon-btn" aria-label={`Remove ${f.name}`} title="Remove" onClick={() => setRemoving(f)}><Trash2 size={15} /></button>
+            </span>
           </li>
         ))}
       </ul>
+      </section>
       {removing && (
         <ConfirmRemove name={removing.name} what="lead file" verb="Remove"
           consequence="It comes off this lead. Nothing else changes."
@@ -58575,7 +58604,15 @@ button.job-insp:hover{border-color:#2f5577}
 .lead-pick{width:20px;height:20px;flex:none;accent-color:var(--brand)}
 .bulk-bar{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 12px;margin:8px 0;border:1px solid var(--line);border-radius:10px;background:var(--paper)}
 .bulk-bar select,.bulk-bar input{min-height:40px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px)}
-.lead-proposals,.lead-claim,.lead-files{display:flex;flex-direction:column;gap:10px;margin-top:12px}
+.lead-proposals,.lead-claim,.lead-files{display:flex;flex-direction:column;gap:14px;margin-top:4px}
+/* Each lead tab is the same sections as the Overview: a card per part, a
+   small uppercase heading, the content inside it with room around it. */
+.lead-tab .appt-sec{padding-bottom:14px;display:flex;flex-direction:column;gap:10px}
+.lead-tab .appt-sec>h4{margin:0}
+.lead-tab .panel-note{margin:0;font-size:13.5px;color:var(--ink-soft);line-height:1.45}
+.lead-tab .appt-sec>.note{margin:0}
+.lead-tab .est-empty{margin:0}
+.lead-tab .est-list-head .note{font-size:13.5px;color:var(--ink-soft);line-height:1.45}
 .prop-lines{display:flex;flex-direction:column;gap:6px}
 .prop-line{display:grid;grid-template-columns:minmax(0,3fr) 118px 64px 110px 100px 28px;gap:8px;align-items:center}
 .prop-line select{min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px);min-width:0}
@@ -58589,12 +58626,22 @@ button.job-insp:hover{border-color:#2f5577}
   .prop-line .prop-line-total{grid-column:auto}
   .prop-line{padding-bottom:8px;border-bottom:1px dashed var(--line)}}
 .prop-list,.lead-file-list,.comm-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.prop-row{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card)}
+.prop-row{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--card);display:flex;flex-direction:column;gap:8px}
+.prop-row>.note,.prop-row>.prop-link{margin:0}
+.prop-row .form-actions{margin:0}
 .prop-row-main{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .prop-link code{font-size:12px;word-break:break-all}
 .lead-files-add{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
-.lead-file{display:flex;flex-wrap:wrap;gap:8px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:var(--card)}
-.lead-file-name{display:inline-flex;gap:6px;align-items:center;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.lead-files-add .fld{flex:1 1 200px;margin:0}
+.lead-files-add .btn-ghost{min-height:44px}
+.lead-file{display:flex;gap:12px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--paper)}
+.lead-file-ico{flex:none;width:36px;height:36px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:var(--card);border:1px solid var(--line);color:var(--ink-soft)}
+.lead-file-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
+.lead-file-name{font-weight:600;font-size:14.5px;min-width:0;overflow-wrap:anywhere}
+.lead-file-sub{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;font-size:12.5px;color:var(--ink-soft)}
+.lead-file-acts{flex:none;display:flex;align-items:center;gap:6px}
+.lead-files-hint{margin:0}
+@media (max-width:560px){.lead-file{flex-wrap:wrap}.lead-file-acts{width:100%;justify-content:flex-end}}
 .lead-file-thumb{width:56px;height:56px;object-fit:cover;border-radius:6px}
 .import-map{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}
 .dupe-group{border:1px solid var(--line);border-radius:10px;padding:10px;margin:8px 0;display:flex;flex-direction:column;gap:6px}
@@ -58768,7 +58815,11 @@ button.job-insp:hover{border-color:#2f5577}
 .appt-sec .lead-meta{margin:4px 0 10px}
 /* 109. Contacting a lead, and the CRM Inbox. */
 .lead-tabs{margin:12px 0 14px}
-.lead-contact{display:flex;flex-direction:column;gap:12px}
+.lead-contact{display:flex;flex-direction:column;gap:14px;margin-top:4px}
+.lc-reach .lc-btns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.lc-reach .lc-btn{justify-content:center;width:100%;text-align:center}
+@media (max-width:560px){.lc-reach .lc-btns{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.lc-history .lm-list{margin:0}
 .lc-consent-line{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
 .lc-consent{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--paper)}
 .lc-q{margin:0 0 12px}
@@ -58901,10 +58952,12 @@ button.job-insp:hover{border-color:#2f5577}
 .lf-consent p{margin:6px 0;font-size:14px}
 @media (max-width:560px){.crm-months{grid-template-columns:repeat(3,minmax(0,1fr))}.crm-table{font-size:13px}}
 .lc-form{border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);display:flex;flex-direction:column;gap:10px}
+.lc-form.appt-sec{border-color:color-mix(in srgb,var(--brand) 35%,var(--line))}
+.lc-form .fld{margin:0}
 .lc-form .seg-tabs{margin:0}
 .lc-tel{display:inline-flex;align-items:center;gap:6px;width:fit-content}
 a.btn-solid.is-disabled{opacity:.5;pointer-events:none}
-.lm-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.lm-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
 .lm-row{display:flex;align-items:flex-start;gap:8px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
 .lm-row.unread{border-color:var(--amber);box-shadow:inset 3px 0 0 var(--amber)}
 .lm-row.inbound{background:var(--paper)}

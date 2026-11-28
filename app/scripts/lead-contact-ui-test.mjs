@@ -18,7 +18,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, touchingSections } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-leadcontactui-test");
@@ -138,6 +138,13 @@ try {
     panel: !!document.querySelector("[data-lead-contact]"),
     reply: document.querySelector("[data-lead-contact] .lm-row.inbound")?.innerText || "" }));
   t.ck("a row opens the lead on its Contact tab", onContact.tab === "true" && onContact.panel, JSON.stringify(onContact));
+  {
+    // The Contact tab is cards like the Overview: reach them, history; none touching.
+    const secs = await page.evaluate(() => [...document.querySelectorAll("[data-lead-contact] .appt-sec > h4")].map((h) => h.innerText.trim().toLowerCase()));
+    const touch = await touchingSections(page, "[data-lead-detail]");
+    t.ck("the Contact tab is sections, none touching", secs.some((x) => x.startsWith("reach")) && secs.includes("history") && touch.length === 0, JSON.stringify({ secs, touch }));
+    if (process.env.SHOTDIR) await page.screenshot({ path: `${process.env.SHOTDIR}/tab-contact.png` });
+  }
   t.ck("with their reply in the conversation", /Tuesday works/.test(onContact.reply), onContact.reply);
 
   const btns = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-contact]")].map((b) => [b.dataset.contact, b.disabled])));

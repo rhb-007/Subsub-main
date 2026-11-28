@@ -8,7 +8,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, touchingSections } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-crmplusui-test");
@@ -123,6 +123,13 @@ const setVal = (page, sel, v) => page.evaluate((s, val) => {
   el.dispatchEvent(new Event(el.tagName === "SELECT" ? "change" : "input", { bubbles: true }));
   return true;
 }, sel, v);
+const tabCheck = async (page, name) => {
+  // Each lead tab is cards like the Overview: at least one section, none touching.
+  const secs = await page.evaluate(() => document.querySelectorAll("[data-lead-detail] .lead-tab .appt-sec").length);
+  const touch = await touchingSections(page, "[data-lead-detail]");
+  t.ck(`the ${name} tab is sections, none touching`, secs >= 1 && touch.length === 0, JSON.stringify({ secs, touch }));
+  if (process.env.SHOTDIR) await page.screenshot({ path: `${process.env.SHOTDIR}/tab-${name}.png` });
+};
 const closeModal = async (page) => { await page.evaluate(() => { const m = [...document.querySelectorAll(".modal-backdrop")].pop(); m?.click(); }); await wait(300); };
 
 try {
@@ -236,6 +243,7 @@ try {
   t.ck("emailing it says where it went and shows the link", posts.send.length === 1 && sent.st === "sent" && sent.link.includes(PTOKEN)
     && /Emailed to dana@home.test/.test(sent.flash), JSON.stringify(sent));
   t.ck("a sent estimate offers no job yet", !(await page.$("[data-est-create-job]")));
+  await tabCheck(page, "estimates");
   await click(page, '[data-lead-tab="overview"]');
   await wait(300);
   const waiting = await page.evaluate(() => ({ step: document.querySelector("[data-sale-progress]")?.dataset.saleProgress,
@@ -302,10 +310,12 @@ try {
   t.ck("the claim says what insurance pays after the deductible", /Insurance pays \$11,000/.test(net), net);
   await click(page, "[data-claim-save]");
   await wait(300);
+  await tabCheck(page, "claim");
   t.ck("the claim saves", posts.claim[0]?.status === "approved" && posts.claim[0].carrier === "State Farm" && posts.claim[0].approved === "12000", JSON.stringify(posts.claim));
   await click(page, '[data-lead-tab="files"]');
   await wait(400);
   t.ck("the files tab offers an upload and what kind it is", !!(await page.$("[data-file-input]")) && !!(await page.$("[data-file-kind]")));
+  await tabCheck(page, "files");
   await closeModal(page);
 
   console.log("\n-- a text reminder on an estimate --");

@@ -17918,6 +17918,22 @@ refactor.
     the job goes through the appointment's own conversion.
   `test:salesign` pins both. Dropping the appointment check fails it.
 
+- **EVERY LEAD TAB IS CARDS LIKE THE OVERVIEW.** Asked for as *"give the same
+  updated UI design to contact, estimates, insurance claim, and files."* Each
+  tab is now `.appt-sec` sections with a small uppercase heading, the class
+  `.lead-tab` giving them room:
+  - **Contact:** *Reach <name>* (consent, Do not contact, and the six ways in
+    as an even grid of buttons). Each compose form is a section titled for
+    what it is (New email, Log a call...). Then *Follow-up sequence* and
+    *History*.
+  - **Estimates:** a heading card with the note and New estimate. Each
+    estimate is a card with room between its lines.
+  - **Insurance claim:** one card holding the form.
+  - **Files:** *Add files* and *Files (n)*. Each file is a row with an icon,
+    its name, a line with its kind and date, and the actions at the right.
+  `test:crmplusui` and `test:leadcontactui` run `touchingSections` on each tab
+  (the message rows went from 8px to 10px apart for it).
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
