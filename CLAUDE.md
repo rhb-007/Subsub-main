@@ -17848,6 +17848,38 @@ refactor.
     regexes became case-insensitive, because the headings are
     `text-transform:uppercase` and `innerText` applies it.
 
+- **WHERE YOU WORK IS BUILT EXACTLY LIKE WHERE YOU SELL, AND EACH WORK AREA
+  BECOMES ITS OWN MARKET.** Asked for with My markets on screen: *"where
+  you'll work should have the same filtering and market zip and city filtering
+  as where you sell. Should function exactly the same"* and *"if you select we
+  sell in the same place we work, then those markets should drop into the where
+  we sell section exactly as the above."* Where you work was a toggle between
+  named cities and ZIP radii, a different editor from the one directly under it.
+  - **A third coverage mode, `areas`**: named areas, each a list of ZIPs and
+    towns, checked like a market without the services (`validWorkAreas` in
+    `shared/markets.js`). `MyCoverage` is now the market editor: the same
+    *Add every ZIP near a place* with towns filled in, typed ZIPs that get
+    their towns, overlaps with another area left out by default, and the same
+    list rows. One editor for both halves of the tab.
+  - **The older modes still read** everywhere: the roster, the Passport, the
+    set-up gaps and the matching. An account set the old way gets *Turn into
+    areas*, which makes one area per radius (its ZIPs and their towns) and one
+    for named cities, and saves them.
+  - **Each area keeps an id**, which is never trusted from the body, and the
+    mirror keys a market on it: `mir_<account>_<area>`. With *We sell in the
+    same places we work* on:
+    - each area is a market of the same name;
+    - renaming an area renames the same market;
+    - an area taken away takes its market with it;
+    - the single "Where we work" market from before is replaced.
+    The ids are derived, so no table was needed.
+  - **What stays the market's own:** what is sold there and whether it is
+    active. Its name and places come from the area (`mirrored_market_name`,
+    `mirrored_market`). Deleting such a market turns the mirror off, so the
+    next save does not write it back.
+  - `test:workareas` (18). `test:zipnearui`, `test:accttabs` and
+    `test:subhome` were moved to the new editor rather than loosened.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

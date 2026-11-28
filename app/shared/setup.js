@@ -39,6 +39,7 @@ const someCrewMember = (crews) => (Array.isArray(crews) ? crews : [])
 const hasCoverage = (c) => {
   if (!c || typeof c !== "object") return false;
   if ((c.cities || []).length > 0) return true;
+  if ((c.areas || []).some((a) => (a.zips || []).length || (a.cities || []).length)) return true;
   return (c.radii || []).some((r) => r && r.zip && r.miles);
 };
 

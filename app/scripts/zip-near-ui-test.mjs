@@ -34,7 +34,7 @@ const TOWN = { "98499": { city: "Lakewood", state: "WA" }, "98402": { city: "Tac
   "98405": { city: "Fife", state: "WA" }, "98406": { city: "Ruston", state: "WA" } };
 // Another market already has 98405 and Fife: by default a new one leaves them out.
 const SOUTH = { id: "mk_s", name: "South Sound", zips: ["98405"], cities: [{ city: "Fife", state: "WA" }], services: ["roofing"], active: true };
-let posted = null;
+let posted = null, workSaved = null;
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body, _h, url) => {
   if (path.startsWith("/api/markets/zips-near")) {
@@ -52,13 +52,18 @@ const api = serveApi({ port: API, routes: (path, method, body, _h, url) => {
   }
   if (path === "/api/markets/mirror" && method === "PUT") {
     mirrorPuts.push(typeof body === "string" ? JSON.parse(body) : body);
-    return [200, { markets: [SOUTH, { id: "mk_w", name: "Where we work", zips: [], cities: [{ city: "Seattle", state: "WA" }], services: ["roofing"], active: true }],
-      mirror: { on: true, marketId: "mk_w" } }];
+    return [200, { markets: [SOUTH, { id: "mir_acc_gc_tac001", name: "Tacoma area", zips: ["98402"], cities: [{ city: "Tacoma", state: "WA" }], services: ["roofing"], active: true }],
+      mirror: { on: true, marketId: null } }];
   }
   if (path === "/api/markets" && method === "POST") { posted = typeof body === "string" ? JSON.parse(body) : body; return [201, { market: { id: "mk_n", ...posted } }]; }
   if (path === "/api/markets") return [200, { markets: [SOUTH], mirror: { on: false, marketId: null } }];
   if (path.startsWith("/api/account-by-subdomain/")) return [200, acct()];
   if (path === "/api/account") return [200, acct()];
+  if (path === "/api/my-company" && method === "PATCH") {
+    workSaved = typeof body === "string" ? JSON.parse(body) : body;
+    MY_COMPANY.coverage = workSaved.coverage;
+    return [200, { ok: true }];
+  }
   if (path === "/api/my-company") return [200, MY_COMPANY];
   if (path === "/api/my-work") return [200, { work: [] }];
   if (path === "/api/account-users") return [200, [{ id: "u_r", name: "Richard Braun", email: "rb@outerhome.test", phone: null,
@@ -141,17 +146,40 @@ try {
     if (w === 1024) {
       await page.evaluate(() => [...document.querySelectorAll(".chip")].find((b) => b.dataset.marketSvc)?.click()); await wait(150);
       await page.evaluate(() => document.querySelector("[data-market-save]")?.click()); await wait(700);
-      // Where you work fills its cities from a place the same way.
-      await setVal(page, "[data-cityfill-center]", "Tacoma, WA");
-      await page.evaluate(() => document.querySelector("[data-cityfill-go]")?.click()); await wait(700);
-      const cf = await page.evaluate(() => ({ chips: [...document.querySelectorAll("[data-markets-work] .cities-edit .pick")].map((b) => b.innerText.trim()),
-        note: document.querySelector("[data-cityfill-note]")?.innerText || "" }));
-      t.ck("Where you work adds the towns near a place, never one twice", cf.chips.join("|") === "Seattle|Tacoma|Fife|Ruston" && /Added 3 cities/.test(cf.note), JSON.stringify(cf));
+      // 116. Where you work is the same editor as Where you sell: named
+      // areas, filled from a place, overlaps left out by default.
+      const W = "[data-markets-work]";
+      const leg = await page.evaluate((W) => document.querySelector(`${W} [data-work-legacy]`)?.innerText || "", W);
+      t.ck("an older coverage says so, with the way to turn it into areas", /Seattle/.test(leg) && /Turn into areas/.test(leg), leg);
+      await page.evaluate((W) => document.querySelector(`${W} [data-add-area]`)?.click(), W); await wait(200);
+      await setVal(page, `${W} [data-area-name]`, "Tacoma area");
+      await setVal(page, `${W} [data-zipfill-center]`, "Tacoma, WA");
+      await page.evaluate((W) => document.querySelector(`${W} [data-zipfill-go]`)?.click(), W); await wait(700);
+      const area = await page.evaluate((W) => ({ zips: document.querySelector(`${W} [data-area-zips]`)?.value, towns: document.querySelector(`${W} [data-area-cities]`)?.value,
+        note: document.querySelector(`${W} [data-zipfill-note]`)?.innerText || "" }), W);
+      t.ck("an area fills its ZIPs and their towns from a place, like a market", area.zips === "98402, 98403, 98405, 98406"
+        && area.towns === "Tacoma, WA\nFife, WA\nRuston, WA" && /Added 4 ZIPs/.test(area.note), JSON.stringify(area));
+      await page.evaluate((W) => document.querySelector(`${W} [data-area-save]`)?.click(), W); await wait(600);
+      const a1 = workSaved?.coverage?.areas?.[0];
+      t.ck("saving it saves the areas", workSaved?.coverage?.mode === "areas" && a1?.name === "Tacoma area" && a1.zips.join() === "98402,98403,98405,98406"
+        && a1.cities.some((c) => c.city === "Ruston") && /^[a-z0-9]{6,24}$/.test(a1.id || ""), JSON.stringify(workSaved));
+      const listed = await page.evaluate((W) => ({ rows: [...document.querySelectorAll(`${W} [data-area]`)].map((r) => r.innerText.replace(/\s+/g, " ")),
+        legacy: !!document.querySelector(`${W} [data-work-legacy]`) }), W);
+      t.ck("the area is listed like a market, and the older coverage note is gone", listed.rows.length === 1 && /Tacoma area/.test(listed.rows[0])
+        && /4 ZIPs/.test(listed.rows[0]) && !listed.legacy, JSON.stringify(listed));
+      await page.evaluate((W) => document.querySelector(`${W} [data-add-area]`)?.click(), W); await wait(200);
+      await setVal(page, `${W} [data-area-name]`, "Again");
+      await setVal(page, `${W} [data-zipfill-center]`, "Tacoma, WA");
+      await page.evaluate((W) => document.querySelector(`${W} [data-zipfill-go]`)?.click(), W); await wait(700);
+      const again = await page.evaluate((W) => ({ zips: document.querySelector(`${W} [data-area-zips]`)?.value,
+        skip: !!document.querySelector(`${W} [data-area-skip]`), note: document.querySelector(`${W} [data-zipfill-note]`)?.innerText || "" }), W);
+      t.ck("a second area leaves out what the first has, and says so", again.skip && again.zips === "" && /Left out 4 ZIPs already in Tacoma area/.test(again.note), JSON.stringify(again));
+      await page.evaluate((W) => [...document.querySelectorAll(`${W} [data-area-form] button`)].find((b) => /Cancel/.test(b.innerText))?.click(), W); await wait(200);
       // The switch between the two cards.
       t.ck("\"We sell in the same places we work\" is offered, off", await page.evaluate(() => document.querySelector("[data-markets-same-box]")?.checked === false));
       await page.evaluate(() => document.querySelector("[data-markets-same-box]")?.click()); await wait(600);
       const same = await page.evaluate(() => ({ on: document.querySelector("[data-markets-same-box]")?.checked,
-        chip: document.querySelector("[data-market=mk_w] [data-market-mirrored]")?.innerText || "" }));
+        chip: document.querySelector("[data-market=mir_acc_gc_tac001] [data-market-mirrored]")?.innerText || "" }));
       t.ck("on, it asks the server and the market says it follows Where you work", mirrorPuts.at(-1)?.on === true && same.on && /Follows Where you work/.test(same.chip), JSON.stringify({ same, mirrorPuts }));
       t.ck("the market is saved with the filled ZIPs", posted?.zips?.join() === "98499,98402,98403,98406,98405", JSON.stringify(posted));
     }

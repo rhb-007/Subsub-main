@@ -85,7 +85,7 @@ export function servicesNotOffered(market, services = []) {
 
 export function marketErrText(e) {
   const code = e?.body?.error || e?.error;
-  if (code === "name_required") return "Give the market a name.";
+  if (code === "name_required") return "Give it a name.";
   if (code === "name_too_long") return "Keep the name under 80 characters.";
   if (code === "bad_zip") return `${e.body?.value ?? e.value ?? "That"} isn't a five-digit ZIP code.`;
   if (code === "too_many_zips") return `A market can list up to ${MAX_MARKET_ZIPS} ZIP codes.`;
@@ -93,8 +93,11 @@ export function marketErrText(e) {
   if (code === "too_many_cities") return `A market can list up to ${MAX_MARKET_CITIES} towns.`;
   if (code === "coverage_required") return "Add at least one ZIP code or town.";
   if (code === "services_required") return "Pick at least one service offered there.";
+  if (code === "too_many_areas") return `Where you work holds up to ${MAX_WORK_AREAS} areas.`;
+  if (code === "invalid_coverage") return "That didn't save. Check each area has a name and a ZIP or a town.";
   if (code === "too_many_markets") return `An account can have up to ${MAX_MARKETS} markets.`;
   if (code === "office_only") return "Only an admin or project manager can change markets.";
+  if (code === "mirrored_market_name") return "This market takes its name from its area in Where you work. Rename the area there.";
   if (code === "mirrored_market") return "This market follows Where you work. Change the places there, or turn off \"We sell in the same places we work\".";
   if (code === "no_coverage") return "Set Where you work first, then this market can follow it.";
   if (code === "no_company") return "Only an account that can be hired has a Where you work to follow.";
@@ -122,3 +125,45 @@ export function weatherTalk(w, services = []) {
     : "It's cold there today. Ask whether they've noticed drafts or high heating bills.";
   return "Good weather there for an estimate visit this week.";
 }
+
+// ---- 116. WHERE YOU WORK, AS AREAS ----------------------------------------------
+// Where you work is built the same way as Where you sell: named areas, each a
+// list of ZIP codes and towns (filled from a place and a distance), so the two
+// halves of My markets are one editor and one shape. It is a third coverage
+// mode beside the older "cities" and "radius", which still read.
+//
+// Each area keeps an id, because "we sell in the same places we work" turns
+// every area into its own market, and the id is what keeps that market the
+// same market when the area is renamed or its ZIPs change.
+export const MAX_WORK_AREAS = 20;
+const AREA_ID_RE = /^[a-z0-9]{6,24}$/;
+export const newAreaId = () => {
+  const b = new Uint8Array(8);
+  (globalThis.crypto?.getRandomValues ? globalThis.crypto.getRandomValues(b) : b.forEach((_, i) => { b[i] = Math.floor(Math.random() * 256); }));
+  return [...b].map((x) => x.toString(36).padStart(2, "0")).join("").slice(0, 12);
+};
+// Answers {ok, areas} or {ok:false, error, field, index}. An area is checked
+// exactly as a market is, less the services: what is sold there is a market's
+// question, and where you work is not about selling.
+export function validWorkAreas(list) {
+  if (!Array.isArray(list)) return { ok: false, error: "invalid_coverage" };
+  if (list.length > MAX_WORK_AREAS) return { ok: false, error: "too_many_areas" };
+  const out = [], ids = new Set();
+  for (let i = 0; i < list.length; i++) {
+    const a = list[i] || {};
+    const v = validMarket({ name: a.name, zips: a.zips, cities: a.cities, services: [SERVICE_IDS[0]] });
+    if (!v.ok) return { ...v, index: i };
+    let id = AREA_ID_RE.test(String(a.id || "")) && !ids.has(a.id) ? a.id : newAreaId();
+    while (ids.has(id)) id = newAreaId();
+    ids.add(id);
+    out.push({ id, name: v.market.name, zips: v.market.zips, cities: v.market.cities });
+  }
+  return { ok: true, areas: out };
+}
+// The area a job is in: the same rule as a lead's market (ZIP first, then town
+// and state, in name order).
+export const workAreaFor = (areas = [], where = {}) => marketFor((areas || []).map((a) => ({ ...a, active: true })), where);
+// The id a mirrored market gets for an area: derived, so the same area is
+// always the same market and nothing needs a second table to remember it.
+export const mirrorMarketId = (accountId, areaId) => `mir_${accountId}_${areaId}`;
+export const isMirrorMarketId = (accountId, id) => String(id || "").startsWith(`mir_${accountId}_`);

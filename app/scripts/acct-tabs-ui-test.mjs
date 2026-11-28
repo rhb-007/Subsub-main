@@ -186,10 +186,10 @@ try {
 
   console.log("\n-- the coverage form's boxes are full-size fields --");
   await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "My markets")?.click());
-  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
+  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-work-areas]")) break; }
   console.log("\n-- My markets: where you work and where you sell, on one tab --");
   const mm = await page.evaluate(() => ({
-    work: !!document.querySelector("[data-markets-work] .cov-toggle"),
+    work: !!document.querySelector("[data-markets-work] [data-work-areas]"),
     sell: document.querySelector("[data-markets-sell]")?.innerText || "",
     workTop: document.querySelector("[data-markets-work]")?.getBoundingClientRect().top ?? null,
     sellTop: document.querySelector("[data-markets-sell]")?.getBoundingClientRect().top ?? null,
@@ -232,7 +232,7 @@ try {
   await wait(300);
   await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "Company")?.click());
   await wait(900);
-  const co = await page.evaluate(() => ({ cov: !!document.querySelector(".cov-toggle"), ptr: document.querySelector("[data-markets-pointer]")?.innerText || "",
+  const co = await page.evaluate(() => ({ cov: !!document.querySelector("[data-work-areas]"), ptr: document.querySelector("[data-markets-pointer]")?.innerText || "",
     open: !!document.querySelector(".open-hire") }));
   t.ck("Company no longer carries the coverage form, and says where it went", co.open && !co.cov && /My markets/.test(co.ptr), JSON.stringify(co));
   const gap = await page.evaluate(() => { const p = document.querySelector("[data-markets-pointer]");
@@ -241,32 +241,30 @@ try {
     return { gap: Math.round(b.top - a.bottom), border: getComputedStyle(p).borderTopStyle }; });
   t.ck("the pointer is a boxed row with real space under Save profile", !!gap && gap.gap >= 16 && gap.border === "solid", JSON.stringify(gap));
   await page.evaluate(() => document.querySelector("[data-markets-go]")?.click());
-  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
-  t.ck("Open My markets lands on My markets", !!(await page.$(".cov-toggle")), "");
+  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-work-areas]")) break; }
+  t.ck("Open My markets lands on My markets", !!(await page.$("[data-work-areas]")), "");
   await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "Company")?.click());
   await wait(600);
   await page.evaluate(() => [...document.querySelectorAll(".acct-tabs button")].find((b) => b.innerText.trim() === "My markets")?.click());
-  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
+  for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-work-areas]")) break; }
+  // 116. Where you work is the market editor now: its boxes are the same
+  // full-size fields a market's are.
   const fieldSize = () => page.evaluate(() => {
     const box = (el) => { if (!el) return null; const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
       return { h: Math.round(r.height), w: Math.round(r.width), font: parseFloat(cs.fontSize), pad: parseFloat(cs.paddingLeft),
         border: cs.borderTopStyle, bw: parseFloat(cs.borderTopWidth) }; };
-    const row = document.querySelector(".radius-row");
-    return { city: box(document.querySelector(".add-city-row input")),
-      zip: box(row?.querySelector("input:not([type=number])")), miles: box(row?.querySelector("input[type=number]")) };
+    const f = document.querySelector("[data-markets-work] [data-area-form]");
+    return { name: box(f?.querySelector("[data-area-name]")), center: box(f?.querySelector("[data-zipfill-center]")), zips: box(f?.querySelector("[data-area-zips]")) };
   });
   const sized = (b, minFont) => !!b && b.h >= 44 && b.font >= minFont && b.pad >= 10 && b.border === "solid" && b.bw >= 1;
+  await page.evaluate(() => document.querySelector("[data-markets-work] [data-add-area]")?.click());
+  await wait(300);
   for (const [vw, vh, minFont] of [[1024, 768, 15], [390, 844, 16]]) {
     await page.setViewport({ width: vw, height: vh }); await wait(300);
-    await page.evaluate(() => [...document.querySelectorAll(".cov-toggle button")].find((b) => /Specific cities/.test(b.innerText))?.click());
-    await wait(200);
     const c = await fieldSize();
-    t.ck(`${vw}px: the add-a-city box is a full-size field`, sized(c.city, minFont), JSON.stringify(c.city));
-    await page.evaluate(() => [...document.querySelectorAll(".cov-toggle button")].find((b) => /ZIP radius/.test(b.innerText))?.click());
-    await wait(200);
-    const r = await fieldSize();
-    t.ck(`${vw}px: the radius ZIP box is a full-size field`, sized(r.zip, minFont), JSON.stringify(r.zip));
-    t.ck(`${vw}px: the miles box is a full-size field, wide enough for three digits`, sized(r.miles, minFont) && r.miles.w >= 90, JSON.stringify(r.miles));
+    t.ck(`${vw}px: the area name box is a full-size field`, sized(c.name, minFont), JSON.stringify(c.name));
+    t.ck(`${vw}px: the place box is a full-size field`, sized(c.center, minFont), JSON.stringify(c.center));
+    t.ck(`${vw}px: the ZIP codes box is a full-size field`, sized(c.zips, minFont), JSON.stringify(c.zips));
   }
 
   t.ck("no page error", crashes.length === 0, crashes.join(" | "));

@@ -748,47 +748,43 @@ try {
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$(".mydocs")) break; }
     await page.evaluate(() => [...document.querySelectorAll("button")]
       .find((b) => b.innerText.trim() === "My markets")?.click());
-    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$(".cov-toggle")) break; }
+    for (let n = 0; n < 40; n++) { await wait(200); if (await page.$("[data-work-areas]")) break; }
 
-    // Scoped to the panel the toggle is IN. `.portal-panel` nests, so a
-    // `find` over all of them lands on an ancestor and reads somebody else's
-    // chips -- which is the assertion-that-cannot-fail trap in miniature.
+    // 116. Where you work is the market editor: named areas. Scoped to the
+    // panel itself, because `.portal-panel` nests.
     const cov = await page.evaluate(() => {
-      const el = document.querySelector(".cov-toggle")?.closest(".portal-panel");
-      return el ? { text: el.innerText.replace(/\s+/g, " ").trim(),
-        modes: [...el.querySelectorAll(".cov-toggle button")].map((b) => b.innerText.trim()),
-        cities: el.querySelectorAll(".pick-grid .pick").length,
-        copies: document.querySelectorAll(".cov-toggle").length } : null;
+      const el = document.querySelector("[data-work-areas]");
+      return el ? { text: el.innerText.replace(/\s+/g, " ").trim(), add: !!el.querySelector("[data-add-area]"),
+        copies: document.querySelectorAll("[data-work-areas]").length } : null;
     });
     t.ck("the panel is there", !!cov, String(cov));
     t.ck("and there is one of it", cov?.copies === 1, JSON.stringify(cov?.copies));
-    t.ck("it offers named cities", /specific cities/i.test((cov?.modes || []).join(" ")),
-      JSON.stringify(cov?.modes));
-    t.ck("or a radius from a ZIP", /zip radius/i.test((cov?.modes || []).join(" ")),
-      JSON.stringify(cov?.modes));
-    t.ck("with cities to pick", (cov?.cities || 0) > 0, String(cov?.cities));
+    t.ck("it offers to add a work area", !!cov?.add, JSON.stringify(cov));
     // Nothing set is not a neutral state: it is a company nobody can be
     // matched to, and the panel has to say so rather than look finished.
     t.ck("and it says what no coverage costs",
       /won.t be matched/i.test(cov?.text || ""), cov?.text);
 
-    await page.evaluate(() => {
-      const el = document.querySelector(".cov-toggle").closest(".portal-panel");
-      el.querySelector(".pick-grid .pick")?.click();
-    });
+    const put = (sel, v) => page.evaluate((sel, v) => {
+      const el = document.querySelector(sel);
+      const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, v);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, sel, v);
+    await page.evaluate(() => document.querySelector("[data-work-areas] [data-add-area]")?.click());
     await wait(200);
-    await page.evaluate(() => {
-      const el = document.querySelector(".cov-toggle").closest(".portal-panel");
-      [...el.querySelectorAll("button")].find((b) => /^save/i.test(b.innerText.trim()))?.click();
-    });
+    await put("[data-work-areas] [data-area-name]", "Seattle");
+    await put("[data-work-areas] [data-area-cities]", "Seattle, WA");
+    await wait(150);
+    await page.evaluate(() => document.querySelector("[data-work-areas] [data-area-save]")?.click());
     for (let n = 0; n < 30 && !savedCompany.length; n++) await wait(150);
     t.ck("saving sends it", savedCompany.length === 1, JSON.stringify(savedCompany));
     // Its own question, so it saves on its own -- the profile above it should
     // not have to be re-submitted to record where somebody works.
     t.ck("and sends only the coverage",
       Object.keys(savedCompany[0] || {}).join(",") === "coverage", JSON.stringify(savedCompany[0]));
-    t.ck("with a city on it",
-      (savedCompany[0]?.coverage?.cities || []).length === 1, JSON.stringify(savedCompany[0]));
+    t.ck("with the area on it",
+      savedCompany[0]?.coverage?.mode === "areas" && savedCompany[0].coverage.areas?.[0]?.cities?.[0]?.city === "Seattle", JSON.stringify(savedCompany[0]));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }
@@ -811,13 +807,13 @@ try {
     // fail: it would also pass on a screen that never rendered.
     t.ck("the Company section opened", await page.evaluate(() => !!document.querySelector(".open-hire")));
     t.ck("and there is no coverage panel on it",
-      await page.evaluate(() => !document.querySelector(".cov-toggle")));
+      await page.evaluate(() => !document.querySelector("[data-work-areas]")));
     await page.evaluate(() => [...document.querySelectorAll("button")]
       .find((b) => b.innerText.trim() === "My markets")?.click());
     for (let n = 0; n < 30; n++) { await wait(200); if (await page.$("[data-markets-work-closed]")) break; }
     t.ck("and My markets says why there is nothing to set", await page.evaluate(() =>
       /not open to being hired/.test(document.querySelector("[data-markets-work-closed]")?.innerText || "")
-      && !document.querySelector(".cov-toggle")));
+      && !document.querySelector("[data-work-areas]")));
     t.ck("nothing crashed", crashes.length === 0, crashes.join(" | "));
     await ctx.close();
   }

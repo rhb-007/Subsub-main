@@ -28,7 +28,7 @@ import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, M
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
   CALLCENTER_STAGES, SOURCE_IDS, sourceLabel } from "../shared/leads.js";
-import { validMarket, MAX_MARKETS, MAX_MARKET_ZIPS, marketFor } from "../shared/markets.js";
+import { validMarket, MAX_MARKETS, MAX_MARKET_ZIPS, marketFor, validWorkAreas, mirrorMarketId, isMirrorMarketId } from "../shared/markets.js";
 import { parseCenter, validRadius } from "../shared/zipnear.js";
 import { zipCenter, zipsNear, ZIP_SOURCE, townOfZip, marketFromCoverage } from "../shared/zipgeo.js";
 import { validEstimateExtras, homeownerExtras, extrasText, categoryTotals, marginOf, estimateNumber } from "../shared/estimate.js";
@@ -6073,6 +6073,10 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
   // Coverage, on its own like the switch: it is edited by its own panel and
   // must not need a whole profile sent with it.
   if (b.coverage !== undefined) {
+    if (b.coverage?.mode === "areas") {
+      const r = validWorkAreas(b.coverage.areas || []);
+      if (!r.ok) return c.json({ error: r.error, field: r.field, value: r.value, index: r.index }, 400);
+    }
     const cov = validCoverage(b.coverage);
     if (!cov) return c.json({ error: "invalid_coverage" }, 400);
     await c.env.DB.prepare(`UPDATE companies SET coverage = ? WHERE id = ?`)
@@ -7640,6 +7644,12 @@ const HIRING_KINDS = ["general_contractor", "property_manager", "building_owner"
 // cities is somebody using a text box as storage.
 function validCoverage(v) {
   if (!v || typeof v !== "object") return null;
+  // 116. Named areas, built like markets. Anything that does not pass is
+  // refused whole rather than half-kept.
+  if (v.mode === "areas") {
+    const r = validWorkAreas(v.areas || []);
+    return r.ok ? { mode: "areas", cities: [], radii: [], areas: r.areas } : null;
+  }
   const mode = v.mode === "radius" ? "radius" : "cities";
   const cities = Array.isArray(v.cities)
     ? v.cities.map((c) => String(c || "").trim().slice(0, 80)).filter(Boolean).slice(0, 60)
@@ -9522,7 +9532,10 @@ async function applySubPatch(db, companyId, engagementId, patch) {
   for (const [k, v] of Object.entries(coPatch)) {
     if (!SUB_COMPANY_COL[k]) continue;
     coSets.push(`${SUB_COMPANY_COL[k]} = ?`);
-    coVals.push(SUB_COMPANY_JSON_FIELDS.has(k) ? JSON.stringify(v) : (typeof v === "boolean" ? (v ? 1 : 0) : v));
+    // 116. Areas are cleaned on the way in like the account's own route does,
+    // so an area id is always one the mirror can key a market on.
+    const val = k === "coverage" && v?.mode === "areas" ? (validCoverage(v) || { mode: "areas", cities: [], radii: [], areas: [] }) : v;
+    coVals.push(SUB_COMPANY_JSON_FIELDS.has(k) ? JSON.stringify(val) : (typeof val === "boolean" ? (val ? 1 : 0) : val));
   }
   if (coSets.length) {
     coVals.push(companyId);
@@ -28201,9 +28214,43 @@ async function syncMirror(env, accountId, userId = null) {
   if (!a?.company_id) return { ok: false, error: "no_company" };
   const co = await env.DB.prepare(`SELECT coverage, state FROM companies WHERE id = ?`).bind(a.company_id).first();
   const cov = validCoverage(parseJson(co?.coverage, null)) || { mode: "cities", cities: [], radii: [] };
+  const now = new Date().toISOString();
+  // 116. AREAS: each work area becomes its own market, named as the area is,
+  // under an id derived from the area's, so renaming an area or changing its
+  // ZIPs moves the same market. A market whose area is gone is removed. The
+  // single "Where we work" market an older coverage made is replaced.
+  if (cov.mode === "areas") {
+    if (!cov.areas.length) return { ok: false, error: "no_coverage" };
+    const { results } = await env.DB.prepare(`SELECT id FROM sales_markets WHERE account_id = ?`).bind(accountId).all();
+    const have = new Set((results || []).map((r) => r.id).filter((id) => isMirrorMarketId(accountId, id)));
+    const want = new Set(cov.areas.map((ar) => mirrorMarketId(accountId, ar.id)));
+    const fresh = [...want].filter((id) => !have.has(id)).length;
+    const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM sales_markets WHERE account_id = ?`).bind(accountId).first();
+    const stale = [...have].filter((id) => !want.has(id)).length;
+    const old = await env.DB.prepare(`SELECT market_id FROM market_mirror WHERE account_id = ?`).bind(accountId).first();
+    const oldSingle = old?.market_id && !isMirrorMarketId(accountId, old.market_id) ? 1 : 0;
+    if ((total?.n || 0) - stale - oldSingle + fresh > MAX_MARKETS) return { ok: false, error: "too_many_markets" };
+    for (const ar of cov.areas) {
+      const id = mirrorMarketId(accountId, ar.id);
+      if (have.has(id)) {
+        await env.DB.prepare(`UPDATE sales_markets SET name = ?, zips = ?, cities = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ?`)
+          .bind(ar.name, JSON.stringify(ar.zips), JSON.stringify(ar.cities), id, accountId).run();
+      } else {
+        await env.DB.prepare(`INSERT INTO sales_markets (id, account_id, name, zips, cities, services, active, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, 1, ?)`).bind(id, accountId, ar.name, JSON.stringify(ar.zips), JSON.stringify(ar.cities),
+          JSON.stringify(APPT_SERVICE_IDS), userId).run();
+      }
+    }
+    for (const id of have) if (!want.has(id)) await env.DB.prepare(`DELETE FROM sales_markets WHERE id = ? AND account_id = ?`).bind(id, accountId).run();
+    if (oldSingle) await env.DB.prepare(`DELETE FROM sales_markets WHERE id = ? AND account_id = ?`).bind(old.market_id, accountId).run();
+    await env.DB.prepare(`INSERT INTO market_mirror (account_id, market_id, on_at, updated_at) VALUES (?, NULL, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET market_id = NULL, on_at = COALESCE(market_mirror.on_at, excluded.on_at), updated_at = excluded.updated_at`)
+      .bind(accountId, now, now).run();
+    return { ok: true, marketId: null, markets: cov.areas.length,
+      zips: cov.areas.reduce((n, ar) => n + ar.zips.length, 0), cities: cov.areas.reduce((n, ar) => n + ar.cities.length, 0) };
+  }
   const { zips, cities } = marketFromCoverage(cov, { state: co?.state || "", maxZips: MAX_MARKET_ZIPS });
   if (!zips.length && !cities.length) return { ok: false, error: "no_coverage" };
-  const now = new Date().toISOString();
   const row = await env.DB.prepare(`SELECT market_id FROM market_mirror WHERE account_id = ?`).bind(accountId).first();
   const cur = row?.market_id
     ? await env.DB.prepare(`SELECT id FROM sales_markets WHERE id = ? AND account_id = ?`).bind(row.market_id, accountId).first() : null;
@@ -28238,7 +28285,7 @@ app.put("/api/markets/mirror", requireRole(...BOOKING_ROLES), async (c) => {
       const r = await syncMirror(c.env, acct.id, userId);
       if (!r.ok) return c.json({ error: r.error }, 409);
       await c.env.DB.prepare(`UPDATE market_mirror SET on_at = COALESCE(on_at, ?) WHERE account_id = ?`).bind(new Date().toISOString(), acct.id).run();
-      await logEvent(c.env, acct.id, userId, "market.mirror_on", r.marketId, { zips: r.zips, cities: r.cities });
+      await logEvent(c.env, acct.id, userId, "market.mirror_on", r.marketId || acct.id, { zips: r.zips, cities: r.cities, markets: r.markets || 1 });
     } else {
       await c.env.DB.prepare(`UPDATE market_mirror SET on_at = NULL, updated_at = ? WHERE account_id = ?`).bind(new Date().toISOString(), acct.id).run();
       await logEvent(c.env, acct.id, userId, "market.mirror_off", acct.id, {});
@@ -28285,11 +28332,15 @@ app.patch("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
     // would be undone by the next save there. Its name, services and active
     // switch stay this market's own.
     const mir = await mirrorOf(c.env, acct.id);
-    if (mir.on && mir.marketId === cur.id && (b.zips !== undefined || b.cities !== undefined)) {
+    if (mir.on && (mir.marketId === cur.id || isMirrorMarketId(acct.id, cur.id)) && (b.zips !== undefined || b.cities !== undefined)) {
       const was0 = marketToJs(cur);
       const next = validMarket({ ...was0, zips: b.zips ?? was0.zips, cities: b.cities ?? was0.cities }).market;
       const placesOf = (m) => JSON.stringify([m?.zips || [], m?.cities || []]);
       if (placesOf(next) !== placesOf(was0)) return c.json({ error: "mirrored_market" }, 409);
+    }
+    // A market made from a work area takes its name from the area too.
+    if (mir.on && isMirrorMarketId(acct.id, cur.id) && b.name !== undefined && String(b.name).trim() !== cur.name) {
+      return c.json({ error: "mirrored_market_name" }, 409);
     }
     // Only the keys sent are changed; the rest are what is stored.
     const was = marketToJs(cur);
@@ -28320,9 +28371,16 @@ app.delete("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
     // Deleting the mirrored market turns the mirror off, or the next save of
     // Where you work would quietly write it back. Before the delete, because
     // the foreign key nulls market_id and this would then match nothing.
-    try { await c.env.DB.prepare(`UPDATE market_mirror SET on_at = NULL, market_id = NULL, updated_at = ? WHERE account_id = ? AND market_id = ?`)
-      .bind(new Date().toISOString(), acct.id, cur.id).run(); }
-    catch (err) { if (!missingSchema(err)) throw err; }
+    try {
+      await c.env.DB.prepare(`UPDATE market_mirror SET on_at = NULL, market_id = NULL, updated_at = ? WHERE account_id = ? AND market_id = ?`)
+        .bind(new Date().toISOString(), acct.id, cur.id).run();
+      // 116. A market made from a work area too: otherwise the next save of
+      // Where you work writes it straight back.
+      if (isMirrorMarketId(acct.id, cur.id)) {
+        await c.env.DB.prepare(`UPDATE market_mirror SET on_at = NULL, updated_at = ? WHERE account_id = ?`)
+          .bind(new Date().toISOString(), acct.id).run();
+      }
+    } catch (err) { if (!missingSchema(err)) throw err; }
     await c.env.DB.prepare(`DELETE FROM sales_markets WHERE id = ? AND account_id = ?`).bind(cur.id, acct.id).run();
     await logEvent(c.env, acct.id, userId, "market.deleted", cur.id, { name: cur.name });
     return c.json({ ok: true });

@@ -148,6 +148,8 @@ export function areaText(coverage) {
   const c = coverage && typeof coverage === "object" ? coverage : {};
   const radii = Array.isArray(c.radii) ? c.radii : c.radius ? [c.radius] : [];
   const cities = Array.isArray(c.cities) ? c.cities : [];
+  // 116. Named work areas: their names, the way the owner called them.
+  if (c.mode === "areas") return (c.areas || []).length ? c.areas.map((a) => a.name).join(" · ") : null;
   if (c.mode === "radius" || (!cities.length && radii.length)) {
     return radii.length ? radii.map((r) => `Within ${r.miles} mi of ${r.zip}`).join(" · ") : null;
   }
@@ -158,7 +160,8 @@ export function areaText(coverage) {
 function firstZip(coverage) {
   const c = coverage && typeof coverage === "object" ? coverage : {};
   const radii = Array.isArray(c.radii) ? c.radii : c.radius ? [c.radius] : [];
-  const z = radii.map((r) => String(r?.zip || "").trim()).find((v) => /^\d{5}$/.test(v));
+  const areaZips = c.mode === "areas" ? (c.areas || []).flatMap((a) => a.zips || []) : [];
+  const z = [...radii.map((r) => String(r?.zip || "").trim()), ...areaZips].find((v) => /^\d{5}$/.test(v));
   return z || null;
 }
 

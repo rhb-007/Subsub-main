@@ -66,7 +66,7 @@ import { LEAD_CHANNELS, BLOCK_TEXT, smsHref as leadSmsHref, telHref as leadTelHr
 import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, sourceLabel, crmDashboard, callerDashboard, RANK_WINDOWS, rankWindow, bookingLeaderboard } from "../shared/leads.js";
 import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
   AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
-import { validMarket, marketFor, servicesNotOffered, weatherTalk, marketErrText, MAX_MARKET_ZIPS } from "../shared/markets.js";
+import { validMarket, marketFor, servicesNotOffered, weatherTalk, marketErrText, MAX_MARKET_ZIPS, validWorkAreas, newAreaId, workAreaFor, MAX_WORK_AREAS } from "../shared/markets.js";
 import { RADIUS_CHOICES, parseCenter, zipNearErrText, fillZipsAndTowns, townsForTyped, takenBy, splitZips, splitTowns, citiesFromFound } from "../shared/zipnear.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
@@ -2192,8 +2192,11 @@ function formatWhen(dateStr, timeStr) {
 // { mode: "cities"|"radius", cities: [...], radii: [{ zip, miles }] }
 const covRadii = (c) => c.radii || (c.radius ? [c.radius] : []);
 const covMode = (c) => c.mode || (covRadii(c).length && !(c.cities || []).length ? "radius" : "cities");
-const coverageAreas = (c) => (covMode(c) === "cities" ? (c.cities || []) : []);
+const coverageAreas = (c) => (covMode(c) === "cities" ? (c.cities || [])
+  : covMode(c) === "areas" ? (c.areas || []).flatMap((a) => (a.cities || []).map((t) => `${t.city}, ${t.state}`)) : []);
 const coverageLabel = (c) => {
+  // 116. Named areas, the way markets are.
+  if (covMode(c) === "areas") return (c.areas || []).length ? c.areas.map((a) => a.name).join(" · ") : "No area set";
   if (covMode(c) === "radius") {
     const r = covRadii(c);
     return r.length ? r.map((x) => `${x.miles} mi of ${x.zip}`).join(" · ") : "No radius set";
@@ -2206,6 +2209,13 @@ const coverageLabel = (c) => {
 function coversZip(sub, zip) {
   if (!zip) return null;
   const c = sub.coverage;
+  if (covMode(c) === "areas") {
+    const hit = workAreaFor(c.areas || [], { zip });
+    if (hit) return { inRange: true, distance: 0, via: "area", area: hit.name };
+    const all = (c.areas || []).flatMap((a) => a.zips || []);
+    const dists = all.slice(0, 300).map((z) => zipDistance(z, zip)).filter((d) => d != null);
+    return dists.length ? { inRange: false, distance: Math.min(...dists), via: "area" } : { inRange: false, distance: null, via: null };
+  }
   if (covMode(c) === "cities") {
     const cityZips = (c.cities || []).map((city) => CITY_ZIP[city]).filter(Boolean);
     if (cityZips.includes(zip)) return { inRange: true, distance: 0, via: "city" };
@@ -32351,8 +32361,8 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
             <span className="mm-same-note">{data?.mirror?.migration
               ? tt("Run migration {m} to use this.", { m: data.mirror.migration })
               : mirrorOn
-              ? tt("Where you work is copied into the market \"Where we work\", and every save of Where you work updates it.")
-              : tt("Copy Where you work into a market, and keep it updated whenever you change where you work.")}</span>
+              ? tt("Each work area is copied into a market of the same name below, and changing an area changes its market.")
+              : tt("Copy each work area into its own market below, and keep them updated whenever you change where you work.")}</span>
             {mirErr && <span className="form-err" role="alert">{marketErrText(mirErr)}</span>}
           </span>
         </label>
@@ -32377,7 +32387,7 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
 // twice is listed once -- and past the cap the nearest are kept and the rest
 // counted. A town used as the center is added to the towns too, and names an
 // unnamed market. The list stays a list: every ZIP can still be taken out.
-function ZipFill({ edit, setEdit, skipTaken = true, taken = null }) {
+function ZipFill({ edit, setEdit, skipTaken = true, taken = null, areas = false }) {
   const firstTown = splitTowns(edit.cities)[0] || "";
   const [center, setCenter] = useState(firstTown);
   const [miles, setMiles] = useState(15);
@@ -32404,9 +32414,9 @@ function ZipFill({ edit, setEdit, skipTaken = true, taken = null }) {
         if (f.townsAdded.length) bits.push(tt(f.townsAdded.length === 1 ? "Added {n} town: {list}." : "Added {n} towns: {list}.",
           { n: f.townsAdded.length, list: andList(f.townsAdded.slice(0, 6)) + (f.townsAdded.length > 6 ? ` +${f.townsAdded.length - 6}` : "") }));
         if (f.skipped) bits.push(tt(f.skipped === 1 ? "Left out {n} ZIP already in {list}." : "Left out {n} ZIPs already in {list}.", { n: f.skipped, list: andList(f.skippedIn) }));
-        if (f.townsSkipped.length) bits.push(tt("Left out {list}, already in another market.", { list: andList(f.townsSkipped.slice(0, 4)) + (f.townsSkipped.length > 4 ? ` +${f.townsSkipped.length - 4}` : "") }));
+        if (f.townsSkipped.length) bits.push(tt(areas ? "Left out {list}, already in another area." : "Left out {list}, already in another market.", { list: andList(f.townsSkipped.slice(0, 4)) + (f.townsSkipped.length > 4 ? ` +${f.townsSkipped.length - 4}` : "") }));
         if (f.already) bits.push(tt(f.already === 1 ? "{n} was already listed." : "{n} were already listed.", { n: f.already }));
-        if (f.left) bits.push(tt("A market holds up to {max}, so the nearest were kept and {n} farther were left off.", { max: MAX_MARKET_ZIPS, n: f.left }));
+        if (f.left) bits.push(tt(areas ? "An area holds up to {max}, so the nearest were kept and {n} farther were left off." : "A market holds up to {max}, so the nearest were kept and {n} farther were left off.", { max: MAX_MARKET_ZIPS, n: f.left }));
       }
       setNote({ ok: f.added > 0 || f.townsAdded.length > 0, text: bits.join(" ") });
     } catch (e) { setNote({ ok: false, text: zipNearErrText(e) }); }
@@ -32434,7 +32444,7 @@ function ZipFill({ edit, setEdit, skipTaken = true, taken = null }) {
 // ZIPs typed by hand get their towns too, looked up when the box is left.
 // Only ZIPs not looked up before are asked about, so taking a town out is
 // not undone by the next blur.
-function useTypedZipTowns(edit, setEdit, { taken, skipTaken }) {
+function useTypedZipTowns(edit, setEdit, { taken, skipTaken, areas = false }) {
   const asked = useRef(new Set(splitZips(edit?.zips)));
   const [note, setNote] = useState("");
   const onBlur = async () => {
@@ -32447,7 +32457,7 @@ function useTypedZipTowns(edit, setEdit, { taken, skipTaken }) {
       setEdit((x) => ({ ...x, cities: out.cities }));
       const bits = [];
       if (out?.added.length) bits.push(tt("Added {list} from those ZIPs.", { list: andList(out.added) }));
-      if (out?.skipped.length) bits.push(tt("Left out {list}, already in another market.", { list: andList(out.skipped) }));
+      if (out?.skipped.length) bits.push(tt(areas ? "Left out {list}, already in another area." : "Left out {list}, already in another market.", { list: andList(out.skipped) }));
       setNote(bits.join(" "));
     } catch { /* the towns are a convenience; the ZIPs are what was typed */ }
   };
@@ -32457,6 +32467,10 @@ function useTypedZipTowns(edit, setEdit, { taken, skipTaken }) {
 function CrmMarkets({ adding = 0, onAdd = null }) {
   const { markets, ready, migration, reload, mirror } = React.useContext(MarketsCtx);
   const mirroredId = mirror?.on ? mirror.marketId : null;
+  // 116. With areas, each work area is its own market, under an id made from
+  // the area's ("mir_..."), so any of those follows Where you work.
+  const isMirrored = (id) => !!id && (id === mirroredId || (!!mirror?.on && String(id).startsWith("mir_")));
+  const fromArea = (id) => !!mirror?.on && String(id || "").startsWith("mir_");
   const [edit, setEdit] = useState(null); // null | {id?, name, zips, cities, services, active}
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -32489,10 +32503,12 @@ function CrmMarkets({ adding = 0, onAdd = null }) {
       {migration && <p className="appt-warn" role="note">Markets aren't set up on this database yet. Run migration {migration}.</p>}
       {edit && (
         <div className="lc-form market-form" data-market-form>
-          <label className="fld">Market name<input value={edit.name} data-market-name placeholder="South Sound"
+          <label className="fld">Market name<input value={edit.name} data-market-name placeholder="South Sound" disabled={fromArea(edit.id)}
             onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
-          {edit.id && edit.id === mirroredId ? (
-            <p className="appt-warn" role="note" data-market-mirror-note>{tt("This market's ZIPs and towns follow Where you work, so change them there. Its name, services and whether it's active are yours to change here.")}</p>
+          {isMirrored(edit.id) ? (
+            <p className="appt-warn" role="note" data-market-mirror-note>{fromArea(edit.id)
+              ? tt("This market is your work area of the same name, so its name, ZIPs and towns change there. What you sell here and whether it's active are yours to change.")
+              : tt("This market's ZIPs and towns follow Where you work, so change them there. Its name, services and whether it's active are yours to change here.")}</p>
           ) : <>
           {taken.zips.size + taken.towns.size > 0 && (
             <label className="appt-check market-skip" data-market-skip>
@@ -32545,7 +32561,7 @@ function CrmMarkets({ adding = 0, onAdd = null }) {
               <li key={m.id} className={`market-row ${m.active ? "" : "off"}`} data-market={m.id}>
                 <div className="market-main">
                   <div className="market-name"><MapPin size={15} /><b>{m.name}</b>{!m.active && <span className="tn-chip">{tt("Paused")}</span>}
-                    {m.id === mirroredId && <span className="tn-chip ok" data-market-mirrored>{tt("Follows Where you work")}</span>}</div>
+                    {isMirrored(m.id) && <span className="tn-chip ok" data-market-mirrored>{tt("Follows Where you work")}</span>}</div>
                   {where && <div className="market-where">{where}</div>}
                   {m.services.length > 0 && (
                     <div className="market-svcs">{m.services.map((sv) => <span key={sv} className="market-svc">{serviceLabel(sv)}</span>)}</div>
@@ -42598,97 +42614,145 @@ function CityFill({ cities = [], state = "", onAdd }) {
 }
 
 // ---- Contractor: choose where they work --------------------------------
+// 116. WHERE YOU WORK IS BUILT EXACTLY LIKE WHERE YOU SELL: named areas, each
+// a list of ZIP codes and towns, filled from a place and a distance with the
+// same tool, leaving out by default what another area already has. One editor
+// for both halves of My markets, so they cannot work two different ways, and
+// "we sell in the same places we work" turns each area into its own market.
+// An older coverage (named cities, or ZIP radii) still reads, and one press
+// turns it into areas.
+const areaBlank = () => ({ id: null, name: "", zips: "", cities: "" });
+const areaToEdit = (a) => ({ id: a.id, name: a.name, zips: (a.zips || []).join(", "), cities: (a.cities || []).map((c) => `${c.city}, ${c.state}`).join("\n") });
 function MyCoverage({ sub, onSave }) {
-  const [mode, setMode] = useState(covMode(sub.coverage));
-  const [cities, setCities] = useState(sub.coverage.cities || []);
-  const [radii, setRadii] = useState(() => {
-    const r = covRadii(sub.coverage);
-    return r.length ? r.map((x) => ({ ...x })) : [{ zip: sub.zip || "", miles: 25 }];
-  });
-  const [newCity, setNewCity] = useState("");
-  const [saved, setSaved] = useState(false);
-  const touch = (fn) => { fn(); setSaved(false); };
-
-  const toggleCity = (c) => touch(() => setCities((cs) => cs.includes(c) ? cs.filter((x) => x !== c) : [...cs, c]));
-  const addCity = () => {
-    const c = newCity.trim();
-    if (!c) return;
-    touch(() => { setCities((cs) => cs.includes(c) ? cs : [...cs, c]); setNewCity(""); });
+  const cov = sub.coverage || {};
+  const legacy = covMode(cov) !== "areas" && (((cov.cities || []).length > 0) || covRadii(cov).length > 0);
+  const [areas, setAreas] = useState(covMode(cov) === "areas" ? (cov.areas || []) : []);
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [removing, setRemoving] = useState(null);
+  const [converted, setConverted] = useState(false);
+  const [skipTaken, setSkipTaken] = useState(true);
+  const taken = useMemo(() => takenBy(areas, edit?.id || null), [areas, edit?.id]);
+  const typed = useTypedZipTowns(edit, setEdit, { taken, skipTaken, areas: true });
+  const overlap = edit ? splitZips(edit.zips).filter((z) => taken.zips.has(z)) : [];
+  // Every change is the whole list, saved at once and checked first, so a
+  // refused area leaves the list as it was.
+  const commit = async (next) => {
+    const v = validWorkAreas(next);
+    if (!v.ok) { setErr(v); return false; }
+    setBusy(true); setErr(null);
+    try { await onSave({ mode: "areas", cities: [], radii: [], areas: v.areas }); setAreas(v.areas); return true; }
+    catch (e) { setErr(e); return false; }
+    finally { setBusy(false); }
   };
-  const setRadius = (i, k, v) => touch(() => setRadii((rs) => rs.map((r, j) => j === i ? { ...r, [k]: v } : r)));
-  const addRadius = () => touch(() => setRadii((rs) => [...rs, { zip: "", miles: 25 }]));
-  const removeRadius = (i) => touch(() => setRadii((rs) => rs.filter((_, j) => j !== i)));
-
-  const cleanRadii = radii.filter((r) => r.zip && r.miles).map((r) => ({ zip: r.zip, miles: Number(r.miles) }));
-  const valid = mode === "cities" ? cities.length > 0 : cleanRadii.length > 0;
-
+  const save = async () => {
+    const one = { id: edit.id || newAreaId(), name: edit.name, zips: splitZips(edit.zips), cities: splitTowns(edit.cities) };
+    const v = validWorkAreas([one]);
+    if (!v.ok) { setErr(v); return; }
+    const next = edit.id ? areas.map((a) => (a.id === edit.id ? one : a)) : [...areas, one];
+    if (await commit(next)) setEdit(null);
+  };
+  // The older coverage, as areas: each radius becomes an area of the ZIPs it
+  // reaches and their towns; named cities become one area.
+  const convert = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const out = [];
+      for (const r of covRadii(cov)) {
+        const res = await api.zipsNear(String(r.zip), Math.min(100, Number(r.miles) || 25));
+        const f = fillZipsAndTowns({ zips: "", cities: "" }, res.zips || [], { skipTaken: false, cap: MAX_MARKET_ZIPS });
+        out.push({ id: newAreaId(), name: res.center?.city ? `${res.center.city} area` : `${r.miles} mi of ${r.zip}`,
+          zips: splitZips(f.zips), cities: splitTowns(f.cities) });
+      }
+      if (covMode(cov) === "cities" && (cov.cities || []).length) {
+        out.push({ id: newAreaId(), name: tt("Cities"), zips: [],
+          cities: splitTowns(cov.cities.map((c) => (/,\s*[A-Za-z]{2}$/.test(c) ? c : `${c}, ${sub.state || ""}`)).join("\n")) });
+      }
+      setBusy(false);
+      if (await commit(out)) setConverted(true);
+    } catch (e) { setErr(e); setBusy(false); }
+  };
   return (
-    <div className="portal-panel">
+    <div className="portal-panel" data-work-areas>
       <h4>{tt("Where you'll work")}</h4>
-      <p className="panel-note">{tt("Choose named cities or set travel radii from ZIP codes — one or the other. You'll only be matched to jobs inside your coverage.")}</p>
-
-      <div className="cov-toggle">
-        <button type="button" className={mode === "cities" ? "on" : ""} onClick={() => touch(() => setMode("cities"))}>{tt("Specific cities")}</button>
-        <button type="button" className={mode === "radius" ? "on" : ""} onClick={() => touch(() => setMode("radius"))}>{tt("ZIP radius")}</button>
-      </div>
-
-      {mode === "cities" ? (
-        <>
-          <div className="cov-sub" style={{ marginTop: 16 }}>{tt("Cities you cover")}</div>
-          <CityFill cities={cities} state={sub.state || ""} onAdd={(next) => touch(() => setCities(next))} />
-          <CitiesEditor cities={cities} onChange={(next) => touch(() => setCities(next))} />
-        </>
-      ) : (
-        <>
-          <div className="cov-sub" style={{ marginTop: 16 }}>{tt("Radius areas")}</div>
-          <div className="radii-edit">
-            {radii.map((r, i) => (
-              <div key={i} className="radius-row">
-                <input inputMode="numeric" value={r.zip} placeholder={tt("ZIP (e.g. 98101)")}
-                  onChange={(e) => setRadius(i, "zip", e.target.value.trim())} />
-                <span>{tt("within")}</span>
-                <input type="number" min="1" value={r.miles}
-                  onChange={(e) => setRadius(i, "miles", e.target.value)} />
-                <span>{tt("mi")}</span>
-                {radii.length > 1 && (
-                  <button type="button" className="icon-x" onClick={() => removeRadius(i)}><X size={12} /></button>
-                )}
-              </div>
-            ))}
-            <button type="button" className="add-line" onClick={addRadius}><Plus size={12} />{" "}{tt("Add another radius")}</button>
-          </div>
-        </>
+      <p className="panel-note">{tt("Your work areas, by ZIP or town. You're matched to jobs inside them.")}</p>
+      {legacy && !areas.length && (
+        <div className="appt-warn work-legacy" role="note" data-work-legacy>
+          <span>{tt("Set the older way: {how}. Turn it into areas to edit it like your markets, with the towns filled in.", { how: coverageLabel(cov) })}</span>
+          <button className="btn-solid" data-work-convert disabled={busy} onClick={convert}>{busy ? tt("Working…") : tt("Turn into areas")}</button>
+        </div>
       )}
-
-      <div className="cov-preview">
-        <Target size={14} />
-        <span>
-          {valid
-            ? (mode === "cities"
-                ? <strong>{cities.join(", ")}</strong>
-                : <strong>{cleanRadii.map((r) => `${r.miles} mi of ${r.zip}`).join(" · ")}</strong>)
-            : <em>{tt("No coverage set — you won't be matched to any jobs.")}</em>}
-        </span>
+      {converted && <p className="zipfill-ok" role="status">{tt("Turned into areas. Check each one and take out anything you don't cover.")}</p>}
+      <div className="crm-markets">
+        {edit && (
+          <div className="lc-form market-form" data-area-form>
+            <label className="fld">{tt("Area name")}<input value={edit.name} data-area-name placeholder="North Seattle"
+              onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
+            {taken.zips.size + taken.towns.size > 0 && (
+              <label className="appt-check market-skip" data-area-skip>
+                <input type="checkbox" checked={skipTaken} onChange={(e) => setSkipTaken(e.target.checked)} />
+                {tt("Leave out ZIPs and towns already in another area")}</label>
+            )}
+            <ZipFill edit={edit} setEdit={setEdit} skipTaken={skipTaken} taken={taken} areas />
+            <label className="fld">{tt("ZIP codes")} <span className="fld-note">{tt("separate with commas or spaces")}</span>
+              <textarea rows={2} value={edit.zips} data-area-zips placeholder="98101, 98102, 98103"
+                onBlur={typed.onBlur} onChange={(e) => setEdit({ ...edit, zips: e.target.value })} /></label>
+            {typed.note && <p className="zipfill-ok" role="status">{typed.note}</p>}
+            {overlap.length > 0 && (
+              <p className="appt-warn" role="note" data-area-overlap>{tt(overlap.length === 1 ? "{list} is also in {areas}." : "{list} are also in {areas}.",
+                { list: andList(overlap.slice(0, 5)) + (overlap.length > 5 ? ` +${overlap.length - 5}` : ""), areas: andList([...new Set(overlap.map((z) => taken.zips.get(z)))]) })}</p>
+            )}
+            <label className="fld">{tt("Towns")} <span className="fld-note">{tt("one per line, with the state")}</span>
+              <textarea rows={2} value={edit.cities} data-area-cities placeholder={"Seattle, WA\nShoreline, WA"}
+                onChange={(e) => setEdit({ ...edit, cities: e.target.value })} /></label>
+            {err && <p className="form-err" role="alert">{marketErrText(err)}</p>}
+            <div className="form-actions">
+              <button className="btn-ghost" onClick={() => { setEdit(null); setErr(null); }}>{tt("Cancel")}</button>
+              <button className="btn-solid" data-area-save disabled={busy} onClick={save}>{busy ? tt("Saving…") : edit.id ? tt("Save area") : tt("Add area")}</button>
+            </div>
+          </div>
+        )}
+        {!edit && err && <p className="form-err" role="alert">{marketErrText(err)}</p>}
+        {!areas.length && !edit && !legacy && (
+          <div className="cov-preview market-empty"><Target size={14} /><em>{tt("No work areas yet, so you won't be matched to any jobs. Add one.")}</em></div>
+        )}
+        {areas.length > 0 && (
+          <ul className="market-list">
+            {areas.map((a) => {
+              const towns = (a.cities || []).slice(0, 2).map((c) => `${c.city}, ${c.state}`).join(" · ")
+                + ((a.cities || []).length > 2 ? ` +${a.cities.length - 2} more` : "");
+              const where = [towns, a.zips.length ? `${a.zips.length} ${a.zips.length === 1 ? "ZIP" : "ZIPs"}` : ""].filter(Boolean).join(" · ");
+              return (
+                <li key={a.id} className="market-row" data-area={a.id}>
+                  <div className="market-main">
+                    <div className="market-name"><MapPin size={15} /><b>{a.name}</b></div>
+                    {where && <div className="market-where">{where}</div>}
+                  </div>
+                  <div className="market-acts">
+                    <button className="icon-btn" aria-label={`Edit ${a.name}`} title={tt("Edit")} data-area-edit
+                      onClick={() => { setErr(null); setSkipTaken(true); setEdit(areaToEdit(a)); }}><Pencil size={15} /></button>
+                    <button className="icon-btn" aria-label={`Delete ${a.name}`} title={tt("Delete")} data-area-delete onClick={() => setRemoving(a)}><Trash2 size={15} /></button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {!edit && (
+          <div className="panel-actions">
+            <span className="panel-count">{tt(areas.length === 1 ? "{n} area" : "{n} areas", { n: areas.length })}</span>
+            <button className="btn-solid" data-add-area disabled={areas.length >= MAX_WORK_AREAS}
+              onClick={() => { setErr(null); setSkipTaken(true); setEdit(areaBlank()); }}><Plus size={15} />{" "}{tt("Add an area")}</button>
+          </div>
+        )}
       </div>
-
-      <div className="panel-actions">
-        <span className="panel-count">
-          {mode === "cities"
-            ? tt(cities.length === 1 ? "{n} city" : "{n} cities", { n: cities.length })
-            : tt(cleanRadii.length === 1 ? "{n} radius area" : "{n} radius areas", { n: cleanRadii.length })}
-        </span>
-        {saved
-          ? <span className="saved-note"><CheckCircle2 size={14} />{" "}{tt("Saved")}</span>
-          : <button className="btn-solid" disabled={!valid}
-              onClick={() => {
-                onSave(mode === "cities"
-                  ? { mode: "cities", cities, radii: [] }
-                  : { mode: "radius", cities: [], radii: cleanRadii });
-                setSaved(true);
-              }}>
-              <Check size={15} />{" "}{tt("Save coverage")}
-            </button>}
-      </div>
+      {removing && (
+        <ConfirmRemove name={removing.name} what="area" verb="Delete"
+          consequence={tt("Jobs there won't be matched to you any more. With \"We sell in the same places we work\" on, its market goes too.")}
+          onConfirm={async () => { const ok = await commit(areas.filter((x) => x.id !== removing.id)); if (ok) setRemoving(null); }}
+          onCancel={() => setRemoving(null)} />
+      )}
     </div>
   );
 }
@@ -49158,7 +49222,13 @@ function SubDetail({ sub, invite, onInviteSent, jobs, brand, canManage, myName, 
 
       <section>
         <h4>Coverage</h4>
-        {covMode(sub.coverage) === "cities" ? (
+        {covMode(sub.coverage) === "areas" ? (
+          (sub.coverage.areas || []).length > 0
+            ? <div className="area-chips">{sub.coverage.areas.map((a) => (
+                <span key={a.id} className="area-chip" title={[...(a.cities || []).map((t) => `${t.city}, ${t.state}`), ...(a.zips || [])].join(", ")}>
+                  <MapPin size={11} /> {a.name} · {a.zips.length ? `${a.zips.length} ZIPs` : `${a.cities.length} towns`}</span>))}</div>
+            : <p className="muted">No areas set.</p>
+        ) : covMode(sub.coverage) === "cities" ? (
           (sub.coverage.cities || []).length > 0
             ? <div className="area-chips">{sub.coverage.cities.map((a) => <span key={a} className="area-chip"><MapPin size={11} /> {a}</span>)}</div>
             : <p className="muted">No cities set.</p>
