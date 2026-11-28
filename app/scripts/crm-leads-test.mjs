@@ -24,6 +24,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { signEstimateFor } from "./lib/signed-estimate.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { LEAD_STAGES, validLead, stageAfterAppointments, crmDashboard, sourceFromBooking, callerDashboard } from "../shared/leads.js";
 
@@ -160,12 +161,14 @@ try {
     // Reopened and sold.
     await call(env, `/api/appointments/${appts[1].id}`, { method: "PATCH", body: { status: "sat" }, who: "u_rep" });
     ck("a reopened visit is an opportunity again", db.prepare("SELECT stage FROM sales_leads").get().stage === "opportunity");
+    signEstimateFor(db, appts[1].id);
     await call(env, `/api/appointments/${appts[1].id}`, { method: "PATCH", body: { status: "sold" }, who: "u_rep" });
     ck("a sale is a customer", db.prepare("SELECT stage FROM sales_leads").get().stage === "customer");
 
     // Former customer who buys again.
     db.prepare("UPDATE sales_leads SET stage = 'former'").run();
     db.prepare("UPDATE sales_appointments SET status = 'sat' WHERE id = ?").run(appts[0].id);
+    signEstimateFor(db, appts[0].id);
     await call(env, `/api/appointments/${appts[0].id}`, { method: "PATCH", body: { status: "sold" }, who: "u_rep" });
     ck("a former customer who buys again is a customer", db.prepare("SELECT stage FROM sales_leads").get().stage === "customer");
   }
@@ -174,6 +177,10 @@ try {
   {
     const { db, env } = seed();
     const [, b] = await json(await call(env, "/api/appointments", { method: "POST", body: booking() }));
+    // 115. Sold is a signed estimate: the row as signing leaves it, with the
+    // lead left behind so the conversion is what moves it.
+    signEstimateFor(db, b.appointment.id);
+    db.prepare("UPDATE sales_appointments SET status = 'sold' WHERE id = ?").run(b.appointment.id);
     const [st] = await json(await call(env, "/api/jobs", { method: "POST", who: "u_admin",
       body: { title: "Roof for Dana", trades: ["roofing"], address: "1204 N Pine St", area: "Tacoma", zip: "98406",
         date: "2027-12-20", fromAppointment: b.appointment.id } }));

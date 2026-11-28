@@ -3160,3 +3160,14 @@ CREATE TABLE IF NOT EXISTS market_mirror (
   on_at       TEXT,
   updated_at  TEXT NOT NULL
 );
+
+-- The job a signed estimate became, when the estimate was written with no
+-- appointment to carry the link. One row per estimate: the key is what stops
+-- one sale becoming two jobs.
+CREATE TABLE IF NOT EXISTS estimate_jobs (
+  proposal_id TEXT PRIMARY KEY REFERENCES sales_proposals(id) ON DELETE CASCADE,
+  account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  job_id      TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL
+);
+

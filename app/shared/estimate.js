@@ -25,6 +25,8 @@
 // because a renamed table is a migration and a renamed link breaks every one
 // already in an inbox.
 
+import { serviceLabel, serviceTrade } from "./salesappt.js";
+
 const str = (v, max = 200) => String(v ?? "").trim().slice(0, max);
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const realDay = (d) => {
@@ -200,6 +202,57 @@ export function extrasText(x = {}) {
   return lines.length ? `\n\n${lines.join("\n")}` : "";
 }
 
+// THE JOB A SIGNED ESTIMATE BECOMES, seeded for the ordinary job form. What
+// the homeowner signed is what the crew is sent: the lines and the project
+// details are the scope, the target start is the date, and the services are
+// the trades. Somebody still reads it over before it is saved, which is why
+// it is a seed and not a job. The price and the margin are not in it: the
+// scope goes to a subcontractor, and what the homeowner pays is not theirs.
+export function jobSeedFromEstimate(e = {}, lead = {}, appt = null) {
+  const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ") || e.homeowner || "";
+  const services = (appt?.services?.length ? appt.services : lead.services) || [];
+  const addr = appt?.address?.street ? appt.address : lead.address || {};
+  const lines = (e.items || []).map((it) => `- ${it.label}${Number(it.qty) !== 1 ? ` (${it.qty})` : ""}`);
+  const details = (e.details || []).filter((d) => d.label && d.value).map((d) => `${d.label}: ${d.value}`);
+  const kind = projectTypeLabel(e.projectType);
+  return {
+    title: `${e.title || services.map(serviceLabel).join(" + ") || "Job"}${name ? ` — ${name}` : ""}`,
+    trades: [...new Set(services.map(serviceTrade).filter(Boolean))],
+    address: [addr.street, addr.city, addr.state].filter(Boolean).join(", "),
+    area: addr.city || "",
+    zip: addr.zip || "",
+    client: name,
+    date: e.targetStart || "",
+    scope: [`From the signed estimate ${estimateNumber(e.id)}${e.signedAt ? `, signed ${String(e.signedAt).slice(0, 10)}` : ""}.`,
+      ...(kind ? [`Project type: ${kind}`] : []), ...details,
+      ...(lines.length ? ["", "Work:", ...lines] : []),
+      ...(e.notes ? ["", `Notes: ${e.notes}`] : [])].join("\n").trim(),
+  };
+}
+
+// What a lead is waiting on to become a job, read off its appointments and
+// estimates. One answer for the lead's Overview, so the next press is named
+// once: book it, write the estimate, send it, get it signed, make the job.
+export function saleStep({ appointments = [], estimates = [] } = {}) {
+  const live = (estimates || []).filter((p) => !["void", "expired"].includes(p.status));
+  const signed = live.find((p) => p.status === "signed");
+  if (signed?.jobId) return { step: "job", estimate: signed, jobId: signed.jobId };
+  if (signed) return { step: "create_job", estimate: signed };
+  const out = live.find((p) => ["sent", "viewed"].includes(p.status));
+  if (out) return { step: "awaiting_signature", estimate: out };
+  const draft = live.find((p) => p.status === "draft");
+  if (draft) return { step: "send", estimate: draft };
+  const booked = (appointments || []).some((a) => !["cancelled", "no_show"].includes(a.status));
+  if (!booked) return { step: "book" };
+  return { step: "write", declined: live.some((p) => p.status === "declined") };
+}
+export const SALE_STEPS = [
+  { id: "book", label: "Appointment" },
+  { id: "write", label: "Estimate" },
+  { id: "awaiting_signature", label: "Signed" },
+  { id: "create_job", label: "Job" },
+];
+
 // A short number to say on the phone and print on the page.
 export const estimateNumber = (id) => `EST-${String(id || "").replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase()}`;
 
@@ -214,4 +267,7 @@ export const ESTIMATE_TEXT = {
   too_many_tasks: `An estimate holds up to ${MAX_TASKS} tasks.`,
   bad_cost: "The cost is a dollar amount, like 12500.",
   logo_not_uploaded: "That logo wasn't uploaded. Choose it again.",
+  estimate_not_signed: "A sale is a signed estimate. Send them the estimate, and it's marked sold when they sign.",
+  estimate_already_a_job: "That estimate is already a job.",
+  estimate_not_found: "That estimate isn't on this account any more.",
 };

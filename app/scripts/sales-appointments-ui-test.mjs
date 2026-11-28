@@ -59,7 +59,7 @@ const appt = (id, extra = {}) => ({
 const NOW = `${key(0)} 09:00:00`;
 let APPTS = [appt("ap_1", { consent: { email: false, phone: true, text: true, record: null }, createdAt: NOW }),
   appt("ap_x", { createdBy: "u_x", createdByName: "Xan Other", createdAt: NOW, homeowner: { firstName: "Xu", lastName: "Li", phone: "2535550109", email: "" } }),
-  appt("ap_sat", { status: "sat", date: key(-2), consent: { email: false, phone: false, text: false, record: false },
+  appt("ap_sat", { status: "sat", estimateSigned: false, date: key(-2), consent: { email: false, phone: false, text: false, record: false },
   homeowner: { firstName: "Hal", lastName: "Stone", phone: "2535550101", email: "" },
   services: ["roofing", "gutters"], details: { roofing: { material: "Asphalt shingle", age: "Over 20 years", leaks: "Yes", stories: "2" },
     gutters: { scope: "Whole home", stories: "2" } } })];
@@ -606,7 +606,21 @@ try {
     const d = await page.evaluate(() => ({ sets: [...document.querySelectorAll("[data-set]")].map((b) => b.dataset.set),
       convert: !!document.querySelector("[data-convert]") }));
     t.ck("the office may record the outcome", d.sets.includes("sold") && d.sets.includes("lost") && d.sets.includes("no_show"), JSON.stringify(d.sets));
-    t.ck("and turn it into a job", d.convert);
+    // 115. A sale is a signed estimate: with none signed, Sold is greyed and
+    // the panel points at the estimate instead of offering the job.
+    const gate = await page.evaluate(() => ({ sold: document.querySelector('[data-set="sold"]')?.disabled,
+      gate: !!document.querySelector("[data-sale-gate]"), go: !!document.querySelector("[data-open-estimates]") }));
+    t.ck("with no signed estimate, Sold is greyed and it points at the estimate", gate.sold === true && gate.gate && gate.go && !d.convert, JSON.stringify({ gate, d }));
+    // They sign it: the appointment now has a signed estimate behind it.
+    APPTS = APPTS.map((a) => a.id === "ap_sat" ? { ...a, estimateSigned: true } : a);
+    await setVal(page, "[data-outcome-note]", "Signed at the table.");
+    await wait(150);
+    await clickText(page, ".appt-note-save", /Save note/);
+    await wait(400);
+    t.ck("once it is signed, Sold can be pressed", await page.evaluate(() => document.querySelector('[data-set="sold"]')?.disabled === false && !document.querySelector("[data-sale-gate]")));
+    await click(page, '[data-set="sold"]');
+    for (let n = 0; n < 20; n++) { await wait(150); if (await page.$("[data-convert]")) break; }
+    t.ck("and turn it into a job", !!(await page.$("[data-convert]")));
     await click(page, "[data-convert]");
     for (let n = 0; n < 20; n++) { await wait(200); if (await page.$(".modal input")) break; }
     const form = await page.evaluate(() => {
@@ -670,7 +684,8 @@ try {
     await click(page, '[data-lead="ld_hal"]');
     await wait(300);
     const adm = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("[data-move]")].map((b) => [b.dataset.move, b.disabled])));
-    t.ck("the office may move a lead to any stage", adm.customer === false && adm.former === false && adm.lead === false, JSON.stringify(adm));
+    t.ck("the office may move a lead to any stage but Customer, which is a signed estimate", adm.customer === true && adm.former === false && adm.lead === false, JSON.stringify(adm));
+    t.ck("and says so on it", /sign an estimate/.test(await page.evaluate(() => document.querySelector('[data-move="customer"]')?.title || "")));
     await click(page, '[data-move="former"]');
     await wait(300);
     t.ck("and the move is saved", leadsPatched.some((x) => x.id === "ld_hal" && x.body.stage === "former"));

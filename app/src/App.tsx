@@ -146,7 +146,7 @@ import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { PROPOSAL_STATUSES, CLAIM_STATUSES, ROUTING_MODES, LEAD_FILE_KINDS, MAX_LEAD_FILES, MAX_IMPORT, IMPORT_FIELDS,
   COMMISSION_SOURCES, parseCsv as parseLeadCsv, guessMapping, importRow, duplicateGroups, bpsText, proposalPathToken, CRM_PLUS_TEXT } from "../shared/crmplus.js";
 import { LINE_CATEGORIES, lineCategory, PROJECT_TYPES, projectTypeLabel, PHASE_STATUSES, PHASE_STATUS_IDS, TASK_PRESETS,
-  presetDetails, presetPhases, categoryTotals, marginOf, marginText, estimateNumber } from "../shared/estimate.js";
+  presetDetails, presetPhases, categoryTotals, marginOf, marginText, estimateNumber, jobSeedFromEstimate, saleStep, SALE_STEPS } from "../shared/estimate.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
@@ -9005,6 +9005,9 @@ export default function SubSub() {
           onConvert={can("jobs") ? (a, after) => {
             const seed = jobSeedFromAppointment(a);
             setJobForm({ preset: seed, fromAppointment: a.id, afterAppointment: after });
+          } : null}
+          onConvertEstimate={can("jobs") ? (est, lead, appt, after) => {
+            setJobForm({ preset: jobSeedFromEstimate(est, lead, appt), fromEstimate: est.id, afterAppointment: after });
           } : null} />
       )}
 
@@ -9223,10 +9226,11 @@ export default function SubSub() {
           onSubmit={async (job) => {
             const ft = jobForm.fromThread;
             const fa = jobForm.fromAppointment;
-            const body = ft ? { ...job, fromThread: ft } : fa ? { ...job, fromAppointment: fa } : job;
+            const fe = jobForm.fromEstimate;
+            const body = ft ? { ...job, fromThread: ft } : fa ? { ...job, fromAppointment: fa } : fe ? { ...job, fromEstimate: fe } : job;
             const id = await createJob(body, jobForm.forSub, { stay: !!ft });
             if (ft) { refreshInbox(); setThreadNonce((n) => n + 1); }
-            if (fa && jobForm.afterAppointment) jobForm.afterAppointment();
+            if ((fa || fe) && jobForm.afterAppointment) jobForm.afterAppointment();
             return id;
           }}
           onCancel={() => setJobForm(null)} /></Modal>}
@@ -29950,6 +29954,7 @@ const apptRefusalText = (e) => {
   if (code === "sales_only") return "Only the office can record how the appointment went.";
   if (code === "outcome_recorded") return "This appointment already has an outcome, so only the office can change it.";
   if (code === "already_a_job") return "This appointment is already a job.";
+  if (code === "estimate_not_signed") return CRM_PLUS_TEXT.estimate_not_signed;
   if (code === "forbidden") return "You don't have access to do that.";
   if (code === "consent_needs_email") return "They agreed to email but there's no email address. Add one, or mark email No.";
   if (code === "consent_needs_phone") return "They agreed to calls or texts but there's no 10-digit number.";
@@ -30487,7 +30492,7 @@ function LeadStageChip({ stage }) {
   return <span className={`tn-chip lead-st lead-st-${stage}`} data-stage={stage}>{stageTerm(stage)}</span>;
 }
 
-function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onOpenJob, pane = "dashboard", onPane,
+function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert, onConvertEstimate = null, onOpenJob, pane = "dashboard", onPane,
   accountName = "", onUnread = null, subdomain = "", theme = null, meName = "", weather = null }) {
   // 110. Templates and sequences, for compose, a lead's sequence and Setup.
   const [lib, loadLib] = useCrmLibrary();
@@ -30841,6 +30846,12 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
             apptById={Object.fromEntries(list.map((a) => [a.id, a]))}
             onSaved={(l) => upsertLead({ ...currentLead, ...l })}
             onOpenAppt={(id) => setOpen(id)}
+            onOpenJob={onOpenJob ? (id) => { setOpenLead(null); onOpenJob(id); } : null}
+            onConvertEstimate={sales && onConvertEstimate ? (est, appt) => {
+              const l = currentLead;
+              setOpenLead(null);
+              onConvertEstimate(est, l, appt, () => { load(); loadLeads(); });
+            } : null}
             onBook={() => { setFlowLead(currentLead); setFlow("new"); }} />
         </Modal>
       )}
@@ -30854,6 +30865,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
           <AppointmentDetail a={current} reps={reps} team={team} sales={sales} onFollowUpsChanged={loadFollowUps}
             onEdit={() => setFlow(current)} onSaved={(a) => { upsert(a); loadLeads(); }} onClose={() => setOpen(null)}
             onConvert={sales && onConvert ? () => { setOpen(null); onConvert(current, () => { load(); loadLeads(); }); } : null}
+            onOpenEstimates={leadOf.get(current.id) ? () => { const l = leadOf.get(current.id); setOpen(null); setOpenLead(l.id); setLeadTab("proposals"); } : null}
             onOpenJob={onOpenJob} />
         </Modal>
       )}
@@ -31307,6 +31319,7 @@ function leadRefusalText(e) {
   if (code === "bad_phone") return "That phone number needs 10 digits.";
   if (code === "bad_email") return "That email address doesn't look right.";
   if (code === "lead_exists") return "Somebody with that phone number is already in your leads.";
+  if (code === "estimate_not_signed") return "A customer is somebody who signed an estimate. Send them one, and they become a customer when they sign.";
   if (code === "stage_sales_only") return "Only an admin or project manager can set that stage. Opportunity comes from booking an appointment.";
   if (code === "bad_owner") return "That person can't own leads here.";
   if (code === "migration_needed") return `Leads aren't set up on this database yet. Run migration ${e.body.migration || "107_crm_leads"}.`;
@@ -31420,8 +31433,82 @@ function LeadForm({ role, owners = [], existing = null, onSaved, onCancel, onOpe
 
 // One lead: who they are, their stage, their appointments, and the one press
 // that moves them forward -- booking an appointment.
-function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, accountName = "", startTab = "", startMode = "", onContacted, lib = null }) {
+// 115. A lead's estimates, held once for the Overview's next step and the
+// Estimates tab, so the two cannot disagree about where the sale stands.
+function useLeadEstimates(leadId) {
+  const [list, setList] = useState(null);
+  const [err, setErr] = useState(null);
+  const [migration, setMigration] = useState(null);
+  const load = useCallback(async () => {
+    try { const r = await api.leadProposals(leadId); setList(r.proposals); setMigration(r.extrasMigration || null); setErr(null); }
+    catch (e) { setErr(e); }
+  }, [leadId]);
+  useEffect(() => { load(); }, [load]);
+  return { list, setList, err, migration, load };
+}
+
+// 115. WHERE THE SALE STANDS, AND THE ONE PRESS THAT MOVES IT. Appointment,
+// estimate, signature, job: a sale is a signed estimate, so the job is made
+// from what the homeowner signed, and nothing before the signature is "sold".
+function SaleProgress({ lead, estimates, appts, sales, onBook, onWrite, onOpenEstimates, onConvert, onOpenJob }) {
+  if (!estimates.list) return null;
+  const st = saleStep({ appointments: appts, estimates: estimates.list });
+  const e = st.estimate;
+  const first = lead.firstName || tt("they");
+  const doneThrough = { book: -1, write: 0, send: 0, awaiting_signature: 1, create_job: 2, job: 3 }[st.step];
+  const expired = st.step === "awaiting_signature" && e?.expiresAt && String(e.expiresAt).slice(0, 10) < dayKey();
+  const appt = e?.appointmentId ? appts.find((a) => a.id === e.appointmentId)?.full || null : null;
+  return (
+    <section className="sale-prog" data-sale-progress={st.step}>
+      <ol className="sale-steps" aria-label={tt("Where the sale stands")}>
+        {SALE_STEPS.map((x, i) => (
+          <li key={x.id} className={i <= doneThrough ? "done" : i === doneThrough + 1 ? "now" : ""} data-sale-step={x.id}>
+            <span className="sale-dot">{i <= doneThrough ? <Check size={12} /> : i + 1}</span>{tt(x.label)}
+          </li>
+        ))}
+      </ol>
+      <div className="sale-next">
+        {st.step === "book" && (<>
+          <p><b>{tt("Book an appointment")}</b> {tt("The estimate is written once somebody has seen the job.")}</p>
+          <button className="btn-solid" data-sale-act="book" onClick={onBook}><PhoneCall size={15} />{" "}{tt("Book an appointment")}</button>
+        </>)}
+        {st.step === "write" && (<>
+          <p><b>{tt("Write the estimate")}</b> {st.declined ? tt("They declined the last one. A new estimate starts a new offer.") : tt("Price the work. They sign it from a link, and that is the sale.")}</p>
+          {sales ? <button className="btn-solid" data-sale-act="write" onClick={onWrite}><FileSignature size={15} />{" "}{tt("Write the estimate")}</button>
+            : <span className="note">{tt("A sales manager or the office writes it.")}</span>}
+        </>)}
+        {st.step === "send" && (<>
+          <p><b>{tt("Send the estimate")}</b> {tt("{title} is a draft. Nothing is sold until they sign it.", { title: e.title })}</p>
+          <button className="btn-solid" data-sale-act="send" onClick={onOpenEstimates}><Send size={15} />{" "}{tt("Review and send")}</button>
+        </>)}
+        {st.step === "awaiting_signature" && (<>
+          <p><b>{expired ? tt("The estimate expired") : tt("Waiting on {who} to sign", { who: first })}</b>{" "}
+            {expired ? tt("Write a new one, or send this one again with a new date.") : tt("When they sign, the appointment is marked sold and they become a customer.")}</p>
+          <div className="sale-acts">
+            {e.link && !expired && <a className="btn-solid" data-sale-act="sign-now" href={e.link} target="_blank" rel="noopener noreferrer"><FileSignature size={15} />{" "}{tt("Have them sign now")}</a>}
+            <button className="btn-ghost" data-sale-act="estimates" onClick={onOpenEstimates}>{tt("Open the estimate")}</button>
+          </div>
+          {!expired && <p className="note">{tt("Sitting with them? Have them sign now opens the signing page on this device.")}</p>}
+        </>)}
+        {st.step === "create_job" && (<>
+          <p><b>{tt("Sold")}</b> {tt("{who} signed {title} for {total}.", { who: e.signerName || first, title: e.title, total: centsText(e.totalCents) })}</p>
+          {onConvert ? <button className="btn-solid" data-sale-act="create-job" onClick={() => onConvert(e, appt)}><Briefcase size={15} />{" "}{tt("Create the job")}</button>
+            : <span className="note">{tt("The office creates the job from the signed estimate.")}</span>}
+        </>)}
+        {st.step === "job" && (<>
+          <p><b>{tt("It's a job")}</b> {tt("Made from the signed estimate {n}.", { n: e.number })}</p>
+          {onOpenJob && <button className="btn-ghost" data-sale-act="open-job" onClick={() => onOpenJob(st.jobId)}>{tt("Open the job")}</button>}
+        </>)}
+      </div>
+    </section>
+  );
+}
+
+function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, onOpenJob = null, onConvertEstimate = null, accountName = "", startTab = "", startMode = "", onContacted, lib = null }) {
   const sales = SALES_ROLES.includes(role);
+  const estimates = useLeadEstimates(lead.id);
+  const [tab, setTab] = useState(LEAD_TABS.some(([id]) => id === startTab) ? startTab : "overview");
+  const [writeNew, setWriteNew] = useState(0);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState(null);
@@ -31438,6 +31525,8 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
       onSaved={(l) => { onSaved(l); setEditing(false); }} />;
   }
   const appts = (lead.appointments || []).map((x) => ({ ...x, full: apptById[x.id] || null }));
+  // A customer has signed an estimate (or bought before that was the rule).
+  const hasSale = (estimates.list || []).some((p) => p.status === "signed") || appts.some((x) => x.status === "sold");
   return (
     <div className="lead-detail" data-lead-detail={lead.id}>
       <div className="lead-head">
@@ -31449,19 +31538,25 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         <button className="btn-ghost" onClick={() => setEditing(true)}><Pencil size={14} /> Edit</button>
       </div>
       <LeadArea zip={lead.address?.zip} city={lead.address?.city} state={lead.address?.state} services={lead.services || []} />
-      <LeadDetailTabs lead={lead} start={startTab} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib} apptById={apptById}
+      <LeadDetailTabs lead={lead} tab={tab} onTab={(t) => { setTab(t); if (t !== "proposals") setWriteNew(0); }} startMode={startMode} accountName={accountName} onContacted={onContacted} role={role} lib={lib} apptById={apptById}
+        estimates={estimates} writeNew={writeNew} onOpenJob={onOpenJob}
+        onConvert={onConvertEstimate}
         onConsent={(consent) => onSaved({ ...lead, consent })}>
+      <SaleProgress lead={lead} estimates={estimates} appts={appts} sales={sales} onBook={onBook}
+        onWrite={() => { setTab("proposals"); setWriteNew((n) => n + 1); }} onOpenEstimates={() => setTab("proposals")}
+        onConvert={onConvertEstimate} onOpenJob={onOpenJob} />
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>
         {LEAD_STAGES.map((stg) => (
           <button key={stg.id} type="button" data-move={stg.id} aria-pressed={lead.stage === stg.id}
             className={`lead-stage-btn ${lead.stage === stg.id ? "on" : ""}`}
-            disabled={lead.stage === stg.id || !mayPick(stg.id) || !!busy} onClick={() => move(stg.id)}
-            title={mayPick(stg.id) ? stg.means : stg.id === "opportunity" ? "Set by booking an appointment" : "The office sets this"}>
+            disabled={lead.stage === stg.id || !mayPick(stg.id) || !!busy || (stg.id === "customer" && !hasSale && lead.stage !== "former")} onClick={() => move(stg.id)}
+            title={stg.id === "customer" && !hasSale && lead.stage !== "former" ? "Set when they sign an estimate"
+              : mayPick(stg.id) ? stg.means : stg.id === "opportunity" ? "Set by booking an appointment" : "The office sets this"}>
             <b>{stg.term}</b><span>{stg.means}</span>
           </button>
         ))}
       </div>
-      {!sales && <p className="note">Booking an appointment makes them an opportunity. A sale makes them a customer.</p>}
+      <p className="note">{sales ? "Booking an appointment makes them an opportunity. Signing an estimate makes them a customer." : "Booking an appointment makes them an opportunity. A signed estimate makes them a customer."}</p>
       {err && <p className="form-err" role="alert">{leadRefusalText(err)}</p>}
       <dl className="lead-facts">
         <div><dt>Interested in</dt><dd>{lead.services.length ? lead.services.map(serviceLabel).join(", ") : "Not said yet"}</dd></div>
@@ -31499,8 +31594,8 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
 // 113. Proposals, the insurance claim and the files are tabs beside them.
 // 114. "Proposals" are Estimates on screen; the tab id keeps the old word.
 const LEAD_TABS = [["overview", "Overview"], ["contact", "Contact"], ["proposals", "Estimates"], ["claim", "Insurance claim"], ["files", "Files"]];
-function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onContacted, onConsent, children, role = "admin", lib = null, apptById = {} }) {
-  const [tab, setTab] = useState(LEAD_TABS.some(([id]) => id === start) ? start : "overview");
+function LeadDetailTabs({ lead, tab, onTab: setTab, startMode = "", accountName, onContacted, onConsent, children, role = "admin", lib = null, apptById = {},
+  estimates, writeNew = 0, onConvert = null, onOpenJob = null }) {
   return (<>
     <div className="seg-tabs lead-tabs" role="tablist">
       {LEAD_TABS.map(([id, label]) => (
@@ -31509,7 +31604,8 @@ function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onConta
     </div>
     {tab === "overview" ? children
       : tab === "contact" ? <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} startMode={startMode} />
-      : tab === "proposals" ? <LeadProposals lead={lead} role={role} apptById={apptById} onChanged={onContacted} accountName={accountName} />
+      : tab === "proposals" ? <LeadProposals lead={lead} role={role} apptById={apptById} onChanged={onContacted} accountName={accountName}
+          store={estimates} writeNew={writeNew} onConvert={onConvert} onOpenJob={onOpenJob} />
       : tab === "claim" ? <LeadClaim lead={lead} />
       : <LeadFiles lead={lead} />}
   </>);
@@ -33044,7 +33140,7 @@ function ProposalEditor({ lead, existing = null, appts = [], onSaved, onCancel, 
   const draft = {
     ...(existing || {}), status: existing?.status || "draft", title, notes, projectType, targetStart, details, schedule, tasks,
     number: existing?.number || estimateNumber("new"), homeowner: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
-    address: [lead.street, lead.city, lead.state].filter(Boolean).join(", "), services, rep: existing?.createdByName || rep,
+    address: [lead.address?.street, lead.address?.city, lead.address?.state].filter(Boolean).join(", "), services, rep: existing?.createdByName || rep,
     createdAt: existing?.createdAt || new Date().toISOString(),
     items: items.map((it) => ({ label: it.label, qty: it.qty, unitCents: dollarsToCents(it.unit) || 0, category: it.category })),
     totalCents: total, margin: marginOf(total, costCents ?? null), costCents,
@@ -33177,21 +33273,16 @@ function ProposalEditor({ lead, existing = null, appts = [], onSaved, onCancel, 
   );
 }
 
-function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "", meName = "" }) {
-  const [list, setList] = useState(null);
+function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "", meName = "", store, writeNew = 0, onConvert = null, onOpenJob = null }) {
+  const { list, setList, migration, load } = store;
   const [err, setErr] = useState(null);
-  const [editing, setEditing] = useState(null);
+  const [editing, setEditing] = useState(writeNew ? "new" : null);
   const [viewing, setViewing] = useState(null);
   const [busy, setBusy] = useState("");
   const [flash, setFlash] = useState("");
-  const [migration, setMigration] = useState(null);
   const logo = useEstimateLogo();
   const sales = SALES_ROLES.includes(role);
-  const load = async () => {
-    try { const r = await api.leadProposals(lead.id); setList(r.proposals); setMigration(r.extrasMigration || null); setErr(null); }
-    catch (e) { setErr(e); }
-  };
-  useEffect(() => { load(); }, [lead.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (writeNew) setEditing("new"); }, [writeNew]);
   const appts = (lead.appointments || []).map((a) => ({ ...a, ...(apptById[a.id] || {}) }));
   const replace = (p) => setList((xs) => xs.map((x) => (x.id === p.id ? p : x)));
   const act = async (p, what) => {
@@ -33212,13 +33303,13 @@ function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "",
     catch (e) { setErr(e); }
   };
   const docOf = (p) => ({ ...p, homeowner: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
-    address: [lead.street, lead.city, lead.state].filter(Boolean).join(", "), services: lead.services || [], rep: p.createdByName });
-  if (err && !list) return <p className="form-err" role="alert">{crmPlusErrText(err)} <button className="link-btn" onClick={load}>{tt("Try again")}</button></p>;
+    address: [lead.address?.street, lead.address?.city, lead.address?.state].filter(Boolean).join(", "), services: lead.services || [], rep: p.createdByName });
+  if (store.err && !list) return <p className="form-err" role="alert">{crmPlusErrText(store.err)} <button className="link-btn" onClick={load}>{tt("Try again")}</button></p>;
   if (!list) return <p className="note">{tt("Loading…")}</p>;
   return (
     <div className="lead-proposals" data-lead-proposals>
       <div className="est-list-head">
-        <p className="note">{tt("A priced estimate they open from a link and sign with their name. Signing marks the appointment sold.")}</p>
+        <p className="note">{tt("A priced estimate they open from a link and sign with their name. Signing is the sale: it marks the appointment sold, and the job is made from what they signed.")}</p>
         {sales && !editing && <button className="btn-solid" data-new-proposal onClick={() => setEditing("new")}><FileSignature size={15} />{" "}{tt("New estimate")}</button>}
       </div>
       {!sales && <p className="note">{tt("Estimates are written by a sales manager or the office.")}</p>}
@@ -33263,6 +33354,15 @@ function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "",
                 </div>
               )}
               {sales && p.status === "draft" && !lead.email && <p className="note">{CRM_PLUS_TEXT.needs_email}</p>}
+              {p.status === "signed" && (
+                <div className="est-sold" data-est-sold>
+                  <CheckCircle2 size={16} />
+                  {p.jobId ? <span>{tt("Sold, and it's a job now.")}</span> : <span>{tt("Sold. Create the job from what they signed.")}</span>}
+                  {p.jobId ? (onOpenJob && <button className="btn-ghost" data-est-open-job onClick={() => onOpenJob(p.jobId)}>{tt("Open the job")}</button>)
+                    : onConvert ? <button className="btn-solid" data-est-create-job onClick={() => onConvert(p, p.appointmentId ? apptById[p.appointmentId] || null : null)}><Briefcase size={14} />{" "}{tt("Create the job")}</button>
+                    : <span className="note">{tt("The office creates the job.")}</span>}
+                </div>
+              )}
             </li>
           );
         })}
@@ -34115,13 +34215,16 @@ function CrmHello({ name, weather, mineToday, owed, unread, caller, children }) 
   );
 }
 
-function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConvert, onOpenJob, onFollowUpsChanged }) {
+function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConvert, onOpenJob, onOpenEstimates = null, onFollowUpsChanged }) {
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [note, setNote] = useState(a.outcomeNote || "");
   const open = APPT_STATUSES[a.status]?.open;
   const mayEdit = !a.jobId && (sales || open);
   const choices = (sales ? Object.keys(APPT_STATUSES) : CALLCENTER_STATUSES).filter((s) => s !== a.status);
+  // A sale is a signed estimate: "Sold" is offered only once one is signed,
+  // because the route refuses it otherwise. Signing marks it sold by itself.
+  const needsSignature = a.estimateSigned === false && a.status !== "sold";
   // 110. Not sold asks why first; the reason goes with the status, in one save.
   const [askLost, setAskLost] = useState(false);
   const setStatus = async (status, lost = null) => {
@@ -34174,10 +34277,19 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
         <div className="appt-status-row" data-status-row>
           <span className="appt-q-label">{sales ? "Mark it" : "Update it"}</span>
           {choices.map((s) => (
-            <button key={s} type="button" className={`btn-ghost appt-set appt-set-${s}`} data-set={s} disabled={!!busy || (!sales && !open)}
+            <button key={s} type="button" className={`btn-ghost appt-set appt-set-${s}`} data-set={s}
+              disabled={!!busy || (!sales && !open) || (s === "sold" && needsSignature)}
+              title={s === "sold" && needsSignature ? "Marked sold when they sign the estimate" : ""}
               onClick={() => setStatus(s)}>{busy === s ? "Saving…" : APPT_STATUSES[s].label}</button>
           ))}
         </div>
+        {sales && needsSignature && !["lost", "no_show", "cancelled"].includes(a.status) && (
+          <div className="sale-gate" data-sale-gate>
+            <FileSignature size={16} />
+            <span>{tt("It's marked sold when they sign the estimate. Write it and send it from the lead's Estimates tab.")}</span>
+            {onOpenEstimates && <button className="btn-solid" data-open-estimates onClick={onOpenEstimates}>{tt("Go to the estimate")}</button>}
+          </div>
+        )}
         {askLost && <LostReasonPick busy={busy === "lost"} onCancel={() => setAskLost(false)}
           onSave={(reason, n) => setStatus("lost", { reason, note: n })} />}
         {!sales && !open && <p className="note">The outcome is recorded, so only the office can change it now.</p>}
@@ -34185,7 +34297,7 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
       {err && <p className="form-err" role="alert">{err}</p>}
       <div className="form-actions">
         {mayEdit && <button className="btn-ghost" data-edit onClick={onEdit}>Edit details</button>}
-        {sales && !a.jobId && onConvert && !["lost", "no_show", "cancelled"].includes(a.status) && (
+        {sales && !a.jobId && onConvert && a.status === "sold" && (
           <button className="btn-solid" data-convert onClick={onConvert}>Sold — create the job</button>
         )}
       </div>
@@ -58455,6 +58567,25 @@ button.job-insp:hover{border-color:#2f5577}
   .est-task-row > input[type=date],.est-task-row > input:nth-child(4){grid-column:2 / 3}}
 /* The list of estimates on a lead. */
 .est-list-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+/* 115. Where the sale stands: four steps and the one press that moves it. */
+.sale-prog{border:1px solid var(--line);border-radius:14px;background:var(--card);padding:14px 16px;margin:0 0 16px;display:flex;flex-direction:column;gap:12px}
+.sale-steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.sale-steps li{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;color:var(--ink-soft);min-width:0;padding:6px 8px;border-radius:9px;background:var(--paper)}
+.sale-steps li.done{color:var(--brand-ink,var(--ink));background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.sale-steps li.now{color:var(--ink);box-shadow:inset 0 0 0 2px var(--brand)}
+.sale-dot{flex:none;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:12px;background:var(--line);color:var(--ink)}
+.sale-steps li.done .sale-dot{background:var(--brand);color:#fff}
+.sale-next{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px}
+.sale-next>p{flex:1 1 280px;margin:0;font-size:14px;line-height:1.45}
+.sale-next>p b{display:block;font-size:15.5px;margin-bottom:2px}
+.sale-next>.note{flex:1 1 100%;margin:0}
+.sale-acts{display:flex;flex-wrap:wrap;gap:8px}
+.sale-acts a.btn-solid{text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.sale-gate,.est-sold{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;padding:10px 12px;border-radius:10px;margin:10px 0;font-size:13.5px}
+.sale-gate{background:color-mix(in srgb,var(--amber) 12%,transparent);border:1px solid color-mix(in srgb,var(--amber) 40%,transparent)}
+.est-sold{background:color-mix(in srgb,var(--brand) 10%,transparent);border:1px solid color-mix(in srgb,var(--brand) 35%,transparent)}
+.sale-gate span,.est-sold>span{flex:1 1 200px}
+@media (max-width:560px){.sale-steps{grid-template-columns:repeat(2,minmax(0,1fr))}.sale-next>.btn-solid,.sale-acts{width:100%}.sale-acts>*{flex:1 1 auto;justify-content:center}}
 .est-list-head .note{flex:1 1 260px;margin:0}
 .est-row .prop-row-main{gap:10px}
 .est-row-title{display:flex;flex-direction:column;min-width:0;flex:1 1 180px}

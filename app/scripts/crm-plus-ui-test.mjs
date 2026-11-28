@@ -47,7 +47,7 @@ const lead = (id, extra = {}) => ({ id, stage: "opportunity", firstName: "Dana",
   optOut: null, enrollment: null, tags: [], custom: {}, ...extra });
 const LEADS = [lead("ld_dana", { tags: ["Storm"] }), lead("ld_dup", { firstName: "Danielle", stage: "lead", appointments: [], email: "" }),
   lead("ld_ben", { firstName: "Ben", lastName: "Ode", phone: "2065550101", email: "ben@x.test", appointments: [], stage: "lead" })];
-const posts = { bulk: [], import: [], proposal: [], send: [], claim: [], settings: [], meta: [], sign: [] };
+const posts = { bulk: [], import: [], proposal: [], send: [], claim: [], settings: [], meta: [], sign: [], jobs: [] };
 let PROPS = [];
 let PUB = { account: { name: "Outerhome" }, homeowner: "Dana Ruiz", address: "1204 N Pine St, Tacoma, WA", title: "Roof replacement",
   items: [{ label: "Tear off and replace", qty: 1, unitCents: 1400000 }, { label: "Gutters", qty: 2, unitCents: 40000 }],
@@ -106,6 +106,7 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (path === "/api/account-users") return [200, [{ id: SEAT.userId, name: "Richard Braun", email: "rb@outerhome.test", phone: null,
     role: SEAT.role, subId: null, propertyIds: [], unit: null, hasLogin: true, inviteSentAt: null, hasAvatar: false }]];
   if (path === "/api/google-calendar") return [200, { configured: false }];
+  if (path === "/api/jobs" && method === "POST") { posts.jobs.push(body); return [201, { id: "j_new", requested: false, job: null, fromEstimate: { id: body.fromEstimate, linked: true } }]; }
   if (path.startsWith("/api/")) return [200, []];
   return undefined;
 } });
@@ -173,6 +174,9 @@ try {
   await wait(400);
   const tabs = await page.evaluate(() => [...document.querySelectorAll("[data-lead-tab]")].map((b) => b.dataset.leadTab));
   t.ck("a lead has Proposals, Insurance claim and Files tabs", ["proposals", "claim", "files"].every((x) => tabs.includes(x)), tabs.join(","));
+  // 115. Where the sale stands, on the Overview: booked, so the estimate is next.
+  t.ck("the Overview says the estimate is next", await page.evaluate(() => document.querySelector("[data-sale-progress]")?.dataset.saleProgress === "write"
+    && !!document.querySelector('[data-sale-act="write"]')));
   t.ck("and its Overview has its custom field", !!(await page.$('[data-custom-field="roof_age"]')));
   await setVal(page, "[data-tag-input]", "Hail");
   await wait(100);
@@ -231,6 +235,62 @@ try {
     link: document.querySelector(".prop-link code")?.innerText || "", flash: document.querySelector(".appt-flash")?.innerText || "" }));
   t.ck("emailing it says where it went and shows the link", posts.send.length === 1 && sent.st === "sent" && sent.link.includes(PTOKEN)
     && /Emailed to dana@home.test/.test(sent.flash), JSON.stringify(sent));
+  t.ck("a sent estimate offers no job yet", !(await page.$("[data-est-create-job]")));
+  await click(page, '[data-lead-tab="overview"]');
+  await wait(300);
+  const waiting = await page.evaluate(() => ({ step: document.querySelector("[data-sale-progress]")?.dataset.saleProgress,
+    sign: document.querySelector('[data-sale-act="sign-now"]')?.getAttribute("href") || "", job: !!document.querySelector('[data-sale-act="create-job"]'),
+    cust: document.querySelector('[data-move="customer"]')?.disabled }));
+  t.ck("then it waits on their signature, with a way to sign at the table, and no job and no Customer yet",
+    waiting.step === "awaiting_signature" && waiting.sign.includes(PTOKEN) && !waiting.job && waiting.cust === true, JSON.stringify(waiting));
+  // They sign. The lead opens again on the sale.
+  PROPS = [{ ...PROPS[0], status: "signed", signedAt: new Date().toISOString(), signerName: "Dana Ruiz" }];
+  await closeModal(page);
+  await click(page, '[data-lead="ld_dana"]');
+  await wait(500);
+  const sold = await page.evaluate(() => ({ step: document.querySelector("[data-sale-progress]")?.dataset.saleProgress,
+    text: document.querySelector("[data-sale-progress]")?.innerText || "", cust: document.querySelector('[data-move="customer"]')?.disabled }));
+  t.ck("once signed it reads Sold, names who signed, and offers the job", sold.step === "create_job" && /Dana Ruiz signed Roof replacement for \$14,800/.test(sold.text)
+    && sold.cust === false, JSON.stringify(sold));
+  await click(page, '[data-lead-tab="proposals"]');
+  await wait(300);
+  t.ck("the signed estimate offers Create the job too", !!(await page.$('[data-proposal="pr1"] [data-est-create-job]')));
+  await click(page, '[data-lead-tab="overview"]');
+  await wait(200);
+  await click(page, '[data-sale-act="create-job"]');
+  for (let n = 0; n < 20; n++) { await wait(200); if (await page.$(".modal input")) break; }
+  const jf = await page.evaluate(() => {
+    const val = (re) => { const l = [...document.querySelectorAll(".modal label")].find((x) => re.test(x.innerText || ""));
+      return l?.querySelector("input, textarea")?.value || ""; };
+    return { title: val(/^Job name/i), client: val(/Homeowner|client/i), zip: val(/^ZIP/i) };
+  });
+  t.ck("Create the job opens the job form from what they signed", /Roof replacement — Dana Ruiz/.test(jf.title) && /Dana Ruiz/.test(jf.client) && jf.zip === "98406", JSON.stringify(jf));
+  for (let n = 0; n < 8 && !posts.jobs.length; n++) {
+    await page.evaluate(() => {
+      const el = document.querySelector('.modal input[type="date"]');
+      if (el && !el.value) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, "2027-05-20"); el.dispatchEvent(new Event("input", { bubbles: true })); }
+    });
+    await wait(150);
+    const pressed = await page.evaluate(() => {
+      const bs = [...document.querySelectorAll(".modal .form-actions button, .modal button.btn-solid")];
+      const save = bs.find((b) => /^(Create job|Create|Save job)/i.test(b.innerText.trim()) && !b.disabled);
+      if (save) { save.click(); return "save"; }
+      const nx = bs.find((b) => /^Next/i.test(b.innerText.trim()) && !b.disabled);
+      if (nx) { nx.click(); return "next"; }
+      return "none";
+    });
+    await wait(400);
+    if (pressed === "none") break;
+  }
+  const jp = posts.jobs[0] || {};
+  t.ck("and saving it sends the estimate with the job, without its price", jp.fromEstimate === "pr1" && jp.trades?.join() === "roofing"
+    && /Tear off and replace/.test(jp.scope || "") && !/14,?000|\$/.test(jp.scope || ""), JSON.stringify(jp).slice(0, 300));
+  await closeModal(page);
+  if (!(await page.$("[data-crm-nav]"))) { await click(page, '[data-ws="crm"]'); await wait(300); }
+  await click(page, '[data-crm-nav="leads"]');
+  await wait(300);
+  await click(page, '[data-lead="ld_dana"]');
+  await wait(400);
   await click(page, '[data-lead-tab="claim"]');
   await wait(400);
   await setVal(page, "[data-claim-status]", "approved");

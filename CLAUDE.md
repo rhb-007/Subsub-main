@@ -17768,6 +17768,69 @@ refactor.
   `test:markettowns` (33) and `test:zipnearui` (30); mutations fire on the
   added-ZIP guard, the skip default and the mirror on save.
 
+- **A SALE IS A SIGNED ESTIMATE, AND THE LEAD SAYS WHAT IS NEXT.** Asked for
+  as *"incorporate the estimate into the lead details so that the lead can be
+  marked as sold and the job can be created, but the estimate needs to be
+  signed first."* Before this, an estimate and a sale were two separate
+  records. "Sold" was a button anybody on the sales side could press, a lead
+  could be set to Customer by hand, and "Sold, create the job" worked on an
+  appointment nobody had priced. The signature was one way among three, and
+  the job the office made did not come from what the homeowner agreed to.
+  - **The signature is the one door.** Signing already marks the appointment
+    sold and the lead a customer, and this makes the other doors agree with
+    it:
+    - `PATCH /api/appointments/:id` refuses `sold` with
+      `estimate_not_signed` unless there is a signed estimate for that
+      appointment, or one for the lead with no appointment named
+      (`signedEstimateForAppt`).
+    - The lead PATCH refuses Customer the same way (`leadHasSale`). A sale
+      recorded before this rule still counts, and a former customer may go
+      back to Customer.
+    - `POST /api/jobs` with `fromAppointment` now needs the appointment
+      **sold**. It used to accept any appointment that was not canceled,
+      lost or a no-show.
+    - A database without 113 holds no estimates, so nothing is refused
+      there.
+  - **A job is made from the signed estimate itself.** `fromEstimate` is
+    admin or pm only (`estimate_not_signed` for a draft, sent or declined one).
+    - When the estimate has an appointment, the job is linked through that
+      appointment as before.
+    - When it has none, the link is `estimate_jobs` (in migration 114, with
+      one row per estimate), so a second press answers
+      `estimate_already_a_job` with the job.
+    - The seed (`jobSeedFromEstimate`) carries the lines, the project details,
+      the target start as the date, the notes and the services as the trades.
+      It carries **no price**, because the scope goes to a subcontractor.
+  - **The lead's Overview leads with where the sale stands** (`SaleProgress`,
+    with `saleStep` in `shared/estimate.js` as the one rule): Appointment,
+    Estimate, Signed, Job, and one button for the next step.
+    - The buttons, in order: Book an appointment, Write the estimate, Review
+      and send, then while it is out **Have them sign now** (the signing page
+      on this device, for the kitchen table), then Create the job, then Open
+      the job.
+    - A sales manager sees *the office creates the job*, because the route
+      is admin or pm.
+    - The lead's estimates are fetched once for this panel and the Estimates
+      tab (`useLeadEstimates`), and each signed one there carries Create the
+      job or Open the job (`jobId` on the list).
+  - **The appointment window agrees with the route.** `/api/appointments` now
+    carries `estimateSigned`. Without one, Sold is greyed and a note points
+    at the lead's Estimates tab. "Sold, create the job" appears only on a sold
+    appointment. The Customer stage button on a lead is greyed with *Set when
+    they sign an estimate*.
+  - **Existing suites marked appointments sold by hand**, so
+    `scripts/lib/signed-estimate.mjs` writes the signed estimate signing
+    would have, and five suites call it first. One of them now asserts that
+    a sat visit with no estimate is refused before it is signed.
+  - **And one edit dropped the stage buttons' `onClick`**, so pressing a
+    stage did nothing, and only the browser suite saw it. The handler is back
+    and `test:salesapptui` presses it.
+  - `test:salesign` (26), `test:crmplusui` (45) and `test:salesapptui` (112).
+    Mutations fire on the sold gate, the job's sold check, the Customer gate
+    and the Create the job button. **Paste 114 again** if it was pasted
+    before this: `estimate_jobs` was added to it, and every statement is
+    `IF NOT EXISTS`.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

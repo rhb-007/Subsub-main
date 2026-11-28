@@ -382,7 +382,8 @@ WITH spec(j) AS (SELECT
   -- kept in step with Where you work.
   ',["m114_sales_estimate_extras","col","sales_estimate_extras",["proposal_id","account_id","project_type","target_start","details","schedule","tasks","cost_cents","show_logo","updated_at"]]' ||
   ',["m114_estimate_branding","col","estimate_branding",["account_id","logo_key","updated_at"]]' ||
-  ',["m114_market_mirror","col","market_mirror",["account_id","market_id","on_at","updated_at"]]')) ||
+  ',["m114_market_mirror","col","market_mirror",["account_id","market_id","on_at","updated_at"]]' ||
+  ',["m114_estimate_jobs","col","estimate_jobs",["proposal_id","account_id","job_id","created_at"]]')) ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),

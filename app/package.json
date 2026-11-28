@@ -366,7 +366,8 @@
     "test:zipnear": "node --no-warnings scripts/zip-near-test.mjs",
     "test:zipnearui": "node --no-warnings scripts/zip-near-ui-test.mjs",
     "test:markettowns": "node --no-warnings scripts/market-towns-test.mjs",
-    "zips": "node scripts/build-zip-centroids.mjs && node scripts/build-zip-cities.mjs"
+    "zips": "node scripts/build-zip-centroids.mjs && node scripts/build-zip-cities.mjs",
+    "test:salesign": "node --no-warnings scripts/sale-sign-test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",

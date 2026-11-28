@@ -27,6 +27,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, makeR2, freshDb } from "./lib/d1-sqlite.mjs";
+import { signEstimateFor } from "./lib/signed-estimate.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { salesReport, validDeal, dollarsToCents, optOutBlock, validSequence, fillTemplate, sequenceStop,
   unknownVars, unsubscribePathToken } from "../shared/crmsales.js";
@@ -148,6 +149,7 @@ try {
   [st, b] = await json(await call(env, `/api/appointments/${appt}`, { method: "PATCH", who: "u_sm",
     body: { status: "lost", deal: { lostReason: "competitor", lostNote: "Went with ABC Roofing" } } }));
   ck("marked not sold, with why", st === 200 && b.appointment.deal?.lostReason === "competitor" && b.appointment.deal.amountCents === 1845000, JSON.stringify(b.appointment?.deal));
+  signEstimateFor(db, appt);
   [st, b] = await json(await call(env, `/api/appointments/${appt}`, { method: "PATCH", who: "u_sm", body: { status: "sold" } }));
   ck("and marked sold after, the lost reason goes", st === 200 && b.appointment.deal?.lostReason === null && b.appointment.deal.amountCents === 1845000, JSON.stringify(b.appointment?.deal));
   [st, b] = await json(await call(env, `/api/appointments/${appt}`, { method: "PATCH", who: "u_sm", body: { deal: { amount: "nope" } } }));

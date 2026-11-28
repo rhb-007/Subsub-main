@@ -10575,7 +10575,7 @@ export function missingSchema(err) {
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
   if (/\bsales_markets\b/i.test(m)) return "112_markets";
-  if (/\b(sales_estimate_extras|estimate_branding|market_mirror)\b/i.test(m)) return "114_estimates_mirror";
+  if (/\b(sales_estimate_extras|estimate_branding|market_mirror|estimate_jobs)\b/i.test(m)) return "114_estimates_mirror";
   if (/\b(sales_proposals|lead_claims|crm_settings|lead_meta|crm_views|lead_files|crm_aftercare|crm_commissions)\b/i.test(m)) return "113_crm_plus";
   if (/\blead_followups\b|crm_templates has no column named channel/i.test(m)) return "111_crm_channels";
   if (/\b(sales_deals|lead_opt_outs|lead_unsub_tokens|crm_templates|crm_sequences|crm_enrollments)\b/i.test(m)) return "110_crm_selling";
@@ -11769,6 +11769,36 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
     if (["cancelled", "no_show", "lost"].includes(fromAppt.status)) {
       return c.json({ error: "appointment_not_sold", status: fromAppt.status }, 409);
     }
+    // A sale is a signed estimate. Signing marks the appointment sold, so a
+    // job is made from a sold one; anything else is waiting on a signature.
+    if (fromAppt.status !== "sold") return c.json({ error: "estimate_not_signed" }, 409);
+  }
+  // The signed estimate itself, from the lead. It carries its appointment's
+  // link along when it has one, and its own (114) when it does not.
+  let fromEst = null;
+  if (b.fromEstimate && !fromAppt) {
+    if (!["admin", "pm"].includes(auth.role)) return c.json({ error: "forbidden" }, 403);
+    try {
+      fromEst = await c.env.DB.prepare(`SELECT id, status, appointment_id, lead_id, title FROM sales_proposals WHERE id = ? AND account_id = ?`)
+        .bind(String(b.fromEstimate), accountId).first();
+    } catch (err) {
+      if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "113_crm_plus" }, 503);
+      throw err;
+    }
+    if (!fromEst) return c.json({ error: "estimate_not_found" }, 404);
+    if (fromEst.status !== "signed") return c.json({ error: "estimate_not_signed", status: fromEst.status }, 409);
+    let ownJob = null, ownReady = true;
+    try { ownJob = (await c.env.DB.prepare(`SELECT job_id FROM estimate_jobs WHERE proposal_id = ?`).bind(fromEst.id).first())?.job_id || null; }
+    catch (err) { if (!missingSchema(err)) throw err; ownReady = false; }
+    if (ownJob) return c.json({ error: "estimate_already_a_job", jobId: ownJob }, 409);
+    if (fromEst.appointment_id) {
+      fromAppt = await c.env.DB.prepare(
+        `SELECT id, job_id, status, first_name, last_name, rep_user_id FROM sales_appointments WHERE id = ? AND account_id = ?`)
+        .bind(fromEst.appointment_id, accountId).first();
+      if (fromAppt?.job_id) return c.json({ error: "estimate_already_a_job", jobId: fromAppt.job_id }, 409);
+    } else if (!ownReady) {
+      return c.json({ error: "migration_needed", migration: "114_estimates_mirror" }, 503);
+    }
   }
 
   const cols = ["id", "account_id", "title", "client", "address", "area", "zip", "sqft", "stories",
@@ -11918,6 +11948,23 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
       `Turned the sold estimate for ${fromAppt.first_name} ${fromAppt.last_name} into job ${b.title}`, { appointmentId: fromAppt.id, jobId: id });
   }
 
+  let estimateLinked = null;
+  if (fromEst) {
+    try {
+      const r = await c.env.DB.prepare(`INSERT OR IGNORE INTO estimate_jobs (proposal_id, account_id, job_id, created_at) VALUES (?, ?, ?, ?)`)
+        .bind(fromEst.id, accountId, id, new Date().toISOString()).run();
+      estimateLinked = { id: fromEst.id, linked: (r.meta?.changes ?? 1) > 0 };
+    } catch (err) {
+      if (!missingSchema(err)) throw err;
+      estimateLinked = { id: fromEst.id, linked: !!appointmentLinked?.linked, migration: "114_estimates_mirror" };
+    }
+    if (!fromEst.appointment_id) {
+      await syncLeadStage(c.env, accountId, fromEst.lead_id, userId, { sale: true });
+      await logActivity(c.env, accountId, userId, "estimate_converted", `Turned the signed estimate ${fromEst.title} into job ${b.title}`,
+        { leadId: fromEst.lead_id, jobId: id });
+    }
+  }
+
   const saved = await c.env.DB.prepare(`SELECT * FROM jobs WHERE id = ?`).bind(id).first();
   const wos = saved ? (await c.env.DB.prepare(
     `SELECT wo.*, c.company AS company_name FROM work_orders wo LEFT JOIN companies c ON c.id = wo.company_id
@@ -11925,6 +11972,7 @@ app.post("/api/jobs", requireRole("admin", "pm", "owner", "tenant"), async (c) =
   const savedSpans = saved ? (await spansForJobs(c.env, [id]))[id] || {} : {};
   return c.json({ id, requested: !!requestedBy, severity, ...(fromThread ? { fromThread } : {}),
     ...(appointmentLinked ? { fromAppointment: appointmentLinked } : {}),
+    ...(estimateLinked ? { fromEstimate: estimateLinked } : {}),
     emergency, job: saved ? { ...jobRowToJs(saved, wos), spans: savedSpans } : null,
     ...(spansSaved ? { spansSaved } : {}) }, 201);
 });
@@ -27665,7 +27713,11 @@ app.get("/api/appointments", requireRole(...BOOKING_ROLES), async (c) => {
     const consents = await apptConsents(c.env, acct.id);
     // 110. What each estimate is worth, and why a lost one was lost.
     const deals = await apptDeals(c.env, acct.id);
-    return c.json({ appointments: (results || []).map((r) => ({ ...withConsent(apptRowToJs(r), consents), deal: deals?.get(r.id) || null })),
+    // Which have a signed estimate behind them, so the screen offers "sold"
+    // only where the route would take it.
+    const signed = await signedApptSet(c.env, acct.id);
+    return c.json({ appointments: (results || []).map((r) => ({ ...withConsent(apptRowToJs(r), consents), deal: deals?.get(r.id) || null,
+      estimateSigned: signed ? signed.has(r.id) : true })),
       reps: await apptReps(c.env, acct.id), team: await crmTeam(c.env, acct.id), crmReady: consents !== null, dealsReady: deals !== null });
   });
 });
@@ -27789,6 +27841,10 @@ app.patch("/api/appointments/:id", requireRole(...BOOKING_ROLES), async (c) => {
     if (b.status !== undefined && b.status !== cur.status) {
       if (!APPT_STATUSES[b.status]) return c.json({ error: "bad_status" }, 400);
       if (!sales && !CALLCENTER_STATUSES.includes(b.status)) return c.json({ error: "sales_only", status: b.status }, 403);
+      // A sale is a signed estimate: "sold" by hand needs one behind it.
+      if (b.status === "sold" && !(await signedEstimateForAppt(c.env, acct.id, cur.id))) {
+        return c.json({ error: "estimate_not_signed" }, 409);
+      }
       status = b.status;
     }
     // Details, if any were sent: the whole booking is checked again, merged
@@ -27932,6 +27988,74 @@ async function findLead(env, accountId, { phone, email }) {
 
 // Moves a lead to the stage its appointments now say. `sale` is a sale that
 // just happened, which makes even a former customer a customer again.
+// A SALE IS A SIGNED ESTIMATE. Nothing marks an appointment sold, makes a
+// lead a customer or turns a sale into a job until the homeowner has signed
+// one: the signature is what says they bought it. Signing is the one door
+// (it marks the appointment sold itself); recording "sold" by hand is
+// refused without one, so a sale on the record always has a price somebody
+// agreed to behind it.
+//
+// An estimate counts for an appointment when it was written for it, or was
+// written for the lead with no appointment named. A database without 113
+// cannot hold an estimate at all, so it is not refused for want of one.
+async function signedEstimateForAppt(env, accountId, apptId) {
+  try {
+    const r = await env.DB.prepare(`SELECT p.id, p.total_cents FROM sales_proposals p
+      WHERE p.account_id = ? AND p.status = 'signed' AND (p.appointment_id = ? OR (p.appointment_id IS NULL AND p.lead_id IN
+        (SELECT k.lead_id FROM sales_lead_links k WHERE k.appointment_id = ?)))
+      ORDER BY p.signed_at DESC LIMIT 1`).bind(accountId, apptId, apptId).first();
+    return r || null;
+  } catch (err) { if (missingSchema(err)) return { schema: false }; throw err; }
+}
+// Every appointment on the account with a signed estimate behind it, by the
+// rule above, in two queries. Null on a database without 113 (nothing refused).
+async function signedApptSet(env, accountId) {
+  let rows;
+  try {
+    rows = (await env.DB.prepare(`SELECT appointment_id, lead_id FROM sales_proposals WHERE account_id = ? AND status = 'signed'`)
+      .bind(accountId).all()).results || [];
+  } catch (err) { if (missingSchema(err)) return null; throw err; }
+  const out = new Set(rows.filter((r) => r.appointment_id).map((r) => r.appointment_id));
+  const leads = new Set(rows.filter((r) => !r.appointment_id).map((r) => r.lead_id));
+  if (leads.size) {
+    const { results } = await env.DB.prepare(`SELECT appointment_id, lead_id FROM sales_lead_links WHERE account_id = ?`).bind(accountId).all();
+    for (const k of results || []) if (leads.has(k.lead_id)) out.add(k.appointment_id);
+  }
+  return out;
+}
+// Whether a lead has bought: a signed estimate, or a sale recorded before
+// estimates had to be signed (a sold appointment, or one that is a job).
+async function leadHasSale(env, accountId, leadId) {
+  try {
+    const p = await env.DB.prepare(`SELECT 1 FROM sales_proposals WHERE account_id = ? AND lead_id = ? AND status = 'signed' LIMIT 1`)
+      .bind(accountId, leadId).first();
+    if (p) return true;
+  } catch (err) { if (!missingSchema(err)) throw err; return true; }
+  const a = await env.DB.prepare(`SELECT 1 FROM sales_lead_links k JOIN sales_appointments a ON a.id = k.appointment_id
+    WHERE k.lead_id = ? AND k.account_id = ? AND (a.status = 'sold' OR a.job_id IS NOT NULL) LIMIT 1`).bind(leadId, accountId).first();
+  return !!a;
+}
+// The job each estimate became: its own link (114), else its appointment's.
+async function estimateJobs(env, rows) {
+  const map = new Map();
+  const ids = rows.map((r) => r.id);
+  if (ids.length) {
+    try {
+      const { results } = await env.DB.prepare(`SELECT proposal_id, job_id FROM estimate_jobs WHERE proposal_id IN (${ids.map(() => "?").join(",")})`)
+        .bind(...ids).all();
+      for (const r of results || []) map.set(r.proposal_id, r.job_id);
+    } catch (err) { if (!missingSchema(err)) throw err; }
+  }
+  const appts = [...new Set(rows.filter((r) => r.appointment_id && !map.has(r.id)).map((r) => r.appointment_id))];
+  if (appts.length) {
+    const { results } = await env.DB.prepare(`SELECT id, job_id FROM sales_appointments WHERE id IN (${appts.map(() => "?").join(",")}) AND job_id IS NOT NULL`)
+      .bind(...appts).all();
+    const byAppt = new Map((results || []).map((r) => [r.id, r.job_id]));
+    for (const r of rows) if (!map.has(r.id) && r.status === "signed" && byAppt.has(r.appointment_id)) map.set(r.id, byAppt.get(r.appointment_id));
+  }
+  return map;
+}
+
 async function syncLeadStage(env, accountId, leadId, userId, { sale = false } = {}) {
   const lead = await env.DB.prepare(`SELECT id, stage FROM sales_leads WHERE id = ? AND account_id = ?`).bind(leadId, accountId).first();
   if (!lead) return null;
@@ -28360,6 +28484,11 @@ app.patch("/api/sales-leads/:id", requireRole(...BOOKING_ROLES), async (c) => {
     const chk = validLead(merged, { role, current: cur.stage });
     if (!chk.ok) return leadRefusal(c, chk);
     const v = chk.value;
+    // A customer has bought, and buying is a signed estimate. A former
+    // customer coming back has bought before, so that move is not refused.
+    if (v.stage === "customer" && !["customer", "former"].includes(cur.stage) && !(await leadHasSale(c.env, acct.id, cur.id))) {
+      return c.json({ error: "estimate_not_signed", field: "stage" }, 409);
+    }
     if (role === "callcenter" || role === "sales") v.ownerId = cur.ownerId;
     if (v.ownerId && v.ownerId !== cur.ownerId && !(await apptReps(c.env, acct.id)).some((r) => r.id === v.ownerId)) {
       return c.json({ error: "bad_owner", field: "ownerId" }, 400);
@@ -30221,7 +30350,8 @@ app.get("/api/sales-leads/:id/proposals", requireRole(...BOOKING_ROLES), async (
     const { results } = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.lead_id = ? AND p.account_id = ? ORDER BY p.created_at DESC`)
       .bind(row.id, acct.id).all();
     const ex = await estimateExtras(c.env, (results || []).map((r) => r.id));
-    return c.json({ proposals: (results || []).map((r) => estimateToJs(r, ex.map.get(r.id))),
+    const jobsOf = await estimateJobs(c.env, results || []);
+    return c.json({ proposals: (results || []).map((r) => ({ ...estimateToJs(r, ex.map.get(r.id)), jobId: jobsOf.get(r.id) || null })),
       ...(ex.ready ? {} : { extrasMigration: "114_estimates_mirror" }) });
   });
 });

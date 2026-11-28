@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, makeR2, freshDb } from "./lib/d1-sqlite.mjs";
+import { signEstimateFor } from "./lib/signed-estimate.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { validLeadMessage, leadConsentFrom, channelBlock, smsHref, inboxCounts, leadTokenFromAddress,
   leadReplyAddress, messageStatusText } from "../shared/leadcontact.js";
@@ -136,6 +137,7 @@ try {
   ck("the office sees both", b.appointments.length === 2);
   [st] = await json(await call(env, `/api/appointments/${apptTia}`, { method: "PATCH", who: "u_sm", body: { status: "confirmed" } }));
   ck("somebody else's estimate answers like one that does not exist", st === 404);
+  signEstimateFor(db, apptSam);
   [st, b] = await json(await call(env, `/api/appointments/${apptSam}`, { method: "PATCH", who: "u_sm", body: { status: "sold" } }));
   ck("they record the outcome of their own", st === 200 && b.appointment.status === "sold", JSON.stringify(b));
   [st] = await json(await call(env, `/api/appointments/${apptSam}`, { method: "PATCH", who: "u_sm", body: { repId: "u_sm2" } }));

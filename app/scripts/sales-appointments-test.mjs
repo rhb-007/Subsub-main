@@ -27,6 +27,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { signEstimateFor } from "./lib/signed-estimate.mjs";
 import { validAppointment, repClashes, jobSeedFromAppointment, SERVICES, SERVICE_QUESTIONS,
   apptWhenText } from "../shared/salesappt.js";
 
@@ -205,6 +206,12 @@ try {
     const [cc1, cv1] = await json(await call(env, "/api/jobs", { method: "POST", who: "u_cc",
       body: { ...seedJob, fromAppointment: id } }));
     ck("the call center cannot make the job", cc1 === 403, String(cc1));
+    // 115. A sale is a signed estimate: a visit that ran is not one yet.
+    const [ns0, nsb0] = await json(await call(env, "/api/jobs", { method: "POST", who: "u_admin", body: { ...seedJob, date: DAY, fromAppointment: id } }));
+    ck("a visit with no signed estimate is not made a job", ns0 === 409 && nsb0.error === "estimate_not_signed", JSON.stringify(nsb0));
+    signEstimateFor(db, id);
+    const [sd, sdb] = await json(await call(env, `/api/appointments/${id}`, { method: "PATCH", who: "u_rep", body: { status: "sold" } }));
+    ck("with one signed it is marked sold", sd === 200 && sdb.appointment?.status === "sold", JSON.stringify(sdb).slice(0, 160));
     const [j1, jb] = await json(await call(env, "/api/jobs", { method: "POST", who: "u_admin",
       body: { ...seedJob, date: DAY, fromAppointment: id } }));
     ck("an admin turns it into a job", j1 === 201 && jb.id && jb.fromAppointment?.linked === true, JSON.stringify({ j1, jb: jb.fromAppointment, e: jb.error }));

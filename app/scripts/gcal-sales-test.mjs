@@ -26,6 +26,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { makeD1, freshDb } from "./lib/d1-sqlite.mjs";
+import { signEstimateFor } from "./lib/signed-estimate.mjs";
 import { runCheck } from "./lib/check-sql.mjs";
 import { salesEventFor, salesOnCalendar, plusMinutes, wallToUtc, GCAL_REQUIRED_SCOPES,
   GCAL_SALES_CALENDAR_NAME } from "../shared/gcal.js";
@@ -248,6 +249,7 @@ try {
     ck("reassigned: off the old sales manager's calendar", s3 === 200 && !evFor(salesCal("rep"), "a1"), `${s3} ${JSON.stringify(b3x)}`);
     ck("and onto the new one's, whose SubSub Sales calendar is made for it", !!salesCal("admin") && !!evFor(salesCal("admin"), "a1"));
 
+    signEstimateFor(DB, "a1");
     await call("admin", `/api/appointments/a1`, { method: "PATCH", body: { status: "sold" } });
     await settle();
     ck("an outcome shows in the title", / \(sold\)$/.test(evFor(salesCal("admin"), "a1")?.summary || ""), evFor(salesCal("admin"), "a1")?.summary);
