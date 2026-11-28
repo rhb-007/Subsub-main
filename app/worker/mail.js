@@ -1660,27 +1660,28 @@ ${link}`;
   return { subject: `New website lead: ${who || "a homeowner"}`, text, html: textToHtml(text, link) };
 }
 
-// 113. A proposal the homeowner opens and signs from a link.
+// 113. An estimate (called a proposal before 114) the homeowner opens and
+// signs from a link. The keys keep the old word; the words say estimate.
 function proposalSentEmailRaw({ firstName, account, title, total, link, expires, senderName }) {
   const text = `Hi ${firstName || "there"},
 
-Here is your proposal from ${account?.name || "us"}: ${title}, ${total}.
+Here is your estimate from ${account?.name || "us"}: ${title}, ${total}.
 
-Read it and sign it here:
+Look it over and sign it here:
 ${link}
 ${expires ? `\nIt's good until ${expires}.` : ""}
 Questions? Just reply or give us a call.
 
 ${senderName ? `${senderName}\n` : ""}The ${account?.name || "team"} team`;
-  return { subject: `Your proposal from ${account?.name || "us"}: ${title}`, text, html: textToHtml(text, link) };
+  return { subject: `Your estimate from ${account?.name || "us"}: ${title}`, text, html: textToHtml(text, link) };
 }
 
 function proposalSignedEmailRaw({ firstName, who, title, total, signer, link }) {
   const text = `Hi ${firstName || "there"},
 
-${who || "A homeowner"} signed your proposal: ${title}, ${total}. Signed as ${signer}.
+${who || "A homeowner"} signed your estimate: ${title}, ${total}. Signed as ${signer}.
 
-The estimate is marked sold. Open it to make the job:
+The appointment is marked sold. Open it to make the job:
 ${link}`;
   return { subject: `Signed: ${who || "a homeowner"}, ${total}`, text, html: textToHtml(text, link) };
 }
@@ -1688,7 +1689,7 @@ ${link}`;
 function proposalDeclinedEmailRaw({ firstName, who, title, note, link }) {
   const text = `Hi ${firstName || "there"},
 
-${who || "A homeowner"} declined your proposal: ${title}.${note ? `\n\n"${String(note).slice(0, 300)}"` : ""}
+${who || "A homeowner"} declined your estimate: ${title}.${note ? `\n\n"${String(note).slice(0, 300)}"` : ""}
 
 Open them here:
 ${link}`;

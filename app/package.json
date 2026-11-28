@@ -364,7 +364,8 @@
     "test:jobrange": "node --no-warnings scripts/job-range-ui-test.mjs",
     "test:zipnear": "node --no-warnings scripts/zip-near-test.mjs",
     "test:zipnearui": "node --no-warnings scripts/zip-near-ui-test.mjs",
-    "zips": "node scripts/build-zip-centroids.mjs"
+    "test:markettowns": "node --no-warnings scripts/market-towns-test.mjs",
+    "zips": "node scripts/build-zip-centroids.mjs && node scripts/build-zip-cities.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
@@ -392,6 +393,7 @@
     "puppeteer-core": "^25.11.0",
     "us-zips": "2022.9.1",
     "vite": "^5.4.11",
-    "wrangler": "^4.1.0"
+    "wrangler": "^4.1.0",
+    "zipcodes": "8.0.0"
   }
 }

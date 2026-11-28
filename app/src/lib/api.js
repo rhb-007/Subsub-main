@@ -399,10 +399,12 @@ export const api = {
   // 107. CRM leads.
   // 112. Markets, and the weather where a homeowner is.
   listMarkets: () => request("/markets"),
+  setMarketMirror: (on) => request("/markets/mirror", { method: "PUT", body: JSON.stringify({ on }) }),
   createMarket: (body) => request("/markets", { method: "POST", body: JSON.stringify(body) }),
   patchMarket: (id, body) => request(`/markets/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   deleteMarket: (id) => request(`/markets/${id}`, { method: "DELETE" }),
   zipsNear: (center, miles) => request(`/markets/zips-near?center=${encodeURIComponent(center)}&miles=${encodeURIComponent(miles)}`),
+  zipTowns: (zips) => request(`/markets/zip-towns?zips=${encodeURIComponent(zips.join(","))}`),
   crmWeather: ({ zip = "", city = "", state = "" } = {}) =>
     request(`/crm-weather?zip=${encodeURIComponent(zip)}&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}`),
   listLeads: () => request("/sales-leads"),
@@ -447,6 +449,11 @@ export const api = {
     const blob = await res.blob();
     return { url: URL.createObjectURL(blob), type: blob.type || "" };
   },
+  estimateBranding: () => request("/estimate-branding"),
+  setEstimateBranding: (body) => request("/estimate-branding", { method: "PUT", body: JSON.stringify(body) }),
+  // Not shrunk: shrinking writes a JPEG, and a logo is very often a PNG with a
+  // transparent background that a JPEG would fill in white.
+  uploadEstimateLogo: (file) => uploadFile("estimate-logo", file),
   leadProposals: (id) => request(`/sales-leads/${encodeURIComponent(id)}/proposals`),
   createProposal: (id, body) => request(`/sales-leads/${encodeURIComponent(id)}/proposals`, { method: "POST", body: JSON.stringify(body) }),
   patchProposal: (pid, body) => request(`/proposals/${encodeURIComponent(pid)}`, { method: "PATCH", body: JSON.stringify(body) }),

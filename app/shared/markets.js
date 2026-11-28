@@ -95,6 +95,9 @@ export function marketErrText(e) {
   if (code === "services_required") return "Pick at least one service offered there.";
   if (code === "too_many_markets") return `An account can have up to ${MAX_MARKETS} markets.`;
   if (code === "office_only") return "Only an admin or project manager can change markets.";
+  if (code === "mirrored_market") return "This market follows Where you work. Change the places there, or turn off \"We sell in the same places we work\".";
+  if (code === "no_coverage") return "Set Where you work first, then this market can follow it.";
+  if (code === "no_company") return "Only an account that can be hired has a Where you work to follow.";
   if (code === "migration_needed") return `Markets aren't set up on this database yet. Run migration ${e.body?.migration || "112_markets"}.`;
   return "That didn't save. Try again.";
 }

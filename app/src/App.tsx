@@ -67,7 +67,7 @@ import { LEAD_STAGES, LEAD_SOURCES, CALLCENTER_STAGES, stageTerm, stageCounts, s
 import { CONSENT_CHANNELS, RECORD_ASK, validConsent, CALL_OUTCOMES, FOLLOW_CHANNELS, mayUse, followUpState,
   AUDIO_TYPES, MAX_RECORDING_BYTES } from "../shared/salescrm.js";
 import { validMarket, marketFor, servicesNotOffered, weatherTalk, marketErrText, MAX_MARKET_ZIPS } from "../shared/markets.js";
-import { RADIUS_CHOICES, mergeZips, parseCenter, zipNearErrText } from "../shared/zipnear.js";
+import { RADIUS_CHOICES, parseCenter, zipNearErrText, fillZipsAndTowns, townsForTyped, takenBy, splitZips, splitTowns, citiesFromFound } from "../shared/zipnear.js";
 import { licenseActive } from "../shared/licensecheck.js";
 import { SUPPLIERS, OTHER, materialLine, parseMaterialSource } from "../shared/suppliers.js";
 // One list of states, shared with the Worker, so the two cannot disagree
@@ -24932,7 +24932,7 @@ function payoutErrorText(e) {
   return "That didn't work. Try again in a moment.";
 }
 
-function HireablePanel({ section = "profile", accountName, myName = "", requests = [], focus = null, focusN = 0, onRespond, onReload }) {
+function HireablePanel({ section = "profile", accountName, myName = "", requests = [], focus = null, focusN = 0, onRespond, onReload, onCoverageSaved = null }) {
   const nav = React.useContext(AppNav);
   const isDocs = section === "docs";
   const [f, setF] = useState(null);
@@ -25045,6 +25045,7 @@ function HireablePanel({ section = "profile", accountName, myName = "", requests
         onSave={async (coverage) => {
           await api.saveMyCompany({ coverage });
           setLoaded((x) => (x ? { ...x, coverage } : x));
+          onCoverageSaved?.();
         }} />
     );
   }
@@ -32182,7 +32183,17 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
   };
   useEffect(() => { if (sell) load(); }, [sell]); // eslint-disable-line react-hooks/exhaustive-deps
   const ctx = useMemo(() => ({ markets: data?.markets || [], ready: !!data && !data.failed,
-    migration: data?.migration || null, reload: load }), [data]); // eslint-disable-line react-hooks/exhaustive-deps
+    migration: data?.migration || null, reload: load, mirror: data?.mirror || null }), [data]); // eslint-disable-line react-hooks/exhaustive-deps
+  // "We sell in the same places we work." Only where both halves are drawn.
+  const [mirBusy, setMirBusy] = useState(false);
+  const [mirErr, setMirErr] = useState(null);
+  const setMirror = async (on) => {
+    setMirBusy(true); setMirErr(null);
+    try { setData(await api.setMarketMirror(on)); }
+    catch (e) { setMirErr(e); }
+    finally { setMirBusy(false); }
+  };
+  const mirrorOn = !!data?.mirror?.on;
   return (
     <div className="my-markets" data-my-markets>
       {/* TWO CARDS IN ONE DESIGN. Where you work has always been a card with
@@ -32193,8 +32204,23 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
           and the one action. */}
       {work && (
         <section className="mm-half" data-markets-work>
-          <HireablePanel section="markets" accountName={accountName} />
+          <HireablePanel section="markets" accountName={accountName} onCoverageSaved={() => { if (mirrorOn) load(); }} />
         </section>
+      )}
+      {work && sell && data && !data.failed && !data.migration && (
+        <label className={`mm-same ${mirrorOn ? "on" : ""}`} data-markets-same>
+          <input type="checkbox" checked={mirrorOn} disabled={mirBusy || !!data?.mirror?.migration}
+            onChange={(e) => setMirror(e.target.checked)} data-markets-same-box />
+          <span>
+            <b>{tt("We sell in the same places we work")}</b>
+            <span className="mm-same-note">{data?.mirror?.migration
+              ? tt("Run migration {m} to use this.", { m: data.mirror.migration })
+              : mirrorOn
+              ? tt("Where you work is copied into the market \"Where we work\", and every save of Where you work updates it.")
+              : tt("Copy Where you work into a market, and keep it updated whenever you change where you work.")}</span>
+            {mirErr && <span className="form-err" role="alert">{marketErrText(mirErr)}</span>}
+          </span>
+        </label>
       )}
       {sell && (
         <section className="mm-half portal-panel" data-markets-sell>
@@ -32216,8 +32242,8 @@ function MyMarketsPane({ work = false, sell = false, accountName = "" }) {
 // twice is listed once -- and past the cap the nearest are kept and the rest
 // counted. A town used as the center is added to the towns too, and names an
 // unnamed market. The list stays a list: every ZIP can still be taken out.
-function ZipFill({ edit, setEdit }) {
-  const firstTown = String(edit.cities || "").split(/\n|;/).map((x) => x.trim()).find(Boolean) || "";
+function ZipFill({ edit, setEdit, skipTaken = true, taken = null }) {
+  const firstTown = splitTowns(edit.cities)[0] || "";
   const [center, setCenter] = useState(firstTown);
   const [miles, setMiles] = useState(15);
   const [busy, setBusy] = useState(false);
@@ -32228,24 +32254,26 @@ function ZipFill({ edit, setEdit }) {
     setBusy(true); setNote(null);
     try {
       const r = await api.zipsNear(center.trim(), miles);
-      const have = String(edit.zips || "").split(/[\s,;]+/).filter(Boolean);
-      const m = mergeZips(have, r.zips || [], MAX_MARKET_ZIPS);
-      const town = r.center?.city && r.center?.state ? `${r.center.city}, ${r.center.state}` : null;
-      const towns = String(edit.cities || "").split(/\n|;/).map((x) => x.trim()).filter(Boolean);
-      const addTown = town && !towns.some((t) => t.toLowerCase().replace(/\s+/g, " ") === town.toLowerCase());
-      setEdit((x) => ({ ...x, zips: m.zips.join(", "),
-        cities: addTown ? [...towns, town].join("\n") : x.cities,
+      const found = r.zips || [];
+      // The towns come with the ZIPs: each ZIP carries the town it is in, and
+      // a town is added only for a ZIP that was. With skipTaken, a ZIP or a
+      // town another market already has is left out and counted.
+      const f = fillZipsAndTowns(edit, found, { taken, skipTaken, cap: MAX_MARKET_ZIPS });
+      setEdit((x) => ({ ...x, zips: f.zips, cities: f.cities,
         name: x.name.trim() ? x.name : (r.center?.city || x.name) }));
       const where = r.center?.label || center.trim();
       const bits = [];
-      if (!(r.zips || []).length) bits.push(`No ZIP centers are within ${miles} miles of ${where}. Try a wider distance.`);
+      if (!found.length) bits.push(tt("No ZIP centers are within {miles} miles of {where}. Try a wider distance.", { miles, where }));
       else {
-        bits.push(`Added ${m.added} ${m.added === 1 ? "ZIP" : "ZIPs"} within ${miles} miles of ${where}.`);
-        if (m.already) bits.push(`${m.already} ${m.already === 1 ? "was" : "were"} already listed.`);
-        if (m.left) bits.push(`A market holds up to ${MAX_MARKET_ZIPS}, so the nearest were kept and ${m.left} farther ${m.left === 1 ? "one was" : "ones were"} left off.`);
-        if (addTown) bits.push(`${town} was added to the towns.`);
+        bits.push(tt(f.added === 1 ? "Added {n} ZIP within {miles} miles of {where}." : "Added {n} ZIPs within {miles} miles of {where}.", { n: f.added, miles, where }));
+        if (f.townsAdded.length) bits.push(tt(f.townsAdded.length === 1 ? "Added {n} town: {list}." : "Added {n} towns: {list}.",
+          { n: f.townsAdded.length, list: andList(f.townsAdded.slice(0, 6)) + (f.townsAdded.length > 6 ? ` +${f.townsAdded.length - 6}` : "") }));
+        if (f.skipped) bits.push(tt(f.skipped === 1 ? "Left out {n} ZIP already in {list}." : "Left out {n} ZIPs already in {list}.", { n: f.skipped, list: andList(f.skippedIn) }));
+        if (f.townsSkipped.length) bits.push(tt("Left out {list}, already in another market.", { list: andList(f.townsSkipped.slice(0, 4)) + (f.townsSkipped.length > 4 ? ` +${f.townsSkipped.length - 4}` : "") }));
+        if (f.already) bits.push(tt(f.already === 1 ? "{n} was already listed." : "{n} were already listed.", { n: f.already }));
+        if (f.left) bits.push(tt("A market holds up to {max}, so the nearest were kept and {n} farther were left off.", { max: MAX_MARKET_ZIPS, n: f.left }));
       }
-      setNote({ ok: (r.zips || []).length > 0, text: bits.join(" ") });
+      setNote({ ok: f.added > 0 || f.townsAdded.length > 0, text: bits.join(" ") });
     } catch (e) { setNote({ ok: false, text: zipNearErrText(e) }); }
     finally { setBusy(false); }
   };
@@ -32263,18 +32291,49 @@ function ZipFill({ edit, setEdit }) {
       </div>
       {note
         ? <p className={note.ok ? "zipfill-ok" : "form-err"} role={note.ok ? "status" : "alert"} data-zipfill-note>{note.text}</p>
-        : <p className="fld-note">{tt("Measured from the center of each ZIP. You can still take any of them out below.")}</p>}
+        : <p className="fld-note">{tt("The towns those ZIPs are in are added too. Measured from the center of each ZIP; you can take any of them out below.")}</p>}
     </div>
   );
 }
 
+// ZIPs typed by hand get their towns too, looked up when the box is left.
+// Only ZIPs not looked up before are asked about, so taking a town out is
+// not undone by the next blur.
+function useTypedZipTowns(edit, setEdit, { taken, skipTaken }) {
+  const asked = useRef(new Set(splitZips(edit?.zips)));
+  const [note, setNote] = useState("");
+  const onBlur = async () => {
+    const fresh = splitZips(edit?.zips).filter((z) => /^\d{5}$/.test(z) && !asked.current.has(z));
+    if (!fresh.length) return;
+    fresh.forEach((z) => asked.current.add(z));
+    try {
+      const r = await api.zipTowns(fresh);
+      const out = townsForTyped(edit?.cities, r.towns || [], { taken, skipTaken });
+      setEdit((x) => ({ ...x, cities: out.cities }));
+      const bits = [];
+      if (out?.added.length) bits.push(tt("Added {list} from those ZIPs.", { list: andList(out.added) }));
+      if (out?.skipped.length) bits.push(tt("Left out {list}, already in another market.", { list: andList(out.skipped) }));
+      setNote(bits.join(" "));
+    } catch { /* the towns are a convenience; the ZIPs are what was typed */ }
+  };
+  return { onBlur, note };
+}
+
 function CrmMarkets({ adding = 0, onAdd = null }) {
-  const { markets, ready, migration, reload } = React.useContext(MarketsCtx);
+  const { markets, ready, migration, reload, mirror } = React.useContext(MarketsCtx);
+  const mirroredId = mirror?.on ? mirror.marketId : null;
   const [edit, setEdit] = useState(null); // null | {id?, name, zips, cities, services, active}
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
   const [removing, setRemoving] = useState(null);
-  useEffect(() => { if (adding) { setEdit(marketBlank()); setErr(null); } }, [adding]);
+  useEffect(() => { if (adding) { setEdit(marketBlank()); setErr(null); setSkipTaken(true); } }, [adding]);
+  // ON BY DEFAULT: a new market leaves out every ZIP and town another market
+  // already has, so two markets do not quietly claim the same street. Off,
+  // they overlap on purpose, and the market first by name wins a lead.
+  const [skipTaken, setSkipTaken] = useState(true);
+  const taken = useMemo(() => takenBy(markets, edit?.id || null), [markets, edit?.id]);
+  const typed = useTypedZipTowns(edit, setEdit, { taken, skipTaken });
+  const overlap = edit ? splitZips(edit.zips).filter((z) => taken.zips.has(z)) : [];
   const save = async () => {
     setBusy(true); setErr(null);
     const v = validMarket(edit);
@@ -32297,10 +32356,25 @@ function CrmMarkets({ adding = 0, onAdd = null }) {
         <div className="lc-form market-form" data-market-form>
           <label className="fld">Market name<input value={edit.name} data-market-name placeholder="South Sound"
             onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></label>
-          <ZipFill edit={edit} setEdit={setEdit} />
+          {edit.id && edit.id === mirroredId ? (
+            <p className="appt-warn" role="note" data-market-mirror-note>{tt("This market's ZIPs and towns follow Where you work, so change them there. Its name, services and whether it's active are yours to change here.")}</p>
+          ) : <>
+          {taken.zips.size + taken.towns.size > 0 && (
+            <label className="appt-check market-skip" data-market-skip>
+              <input type="checkbox" checked={skipTaken} onChange={(e) => setSkipTaken(e.target.checked)} />
+              {tt("Leave out ZIPs and towns already in another market")}</label>
+          )}
+          <ZipFill edit={edit} setEdit={setEdit} skipTaken={skipTaken} taken={taken} />
           <label className="fld">ZIP codes <span className="fld-note">separate with commas or spaces</span>
             <textarea rows={2} value={edit.zips} data-market-zips placeholder="98402, 98403, 98405"
-              onChange={(e) => setEdit({ ...edit, zips: e.target.value })} /></label>
+              onBlur={typed.onBlur} onChange={(e) => setEdit({ ...edit, zips: e.target.value })} /></label>
+          {typed.note && <p className="zipfill-ok" role="status" data-typed-towns>{typed.note}</p>}
+          {overlap.length > 0 && (
+            <p className="appt-warn" role="note" data-market-overlap>{tt(overlap.length === 1 ? "{list} is also in {markets}. A lead there goes to whichever market comes first by name."
+              : "{list} are also in {markets}. A lead there goes to whichever market comes first by name.",
+              { list: andList(overlap.slice(0, 5)) + (overlap.length > 5 ? ` +${overlap.length - 5}` : ""), markets: andList([...new Set(overlap.map((z) => taken.zips.get(z)))]) })}</p>
+          )}
+          </>}
           <label className="fld">Towns <span className="fld-note">one per line, with the state</span>
             <textarea rows={2} value={edit.cities} data-market-cities placeholder={"Tacoma, WA\nFife, WA"}
               onChange={(e) => setEdit({ ...edit, cities: e.target.value })} /></label>
@@ -32335,7 +32409,8 @@ function CrmMarkets({ adding = 0, onAdd = null }) {
             return (
               <li key={m.id} className={`market-row ${m.active ? "" : "off"}`} data-market={m.id}>
                 <div className="market-main">
-                  <div className="market-name"><MapPin size={15} /><b>{m.name}</b>{!m.active && <span className="tn-chip">{tt("Paused")}</span>}</div>
+                  <div className="market-name"><MapPin size={15} /><b>{m.name}</b>{!m.active && <span className="tn-chip">{tt("Paused")}</span>}
+                    {m.id === mirroredId && <span className="tn-chip ok" data-market-mirrored>{tt("Follows Where you work")}</span>}</div>
                   {where && <div className="market-where">{where}</div>}
                   {m.services.length > 0 && (
                     <div className="market-svcs">{m.services.map((sv) => <span key={sv} className="market-svc">{serviceLabel(sv)}</span>)}</div>
@@ -42019,6 +42094,48 @@ function CitiesEditor({ cities = [], onChange }) {
   );
 }
 
+// THE SAME FILL WHERE YOU WORK HAS: a place and a distance, and every town
+// whose ZIPs are within it is added. A city already listed is left alone, so
+// pressing it twice, or from two places that overlap, never lists one twice.
+function CityFill({ cities = [], state = "", onAdd }) {
+  const [center, setCenter] = useState("");
+  const [miles, setMiles] = useState(15);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);
+  const go = async () => {
+    const p = parseCenter(center);
+    if (!p.ok) { setNote({ ok: false, text: zipNearErrText(p) }); return; }
+    setBusy(true); setNote(null);
+    try {
+      const r = await api.zipsNear(center.trim(), miles);
+      const f = citiesFromFound(cities, r.zips || [], { state });
+      if (f.added.length) onAdd(f.cities);
+      const where = r.center?.label || center.trim();
+      setNote(f.added.length
+        ? { ok: true, text: tt(f.added.length === 1 ? "Added {n} city within {miles} miles of {where}: {list}." : "Added {n} cities within {miles} miles of {where}: {list}.",
+            { n: f.added.length, miles, where, list: andList(f.added.slice(0, 8)) + (f.added.length > 8 ? ` +${f.added.length - 8}` : "") }) }
+        : { ok: false, text: (r.zips || []).length ? tt("Every city within {miles} miles of {where} is already listed.", { miles, where })
+          : tt("No ZIP centers are within {miles} miles of {where}. Try a wider distance.", { miles, where }) });
+    } catch (e) { setNote({ ok: false, text: zipNearErrText(e) }); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div className="zipfill cityfill" data-cityfill>
+      <div className="appt-q-label">{tt("Add every city near a place")}</div>
+      <div className="zipfill-row">
+        <input value={center} data-cityfill-center placeholder="Tacoma, WA or 98402" aria-label="Town and state, or a ZIP"
+          onChange={(e) => setCenter(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); go(); } }} />
+        <select value={miles} data-cityfill-miles aria-label="Distance" onChange={(e) => setMiles(Number(e.target.value))}>
+          {RADIUS_CHOICES.map((n) => <option key={n} value={n}>{tt("Within {n} mi", { n })}</option>)}
+        </select>
+        <button type="button" className="btn-ghost" data-cityfill-go disabled={busy || !center.trim()} onClick={go}>
+          <MapPin size={15} />{" "}{busy ? tt("Finding…") : tt("Add cities")}</button>
+      </div>
+      {note && <p className={note.ok ? "zipfill-ok" : "form-err"} role={note.ok ? "status" : "alert"} data-cityfill-note>{note.text}</p>}
+    </div>
+  );
+}
+
 // ---- Contractor: choose where they work --------------------------------
 function MyCoverage({ sub, onSave }) {
   const [mode, setMode] = useState(covMode(sub.coverage));
@@ -42057,6 +42174,7 @@ function MyCoverage({ sub, onSave }) {
       {mode === "cities" ? (
         <>
           <div className="cov-sub" style={{ marginTop: 16 }}>{tt("Cities you cover")}</div>
+          <CityFill cities={cities} state={sub.state || ""} onAdd={(next) => touch(() => setCities(next))} />
           <CitiesEditor cities={cities} onChange={(next) => touch(() => setCities(next))} />
         </>
       ) : (
@@ -54506,6 +54624,17 @@ a.meas-dl{text-decoration:none}
 .seg-tabs.acct-tabs{flex-wrap:wrap;max-width:100%}
 .seg-tabs.acct-subtabs{margin-top:-6px}
 .my-markets{display:flex;flex-direction:column;gap:18px}
+/* We sell in the same places we work: one switch between the two cards, drawn
+   as a card of its own so it reads as joining them rather than as a line in
+   either. */
+.mm-same{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:var(--card);cursor:pointer}
+.mm-same.on{border-color:var(--brand);background:var(--brand-soft,var(--paper))}
+.mm-same input{width:20px;height:20px;flex:none;margin-top:2px;accent-color:var(--brand)}
+.mm-same > span{display:flex;flex-direction:column;gap:4px;min-width:0}
+.mm-same b{font-size:15px}
+.mm-same-note{font-size:13.5px;color:var(--ink-soft);line-height:1.45}
+.market-skip{margin:2px 0 4px}
+.cityfill{margin:8px 0 12px}
 .crm-markets{display:flex;flex-direction:column;gap:12px;margin-top:14px}
 .market-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .zipfill{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--paper);margin:4px 0 14px}

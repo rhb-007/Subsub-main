@@ -45,3 +45,60 @@ export function zipsNear(center, miles) {
   return out.sort((a, b) => a.miles - b.miles || a.zip.localeCompare(b.zip));
 }
 
+
+// The town each ZIP belongs to (GeoNames), for filling a market's or a
+// coverage area's towns from its ZIPs. Worker only, like the centers.
+import { ZIP_TOWNS, ZIP_TOWN_OF, ZIP_TOWN_SOURCE } from "./zipcities.js";
+export { ZIP_TOWN_SOURCE };
+let towns = null;
+function loadTowns() {
+  if (towns) return towns;
+  const names = ZIP_TOWNS.split(",").map((t) => { const [city, state] = t.split("|"); return { city, state }; });
+  towns = new Map();
+  for (const rec of ZIP_TOWN_OF.split(",")) {
+    const [z, i] = rec.split(":");
+    towns.set(z, names[parseInt(i, 36)]);
+  }
+  return towns;
+}
+export function townOfZip(zip) {
+  const t = loadTowns().get(String(zip ?? "").trim());
+  return t ? { city: t.city, state: t.state } : null;
+}
+
+// "We sell in the same places we work": Where you work, as a market. Cities
+// are named towns in the company's state (or the state written after them);
+// a radius becomes every ZIP within it and the towns those ZIPs are in.
+// Nearest first and capped, so a 200-mile radius cannot write 4,000 ZIPs.
+export function marketFromCoverage(coverage = {}, { state = "", maxZips = 500, maxCities = 100 } = {}) {
+  const st = String(state || "").trim().toUpperCase();
+  const zips = [], seenZ = new Set(), cities = [], seenC = new Set();
+  const addTown = (city, s) => {
+    const c = String(city || "").trim().replace(/\s+/g, " ");
+    const S = String(s || "").trim().toUpperCase();
+    if (!c || !/^[A-Z]{2}$/.test(S) || cities.length >= maxCities) return;
+    const k = `${c.toLowerCase()}|${S}`;
+    if (seenC.has(k)) return;
+    seenC.add(k); cities.push({ city: c, state: S });
+  };
+  if (coverage?.mode === "radius") {
+    const found = [];
+    for (const r of coverage.radii || []) {
+      const center = zipCenter(r.zip);
+      if (center) found.push(...zipsNear(center, Math.min(100, Number(r.miles) || 0)));
+    }
+    found.sort((a, b) => a.miles - b.miles || a.zip.localeCompare(b.zip));
+    for (const f of found) {
+      if (seenZ.has(f.zip) || zips.length >= maxZips) continue;
+      seenZ.add(f.zip); zips.push(f.zip);
+      const t = townOfZip(f.zip);
+      if (t) addTown(t.city, t.state);
+    }
+  } else {
+    for (const raw of coverage?.cities || []) {
+      const m = String(raw).match(/^(.*?),\s*([A-Za-z]{2})$/);
+      if (m) addTown(m[1], m[2]); else addTown(raw, st);
+    }
+  }
+  return { zips, cities };
+}

@@ -21,16 +21,17 @@ import { sendEmail, applicationDecidedEmail, welcomeEmail, founderIntroEmail, de
 import * as MAIL from "./mail.js";
 import { validAppointment, repClashes, STATUSES as APPT_STATUSES, CALLCENTER_STATUSES,
   BOOKING_ROLES, SALES_ROLES, REP_ROLES, OFFICE_ROLES, takesAppointments, serviceLabel, apptWhenText,
-  SERVICES as APPT_SERVICE_LIST } from "../shared/salesappt.js";
+  SERVICES as APPT_SERVICE_LIST, SERVICE_IDS as APPT_SERVICE_IDS } from "../shared/salesappt.js";
 import { validLeadMessage, validLeadConsent, leadConsentFrom, leadConsentOf, channelBlock,
   leadReplyAddress, leadTokenFromAddress, LEAD_EMAILS_PER_HOUR } from "../shared/leadcontact.js";
 import { validConsent, consentOf, validActivity, CONSENT_VERSION, AUDIO_TYPES, MAX_RECORDING_BYTES,
   FOLLOW_CHANNELS } from "../shared/salescrm.js";
 import { validLead, stageAfterAppointments, sourceFromBooking, stageTerm, STAGE_IDS,
   CALLCENTER_STAGES, SOURCE_IDS, sourceLabel } from "../shared/leads.js";
-import { validMarket, MAX_MARKETS, marketFor } from "../shared/markets.js";
+import { validMarket, MAX_MARKETS, MAX_MARKET_ZIPS, marketFor } from "../shared/markets.js";
 import { parseCenter, validRadius } from "../shared/zipnear.js";
-import { zipCenter, zipsNear, ZIP_SOURCE } from "../shared/zipgeo.js";
+import { zipCenter, zipsNear, ZIP_SOURCE, townOfZip, marketFromCoverage } from "../shared/zipgeo.js";
+import { validEstimateExtras, homeownerExtras, extrasText, categoryTotals, marginOf, estimateNumber } from "../shared/estimate.js";
 import { validProposal, proposalText, proposalSignBlock, validSignature, PROPOSAL_TOKEN_RE, PROPOSAL_DAYS,
   validClaim, routeLead, cleanTags, validCustomValues, validView, validBulk, mergedLead, MAX_LEAD_FILES,
   LEAD_FILE_KIND_IDS, MAX_IMPORT, REVIEW_DELAY_DAYS, addDays, addMonths, realDay, commissionReport,
@@ -493,7 +494,7 @@ app.use("/api/*", async (c, next) => {
     // about anybody. The console's health light reads it through the public
     // hostname, and an uptime monitor can too.
     || c.req.path === "/api/ping"
-    || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
+    || c.req.path.startsWith("/api/logo/") || c.req.path.startsWith("/api/estimate-logo/") || c.req.path.startsWith("/api/cron/") || c.req.path.startsWith("/api/account-by-subdomain/")) return next();
 
   // See ACTING_AS: an inner request made by /api/my-work/:woId/*, whose
   // outer request was authenticated the ordinary way.
@@ -937,6 +938,7 @@ const SALES_ALLOWED = [
   [/^\/api\/sales-leads\/[^/]+\/proposals$/, ["GET", "POST"]],
   [/^\/api\/proposals\/[^/]+$/, ["PATCH"]],
   [/^\/api\/proposals\/[^/]+\/(send|void)$/, ["POST"]],
+  [/^\/api\/estimate-branding$/, ["GET"]],
   [/^\/api\/crm-commissions$/, ["GET"]],
 ];
 
@@ -6075,6 +6077,12 @@ app.patch("/api/my-company", requireRole("admin", "pm"), async (c) => {
     if (!cov) return c.json({ error: "invalid_coverage" }, 400);
     await c.env.DB.prepare(`UPDATE companies SET coverage = ? WHERE id = ?`)
       .bind(JSON.stringify(cov), companyId).run();
+    // 114. With "we sell where we work" on, the mirrored market follows. Never
+    // fails the save: the coverage is written by then.
+    try {
+      const mir = await mirrorOf(c.env, accountId);
+      if (mir.on) await syncMirror(c.env, accountId, userId);
+    } catch (err) { console.warn("[markets] mirror:", err?.message || err); }
   }
 
   // Crews, and with them every crew's days off. Their own write for the
@@ -10567,6 +10575,7 @@ export function missingSchema(err) {
   if (/\bnotice_settings\b/i.test(m)) return "104_notice_settings";
   if (/\bsales_(consents|activities)\b/i.test(m)) return "106_sales_crm";
   if (/\bsales_markets\b/i.test(m)) return "112_markets";
+  if (/\b(sales_estimate_extras|estimate_branding|market_mirror)\b/i.test(m)) return "114_estimates_mirror";
   if (/\b(sales_proposals|lead_claims|crm_settings|lead_meta|crm_views|lead_files|crm_aftercare|crm_commissions)\b/i.test(m)) return "113_crm_plus";
   if (/\blead_followups\b|crm_templates has no column named channel/i.test(m)) return "111_crm_channels";
   if (/\b(sales_deals|lead_opt_outs|lead_unsub_tokens|crm_templates|crm_sequences|crm_enrollments)\b/i.test(m)) return "110_crm_selling";
@@ -22465,7 +22474,8 @@ app.put("/api/uploads/:kind/:fileName", async (c) => {
   // An avatar is the same shape of thing from the same kind of person -- a
   // guest seat may upload one -- so it gets the same checks. A Passport photo
   // is published to anybody holding the link, so it is checked the same way.
-  if (kind === "report-photo" || kind === "avatar" || kind === "passport-photo" || kind === "message-photo") {
+  // 114. An estimate logo goes on a page every homeowner it is sent to opens.
+  if (kind === "report-photo" || kind === "avatar" || kind === "passport-photo" || kind === "message-photo" || kind === "estimate-logo") {
     if (!PHOTO_TYPES.has(type)) return c.json({ error: "not_an_image", type }, 415);
     const declared = Number(c.req.header("Content-Length") || 0);
     if (declared > MAX_PHOTO_BYTES) return c.json({ error: "too_big", max: MAX_PHOTO_BYTES }, 413);
@@ -28041,7 +28051,80 @@ const marketsGuard = async (c, fn) => {
 app.get("/api/markets", requireRole(...BOOKING_ROLES), async (c) => {
   const { error, acct } = await apptAccount(c);
   if (error) return error;
-  return marketsGuard(c, async () => c.json({ markets: await listMarkets(c.env, acct.id) }));
+  return marketsGuard(c, async () => c.json({ markets: await listMarkets(c.env, acct.id), mirror: await mirrorOf(c.env, acct.id) }));
+});
+
+// 114. "WE SELL IN THE SAME PLACES WE WORK." On, one market -- "Where we
+// work" -- is written from the account's own coverage and kept in step with
+// it: every save of Where you work writes it again. Off, the market stays as
+// it was and stops moving. Read as {on, marketId}; a database without 114
+// reads as off and says which file.
+async function mirrorOf(env, accountId) {
+  try {
+    const r = await env.DB.prepare(`SELECT market_id, on_at FROM market_mirror WHERE account_id = ?`).bind(accountId).first();
+    return { on: !!r?.on_at, marketId: r?.market_id || null };
+  } catch (err) {
+    if (missingSchema(err)) return { on: false, marketId: null, migration: "114_estimates_mirror" };
+    throw err;
+  }
+}
+
+// Writes the mirrored market from the coverage. Answers {ok, marketId} or
+// {ok:false, error}. The market keeps its id and its services once made, so
+// somebody who narrowed what is sold there does not have it reset.
+async function syncMirror(env, accountId, userId = null) {
+  const a = await env.DB.prepare(`SELECT company_id FROM accounts WHERE id = ?`).bind(accountId).first();
+  if (!a?.company_id) return { ok: false, error: "no_company" };
+  const co = await env.DB.prepare(`SELECT coverage, state FROM companies WHERE id = ?`).bind(a.company_id).first();
+  const cov = validCoverage(parseJson(co?.coverage, null)) || { mode: "cities", cities: [], radii: [] };
+  const { zips, cities } = marketFromCoverage(cov, { state: co?.state || "", maxZips: MAX_MARKET_ZIPS });
+  if (!zips.length && !cities.length) return { ok: false, error: "no_coverage" };
+  const now = new Date().toISOString();
+  const row = await env.DB.prepare(`SELECT market_id FROM market_mirror WHERE account_id = ?`).bind(accountId).first();
+  const cur = row?.market_id
+    ? await env.DB.prepare(`SELECT id FROM sales_markets WHERE id = ? AND account_id = ?`).bind(row.market_id, accountId).first() : null;
+  let id = cur?.id;
+  if (id) {
+    await env.DB.prepare(`UPDATE sales_markets SET zips = ?, cities = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND account_id = ?`)
+      .bind(JSON.stringify(zips), JSON.stringify(cities), id, accountId).run();
+  } else {
+    const n = await env.DB.prepare(`SELECT COUNT(*) AS n FROM sales_markets WHERE account_id = ?`).bind(accountId).first();
+    if ((n?.n || 0) >= MAX_MARKETS) return { ok: false, error: "too_many_markets" };
+    id = uid();
+    await env.DB.prepare(`INSERT INTO sales_markets (id, account_id, name, zips, cities, services, active, created_by)
+      VALUES (?, ?, 'Where we work', ?, ?, ?, 1, ?)`).bind(id, accountId, JSON.stringify(zips), JSON.stringify(cities),
+      JSON.stringify(APPT_SERVICE_IDS), userId).run();
+  }
+  await env.DB.prepare(`INSERT INTO market_mirror (account_id, market_id, on_at, updated_at) VALUES (?, ?, ?, ?)
+    ON CONFLICT(account_id) DO UPDATE SET market_id = excluded.market_id, on_at = COALESCE(market_mirror.on_at, excluded.on_at), updated_at = excluded.updated_at`)
+    .bind(accountId, id, now, now).run();
+  return { ok: true, marketId: id, zips: zips.length, cities: cities.length };
+}
+
+app.put("/api/markets/mirror", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const { userId, role } = c.get("auth");
+  if (!["admin", "pm"].includes(role)) return c.json({ error: "office_only" }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  try {
+    const was = await mirrorOf(c.env, acct.id);
+    if (was.migration) return c.json({ error: "migration_needed", migration: was.migration }, 503);
+    if (b.on) {
+      const r = await syncMirror(c.env, acct.id, userId);
+      if (!r.ok) return c.json({ error: r.error }, 409);
+      await c.env.DB.prepare(`UPDATE market_mirror SET on_at = COALESCE(on_at, ?) WHERE account_id = ?`).bind(new Date().toISOString(), acct.id).run();
+      await logEvent(c.env, acct.id, userId, "market.mirror_on", r.marketId, { zips: r.zips, cities: r.cities });
+    } else {
+      await c.env.DB.prepare(`UPDATE market_mirror SET on_at = NULL, updated_at = ? WHERE account_id = ?`).bind(new Date().toISOString(), acct.id).run();
+      await logEvent(c.env, acct.id, userId, "market.mirror_off", acct.id, {});
+    }
+    return c.json({ markets: await listMarkets(c.env, acct.id), mirror: await mirrorOf(c.env, acct.id) });
+  } catch (err) {
+    const m = missingSchema(err);
+    if (m) return c.json({ error: "migration_needed", migration: m }, 503);
+    throw err;
+  }
 });
 
 app.post("/api/markets", requireRole(...BOOKING_ROLES), async (c) => {
@@ -28074,6 +28157,16 @@ app.patch("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
     const cur = await c.env.DB.prepare(`SELECT * FROM sales_markets WHERE id = ? AND account_id = ?`).bind(c.req.param("id"), acct.id).first();
     if (!cur) return c.json({ error: "not_found" }, 404);
     const b = await c.req.json().catch(() => ({}));
+    // The mirrored market's places are Where you work's; changing them here
+    // would be undone by the next save there. Its name, services and active
+    // switch stay this market's own.
+    const mir = await mirrorOf(c.env, acct.id);
+    if (mir.on && mir.marketId === cur.id && (b.zips !== undefined || b.cities !== undefined)) {
+      const was0 = marketToJs(cur);
+      const next = validMarket({ ...was0, zips: b.zips ?? was0.zips, cities: b.cities ?? was0.cities }).market;
+      const placesOf = (m) => JSON.stringify([m?.zips || [], m?.cities || []]);
+      if (placesOf(next) !== placesOf(was0)) return c.json({ error: "mirrored_market" }, 409);
+    }
     // Only the keys sent are changed; the rest are what is stored.
     const was = marketToJs(cur);
     const v = validMarket({ name: b.name ?? was.name, zips: b.zips ?? was.zips, cities: b.cities ?? was.cities,
@@ -28100,6 +28193,12 @@ app.delete("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
     // Nothing points at a market (a lead's is worked out on read), so deleting
     // one loses no record: those leads simply have no market until another
     // covers their ZIP.
+    // Deleting the mirrored market turns the mirror off, or the next save of
+    // Where you work would quietly write it back. Before the delete, because
+    // the foreign key nulls market_id and this would then match nothing.
+    try { await c.env.DB.prepare(`UPDATE market_mirror SET on_at = NULL, market_id = NULL, updated_at = ? WHERE account_id = ? AND market_id = ?`)
+      .bind(new Date().toISOString(), acct.id, cur.id).run(); }
+    catch (err) { if (!missingSchema(err)) throw err; }
     await c.env.DB.prepare(`DELETE FROM sales_markets WHERE id = ? AND account_id = ?`).bind(cur.id, acct.id).run();
     await logEvent(c.env, acct.id, userId, "market.deleted", cur.id, { name: cur.name });
     return c.json({ ok: true });
@@ -28113,10 +28212,11 @@ app.delete("/api/markets/:id", requireRole(...BOOKING_ROLES), async (c) => {
 // go. Held to the state typed, through pickPlace, because "Springfield" placed
 // in the wrong state fills a market with somebody else's ZIPs. Office only, the
 // same as changing a market, and rate-limited per account.
-app.get("/api/markets/zips-near", requireRole(...BOOKING_ROLES), async (c) => {
-  const { error, acct } = await apptAccount(c);
-  if (error) return error;
-  if (!["admin", "pm"].includes(c.get("auth").role)) return c.json({ error: "office_only" }, 403);
+app.get("/api/markets/zips-near", requireRole("admin", "pm", "contractor", "callcenter"), async (c) => {
+  // Read by Where you work as well as the markets, on any account kind:
+  // nothing here reads the account, so only the rate limit is per account.
+  const acct = { id: c.get("auth").accountId };
+  if (!["admin", "pm", "contractor"].includes(c.get("auth").role)) return c.json({ error: "office_only" }, 403);
   const p = parseCenter(c.req.query("center"));
   if (!p.ok) return c.json({ error: p.error }, 400);
   const miles = validRadius(c.req.query("miles"));
@@ -28141,9 +28241,25 @@ app.get("/api/markets/zips-near", requireRole(...BOOKING_ROLES), async (c) => {
     center = { lat: hit.latitude, lng: hit.longitude };
     label = `${hit.name || p.city}, ${p.state}`;
   }
-  const zips = zipsNear(center, miles);
+  // Each ZIP carries the town it belongs to, so the screen can add the towns
+  // with the ZIPs and leave out ones another market already has.
+  const zips = zipsNear(center, miles).map((z) => ({ ...z, ...(townOfZip(z.zip) || {}) }));
   return c.json({ center: { ...center, label, city: p.city ? label.replace(/,\s*[A-Z]{2}$/, "") : null, state: p.state || null },
     miles, zips, source: ZIP_SOURCE });
+});
+
+// The town each of a list of typed ZIPs belongs to. A fact about the ZIP, not
+// about anybody, read from the table in the Worker; nothing leaves.
+app.get("/api/markets/zip-towns", requireRole("admin", "pm", "contractor", "callcenter"), async (c) => {
+  // Read by Where you work as well as the markets, on any account kind:
+  // nothing here reads the account, so only the rate limit is per account.
+  const acct = { id: c.get("auth").accountId };
+  if (!["admin", "pm", "contractor"].includes(c.get("auth").role)) return c.json({ error: "office_only" }, 403);
+  const zips = [...new Set(String(c.req.query("zips") || "").split(/[\s,;]+/).filter((z) => /^\d{5}$/.test(z)))].slice(0, 500);
+  if (!zips.length) return c.json({ towns: [] });
+  const rl = await rateLimit(c.env, "zip-towns", acct.id, { limit: 300, windowMinutes: 60 });
+  if (!rl.ok) return c.json({ error: "rate_limited" }, 429);
+  return c.json({ towns: zips.map((zip) => ({ zip, ...(townOfZip(zip) || {}) })) });
 });
 
 // The weather where a homeowner is, so the rep on the call can talk to it.
@@ -30033,6 +30149,61 @@ const proposalToJs = (r, { withToken = true } = {}) => ({
 });
 const PROPOSAL_SELECT = `SELECT p.*, u.name AS created_by_name FROM sales_proposals p LEFT JOIN users u ON u.id = p.created_by`;
 
+// 114. What an estimate carries beyond its lines. Its own table, read
+// separately, so a database without 114 still lists and sends estimates and
+// only loses these parts. Answers {ready, map}.
+const extrasToJs = (r) => r ? ({
+  projectType: r.project_type || null, targetStart: r.target_start || null,
+  details: parseJson(r.details, []) || [], schedule: parseJson(r.schedule, []) || [],
+  tasks: parseJson(r.tasks, []) || [], costCents: r.cost_cents ?? null, showLogo: r.show_logo !== 0,
+}) : { projectType: null, targetStart: null, details: [], schedule: [], tasks: [], costCents: null, showLogo: true };
+async function estimateExtras(env, ids = []) {
+  const map = new Map();
+  if (!ids.length) return { ready: true, map };
+  try {
+    const { results } = await env.DB.prepare(`SELECT * FROM sales_estimate_extras WHERE proposal_id IN (${ids.map(() => "?").join(",")})`)
+      .bind(...ids).all();
+    for (const r of results || []) map.set(r.proposal_id, extrasToJs(r));
+    return { ready: true, map };
+  } catch (err) {
+    if (missingSchema(err)) return { ready: false, map };
+    throw err;
+  }
+}
+// The office's whole view: the lines, the extras, the breakdown and the margin.
+const estimateToJs = (r, x) => {
+  const base = proposalToJs(r);
+  const ex = x || extrasToJs(null);
+  return { ...base, ...ex, number: estimateNumber(r.id), byCategory: categoryTotals(base.items),
+    margin: marginOf(base.totalCents, ex.costCents) };
+};
+// Writes only the keys the check returned. Answers true, or false when 114
+// is not pasted (the caller says so rather than failing the save).
+async function writeEstimateExtras(env, proposalId, accountId, v) {
+  if (!Object.keys(v).length) return true;
+  try {
+    const cur = await env.DB.prepare(`SELECT * FROM sales_estimate_extras WHERE proposal_id = ?`).bind(proposalId).first();
+    const x = { ...extrasToJs(cur), ...v };
+    await env.DB.prepare(`INSERT INTO sales_estimate_extras (proposal_id, account_id, project_type, target_start, details, schedule, tasks,
+      cost_cents, show_logo, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(proposal_id) DO UPDATE SET project_type = excluded.project_type, target_start = excluded.target_start,
+      details = excluded.details, schedule = excluded.schedule, tasks = excluded.tasks, cost_cents = excluded.cost_cents,
+      show_logo = excluded.show_logo, updated_at = excluded.updated_at`)
+      .bind(proposalId, accountId, x.projectType, x.targetStart, JSON.stringify(x.details), JSON.stringify(x.schedule),
+        JSON.stringify(x.tasks), x.costCents, x.showLogo ? 1 : 0, new Date().toISOString()).run();
+    return true;
+  } catch (err) {
+    if (missingSchema(err)) return false;
+    throw err;
+  }
+}
+// The extras keys a body may carry. The homeowner's part changes only while a
+// draft; the office's part (tasks, cost) changes any time, because nobody
+// signs it.
+const ESTIMATE_OFFICE_KEYS = ["tasks", "costCents", "cost"];
+const ESTIMATE_EXTRA_KEYS = ["projectType", "targetStart", "details", "schedule", "showLogo", ...ESTIMATE_OFFICE_KEYS];
+const pickKeys = (b, keys) => Object.fromEntries(keys.filter((k) => k in (b || {})).map((k) => [k, b[k]]));
+
 async function proposalOfAccount(c, acct) {
   const p = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ? AND p.account_id = ?`).bind(c.req.param("pid"), acct.id).first();
   if (!p) return null;
@@ -30049,7 +30220,9 @@ app.get("/api/sales-leads/:id/proposals", requireRole(...BOOKING_ROLES), async (
     if (!row) return c.json({ error: "not_found" }, 404);
     const { results } = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.lead_id = ? AND p.account_id = ? ORDER BY p.created_at DESC`)
       .bind(row.id, acct.id).all();
-    return c.json({ proposals: (results || []).map((r) => proposalToJs(r)) });
+    const ex = await estimateExtras(c.env, (results || []).map((r) => r.id));
+    return c.json({ proposals: (results || []).map((r) => estimateToJs(r, ex.map.get(r.id))),
+      ...(ex.ready ? {} : { extrasMigration: "114_estimates_mirror" }) });
   });
 });
 
@@ -30066,6 +30239,8 @@ app.post("/api/sales-leads/:id/proposals", requireRole(...SALES_ROLES), async (c
   const b = await c.req.json().catch(() => ({}));
   const chk = validProposal(b);
   if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
+  const xchk = validEstimateExtras(pickKeys(b, ESTIMATE_EXTRA_KEYS));
+  if (!xchk.ok) return c.json({ error: xchk.error, field: xchk.field }, 400);
   return crmPlusGuard(c, async () => {
     const row = await leadOfAccount(c, acct);
     if (!row) return c.json({ error: "not_found" }, 404);
@@ -30083,8 +30258,10 @@ app.post("/api/sales-leads/:id/proposals", requireRole(...SALES_ROLES), async (c
       status, expires_at, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)`)
       .bind(id, acct.id, row.id, apptId, proposalToken(), v.title, JSON.stringify(v.items), v.totalCents, v.notes,
         String(v.expiresDays), c.get("auth").userId, now, now).run();
+    const stored = await writeEstimateExtras(c.env, id, acct.id, xchk.value);
     const p = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(id).first();
-    return c.json({ proposal: proposalToJs(p) }, 201);
+    const ex = await estimateExtras(c.env, [id]);
+    return c.json({ proposal: estimateToJs(p, ex.map.get(id)), ...(stored ? {} : { extrasMigration: "114_estimates_mirror" }) }, 201);
   });
 });
 
@@ -30095,9 +30272,22 @@ app.patch("/api/proposals/:pid", requireRole(...SALES_ROLES), async (c) => {
   return crmPlusGuard(c, async () => {
     const got = await proposalOfAccount(c, acct);
     if (!got) return c.json({ error: "not_found" }, 404);
+    // 114. The office's own part -- tasks and the cost -- changes on any
+    // estimate, because nobody signs it. A body carrying only those is that.
+    const keys = Object.keys(b || {});
+    if (keys.length && keys.every((k) => ESTIMATE_OFFICE_KEYS.includes(k))) {
+      const ochk = validEstimateExtras(b);
+      if (!ochk.ok) return c.json({ error: ochk.error, field: ochk.field }, 400);
+      const stored = await writeEstimateExtras(c.env, got.p.id, acct.id, ochk.value);
+      if (!stored) return c.json({ error: "migration_needed", migration: "114_estimates_mirror" }, 503);
+      const ex = await estimateExtras(c.env, [got.p.id]);
+      return c.json({ proposal: estimateToJs(got.p, ex.map.get(got.p.id)) });
+    }
     // What was sent is what they are signing; a sent proposal is withdrawn
     // and a new one made rather than edited under them.
     if (got.p.status !== "draft") return c.json({ error: "not_a_draft", status: got.p.status }, 409);
+    const xchk = validEstimateExtras(pickKeys(b, ESTIMATE_EXTRA_KEYS));
+    if (!xchk.ok) return c.json({ error: xchk.error, field: xchk.field }, 400);
     const chk = validProposal({ title: got.p.title, items: parseJson(got.p.items, []), notes: got.p.notes, ...b,
       expiresDays: b.expiresDays ?? Number(got.p.expires_at || PROPOSAL_DAYS) });
     if (!chk.ok) return c.json({ error: chk.error, field: chk.field }, 400);
@@ -30114,8 +30304,10 @@ app.patch("/api/proposals/:pid", requireRole(...SALES_ROLES), async (c) => {
     await c.env.DB.prepare(`UPDATE sales_proposals SET title = ?, items = ?, total_cents = ?, notes = ?, appointment_id = ?, expires_at = ?,
       updated_at = ? WHERE id = ? AND status = 'draft'`)
       .bind(v.title, JSON.stringify(v.items), v.totalCents, v.notes, apptId, String(v.expiresDays), new Date().toISOString(), got.p.id).run();
+    const stored = await writeEstimateExtras(c.env, got.p.id, acct.id, xchk.value);
     const p = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(got.p.id).first();
-    return c.json({ proposal: proposalToJs(p) });
+    const ex = await estimateExtras(c.env, [got.p.id]);
+    return c.json({ proposal: estimateToJs(p, ex.map.get(got.p.id)), ...(stored ? {} : { extrasMigration: "114_estimates_mirror" }) });
   });
 });
 
@@ -30157,7 +30349,8 @@ app.post("/api/proposals/:pid/send", requireRole(...SALES_ROLES), async (c) => {
     try { await logEvent(c.env, acct.id, c.get("auth").userId, "proposal.sent", p.id, { lead: lead.id, totalCents: p.total_cents, emailed: emailed?.ok ?? null }); }
     catch (err) { console.warn("[proposals] event:", err?.message || err); }
     const after = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(p.id).first();
-    return c.json({ proposal: proposalToJs(after), emailed });
+    const ex = await estimateExtras(c.env, [p.id]);
+    return c.json({ proposal: estimateToJs(after, ex.map.get(p.id)), emailed });
   });
 });
 
@@ -30172,7 +30365,68 @@ app.post("/api/proposals/:pid/void", requireRole(...SALES_ROLES), async (c) => {
       .bind(new Date().toISOString(), got.p.id).run();
     if (!r.meta?.changes) return c.json({ error: "not_open", status: got.p.status }, 409);
     const after = await c.env.DB.prepare(`${PROPOSAL_SELECT} WHERE p.id = ?`).bind(got.p.id).first();
-    return c.json({ proposal: proposalToJs(after) });
+    const ex = await estimateExtras(c.env, [got.p.id]);
+    return c.json({ proposal: estimateToJs(after, ex.map.get(got.p.id)) });
+  });
+});
+
+// 114. The estimate logo. Its own, so an account on Basic -- where Branding's
+// logo is not offered -- can still put its mark on what it sends. Read by
+// anybody on the CRM, set by an admin or project manager.
+app.get("/api/estimate-branding", requireRole(...BOOKING_ROLES), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const a = await c.env.DB.prepare(`SELECT logo_key FROM accounts WHERE id = ?`).bind(acct.id).first();
+  let own = null, ready = true;
+  try { own = (await c.env.DB.prepare(`SELECT logo_key FROM estimate_branding WHERE account_id = ?`).bind(acct.id).first())?.logo_key || null; }
+  catch (err) { if (missingSchema(err)) ready = false; else throw err; }
+  const from = own ? "estimate" : a?.logo_key ? "account" : null;
+  return c.json({ logo: from ? `/api/estimate-logo/${acct.id}` : null, from, canSet: ["admin", "pm"].includes(c.get("auth").role),
+    ...(ready ? {} : { migration: "114_estimates_mirror" }) });
+});
+app.put("/api/estimate-branding", requireRole("admin", "pm"), async (c) => {
+  const { error, acct } = await apptAccount(c);
+  if (error) return error;
+  const b = await c.req.json().catch(() => ({}));
+  const key = b.logoKey == null || b.logoKey === "" ? null : String(b.logoKey);
+  // A key is a claim: it has to be an estimate logo this account uploaded.
+  if (key && (!key.startsWith(`${acct.id}/estimate-logo/`) || key.includes(".."))) return c.json({ error: "logo_not_uploaded" }, 400);
+  try {
+    await c.env.DB.prepare(`INSERT INTO estimate_branding (account_id, logo_key, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(account_id) DO UPDATE SET logo_key = excluded.logo_key, updated_at = excluded.updated_at`)
+      .bind(acct.id, key, new Date().toISOString()).run();
+  } catch (err) {
+    if (missingSchema(err)) return c.json({ error: "migration_needed", migration: "114_estimates_mirror" }, 503);
+    throw err;
+  }
+  await logEvent(c.env, acct.id, c.get("auth").userId, key ? "estimate.logo_set" : "estimate.logo_removed", acct.id, {});
+  const a = await c.env.DB.prepare(`SELECT logo_key FROM accounts WHERE id = ?`).bind(acct.id).first();
+  const from = key ? "estimate" : a?.logo_key ? "account" : null;
+  return c.json({ logo: from ? `/api/estimate-logo/${acct.id}` : null, from, canSet: true });
+});
+// Public, like /api/logo/:accountId: serves only the one key stored against
+// that account (its estimate logo, else its Branding logo), never a path.
+async function serveLogoKey(env, key) {
+  if (!key) return null;
+  const obj = await env.FILES.get(key);
+  if (!obj) return null;
+  return new Response(obj.body, { headers: { "Content-Type": obj.httpMetadata?.contentType || "image/png",
+    "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" } });
+}
+app.get("/api/estimate-logo/:accountId", async (c) => {
+  const a = await c.env.DB.prepare(`SELECT id, logo_key FROM accounts WHERE id = ?`).bind(c.req.param("accountId")).first();
+  if (!a) return c.notFound();
+  const { key } = await estimateLogoKey(c.env, a.id, a.logo_key);
+  return (await serveLogoKey(c.env, key)) || c.notFound();
+});
+app.get("/api/public/proposal/:token/logo", async (c) => {
+  return crmPlusGuard(c, async () => {
+    const r = await publicProposal(c.env, c.req.param("token"));
+    if (!r || r.status === "draft") return c.notFound();
+    const ex = (await estimateExtras(c.env, [r.id])).map.get(r.id) || extrasToJs(null);
+    if (!ex.showLogo) return c.notFound();
+    const { key } = await estimateLogoKey(c.env, r.account_id, r.logo_key);
+    return (await serveLogoKey(c.env, key)) || c.notFound();
   });
 });
 
@@ -30180,9 +30434,29 @@ app.post("/api/proposals/:pid/void", requireRole(...SALES_ROLES), async (c) => {
 // proposal says and whose it is.
 async function publicProposal(env, token) {
   if (!PROPOSAL_TOKEN_RE.test(String(token || ""))) return null;
-  return env.DB.prepare(`SELECT p.*, l.first_name, l.last_name, l.street, l.city, l.state, l.zip, a.name AS acct_name, a.subdomain,
-    a.hostname_status, a.kind, a.theme, a.logo_key FROM sales_proposals p JOIN sales_leads l ON l.id = p.lead_id
-    JOIN accounts a ON a.id = p.account_id WHERE p.token = ?`).bind(String(token)).first();
+  return env.DB.prepare(`SELECT p.*, l.first_name, l.last_name, l.street, l.city, l.state, l.zip,
+    a.name AS acct_name, a.subdomain, a.hostname_status, a.kind, a.theme, a.logo_key, u.name AS created_by_name
+    FROM sales_proposals p JOIN sales_leads l ON l.id = p.lead_id
+    JOIN accounts a ON a.id = p.account_id LEFT JOIN users u ON u.id = p.created_by WHERE p.token = ?`).bind(String(token)).first();
+}
+// The logo an estimate wears: its own (114), else the account's Branding one.
+async function estimateLogoKey(env, accountId, accountLogoKey = null) {
+  try {
+    const r = await env.DB.prepare(`SELECT logo_key FROM estimate_branding WHERE account_id = ?`).bind(accountId).first();
+    if (r?.logo_key) return { key: r.logo_key, from: "estimate" };
+  } catch (err) { if (!missingSchema(err)) throw err; }
+  return accountLogoKey ? { key: accountLogoKey, from: "account" } : { key: null, from: null };
+}
+// The homeowner's whole page: the lines, what the money is for, the project,
+// the schedule, the number, who wrote it and the logo. Never the tasks, the
+// cost or the margin.
+async function publicEstimateJs(env, r) {
+  const base = publicProposalJs(r);
+  const ex = (await estimateExtras(env, [r.id])).map.get(r.id) || extrasToJs(null);
+  const logo = ex.showLogo ? await estimateLogoKey(env, r.account_id, r.logo_key) : { key: null };
+  return { ...base, ...homeownerExtras(ex), number: estimateNumber(r.id), byCategory: categoryTotals(base.items),
+    rep: r.created_by_name || null, createdAt: r.created_at, sentAt: r.sent_at || null,
+    logo: logo.key ? `/api/public/proposal/${r.token}/logo` : null };
 }
 const publicProposalJs = (r) => ({
   account: { name: r.acct_name, subdomain: r.subdomain, hasLogo: !!r.logo_key },
@@ -30203,7 +30477,7 @@ app.get("/api/public/proposal/:token", async (c) => {
     }
     c.header("X-Robots-Tag", "noindex");
     c.header("Cache-Control", "private, no-store");
-    return c.json(publicProposalJs(r));
+    return c.json(await publicEstimateJs(c.env, r));
   });
 });
 
@@ -30221,8 +30495,12 @@ app.post("/api/public/proposal/:token/sign", async (c) => {
     const block = proposalSignBlock({ status: r.status, expiresAt: r.expires_at });
     if (block) return c.json({ error: block }, 409);
     const p = publicProposalJs(r);
+    // 114. The project, the schedule and what the money is for are on the page
+    // they are signing, so they are in what the hash is of. Read from the
+    // stored row, never the request.
+    const ex = (await estimateExtras(c.env, [r.id])).map.get(r.id) || extrasToJs(null);
     const hash = await sha256Hex(proposalText({ title: r.title, items: p.items, totalCents: r.total_cents, notes: r.notes },
-      { accountName: r.acct_name, homeowner: p.homeowner }));
+      { accountName: r.acct_name, homeowner: p.homeowner }) + extrasText(ex));
     const now = new Date().toISOString();
     const won = await c.env.DB.prepare(`UPDATE sales_proposals SET status = 'signed', signed_at = ?, signer_name = ?, signed_hash = ?, updated_at = ?
       WHERE id = ? AND status IN ('sent','viewed')`).bind(now, sig.value.name, hash, now, r.id).run();
@@ -30248,7 +30526,7 @@ app.post("/api/public/proposal/:token/sign", async (c) => {
       if (rep?.rep_user_id) gcalSalesSoon(c, [rep.rep_user_id]);
     }
     const after = await publicProposal(c.env, c.req.param("token"));
-    return c.json(publicProposalJs(after));
+    return c.json(await publicEstimateJs(c.env, after));
   });
 });
 
@@ -30268,7 +30546,7 @@ app.post("/api/public/proposal/:token/decline", async (c) => {
     await logActivity(c.env, r.account_id, null, "proposal_declined", `${[r.first_name, r.last_name].filter(Boolean).join(" ") || "A homeowner"} declined ${r.title}`, { leadId: r.lead_id });
     await tellProposalTeam(c.env, r, "declined", { note });
     const after = await publicProposal(c.env, c.req.param("token"));
-    return c.json(publicProposalJs(after));
+    return c.json(await publicEstimateJs(c.env, after));
   });
 });
 

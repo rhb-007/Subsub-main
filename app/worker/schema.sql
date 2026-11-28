@@ -3134,3 +3134,29 @@ CREATE TABLE IF NOT EXISTS crm_commissions (
   paid_ref       TEXT,
   paid_by        TEXT REFERENCES users(id) ON DELETE SET NULL
 );
+CREATE TABLE IF NOT EXISTS sales_estimate_extras (
+  proposal_id   TEXT PRIMARY KEY REFERENCES sales_proposals(id) ON DELETE CASCADE,
+  account_id    TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  project_type  TEXT,
+  target_start  TEXT,
+  details       TEXT NOT NULL DEFAULT '[]',
+  schedule      TEXT NOT NULL DEFAULT '[]',
+  tasks         TEXT NOT NULL DEFAULT '[]',
+  cost_cents    INTEGER,
+  show_logo     INTEGER NOT NULL DEFAULT 1,
+  updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_estimate_extras_account ON sales_estimate_extras(account_id);
+
+CREATE TABLE IF NOT EXISTS estimate_branding (
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  logo_key    TEXT,
+  updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS market_mirror (
+  account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+  market_id   TEXT REFERENCES sales_markets(id) ON DELETE SET NULL,
+  on_at       TEXT,
+  updated_at  TEXT NOT NULL
+);

@@ -7,6 +7,7 @@
 
 import { dollarsToCents, MAX_DEAL_CENTS, centsText } from "./crmsales.js";
 import { STAGE_IDS, SOURCE_IDS } from "./leads.js";
+import { lineCategory, ESTIMATE_TEXT } from "./estimate.js";
 
 const str = (v, max = 200) => String(v ?? "").trim().slice(0, max);
 const digits = (v) => String(v ?? "").replace(/\D/g, "");
@@ -62,7 +63,10 @@ export function validProposal(raw) {
     if (unitCents === undefined || unitCents === null || !Number.isInteger(unitCents) || unitCents < 0) {
       return { ok: false, error: "bad_price", field: `items.${i}` };
     }
-    items.push({ label, qty, unitCents });
+    // 114. Each line says what it is for (materials, labor, other), so the
+    // estimate can break the total down. Not in the signed text's line, so a
+    // 113 proposal hashes as it always did.
+    items.push({ label, qty, unitCents, category: lineCategory(it.category) });
   }
   const totalCents = proposalTotal(items);
   if (totalCents <= 0) return { ok: false, error: "total_required", field: "items" };
@@ -460,7 +464,7 @@ export const MAX_COMMISSION_BPS = 5000; // 50%
 // the job made from it (what SubSub knows it cost to deliver), then the signed
 // proposal, then the deal amount somebody typed.
 export const COMMISSION_SOURCES = {
-  proposal: "Signed proposal",
+  proposal: "Signed estimate",
   deal: "Deal amount",
   job: "Job value",
 };
@@ -586,14 +590,15 @@ export function proposalPathToken(path) {
 
 // What a refused CRM change is called on the screen, in the route's words.
 export const CRM_PLUS_TEXT = {
-  title_required: "Give the proposal a title.",
+  ...ESTIMATE_TEXT,
+  title_required: "Give the estimate a title.",
   items_required: "Add at least one line.",
   item_label_required: "Every line needs a description.",
   bad_qty: "A quantity must be a number above zero.",
   bad_price: "A price must be dollars and cents.",
   total_required: "The total has to be more than $0.",
   too_large: "That total is too large to be right.",
-  bad_expiry: "A proposal is good for 1 to 180 days.",
+  bad_expiry: "An estimate is good for 1 to 180 days.",
   not_a_draft: "It has already gone out. Withdraw it and make a new one to change it.",
   needs_email: "Add an email address to the lead to send it.",
   do_not_contact: "They're marked Do not contact.",
@@ -615,7 +620,7 @@ export const CRM_PLUS_TEXT = {
   bad_rep: "That person can't own leads here.",
   bad_commission: "A commission is a percent between 0 and 50.",
   bad_review_url: "That review link isn't a web address.",
-  no_value: "There's no value on this sale yet: sign a proposal or set the deal amount.",
+  no_value: "There's no value on this sale yet: get an estimate signed or set the deal amount.",
   no_rate: "Set a commission rate first.",
   already_paid: "It's already marked paid.",
   no_rep: "Nobody is the sales manager on this sale.",

@@ -377,7 +377,12 @@ WITH spec(j) AS (SELECT
   ',["m113_crm_views","col","crm_views",["id","account_id","user_id","name","filters","created_at"]]' ||
   ',["m113_lead_files","col","lead_files",["id","lead_id","account_id","file_key","name","type","size","kind","source","uploaded_by","created_at"]]' ||
   ',["m113_crm_aftercare","col","crm_aftercare",["appointment_id","kind","account_id","lead_id","done_at","result"]]' ||
-  ',["m113_crm_commissions","col","crm_commissions",["appointment_id","account_id","rep_user_id","value_cents","value_source","bps","amount_cents","paid_at","paid_ref","paid_by"]]')) ||
+  ',["m113_crm_commissions","col","crm_commissions",["appointment_id","account_id","rep_user_id","value_cents","value_source","bps","amount_cents","paid_at","paid_ref","paid_by"]]' ||
+  -- 114. Estimates: details, schedule, tasks, cost and a logo; and a market
+  -- kept in step with Where you work.
+  ',["m114_sales_estimate_extras","col","sales_estimate_extras",["proposal_id","account_id","project_type","target_start","details","schedule","tasks","cost_cents","show_logo","updated_at"]]' ||
+  ',["m114_estimate_branding","col","estimate_branding",["account_id","logo_key","updated_at"]]' ||
+  ',["m114_market_mirror","col","market_mirror",["account_id","market_id","on_at","updated_at"]]')) ||
   ']'),
 want(name, kind, on_, cols) AS (
   SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
