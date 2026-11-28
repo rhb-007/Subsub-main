@@ -17831,6 +17831,23 @@ refactor.
     before this: `estimate_jobs` was added to it, and every statement is
     `IF NOT EXISTS`.
 
+- **AN APPOINTMENT READS AS SECTIONS, ONE ANSWER PER ROW.** Reported with
+  the window on screen: *"all of the content looks to be running into each
+  other."* `ApptSummary` packed each service's answers into one run-on line
+  of `label: value · label: value`, under 6px rows.
+  - The time is now a card of its own, with the length, the sales manager and
+    who booked it (the separate *Booked by* line is gone).
+  - Below it are boxed sections: Homeowner (phone and email are tap links),
+    each service, The home, Notes and Follow-up consent. Each section is a
+    small uppercase heading over hairline-separated rows.
+  - The deal panel wears the same heading.
+  - The booking review step draws the same component, so the read-back
+    changed with it.
+  - `test:salesapptui` checks that each roofing answer sits on its own line
+    and runs `touchingSections` over the window. Three of its read-back
+    regexes became case-insensitive, because the headings are
+    `text-transform:uppercase` and `innerText` applies it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

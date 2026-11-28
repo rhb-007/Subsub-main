@@ -30439,32 +30439,68 @@ function CallFlow({ existing = null, seed = null, leadId = null, reps = [], appo
   );
 }
 
-function ApptSummary({ a, repName }) {
+// One answer per row, in sections, so a long call reads as a form somebody
+// filled in rather than as one sentence: the time first, then who and where,
+// then each service's answers, the home, the notes and what they agreed to.
+function ApptSummary({ a, repName, bookedBy = "" }) {
   const who = [a.homeowner?.firstName, a.homeowner?.lastName].filter(Boolean).join(" ");
+  const addr = [a.address?.street, a.address?.city, [a.address?.state, a.address?.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+  const answers = (qs, vals) => (qs || []).filter((q) => vals?.[q.id] != null && vals[q.id] !== "")
+    .map((q) => [q.label.replace(/\?$/, ""), [].concat(vals[q.id]).join(", ")]);
+  const second = a.second
+    ? `${[a.second.firstName, a.second.lastName].filter(Boolean).join(" ")}${a.second.relationship ? ` (${a.second.relationship})` : ""}`
+    : "Nobody, they decide alone";
+  const attends = a.second ? (a.second.attends === true ? "Will be there" : a.second.attends === false ? "Will NOT be there" : "") : "";
+  const home = answers(HOME_QUESTIONS, a.home);
+  const call = [a.direction === "outbound" ? "Outbound call" : a.direction === "inbound" ? "Inbound call" : "", a.source ? `heard from ${a.source}` : ""].filter(Boolean).join(", ");
   return (
     <div className="appt-sum">
-      <div className="appt-sum-when" data-when>{a.date ? apptWhenText(a.date, a.time) : "No time yet"}
-        {a.minutes ? <span> · {a.minutes} min</span> : null}{repName ? <span> · {repName}</span> : <span> · sales manager not assigned</span>}</div>
-      <dl>
-        <dt>Homeowner</dt><dd data-who>{who || "—"}{a.homeowner?.phone ? ` · ${formatPhone(a.homeowner.phone)}` : ""}
-          {a.homeowner?.email ? ` · ${a.homeowner.email}` : ""}</dd>
-        <dt>Address</dt><dd>{[a.address?.street, a.address?.city, [a.address?.state, a.address?.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ") || "—"}</dd>
-        <dt>Decides with</dt><dd data-second>{a.second
-          ? `${a.second.firstName} ${a.second.lastName || ""} (${a.second.relationship || "?"})${a.second.attends === true ? ", will be there" : a.second.attends === false ? ", will NOT be there" : ""}${a.second.phone ? ` · ${formatPhone(a.second.phone)}` : ""}`
-          : "Nobody, they decide alone"}</dd>
-        <dt>Call</dt><dd>{a.direction === "outbound" ? "Outbound" : a.direction === "inbound" ? "Inbound" : "—"}{a.source ? ` · ${a.source}` : ""}</dd>
-        {(a.services || []).map((s) => (
-          <React.Fragment key={s}>
-            <dt>{serviceLabel(s)}</dt>
-            <dd>{(SERVICE_QUESTIONS[s] || []).filter((q) => a.details?.[s]?.[q.id] != null)
-              .map((q) => `${q.label.replace(/\?$/, "")}: ${[].concat(a.details[s][q.id]).join(", ")}`).join(" · ") || "—"}</dd>
-          </React.Fragment>
-        ))}
-        <dt>The home</dt><dd>{HOME_QUESTIONS.filter((q) => a.home?.[q.id] != null)
-          .map((q) => `${q.label.replace(/\?$/, "")}: ${a.home[q.id]}`).join(" · ") || "—"}</dd>
-        {a.notes ? (<><dt>Notes</dt><dd>{a.notes}</dd></>) : null}
-        <dt>Follow-up</dt><dd><ConsentChips consent={a.consent} /></dd>
-      </dl>
+      <div className="appt-when-card" data-when>
+        <CalendarClock size={22} />
+        <div>
+          <b>{a.date ? apptWhenText(a.date, a.time) : "No time yet"}</b>
+          <span>{[a.minutes ? `${a.minutes} min` : "", repName ? `with ${repName}` : "sales manager not assigned"].filter(Boolean).join(" · ")}</span>
+          {bookedBy && <span className="appt-when-by">Booked by {bookedBy}</span>}
+        </div>
+      </div>
+      <section className="appt-sec">
+        <h4>Homeowner</h4>
+        <dl className="appt-rows">
+          <div><dt>Name</dt><dd data-who>{who || "—"}</dd></div>
+          {a.homeowner?.phone && <div><dt>Phone</dt><dd><a href={`tel:${a.homeowner.phone}`}>{formatPhone(a.homeowner.phone)}</a></dd></div>}
+          {a.homeowner?.email && <div><dt>Email</dt><dd className="appt-wrap"><a href={`mailto:${a.homeowner.email}`}>{a.homeowner.email}</a></dd></div>}
+          <div><dt>Address</dt><dd>{addr || "—"}</dd></div>
+          <div><dt>Decides with</dt><dd data-second>{second}{attends && <span className="appt-sub">{attends}</span>}
+            {a.second?.phone && <span className="appt-sub">{formatPhone(a.second.phone)}</span>}</dd></div>
+          {call && <div><dt>The call</dt><dd>{call}</dd></div>}
+        </dl>
+      </section>
+      {(a.services || []).map((sv) => {
+        const rows = answers(SERVICE_QUESTIONS[sv], a.details?.[sv]);
+        return (
+          <section key={sv} className="appt-sec" data-appt-service={sv}>
+            <h4>{serviceLabel(sv)}</h4>
+            {rows.length ? <dl className="appt-rows">{rows.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+              : <p className="appt-none">No answers recorded.</p>}
+          </section>
+        );
+      })}
+      {home.length > 0 && (
+        <section className="appt-sec">
+          <h4>The home</h4>
+          <dl className="appt-rows">{home.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v}</dd></div>)}</dl>
+        </section>
+      )}
+      {a.notes && (
+        <section className="appt-sec">
+          <h4>Notes</h4>
+          <p className="appt-notes">{a.notes}</p>
+        </section>
+      )}
+      <section className="appt-sec">
+        <h4>Follow-up consent</h4>
+        <div className="appt-consent"><ConsentChips consent={a.consent} /></div>
+      </section>
     </div>
   );
 }
@@ -34251,8 +34287,7 @@ function AppointmentDetail({ a, reps, team = [], sales, onEdit, onSaved, onConve
         <h3 className="form-title">{a.homeowner.firstName} {a.homeowner.lastName}</h3>
         <ApptStatusChip status={a.status} />
       </div>
-      <ApptSummary a={a} repName={repName} />
-      {a.createdByName && <p className="note">Booked by {a.createdByName}.</p>}
+      <ApptSummary a={a} repName={repName} bookedBy={a.createdByName || ""} />
       {/* 113. A reminder by text, from this phone, while SubSub cannot send
           texts itself. Only to somebody who agreed to texts. */}
       {open && a.consent?.text === true && a.homeowner.phone && (
@@ -58240,12 +58275,29 @@ button.job-insp:hover{border-color:#2f5577}
 .appt-actions .btn-solid{margin-left:auto}
 .appt-next-why{font-size:13px;color:var(--ink-soft);margin-left:auto}
 .appt-next-why + .btn-solid{margin-left:0}
-.appt-sum-when{font-weight:700;font-size:16px;margin-bottom:8px}
-.appt-sum-when span{font-weight:500;color:var(--ink-soft)}
-.appt-sum dl{display:grid;grid-template-columns:140px 1fr;gap:6px 12px;margin:0;font-size:14px}
-.appt-sum dt{color:var(--ink-soft);font-weight:600}
-.appt-sum dd{margin:0}
-@media (max-width:560px){.appt-sum dl{grid-template-columns:1fr}.appt-sum dd{margin-bottom:6px}}
+/* An appointment reads as sections with one answer per row: the time in a
+   card of its own, then each part under a small heading. */
+.appt-sum{display:flex;flex-direction:column;gap:14px}
+.appt-when-card{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:12px;background:color-mix(in srgb,var(--brand) 9%,var(--card));border:1px solid color-mix(in srgb,var(--brand) 25%,var(--line))}
+.appt-when-card>svg{flex:none;color:var(--brand);margin-top:2px}
+.appt-when-card>div{display:flex;flex-direction:column;gap:3px;min-width:0}
+.appt-when-card b{font-size:17px;line-height:1.3}
+.appt-when-card span{font-size:14px;color:var(--ink-soft)}
+.appt-when-card .appt-when-by{font-size:13px}
+.appt-sec{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:12px 16px 6px}
+.appt-sec>h4{margin:0 0 4px;font:700 12px/1.3 Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft)}
+.appt-rows{margin:0}
+.appt-rows>div{display:grid;grid-template-columns:minmax(120px,38%) 1fr;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:14.5px;line-height:1.4}
+.appt-rows>div:first-child{border-top:0}
+.appt-rows dt{color:var(--ink-soft);font-weight:500}
+.appt-rows dd{margin:0;font-weight:600;min-width:0}
+.appt-rows dd a{color:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.appt-wrap{overflow-wrap:anywhere}
+.appt-sub{display:block;font-weight:500;color:var(--ink-soft);font-size:13.5px;margin-top:2px}
+.appt-notes{margin:4px 0 8px;font-size:14.5px;line-height:1.5;white-space:pre-wrap}
+.appt-none{margin:4px 0 8px;font-size:14px;color:var(--ink-soft)}
+.appt-consent{padding:6px 0 10px}
+@media (max-width:560px){.appt-rows>div{grid-template-columns:1fr;gap:2px}.appt-sec{padding:12px 14px 6px}}
 .appt-list{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
 .appt-row{width:100%;display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);cursor:pointer;text-align:left;font:500 14px Inter,sans-serif;min-height:56px}
 .appt-row:hover{border-color:var(--brand)}
@@ -58264,7 +58316,8 @@ button.job-insp:hover{border-color:#2f5577}
 .appt-needs{display:flex;align-items:center;gap:8px;margin:0 0 12px;padding:10px 14px;border:1px solid #e3c48a;border-radius:10px;background:#fbf0dd;color:#7a4f10;font:600 14px Inter,sans-serif;cursor:pointer}
 .appt-flash{margin:0 0 12px;padding:10px 14px;border-radius:10px;background:#e6f2ec;color:#1d5740;font-weight:600}
 .appt-empty{text-align:center;padding:28px 0}
-.appt-detail{display:flex;flex-direction:column;gap:14px}
+.appt-detail{display:flex;flex-direction:column;gap:16px}
+.appt-detail .note{margin:0}
 .appt-detail-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .appt-status-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .appt-set{min-height:40px}
@@ -58623,7 +58676,8 @@ button.job-insp:hover{border-color:#2f5577}
 .lc-seq-start{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .lc-seq-start select{flex:1 1 220px;min-height:44px}
 .lead-dnc{color:var(--red);border-color:var(--red)}
-.appt-deal{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:var(--paper);display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.appt-deal{border:1px solid var(--line);border-radius:12px;padding:12px 16px 14px;background:var(--card);display:flex;flex-direction:column;gap:10px;margin:0}
+.appt-deal>.lead-label{font:700 12px/1.3 Inter,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-soft)}
 .appt-deal-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .appt-deal-row .fld{flex:1 1 180px;margin:0}
 .appt-deal-row .btn-ghost{min-height:44px}

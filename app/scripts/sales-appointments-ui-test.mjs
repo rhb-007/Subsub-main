@@ -23,7 +23,7 @@
 
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait } from "./lib/stub-stack.mjs";
+import { buildApp, serveApp, serveApi, launch, visitApp, tally, wait, touchingSections } from "./lib/stub-stack.mjs";
 
 const app = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const OUT = join(app, "dist-apptui-test");
@@ -379,8 +379,8 @@ try {
     await next(page);
     t.ck("and last, a review", (await stepNow(page)) === "review");
     const rev = await page.evaluate(() => document.querySelector("[data-review]")?.innerText.replace(/\s+/g, " ") || "");
-    t.ck("which reads back the call", /Dana Ruiz/.test(rev) && /Alex.*Spouse.*will be there/.test(rev)
-      && /Window replacement/.test(rev) && /About how many windows: 14/.test(rev) && /1:30 PM/.test(rev), rev);
+    t.ck("which reads back the call", /Dana Ruiz/.test(rev) && /Alex.*Spouse.*will be there/i.test(rev)
+      && /Window replacement/i.test(rev) && /About how many windows:? 14/.test(rev) && /1:30 PM/.test(rev), rev);
     // 108. The server answers that the sales manager's Google Calendar shows
     // them busy: the form goes back to the time, says so, and books only once
     // Book anyway is ticked.
@@ -577,6 +577,21 @@ try {
     await wait(300);
     await click(page, '[data-appt="ap_sat"]');
     await wait(500);
+    // The appointment reads as sections with one answer per row: the time
+    // in a card of its own, each service's answers on their own lines, and
+    // no two boxed sections touching.
+    const sum = await page.evaluate(() => {
+      const d = document.querySelector("[data-detail]");
+      const roof = [...(d?.querySelectorAll('[data-appt-service="roofing"] .appt-rows > div') || [])];
+      const tops = roof.map((r) => Math.round(r.getBoundingClientRect().top));
+      return { when: !!d?.querySelector(".appt-when-card"), roofRows: roof.length, distinct: new Set(tops).size,
+        secs: d?.querySelectorAll(".appt-sec").length || 0, by: d?.querySelector(".appt-when-by")?.innerText || "" };
+    });
+    t.ck("the appointment is sections, one answer per row", sum.when && sum.roofRows >= 4 && sum.distinct === sum.roofRows && sum.secs >= 4
+      && /Booked by Cara Call/.test(sum.by), JSON.stringify(sum));
+    const touch = await touchingSections(page, "[data-detail]");
+    t.ck("and no two sections in it touch", touch.length === 0, JSON.stringify(touch));
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT, fullPage: false });
     // 106. The activity panel, on a homeowner who said no to everything.
     const chips = await page.evaluate(() => [...document.querySelectorAll("[data-activity] [data-chip]")].map((x) => `${x.dataset.chip}:${x.className.split(" ").pop()}`));
     t.ck("the appointment shows what they agreed to", chips.join() === "email:no,phone:no,text:no,record:no", chips.join());
