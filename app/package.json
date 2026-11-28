@@ -361,6 +361,7 @@
     "test:viewasui": "node --no-warnings scripts/view-as-ui-test.mjs",
     "test:crmplus": "node --no-warnings scripts/crm-plus-test.mjs",
     "test:crmplusui": "node --no-warnings scripts/crm-plus-ui-test.mjs",
+    "test:estimates": "node --no-warnings scripts/estimates-test.mjs",
     "test:jobrange": "node --no-warnings scripts/job-range-ui-test.mjs",
     "test:zipnear": "node --no-warnings scripts/zip-near-test.mjs",
     "test:zipnearui": "node --no-warnings scripts/zip-near-ui-test.mjs",

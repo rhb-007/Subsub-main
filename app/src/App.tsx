@@ -42,7 +42,7 @@ import {
   Crown,
   PhoneIncoming,
   PhoneOutgoing, Mic, CalendarClock, Briefcase, Tag, FileSignature, GitMerge, Bookmark,
-  Shuffle, Percent, SlidersHorizontal,
+  Shuffle, Percent, SlidersHorizontal, Image as ImageIcon,
 } from "lucide-react";
 import { api, getAuth, setAuth, clearAuth, clearStoredAuth, hasStoredAuth, logoUrl, API_BASE, IMPERSONATION_LAPSED } from "./lib/api";
 import { inPool, shrinkPhoto } from "./lib/photoshrink.js";
@@ -145,6 +145,8 @@ import { LOST_REASONS, lostReasonLabel, dollarsToCents, centsText, salesReport, 
 import { hiresLabelFor, workingForVerb } from "../shared/hires.js";
 import { PROPOSAL_STATUSES, CLAIM_STATUSES, ROUTING_MODES, LEAD_FILE_KINDS, MAX_LEAD_FILES, MAX_IMPORT, IMPORT_FIELDS,
   COMMISSION_SOURCES, parseCsv as parseLeadCsv, guessMapping, importRow, duplicateGroups, bpsText, proposalPathToken, CRM_PLUS_TEXT } from "../shared/crmplus.js";
+import { LINE_CATEGORIES, lineCategory, PROJECT_TYPES, projectTypeLabel, PHASE_STATUSES, PHASE_STATUS_IDS, TASK_PRESETS,
+  presetDetails, presetPhases, categoryTotals, marginOf, marginText, estimateNumber } from "../shared/estimate.js";
 import { onRoster, offRosterText, endConsequence } from "../shared/roster.js";
 import { greetingFor, weatherLine, weatherLabel } from "../shared/greeting.js";
 import { CONTACT_PREFS, NEEDS_PHONE, contactLine, emergencyLine, noticeLive, sortNotices, NOTICE_TITLE_MAX, NOTICE_BODY_MAX } from "../shared/tenanthome.js";
@@ -31495,7 +31497,8 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
 // 109. A lead is two tabs: who they are, and contacting them. Contact opens
 // first when the lead was opened from the Inbox.
 // 113. Proposals, the insurance claim and the files are tabs beside them.
-const LEAD_TABS = [["overview", "Overview"], ["contact", "Contact"], ["proposals", "Proposals"], ["claim", "Insurance claim"], ["files", "Files"]];
+// 114. "Proposals" are Estimates on screen; the tab id keeps the old word.
+const LEAD_TABS = [["overview", "Overview"], ["contact", "Contact"], ["proposals", "Estimates"], ["claim", "Insurance claim"], ["files", "Files"]];
 function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onContacted, onConsent, children, role = "admin", lib = null, apptById = {} }) {
   const [tab, setTab] = useState(LEAD_TABS.some(([id]) => id === start) ? start : "overview");
   return (<>
@@ -31506,7 +31509,7 @@ function LeadDetailTabs({ lead, start = "", startMode = "", accountName, onConta
     </div>
     {tab === "overview" ? children
       : tab === "contact" ? <LeadContact lead={lead} accountName={accountName} onContacted={onContacted} onConsent={onConsent} role={role} lib={lib} startMode={startMode} />
-      : tab === "proposals" ? <LeadProposals lead={lead} role={role} apptById={apptById} onChanged={onContacted} />
+      : tab === "proposals" ? <LeadProposals lead={lead} role={role} apptById={apptById} onChanged={onContacted} accountName={accountName} />
       : tab === "claim" ? <LeadClaim lead={lead} />
       : <LeadFiles lead={lead} />}
   </>);
@@ -32837,133 +32840,447 @@ function LeadMeta({ lead, onSaved }) {
 }
 
 const PROPOSAL_CHIP = { draft: "", sent: "wait", viewed: "wait", signed: "ok", declined: "bad", void: "" };
-const blankLine = () => ({ label: "", qty: "1", unit: "" });
+const blankLine = (category = "materials") => ({ label: "", qty: "1", unit: "", category });
 const lineCents = (l) => {
   const c = dollarsToCents(l.unit);
   const q = Number(l.qty || 0);
   return c == null || c === undefined || !Number.isFinite(q) ? 0 : Math.round(q * c);
 };
+// A path the API answers (/api/...), as an address the browser can load.
+const apiAsset = (path) => (path ? `${API_BASE}${String(path).replace(/^\/api/, "")}` : null);
+const estDay = (d) => (d ? stampDay(d) : "");
 
-function ProposalEditor({ lead, existing = null, appts = [], onSaved, onCancel }) {
-  const [title, setTitle] = useState(existing?.title || (lead.services?.length ? lead.services.map(serviceLabel).join(", ") : ""));
-  const [lines, setLines] = useState(existing ? existing.items.map((i) => ({ label: i.label, qty: String(i.qty), unit: String(i.unitCents / 100) })) : [blankLine()]);
+// ONE DOCUMENT, DRAWN IN TWO PLACES. The homeowner's page and the office's
+// View estimate window are this component, so what the office previews is
+// exactly what the homeowner opens. `office` adds the two things that never
+// leave the office: the margin and the tasks.
+function EstimateDoc({ e, accountName = "", logo = null, office = false, children = null }) {
+  const by = e.byCategory || categoryTotals(e.items || []);
+  const status = PROPOSAL_STATUSES[e.status]?.label || "";
+  const schedule = (e.schedule || []).filter((p) => p.label);
+  const details = (e.details || []).filter((d) => d.label && (office || d.value));
+  const facts = [
+    [tt("Customer"), e.homeowner || "—", e.phone || ""],
+    [tt("Project type"), projectTypeLabel(e.projectType) || "—", (e.services || []).map(serviceLabel).join(", ")],
+    [tt("Sales rep"), e.rep || "—", ""],
+    [tt(e.sentAt ? "Sent" : "Created"), estDay(e.sentAt || e.createdAt) || "—", e.expiresAt && e.status !== "draft" ? tt("Good until {d}", { d: estDay(e.expiresAt) }) : ""],
+    [tt("Target start"), estDay(e.targetStart) || tt("To be scheduled"), ""],
+  ];
+  return (
+    <article className="est-doc" data-estimate-doc>
+      <header className="est-head">
+        <div className={`est-logo ${logo ? "" : "none"}`} data-est-logo>
+          {logo ? <img src={logo} alt={accountName} /> : <span>{(accountName || "?").split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase()}</span>}
+        </div>
+        <div className="est-title">
+          <p className="est-kicker">{accountName}{" · "}{tt("Estimate")}{" "}{e.number}</p>
+          <h1 data-est-title>{e.title || tt("Untitled estimate")}</h1>
+          {e.address && <p className="est-addr"><MapPin size={14} /> {e.address}</p>}
+        </div>
+        {status && <span className={`est-status s-${e.status}`} data-est-status>{status}</span>}
+      </header>
+
+      <div className="est-facts" data-est-facts>
+        {facts.map(([k, v, sub]) => (
+          <div key={k} className="est-fact"><span>{k}</span><b>{v}</b>{sub && <em>{sub}</em>}</div>
+        ))}
+      </div>
+
+      <div className="est-grid">
+        <section className="est-card est-money" data-est-money>
+          <h2>{tt("Sales estimate")}</h2>
+          <dl>
+            <div className="est-total"><dt>{tt("Total")}</dt><dd data-est-total>{centsText(e.totalCents) || "$0"}</dd></div>
+            {LINE_CATEGORIES.map((c) => (by[c.id] > 0 || c.id !== "other") && (
+              <div key={c.id}><dt>{tt(c.label)}</dt><dd data-est-cat={c.id}>{centsText(by[c.id]) || "$0"}</dd></div>
+            ))}
+            {office && (
+              <div className="est-margin" data-est-margin><dt>{tt("Profit margin")} <small>{tt("office only")}</small></dt>
+                <dd>{e.margin === null || e.margin === undefined ? <span className="est-muted">{tt("Add your cost")}</span> : marginText(e.margin)}</dd></div>
+            )}
+          </dl>
+        </section>
+        <section className="est-card est-sched" data-est-schedule>
+          <h2>{tt("Proposed production schedule")}</h2>
+          {schedule.length ? (
+            <table>
+              <thead><tr><th>{tt("Phase")}</th><th>{tt("Start")}</th><th>{tt("End")}</th><th>{tt("Status")}</th></tr></thead>
+              <tbody>{schedule.map((p, i) => (
+                <tr key={i}><td>{p.label}</td><td>{estDay(p.start) || "—"}</td><td>{estDay(p.end || p.start) || "—"}</td>
+                  <td><span className={`est-phase s-${p.status}`}>{tt(PHASE_STATUSES[p.status]?.label || "Planned")}</span></td></tr>
+              ))}</tbody>
+            </table>
+          ) : <p className="est-muted">{tt("Dates are set once the work is scheduled.")}</p>}
+        </section>
+      </div>
+
+      {details.length > 0 && (
+        <section className="est-card" data-est-details>
+          <h2>{tt("Project details")}</h2>
+          <dl className="est-details">{details.map((d, i) => (
+            <div key={i}><dt>{d.label}</dt><dd>{d.value || "—"}</dd></div>
+          ))}</dl>
+        </section>
+      )}
+
+      <section className="est-card" data-est-items>
+        <h2>{tt("What's included")}</h2>
+        <div className="est-items-wrap">
+          <table className="est-items">
+            <thead><tr><th>{tt("Description")}</th><th>{tt("Qty")}</th><th>{tt("Price")}</th><th>{tt("Amount")}</th></tr></thead>
+            <tbody>{(e.items || []).map((it, i) => (
+              <tr key={i}><td>{it.label}<small>{tt(LINE_CATEGORIES.find((c) => c.id === lineCategory(it.category))?.label || "Other")}</small></td>
+                <td>{it.qty}</td><td>{centsText(it.unitCents)}</td><td>{centsText(Math.round(it.qty * it.unitCents))}</td></tr>
+            ))}</tbody>
+            <tfoot><tr><td colSpan={3}>{tt("Total")}</td><td>{centsText(e.totalCents) || "$0"}</td></tr></tfoot>
+          </table>
+        </div>
+      </section>
+
+      {e.notes && (
+        <section className="est-card" data-est-notes>
+          <h2>{tt("Notes")}</h2>
+          <p className="est-notes">{e.notes}</p>
+        </section>
+      )}
+
+      {office && (e.tasks || []).length > 0 && (
+        <section className="est-card est-tasks" data-est-tasks>
+          <h2>{tt("Tasks")} <small>{tt("office only")}</small></h2>
+          <ul>{e.tasks.map((t, i) => (
+            <li key={i} className={t.done ? "done" : ""}><CheckCircle2 size={15} /><span>{t.label}</span>
+              <em>{[estDay(t.due), t.who].filter(Boolean).join(" · ")}</em></li>
+          ))}</ul>
+        </section>
+      )}
+      {children}
+    </article>
+  );
+}
+
+// The logo an estimate wears, set once for the account. Its own, so an
+// account on Basic (no Branding logo) can still put its mark on an estimate.
+function useEstimateLogo() {
+  const [b, setB] = useState(null);
+  const [v, setV] = useState(0);
+  const load = async () => { try { setB(await api.estimateBranding()); } catch { setB({ logo: null, failed: true }); } };
+  useEffect(() => { load(); }, []);
+  return { b, src: b?.logo ? `${apiAsset(b.logo)}?v=${v}` : null, set: (x) => { setB(x); setV((n) => n + 1); }, reload: load };
+}
+
+function EstimateLogoRow({ logo, show, onShow }) {
+  const { b, src, set } = logo;
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const pick = async (file) => {
+    if (!file) return;
+    setBusy(true); setErr("");
+    try {
+      const up = await api.uploadEstimateLogo(file);
+      set(await api.setEstimateBranding({ logoKey: up.key }));
+    } catch (e) {
+      setErr(e?.body?.error === "migration_needed" ? tt("Run migration {m} to add a logo.", { m: e.body.migration })
+        : /415/.test(String(e?.message)) ? tt("That isn't an image. Use a PNG or JPEG.")
+        : /413/.test(String(e?.message)) ? tt("That image is too large. Use one under 10 MB.") : tt("That logo didn't upload. Try again."));
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="est-logo-row" data-est-logo-row>
+      <div className={`est-logo sm ${src ? "" : "none"}`}>{src ? <img src={src} alt="" /> : <ImageIcon size={18} />}</div>
+      <div className="est-logo-text">
+        <b>{tt("Company logo")}</b>
+        <span>{src ? (b?.from === "account" ? tt("Your Branding logo. Upload one just for estimates if you like.") : tt("Shown at the top of every estimate you send."))
+          : b?.canSet ? tt("Add your logo so the estimate looks like it came from you.") : tt("No logo yet. An admin can add one here.")}</span>
+        {err && <span className="form-err" role="alert">{err}</span>}
+        {b?.migration && <span className="form-err" role="note">{tt("Run migration {m} to add a logo.", { m: b.migration })}</span>}
+      </div>
+      <div className="est-logo-acts">
+        {b?.canSet && (
+          <label className={`btn-ghost ${busy ? "is-busy" : ""}`} data-est-logo-upload>
+            <Upload size={14} />{" "}{busy ? tt("Uploading…") : src && b?.from === "estimate" ? tt("Replace") : tt("Upload logo")}
+            <input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={busy} onChange={(e) => { pick(e.target.files?.[0]); e.target.value = ""; }} />
+          </label>
+        )}
+        {src && <label className="appt-check est-logo-show"><input type="checkbox" checked={show} onChange={(e) => onShow(e.target.checked)} data-est-show-logo />{tt("Show on this estimate")}</label>}
+      </div>
+    </div>
+  );
+}
+
+// The form is the estimate, in the order it reads: the logo, what the job is,
+// the lines, the money, the project, the schedule, the notes, and the office's
+// own tasks and cost last. Preview draws it through EstimateDoc before it is
+// saved, so nothing about the page the homeowner opens is a surprise.
+function ProposalEditor({ lead, existing = null, appts = [], onSaved, onCancel, logo, accountName = "", rep = "" }) {
+  const services = lead.services || [];
+  const [title, setTitle] = useState(existing?.title || (services.length ? services.map(serviceLabel).join(", ") : ""));
+  const [lines, setLines] = useState(existing ? existing.items.map((i) => ({ label: i.label, qty: String(i.qty), unit: String(i.unitCents / 100), category: lineCategory(i.category) }))
+    : [blankLine("materials"), blankLine("labor")]);
   const [notes, setNotes] = useState(existing?.notes || "");
   const [days, setDays] = useState(String(existing ? Number(existing.expiresAt || 30) || 30 : 30));
   const [apptId, setApptId] = useState(existing?.appointmentId || (appts.find((a) => !["cancelled", "no_show"].includes(a.status))?.id || ""));
+  const [projectType, setProjectType] = useState(existing?.projectType || "residential");
+  const [targetStart, setTargetStart] = useState(existing?.targetStart || "");
+  const [details, setDetails] = useState(existing?.details?.length ? existing.details : presetDetails(services));
+  const [schedule, setSchedule] = useState(existing?.schedule?.length ? existing.schedule.map((p) => ({ ...p, start: p.start || "", end: p.end || "" })) : presetPhases(services));
+  const [tasks, setTasks] = useState(existing?.tasks?.length ? existing.tasks.map((t) => ({ ...t, due: t.due || "", who: t.who || "" }))
+    : TASK_PRESETS.map((label) => ({ label, due: "", who: "", done: false })));
+  const [cost, setCost] = useState(existing?.costCents != null ? String(existing.costCents / 100) : "");
+  const [showLogo, setShowLogo] = useState(existing?.showLogo !== false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
   const total = lines.reduce((t, l) => t + lineCents(l), 0);
-  const body = () => ({ title, notes, expiresDays: Number(days), appointmentId: apptId || null,
-    items: lines.filter((l) => l.label.trim() || l.unit).map((l) => ({ label: l.label, qty: Number(l.qty || 1), unit: l.unit })) });
+  const costCents = cost.trim() ? dollarsToCents(cost) : null;
+  const items = lines.filter((l) => l.label.trim() || l.unit).map((l) => ({ label: l.label, qty: Number(l.qty || 1), unit: l.unit, category: l.category }));
+  const body = () => ({ title, notes, expiresDays: Number(days), appointmentId: apptId || null, items,
+    projectType, targetStart: targetStart || null, details, schedule, tasks, cost: cost.trim(), showLogo });
   const save = async () => {
     setBusy(true); setErr(null);
     try { onSaved((existing ? await api.patchProposal(existing.id, body()) : await api.createProposal(lead.id, body())).proposal); }
     catch (e) { setErr(e); }
     finally { setBusy(false); }
   };
+  const draft = {
+    ...(existing || {}), status: existing?.status || "draft", title, notes, projectType, targetStart, details, schedule, tasks,
+    number: existing?.number || estimateNumber("new"), homeowner: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
+    address: [lead.street, lead.city, lead.state].filter(Boolean).join(", "), services, rep: existing?.createdByName || rep,
+    createdAt: existing?.createdAt || new Date().toISOString(),
+    items: items.map((it) => ({ label: it.label, qty: it.qty, unitCents: dollarsToCents(it.unit) || 0, category: it.category })),
+    totalCents: total, margin: marginOf(total, costCents ?? null), costCents,
+  };
+  const setRow = (set, list, i, k, v) => set(list.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
+  const by = categoryTotals(draft.items);
   return (
-    <div className="lc-form proposal-editor" data-proposal-editor>
-      <label className="fld">Title<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Roof replacement" data-prop-title /></label>
-      <div className="prop-lines">
-        <div className="prop-line prop-line-head"><span>What</span><span>Qty</span><span>Price each</span><span>Line total</span><span /></div>
-        {lines.map((l, i) => (
-          <div key={i} className="prop-line" data-prop-line={i}>
-            <input value={l.label} onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, label: e.target.value } : x)))} placeholder="Tear off and replace, 30 squares" aria-label="What" />
-            <input value={l.qty} inputMode="decimal" onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, qty: e.target.value } : x)))} aria-label="Quantity" />
-            <input value={l.unit} inputMode="decimal" onChange={(e) => setLines(lines.map((x, k) => (k === i ? { ...x, unit: e.target.value } : x)))} placeholder="$0" aria-label="Price each" />
-            <span className="prop-line-total">{centsText(lineCents(l)) || "$0"}</span>
-            <button type="button" className="icon-x" aria-label="Remove line" disabled={lines.length === 1}
-              onClick={() => setLines(lines.filter((_, k) => k !== i))}><X size={12} /></button>
-          </div>
-        ))}
-        <button type="button" className="link-btn" data-prop-add-line onClick={() => setLines([...lines, blankLine()])}><Plus size={13} /> Add a line</button>
-      </div>
-      <p className="prop-total" data-prop-total>Total <b>{centsText(total) || "$0"}</b></p>
-      <label className="fld">Notes for the homeowner<textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)}
-        placeholder="What's included, warranty, payment terms…" /></label>
-      <div className="fld-row">
-        <label className="fld">Good for (days)<input type="number" min={1} max={180} value={days} onChange={(e) => setDays(e.target.value)} /></label>
-        <label className="fld">For the estimate
-          <select value={apptId} onChange={(e) => setApptId(e.target.value)} data-prop-appt>
-            <option value="">Not tied to an estimate</option>
-            {appts.map((a) => <option key={a.id} value={a.id}>{apptWhenText(a.date).replace(/^(\w+), /, "")} · {APPT_STATUSES[a.status]?.label || a.status}</option>)}
-          </select></label>
-      </div>
-      {apptId && <p className="note">Signing it marks that estimate sold, at this total.</p>}
+    <div className="lc-form proposal-editor est-editor" data-proposal-editor>
+      <EstimateLogoRow logo={logo} show={showLogo} onShow={setShowLogo} />
+
+      <section className="est-sec">
+        <h3>{tt("The job")}</h3>
+        <label className="fld">{tt("Title")}<input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={tt("Full roof replacement")} data-prop-title /></label>
+        <div className="fld-row">
+          <label className="fld">{tt("Project type")}
+            <select value={projectType} onChange={(e) => setProjectType(e.target.value)} data-est-project-type>
+              {PROJECT_TYPES.map((p) => <option key={p.id} value={p.id}>{tt(p.label)}</option>)}
+            </select></label>
+          <label className="fld">{tt("Target start")}<input type="date" value={targetStart} onChange={(e) => setTargetStart(e.target.value)} data-est-target /></label>
+        </div>
+      </section>
+
+      <section className="est-sec">
+        <h3>{tt("What's included")}</h3>
+        <div className="prop-lines">
+          <div className="prop-line prop-line-head"><span>{tt("Description")}</span><span>{tt("Type")}</span><span>{tt("Qty")}</span><span>{tt("Price each")}</span><span>{tt("Amount")}</span><span /></div>
+          {lines.map((l, i) => (
+            <div key={i} className="prop-line" data-prop-line={i}>
+              <input value={l.label} onChange={(e) => setRow(setLines, lines, i, "label", e.target.value)} placeholder={tt("Tear off and replace, 30 squares")} aria-label="Description" />
+              <select value={l.category} onChange={(e) => setRow(setLines, lines, i, "category", e.target.value)} aria-label="Type" data-prop-cat={i}>
+                {LINE_CATEGORIES.map((c) => <option key={c.id} value={c.id}>{tt(c.label)}</option>)}
+              </select>
+              <input value={l.qty} inputMode="decimal" onChange={(e) => setRow(setLines, lines, i, "qty", e.target.value)} aria-label="Quantity" />
+              <input value={l.unit} inputMode="decimal" onChange={(e) => setRow(setLines, lines, i, "unit", e.target.value)} placeholder="$0" aria-label="Price each" />
+              <span className="prop-line-total">{centsText(lineCents(l)) || "$0"}</span>
+              <button type="button" className="icon-x" aria-label="Remove line" disabled={lines.length === 1}
+                onClick={() => setLines(lines.filter((_, k) => k !== i))}><X size={12} /></button>
+            </div>
+          ))}
+          <button type="button" className="link-btn" data-prop-add-line onClick={() => setLines([...lines, blankLine("other")])}><Plus size={13} />{" "}{tt("Add a line")}</button>
+        </div>
+        <div className="est-sum" data-prop-total>
+          {LINE_CATEGORIES.map((c) => <span key={c.id}>{tt(c.label)} <b>{centsText(by[c.id]) || "$0"}</b></span>)}
+          <span className="est-sum-total">{tt("Total")} <b>{centsText(total) || "$0"}</b></span>
+        </div>
+      </section>
+
+      <section className="est-sec">
+        <h3>{tt("Project details")}</h3>
+        <div className="est-rows">
+          {details.map((d, i) => (
+            <div key={i} className="est-row2" data-est-detail={i}>
+              <input value={d.label} onChange={(e) => setRow(setDetails, details, i, "label", e.target.value)} placeholder={tt("Roof size")} aria-label="Detail" />
+              <input value={d.value} onChange={(e) => setRow(setDetails, details, i, "value", e.target.value)} placeholder={tt("27.5 squares")} aria-label="Value" />
+              <button type="button" className="icon-x" aria-label="Remove detail" onClick={() => setDetails(details.filter((_, k) => k !== i))}><X size={12} /></button>
+            </div>
+          ))}
+          <button type="button" className="link-btn" data-est-add-detail onClick={() => setDetails([...details, { label: "", value: "" }])}><Plus size={13} />{" "}{tt("Add a detail")}</button>
+        </div>
+        <p className="fld-note">{tt("A detail with no value is left off the estimate.")}</p>
+      </section>
+
+      <section className="est-sec">
+        <h3>{tt("Proposed production schedule")}</h3>
+        <div className="est-rows">
+          {schedule.map((p, i) => (
+            <div key={i} className="est-phase-row" data-est-phase={i}>
+              <input value={p.label} onChange={(e) => setRow(setSchedule, schedule, i, "label", e.target.value)} placeholder={tt("Tear off")} aria-label="Phase" />
+              <input type="date" value={p.start} onChange={(e) => setRow(setSchedule, schedule, i, "start", e.target.value)} aria-label="Start" />
+              <input type="date" value={p.end} min={p.start || undefined} onChange={(e) => setRow(setSchedule, schedule, i, "end", e.target.value)} aria-label="End" />
+              <select value={p.status} onChange={(e) => setRow(setSchedule, schedule, i, "status", e.target.value)} aria-label="Status">
+                {PHASE_STATUS_IDS.map((sid) => <option key={sid} value={sid}>{tt(PHASE_STATUSES[sid].label)}</option>)}
+              </select>
+              <button type="button" className="icon-x" aria-label="Remove phase" onClick={() => setSchedule(schedule.filter((_, k) => k !== i))}><X size={12} /></button>
+            </div>
+          ))}
+          <button type="button" className="link-btn" data-est-add-phase onClick={() => setSchedule([...schedule, { label: "", start: "", end: "", status: "planned" }])}><Plus size={13} />{" "}{tt("Add a phase")}</button>
+        </div>
+        <p className="fld-note">{tt("A plan, not a booking: dates can be left blank and set once the work is scheduled.")}</p>
+      </section>
+
+      <section className="est-sec">
+        <h3>{tt("Notes for the homeowner")}</h3>
+        <label className="fld"><textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} aria-label="Notes"
+          placeholder={tt("What's included, warranty, payment terms…")} /></label>
+        <div className="fld-row">
+          <label className="fld">{tt("Good for (days)")}<input type="number" min={1} max={180} value={days} onChange={(e) => setDays(e.target.value)} /></label>
+          <label className="fld">{tt("From the appointment")}
+            <select value={apptId} onChange={(e) => setApptId(e.target.value)} data-prop-appt>
+              <option value="">{tt("Not tied to an appointment")}</option>
+              {appts.map((a) => <option key={a.id} value={a.id}>{apptWhenText(a.date).replace(/^(\w+), /, "")} · {APPT_STATUSES[a.status]?.label || a.status}</option>)}
+            </select></label>
+        </div>
+        {apptId && <p className="fld-note">{tt("Signing it marks that appointment sold, at this total.")}</p>}
+      </section>
+
+      <section className="est-sec est-office" data-est-office>
+        <h3>{tt("For your office")} <small>{tt("never shown to the homeowner")}</small></h3>
+        <div className="fld-row">
+          <label className="fld">{tt("Your cost")}<input value={cost} inputMode="decimal" placeholder="$0" onChange={(e) => setCost(e.target.value)} data-est-cost /></label>
+          <div className="fld est-margin-out"><span>{tt("Profit margin")}</span><b data-est-margin-out>{draft.margin === null ? "—" : marginText(draft.margin)}</b></div>
+        </div>
+        <div className="appt-q-label">{tt("Tasks")}</div>
+        <div className="est-rows">
+          {tasks.map((t, i) => (
+            <div key={i} className="est-task-row" data-est-task={i}>
+              <input type="checkbox" checked={!!t.done} onChange={(e) => setRow(setTasks, tasks, i, "done", e.target.checked)} aria-label="Done" />
+              <input value={t.label} onChange={(e) => setRow(setTasks, tasks, i, "label", e.target.value)} placeholder={tt("Order materials")} aria-label="Task" />
+              <input type="date" value={t.due} onChange={(e) => setRow(setTasks, tasks, i, "due", e.target.value)} aria-label="Due" />
+              <input value={t.who} onChange={(e) => setRow(setTasks, tasks, i, "who", e.target.value)} placeholder={tt("Who")} aria-label="Who" />
+              <button type="button" className="icon-x" aria-label="Remove task" onClick={() => setTasks(tasks.filter((_, k) => k !== i))}><X size={12} /></button>
+            </div>
+          ))}
+          <button type="button" className="link-btn" data-est-add-task onClick={() => setTasks([...tasks, { label: "", due: "", who: "", done: false }])}><Plus size={13} />{" "}{tt("Add a task")}</button>
+        </div>
+      </section>
+
       {err && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
       <div className="form-actions">
-        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-solid" disabled={busy || !title.trim() || total <= 0} data-prop-save onClick={save}>{busy ? "Saving…" : "Save draft"}</button>
+        <button className="btn-ghost" onClick={onCancel}>{tt("Cancel")}</button>
+        <button className="btn-ghost" data-est-preview disabled={!title.trim()} onClick={() => setPreviewing(true)}><Eye size={14} />{" "}{tt("View estimate")}</button>
+        <button className="btn-solid" disabled={busy || !title.trim() || total <= 0} data-prop-save onClick={save}>{busy ? tt("Saving…") : tt("Save draft")}</button>
       </div>
+      {previewing && (
+        <Modal wide onClose={() => setPreviewing(false)} className="est-modal">
+          <EstimateDoc e={draft} accountName={accountName} logo={showLogo ? logo.src : null} office />
+        </Modal>
+      )}
     </div>
   );
 }
 
-function LeadProposals({ lead, role, apptById = {}, onChanged }) {
+function LeadProposals({ lead, role, apptById = {}, onChanged, accountName = "", meName = "" }) {
   const [list, setList] = useState(null);
   const [err, setErr] = useState(null);
   const [editing, setEditing] = useState(null);
+  const [viewing, setViewing] = useState(null);
   const [busy, setBusy] = useState("");
   const [flash, setFlash] = useState("");
+  const [migration, setMigration] = useState(null);
+  const logo = useEstimateLogo();
   const sales = SALES_ROLES.includes(role);
   const load = async () => {
-    try { setList((await api.leadProposals(lead.id)).proposals); setErr(null); }
+    try { const r = await api.leadProposals(lead.id); setList(r.proposals); setMigration(r.extrasMigration || null); setErr(null); }
     catch (e) { setErr(e); }
   };
-  useEffect(() => { load(); }, [lead.id]);
+  useEffect(() => { load(); }, [lead.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const appts = (lead.appointments || []).map((a) => ({ ...a, ...(apptById[a.id] || {}) }));
+  const replace = (p) => setList((xs) => xs.map((x) => (x.id === p.id ? p : x)));
   const act = async (p, what) => {
     setBusy(p.id + what); setErr(null); setFlash("");
     try {
       const r = what === "send" ? await api.sendProposal(p.id) : await api.voidProposal(p.id);
-      setList((xs) => xs.map((x) => (x.id === p.id ? r.proposal : x)));
-      setFlash(what === "send" ? (r.emailed?.ok ? `Emailed to ${r.emailed.to}.` : `It's out, but the email didn't send (${r.emailed?.error || "try again"}). Copy the link below.`) : "Withdrawn.");
+      replace(r.proposal);
+      setFlash(what === "send" ? (r.emailed?.ok ? tt("Emailed to {to}.", { to: r.emailed.to }) : tt("It's out, but the email didn't send ({why}). Copy the link below.", { why: r.emailed?.error || "try again" })) : tt("Withdrawn."));
       onChanged?.();
     } catch (e) { setErr(e); }
     finally { setBusy(""); }
   };
-  if (err && !list) return <p className="form-err" role="alert">{crmPlusErrText(err)} <button className="link-btn" onClick={load}>Try again</button></p>;
-  if (!list) return <p className="note">Loading…</p>;
+  // Ticking a task off: the office's own list, so it changes on a sent
+  // estimate too. Awaited, and drawn from the server's answer.
+  const toggleTask = async (p, i) => {
+    const tasks = p.tasks.map((t, j) => (j === i ? { ...t, done: !t.done } : t));
+    try { const r = await api.patchProposal(p.id, { tasks }); replace(r.proposal); if (viewing?.id === p.id) setViewing(r.proposal); }
+    catch (e) { setErr(e); }
+  };
+  const docOf = (p) => ({ ...p, homeowner: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
+    address: [lead.street, lead.city, lead.state].filter(Boolean).join(", "), services: lead.services || [], rep: p.createdByName });
+  if (err && !list) return <p className="form-err" role="alert">{crmPlusErrText(err)} <button className="link-btn" onClick={load}>{tt("Try again")}</button></p>;
+  if (!list) return <p className="note">{tt("Loading…")}</p>;
   return (
     <div className="lead-proposals" data-lead-proposals>
-      <p className="note">A proposal is a priced estimate they open from a link and sign with their name. Signing marks the estimate sold.</p>
-      {sales && !editing && <button className="btn-solid" data-new-proposal onClick={() => setEditing("new")}><FileSignature size={15} /> New proposal</button>}
-      {!sales && <p className="note">Proposals are written by a sales manager or the office.</p>}
+      <div className="est-list-head">
+        <p className="note">{tt("A priced estimate they open from a link and sign with their name. Signing marks the appointment sold.")}</p>
+        {sales && !editing && <button className="btn-solid" data-new-proposal onClick={() => setEditing("new")}><FileSignature size={15} />{" "}{tt("New estimate")}</button>}
+      </div>
+      {!sales && <p className="note">{tt("Estimates are written by a sales manager or the office.")}</p>}
+      {migration && <p className="appt-warn" role="note">{tt("Run migration {m} to keep the schedule, project details, tasks and cost.", { m: migration })}</p>}
       {editing && (
-        <ProposalEditor lead={lead} appts={appts} existing={editing === "new" ? null : editing}
+        <ProposalEditor lead={lead} appts={appts} existing={editing === "new" ? null : editing} logo={logo} accountName={accountName} rep={meName}
           onCancel={() => setEditing(null)}
           onSaved={(p) => { setList((xs) => [p, ...xs.filter((x) => x.id !== p.id)]); setEditing(null); }} />
       )}
       {flash && <p className="appt-flash" role="status">{flash}</p>}
       {err && list && <p className="form-err" role="alert">{crmPlusErrText(err)}</p>}
-      {!list.length && !editing && <p className="note">None yet.</p>}
+      {!list.length && !editing && <div className="cov-preview"><FileSignature size={14} /><em>{tt("No estimates yet.")}</em></div>}
       <ul className="prop-list">
-        {list.map((p) => (
-          <li key={p.id} className="prop-row" data-proposal={p.id}>
-            <div className="prop-row-main"><b>{p.title}</b> <span>{centsText(p.totalCents)}</span>
-              <span className={`tn-chip ${PROPOSAL_CHIP[p.status]}`} data-proposal-status={p.status}>{PROPOSAL_STATUSES[p.status]?.label || p.status}</span></div>
-            <p className="note">
-              {p.status === "signed" ? `Signed by ${p.signerName} ${stampDay(p.signedAt)}`
-                : p.status === "declined" ? `Declined ${stampDay(p.declinedAt)}${p.declineNote ? `: "${p.declineNote}"` : ""}`
-                : p.status === "draft" ? `Draft, written by ${p.createdByName || "your team"}`
-                : `Sent ${stampDay(p.sentAt)}${p.viewedAt ? `, opened ${stampDay(p.viewedAt)}` : ", not opened yet"}${p.expiresAt ? ` · good until ${stampDay(p.expiresAt)}` : ""}`}
-            </p>
-            {p.link && ["sent", "viewed"].includes(p.status) && (
-              <p className="prop-link"><code>{p.link}</code> <button type="button" className="link-btn" onClick={() => navigator.clipboard?.writeText(p.link)}><Copy size={12} /> Copy</button></p>
-            )}
-            {sales && (
-              <div className="form-actions">
-                {p.status === "draft" && <button className="btn-ghost" onClick={() => setEditing(p)}><Pencil size={13} /> Edit</button>}
-                {p.status === "draft" && <button className="btn-solid" data-send-proposal disabled={!!busy || !lead.email} onClick={() => act(p, "send")}
-                  title={lead.email ? "" : CRM_PLUS_TEXT.needs_email}><Send size={13} /> {busy === p.id + "send" ? "Sending…" : "Email it to sign"}</button>}
-                {["sent", "viewed"].includes(p.status) && <button className="btn-ghost" disabled={!!busy || !lead.email} onClick={() => act(p, "send")}>Email it again</button>}
-                {["draft", "sent", "viewed"].includes(p.status) && <button className="btn-ghost" disabled={!!busy} onClick={() => act(p, "void")}>Withdraw</button>}
+        {list.map((p) => {
+          const open = (p.tasks || []).filter((t) => !t.done).length;
+          return (
+            <li key={p.id} className="prop-row est-row" data-proposal={p.id}>
+              <div className="prop-row-main">
+                <div className="est-row-title"><b>{p.title}</b><span className="est-row-num">{p.number}</span></div>
+                <span className="est-row-total">{centsText(p.totalCents)}</span>
+                <span className={`tn-chip ${PROPOSAL_CHIP[p.status]}`} data-proposal-status={p.status}>{tt(PROPOSAL_STATUSES[p.status]?.label || p.status)}</span>
+                <button type="button" className="btn-ghost est-view" data-view-estimate onClick={() => setViewing(p)}><Eye size={14} />{" "}{tt("View estimate")}</button>
               </div>
-            )}
-            {sales && p.status === "draft" && !lead.email && <p className="note">{CRM_PLUS_TEXT.needs_email}</p>}
-          </li>
-        ))}
+              <p className="note">
+                {p.status === "signed" ? tt("Signed by {who} {when}", { who: p.signerName, when: stampDay(p.signedAt) })
+                  : p.status === "declined" ? `${tt("Declined {when}", { when: stampDay(p.declinedAt) })}${p.declineNote ? `: "${p.declineNote}"` : ""}`
+                  : p.status === "draft" ? tt("Draft, written by {who}", { who: p.createdByName || tt("your team") })
+                  : `${tt("Sent {when}", { when: stampDay(p.sentAt) })}${p.viewedAt ? `, ${tt("opened {when}", { when: stampDay(p.viewedAt) })}` : `, ${tt("not opened yet")}`}${p.expiresAt ? ` · ${tt("good until {when}", { when: stampDay(p.expiresAt) })}` : ""}`}
+                {p.margin !== null && p.margin !== undefined && <> · {tt("margin {m}", { m: marginText(p.margin) })}</>}
+                {open > 0 && <> · {tt(open === 1 ? "{n} task open" : "{n} tasks open", { n: open })}</>}
+              </p>
+              {p.link && ["sent", "viewed"].includes(p.status) && (
+                <p className="prop-link"><code>{p.link}</code> <button type="button" className="link-btn" onClick={() => navigator.clipboard?.writeText(p.link)}><Copy size={12} />{" "}{tt("Copy")}</button></p>
+              )}
+              {sales && (
+                <div className="form-actions">
+                  {p.status === "draft" && <button className="btn-ghost" onClick={() => setEditing(p)}><Pencil size={13} />{" "}{tt("Edit")}</button>}
+                  {p.status === "draft" && <button className="btn-solid" data-send-proposal disabled={!!busy || !lead.email} onClick={() => act(p, "send")}
+                    title={lead.email ? "" : CRM_PLUS_TEXT.needs_email}><Send size={13} />{" "}{busy === p.id + "send" ? tt("Sending…") : tt("Email it to sign")}</button>}
+                  {["sent", "viewed"].includes(p.status) && <button className="btn-ghost" disabled={!!busy || !lead.email} onClick={() => act(p, "send")}>{tt("Email it again")}</button>}
+                  {["draft", "sent", "viewed"].includes(p.status) && <button className="btn-ghost" disabled={!!busy} onClick={() => act(p, "void")}>{tt("Withdraw")}</button>}
+                </div>
+              )}
+              {sales && p.status === "draft" && !lead.email && <p className="note">{CRM_PLUS_TEXT.needs_email}</p>}
+            </li>
+          );
+        })}
       </ul>
+      {viewing && (
+        <Modal wide onClose={() => setViewing(null)} className="est-modal">
+          <EstimateDoc e={docOf(viewing)} accountName={accountName} logo={viewing.showLogo !== false ? logo.src : null} office>
+            {sales && (viewing.tasks || []).length > 0 && (
+              <section className="est-card est-tasks-edit" data-est-task-toggles>
+                <h2>{tt("Tick tasks off")}</h2>
+                {viewing.tasks.map((t, i) => (
+                  <label key={i} className="appt-check"><input type="checkbox" checked={!!t.done} onChange={() => toggleTask(viewing, i)} data-est-task-toggle={i} />{t.label}</label>
+                ))}
+              </section>
+            )}
+          </EstimateDoc>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -33110,7 +33427,9 @@ function LeadFiles({ lead }) {
   );
 }
 
-// The homeowner's page: no account, opened from the email.
+// The homeowner's page: no account, opened from the email. The estimate is
+// EstimateDoc -- the same drawing the office's View estimate shows, minus the
+// office's margin and tasks -- and the signature sits under it.
 function ProposalPage({ token }) {
   const [p, setP] = useState(null);
   const [gone, setGone] = useState(false);
@@ -33124,57 +33443,52 @@ function ProposalPage({ token }) {
     api.publicProposal(token).then((r) => { setP(r); setName(r.homeowner || ""); })
       .catch((e) => (e?.status === 404 ? setGone(true) : setErr("That didn't load. Check your connection and open the link again.")));
   }, [token]);
+  useEffect(() => { if (p?.title) document.title = `${p.title} · ${p.account?.name || "Estimate"}`; }, [p?.title, p?.account?.name]);
   const go = async (what) => {
     setBusy(true); setErr("");
     try { setP(what === "sign" ? await api.signProposal(token, { name, agree }) : await api.declineProposal(token, { note })); setDeclining(false); }
-    catch (e) { setErr(CRM_PLUS_TEXT[e?.body?.error] || (e?.body?.error === "full_name_required" ? "Type your full name, first and last." : e?.body?.error === "agree_required" ? "Tick the box to agree." : e?.body?.error === "expired" ? "This proposal has expired. Ask them for a new one." : "That didn't go through. Please try again.")); }
+    catch (e) { setErr(CRM_PLUS_TEXT[e?.body?.error] || (e?.body?.error === "full_name_required" ? "Type your full name, first and last." : e?.body?.error === "agree_required" ? "Tick the box to agree." : e?.body?.error === "expired" ? "This estimate has expired. Ask them for a new one." : "That didn't go through. Please try again.")); }
     finally { setBusy(false); }
   };
   return (
-    <div className="pack-page proposal-page" data-proposal-page>
-      <div className="pack-card">
-        {gone ? (<><h2>We couldn't find that proposal</h2><p>It may have been copied only in part. Open it again from the email.</p></>)
-          : !p && !err ? <p className="note">Loading…</p>
-          : p && (<>
-            <p className="pack-kicker">Proposal from {p.account.name}</p>
-            <h1 className="pack-name" data-proposal-title>{p.title}</h1>
-            <p className="pack-lede">For {p.homeowner}{p.address ? ` · ${p.address}` : ""}</p>
-            <table className="prop-table" data-proposal-items>
-              <thead><tr><th>Description</th><th>Qty</th><th>Price</th><th>Total</th></tr></thead>
-              <tbody>{p.items.map((it, i) => (
-                <tr key={i}><td>{it.label}</td><td>{it.qty}</td><td>{centsText(it.unitCents)}</td><td>{centsText(Math.round(it.qty * it.unitCents))}</td></tr>
-              ))}</tbody>
-              <tfoot><tr><td colSpan={3}>Total</td><td data-proposal-total>{centsText(p.totalCents)}</td></tr></tfoot>
-            </table>
-            {p.notes && <p className="prop-notes">{p.notes}</p>}
+    <div className="est-page proposal-page" data-proposal-page>
+      {gone ? (
+        <div className="pack-card"><h2>We couldn't find that estimate</h2><p>It may have been copied only in part. Open it again from the email.</p></div>
+      ) : !p && !err ? <div className="pack-card"><p className="note">Loading…</p></div>
+      : p && (
+        <EstimateDoc e={p} accountName={p.account.name} logo={p.logo ? apiAsset(p.logo) : null}>
+          <section className="est-card est-sign-card" data-est-sign>
             {p.status === "signed" ? (
               <p className="prop-done" data-proposal-signed><CheckCircle2 size={20} /> Signed by {p.signerName} on {stampDay(p.signedAt)}. {p.account.name} will be in touch to schedule the work.</p>
             ) : p.status === "declined" ? (
-              <p className="prop-done" data-proposal-declined>You declined this proposal. Thanks for letting {p.account.name} know.</p>
+              <p className="prop-done" data-proposal-declined>You declined this estimate. Thanks for letting {p.account.name} know.</p>
             ) : p.block ? (
-              <p className="appt-warn" data-proposal-block>{p.block === "expired" ? "This proposal has expired. Ask them for a new one." : "This proposal can't be signed any more."}</p>
+              <p className="appt-warn" data-proposal-block>{p.block === "expired" ? "This estimate has expired. Ask them for a new one." : "This estimate can't be signed any more."}</p>
             ) : declining ? (
               <div className="prop-sign">
                 <label className="fld">Anything you'd like them to know? (optional)<textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} /></label>
                 <div className="form-actions"><button className="btn-ghost" onClick={() => setDeclining(false)}>Back</button>
-                  <button className="btn-danger" disabled={busy} onClick={() => go("decline")}>Decline the proposal</button></div>
+                  <button className="btn-danger" disabled={busy} onClick={() => go("decline")}>Decline the estimate</button></div>
               </div>
             ) : (
               <div className="prop-sign" data-proposal-sign>
-                {p.expiresAt && <p className="note">Good until {stampDay(p.expiresAt)}.</p>}
+                <h2>Accept and sign</h2>
+                {p.expiresAt && <p className="note">This estimate is good until {stampDay(p.expiresAt)}.</p>}
                 <label className="fld">Your full name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" data-sign-name /></label>
                 <label className="prop-agree"><input type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} data-sign-agree />
-                  I accept this proposal for {centsText(p.totalCents)}, and typing my name is my signature.</label>
+                  I accept this estimate for {centsText(p.totalCents)}, and typing my name is my signature.</label>
                 <div className="form-actions">
                   <button className="btn-ghost" onClick={() => setDeclining(true)} data-proposal-decline>Decline</button>
                   <button className="btn-solid" disabled={busy || !agree || name.trim().split(/\s+/).length < 2} data-sign-go onClick={() => go("sign")}>
-                    <FileSignature size={15} /> {busy ? "Signing…" : "Sign the proposal"}</button>
+                    <FileSignature size={15} /> {busy ? "Signing…" : "Sign the estimate"}</button>
                 </div>
               </div>
             )}
-          </>)}
-        {err && <p className="form-err" role="alert">{err}</p>}
-      </div>
+            {err && <p className="form-err" role="alert">{err}</p>}
+          </section>
+        </EstimateDoc>
+      )}
+      {!p && err && <div className="pack-card"><p className="form-err" role="alert">{err}</p></div>}
       <p className="pack-foot">Sent through SubSub</p>
     </div>
   );
@@ -57992,12 +58306,17 @@ button.job-insp:hover{border-color:#2f5577}
 .bulk-bar select,.bulk-bar input{min-height:40px;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px)}
 .lead-proposals,.lead-claim,.lead-files{display:flex;flex-direction:column;gap:10px;margin-top:12px}
 .prop-lines{display:flex;flex-direction:column;gap:6px}
-.prop-line{display:grid;grid-template-columns:minmax(0,3fr) 64px 110px 100px 28px;gap:8px;align-items:center}
+.prop-line{display:grid;grid-template-columns:minmax(0,3fr) 118px 64px 110px 100px 28px;gap:8px;align-items:center}
+.prop-line select{min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px);min-width:0}
 .prop-line input{min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px);min-width:0}
 .prop-line-head{font-size:12px;color:var(--ink-soft);font-weight:700}
 .prop-line-total{text-align:right;font-variant-numeric:tabular-nums}
 .prop-total{text-align:right;font-size:17px;margin:4px 0}
-@media (max-width:560px){.prop-line{grid-template-columns:minmax(0,1fr) 56px 90px 24px}.prop-line-total,.prop-line-head span:nth-child(4){display:none}}
+@media (max-width:700px){.prop-line{grid-template-columns:minmax(0,1fr) 100px 24px;row-gap:6px}
+  .prop-line > input:first-child{grid-column:1 / -1}
+  .prop-line-head{display:none}
+  .prop-line .prop-line-total{grid-column:auto}
+  .prop-line{padding-bottom:8px;border-bottom:1px dashed var(--line)}}
 .prop-list,.lead-file-list,.comm-rows{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .prop-row{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card)}
 .prop-row-main{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
@@ -58024,6 +58343,125 @@ button.job-insp:hover{border-color:#2f5577}
 .prop-agree{display:flex;gap:10px;align-items:flex-start;font-size:15px}
 .prop-agree input{width:20px;height:20px;margin-top:2px;flex:none}
 .prop-done{display:flex;gap:8px;align-items:center;font-weight:600}
+/* 114. THE ESTIMATE. One document drawn on the homeowner's page and in the
+   office's View estimate window: a header with the logo, a row of facts, the
+   money beside the proposed schedule, the project details, the lines, the
+   notes. Built to look like the company sat down and wrote it, because the
+   homeowner reads it as exactly that. */
+.est-page{min-height:100vh;background:var(--paper);padding:28px 16px 40px;display:flex;flex-direction:column;align-items:center;gap:16px}
+.est-page > .est-doc,.est-page > .pack-card{width:100%;max-width:1040px}
+.est-doc{display:flex;flex-direction:column;gap:16px;color:var(--ink)}
+.est-head{display:flex;gap:18px;align-items:center;padding:22px 24px;background:var(--card);border:1px solid var(--line);border-radius:18px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04),0 4px 14px rgba(16,24,40,.05)}
+.est-logo{flex:none;width:64px;height:64px;border-radius:14px;display:flex;align-items:center;justify-content:center;overflow:hidden;
+  background:#fff;border:1px solid var(--line)}
+.est-logo img{max-width:100%;max-height:100%;object-fit:contain;padding:6px}
+.est-logo.none{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:800;font-size:22px;letter-spacing:.02em}
+.est-logo.sm{width:48px;height:48px;border-radius:12px;font-size:16px}
+.est-logo.sm.none{background:var(--paper);border:1px dashed var(--line);color:var(--ink-soft)}
+.est-title{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:4px}
+.est-kicker{margin:0;font-size:12.5px;font-weight:700;color:var(--ink-soft);letter-spacing:.04em;text-transform:uppercase}
+.est-title h1{margin:0;font-size:26px;line-height:1.2;font-weight:800;letter-spacing:-.01em;overflow-wrap:anywhere}
+.est-addr{margin:0;display:flex;gap:6px;align-items:center;color:var(--ink-soft);font-size:14.5px}
+.est-status{flex:none;align-self:flex-start;display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:999px;font-size:13px;font-weight:700;
+  background:var(--paper);color:var(--ink-soft);border:1px solid var(--line)}
+.est-status::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.est-status.s-sent,.est-status.s-viewed{background:#fff6e5;color:#9a6200;border-color:#f3d79a}
+.est-status.s-signed{background:#e8f5ee;color:#1f7a4c;border-color:#b6dcc6}
+.est-status.s-declined,.est-status.s-void{background:#fdeeee;color:#a3302a;border-color:#efc0bd}
+.est-facts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+.est-fact{display:flex;flex-direction:column;gap:5px;padding:14px 16px;background:var(--card);border:1px solid var(--line);border-radius:14px;min-width:0}
+.est-fact span{font-size:12.5px;color:var(--ink-soft);font-weight:600}
+.est-fact b{font-size:15.5px;font-weight:800;overflow-wrap:anywhere}
+.est-fact em{font-style:normal;font-size:12.5px;color:var(--ink-soft);overflow-wrap:anywhere}
+.est-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:16px;align-items:stretch}
+.est-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;min-width:0}
+.est-card h2{margin:0 0 12px;font-size:17px;font-weight:800;display:flex;gap:8px;align-items:baseline}
+.est-card h2 small,.est-sec h3 small{font-size:11.5px;font-weight:700;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.05em}
+.est-money dl{margin:0;display:flex;flex-direction:column}
+.est-money dl > div{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-top:1px solid var(--line);font-variant-numeric:tabular-nums}
+.est-money dt{color:var(--ink-soft);font-size:14.5px}
+.est-money dd{margin:0;font-weight:800;font-size:15.5px}
+.est-money .est-total{border-top:0;padding-top:2px;align-items:center}
+.est-money .est-total dt{color:var(--ink);font-weight:700}
+.est-money .est-total dd{color:var(--brand);font-size:24px}
+.est-margin dd{color:var(--brand)}
+.est-margin dt small{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;margin-left:4px}
+.est-muted{color:var(--ink-soft);font-weight:500;font-size:14px}
+.est-sched table,.est-items{width:100%;border-collapse:separate;border-spacing:0;font-size:14px}
+.est-sched th,.est-items th{text-align:left;font-size:12.5px;font-weight:700;color:var(--ink-soft);padding:9px 10px;background:var(--paper);border-bottom:1px solid var(--line)}
+.est-sched th:first-child,.est-items th:first-child{border-top-left-radius:10px}
+.est-sched th:last-child,.est-items th:last-child{border-top-right-radius:10px}
+.est-sched td,.est-items td{padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.est-sched tr:last-child td{border-bottom:0}
+.est-phase{display:inline-block;padding:4px 10px;border-radius:8px;font-size:12.5px;font-weight:700;background:var(--paper);color:var(--ink-soft);border:1px solid var(--line);white-space:nowrap}
+.est-phase.s-scheduled{background:#eaf1fd;color:#2456b3;border-color:#c5d7f6}
+.est-phase.s-complete{background:#e8f5ee;color:#1f7a4c;border-color:#b6dcc6}
+.est-details{margin:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:28px}
+.est-details > div{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+.est-details dt{color:var(--ink-soft);font-size:14.5px}
+.est-details dd{margin:0;font-weight:700;text-align:right;overflow-wrap:anywhere}
+.est-items-wrap{overflow-x:auto}
+.est-items th:not(:first-child),.est-items td:not(:first-child){text-align:right;white-space:nowrap}
+.est-items td small{display:block;font-size:12px;color:var(--ink-soft);margin-top:2px}
+.est-items tfoot td{font-weight:800;font-size:17px;border-bottom:0;padding-top:14px}
+.est-notes{margin:0;white-space:pre-wrap;line-height:1.55}
+.est-tasks ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.est-tasks li{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:14.5px}
+.est-tasks li:last-child{border-bottom:0}
+.est-tasks li svg{flex:none;color:var(--line)}
+.est-tasks li.done svg{color:var(--brand)}
+.est-tasks li.done span{text-decoration:line-through;color:var(--ink-soft)}
+.est-tasks li em{margin-left:auto;font-style:normal;font-size:12.5px;color:var(--ink-soft);white-space:nowrap}
+.est-tasks-edit{display:flex;flex-direction:column;gap:6px}
+.est-sign-card h2{margin-bottom:4px}
+.est-modal.modal{max-width:1080px;background:var(--paper)}
+@media (max-width:900px){.est-facts{grid-template-columns:repeat(3,minmax(0,1fr))}.est-grid{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:560px){.est-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .est-facts .est-fact:last-child:nth-child(odd){grid-column:1 / -1}
+  .est-head{flex-wrap:wrap;padding:18px;gap:14px}
+  .est-head .est-logo{width:52px;height:52px;font-size:18px}
+  .est-status{order:1;margin-left:auto;align-self:center}
+  .est-title{order:2;flex-basis:100%}
+  .est-title h1{font-size:22px}.est-details{grid-template-columns:minmax(0,1fr)}
+  .est-card{padding:16px}.est-sched th:nth-child(3),.est-sched td:nth-child(3){display:none}}
+/* The editor: sections in the order the estimate reads. */
+.est-editor{display:flex;flex-direction:column;gap:14px}
+.est-sec{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--card);display:flex;flex-direction:column;gap:10px}
+.est-sec h3{margin:0;font-size:15.5px;font-weight:800;display:flex;gap:8px;align-items:baseline}
+.est-office{background:var(--paper);border-style:dashed}
+.est-logo-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:var(--card)}
+.est-logo-text{flex:1 1 220px;display:flex;flex-direction:column;gap:3px;min-width:0;font-size:13.5px;color:var(--ink-soft)}
+.est-logo-text b{color:var(--ink);font-size:15px}
+.est-logo-acts{display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.est-logo-acts label.btn-ghost{cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.est-logo-show{margin:0}
+.est-sum{display:flex;flex-wrap:wrap;gap:6px 18px;justify-content:flex-end;font-size:14px;color:var(--ink-soft);font-variant-numeric:tabular-nums}
+.est-sum b{color:var(--ink)}
+.est-sum-total{font-size:17px;color:var(--ink)}
+.est-sum-total b{color:var(--brand)}
+.est-rows{display:flex;flex-direction:column;gap:8px}
+.est-rows input,.est-rows select{min-height:44px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-size:var(--field-fs,15px);min-width:0;width:100%}
+.est-row2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr) 28px;gap:8px;align-items:center}
+.est-phase-row{display:grid;grid-template-columns:minmax(0,1.4fr) 150px 150px 130px 28px;gap:8px;align-items:center}
+.est-task-row{display:grid;grid-template-columns:22px minmax(0,1.6fr) 150px minmax(0,.8fr) 28px;gap:8px;align-items:center}
+.est-task-row input[type=checkbox]{width:20px;height:20px;min-height:0;padding:0;accent-color:var(--brand)}
+.est-margin-out{display:flex;flex-direction:column;gap:6px}
+.est-margin-out span{font-size:14px;font-weight:600}
+.est-margin-out b{min-height:44px;display:flex;align-items:center;font-size:20px;color:var(--brand)}
+@media (max-width:700px){.est-phase-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 28px}
+  .est-phase-row > input:first-child{grid-column:1 / -1}
+  .est-task-row{grid-template-columns:22px minmax(0,1fr) 28px}
+  .est-task-row > input[type=date],.est-task-row > input:nth-child(4){grid-column:2 / 3}}
+/* The list of estimates on a lead. */
+.est-list-head{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.est-list-head .note{flex:1 1 260px;margin:0}
+.est-row .prop-row-main{gap:10px}
+.est-row-title{display:flex;flex-direction:column;min-width:0;flex:1 1 180px}
+.est-row-title b{font-size:15.5px;overflow-wrap:anywhere}
+.est-row-num{font-size:12px;color:var(--ink-soft);font-weight:600;letter-spacing:.03em}
+.est-row-total{font-weight:800;font-size:16px;font-variant-numeric:tabular-nums}
+.est-view{display:inline-flex;gap:6px;align-items:center}
 .lead-facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0}
 .lead-facts dt,.lead-label{font-size:12.5px;color:var(--ink-soft);font-weight:600}
 .lead-facts dd{margin:2px 0 0;font-size:14px}

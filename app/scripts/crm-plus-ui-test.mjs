@@ -51,7 +51,12 @@ const posts = { bulk: [], import: [], proposal: [], send: [], claim: [], setting
 let PROPS = [];
 let PUB = { account: { name: "Outerhome" }, homeowner: "Dana Ruiz", address: "1204 N Pine St, Tacoma, WA", title: "Roof replacement",
   items: [{ label: "Tear off and replace", qty: 1, unitCents: 1400000 }, { label: "Gutters", qty: 2, unitCents: 40000 }],
-  totalCents: 1480000, notes: "Lifetime shingle warranty.", status: "sent", expiresAt: "2099-01-01T00:00:00Z", block: null };
+  totalCents: 1480000, notes: "Lifetime shingle warranty.", status: "sent", expiresAt: "2099-01-01T00:00:00Z", block: null,
+  // 114: what a sales estimate carries beyond the lines.
+  number: "EST-AB12CD", rep: "Sam Seller", createdAt: "2026-11-20T10:00:00Z", sentAt: "2026-11-21T10:00:00Z",
+  projectType: "residential", targetStart: "2027-05-20", byCategory: { materials: 1400000, labor: 80000, other: 0 },
+  details: [{ label: "Roof size", value: "27.5 SQ" }], logo: null,
+  schedule: [{ label: "Material order", start: "2027-05-06", end: "2027-05-06", status: "complete" }, { label: "Install", start: "2027-05-21", end: "2027-05-22", status: "planned" }] };
 
 const web = serveApp({ dir: OUT, port: WEB });
 const api = serveApi({ port: API, routes: (path, method, body) => {
@@ -80,12 +85,15 @@ const api = serveApi({ port: API, routes: (path, method, body) => {
   if (/\/sales-leads\/[^/]+\/proposals$/.test(path) && method === "POST") {
     posts.proposal.push(body);
     const p = { id: "pr1", leadId: "ld_dana", appointmentId: body.appointmentId, title: body.title, items: body.items.map((i) => ({ ...i, unitCents: Math.round(Number(i.unit) * 100) })),
-      totalCents: 1480000, notes: body.notes, status: "draft", createdByName: "Richard Braun", createdAt: key(0) };
+      totalCents: 1480000, notes: body.notes, status: "draft", createdByName: "Richard Braun", createdAt: key(0), number: "EST-AB12CD",
+      projectType: body.projectType, targetStart: body.targetStart, details: body.details, schedule: body.schedule, tasks: body.tasks,
+      costCents: 1258000, margin: 0.15, byCategory: { materials: 1400000, labor: 80000, other: 0 }, showLogo: true };
     PROPS = [p];
     return [201, { proposal: p }];
   }
   if (path === "/api/proposals/pr1/send") { posts.send.push(1); PROPS = [{ ...PROPS[0], status: "sent", sentAt: key(0), link: `https://app.subsub.work/proposal/${PTOKEN}` }];
     return [200, { proposal: PROPS[0], emailed: { ok: true, to: "dana@home.test" } }]; }
+  if (path === "/api/estimate-branding") return [200, { logo: null, from: null, canSet: true }];
   if (/\/claim$/.test(path) && method === "GET") return [200, { claim: null }];
   if (/\/claim$/.test(path) && method === "PUT") { posts.claim.push(body); return [200, { claim: { status: body.status, carrier: body.carrier, updatedAt: key(0) } }]; }
   if (/\/files$/.test(path)) return [200, { files: [] }];
@@ -175,20 +183,48 @@ try {
   await wait(400);
   await click(page, "[data-new-proposal]");
   await wait(200);
-  await setVal(page, '[data-prop-line="0"] input[aria-label="What"]', "Tear off and replace");
+  t.ck("the estimate offers the company logo", !!(await page.$("[data-est-logo-row] [data-est-logo-upload]")));
+  t.ck("and opens on the phases and details a roof needs", await page.evaluate(() => document.querySelectorAll("[data-est-phase]").length === 5
+    && [...document.querySelectorAll("[data-est-detail] input[aria-label=Detail]")].map((i) => i.value).includes("Roof size")));
+  await setVal(page, '[data-prop-line="0"] input[aria-label="Description"]', "Tear off and replace");
   await setVal(page, '[data-prop-line="0"] input[aria-label="Price each"]', "14000");
-  await click(page, "[data-prop-add-line]");
-  await wait(100);
-  await setVal(page, '[data-prop-line="1"] input[aria-label="What"]', "Gutters");
+  await setVal(page, '[data-prop-line="1"] input[aria-label="Description"]', "Gutters");
   await setVal(page, '[data-prop-line="1"] input[aria-label="Quantity"]', "2");
   await setVal(page, '[data-prop-line="1"] input[aria-label="Price each"]', "400");
+  await setVal(page, '[data-est-detail="0"] input[aria-label="Value"]', "27.5 SQ");
+  await setVal(page, '[data-est-phase="3"] input[aria-label="Start"]', "2027-05-21");
+  await setVal(page, "[data-est-cost]", "12580");
   await wait(200);
   const tot = await page.evaluate(() => document.querySelector("[data-prop-total]")?.innerText || "");
-  t.ck("the proposal totals its lines as they are typed", /\$14,800/.test(tot), tot);
+  t.ck("the estimate totals its lines as they are typed, by what they are for", /Total \$14,800/.test(tot) && /Materials \$14,000/.test(tot) && /Labor \$800/.test(tot), tot);
+  t.ck("the office sees its margin as it types the cost", (await page.evaluate(() => document.querySelector("[data-est-margin-out]")?.innerText || "")) === "15.0%");
+  await click(page, "[data-est-preview]");
+  await wait(300);
+  const pv = await page.evaluate(() => {
+    const d = document.querySelector(".est-modal [data-estimate-doc]");
+    return d ? { total: d.querySelector("[data-est-total]")?.innerText, margin: d.querySelector("[data-est-margin]")?.innerText || "",
+      phases: d.querySelectorAll("[data-est-schedule] tbody tr").length, detail: d.querySelector("[data-est-details]")?.innerText || "",
+      overflow: d.scrollWidth > d.clientWidth + 1 } : null;
+  });
+  t.ck("View estimate draws it before it is saved, margin included for the office", pv?.total === "$14,800" && /15\.0%/.test(pv.margin) && pv.phases === 5
+    && /27\.5 SQ/.test(pv.detail) && !pv.overflow, JSON.stringify(pv));
+  await closeModal(page);
   await click(page, "[data-prop-save]");
   await wait(400);
   const pb = posts.proposal[0];
-  t.ck("saving sends the lines and ties it to the estimate", pb?.items?.length === 2 && pb.items[1].qty === 2 && pb.appointmentId === "ap_open", JSON.stringify(pb));
+  t.ck("saving sends the lines, the schedule, the details, the tasks and the cost", pb?.items?.length === 2 && pb.items[1].qty === 2 && pb.items[1].category === "labor"
+    && pb.appointmentId === "ap_open" && pb.schedule?.[3]?.start === "2027-05-21" && pb.details?.[0]?.value === "27.5 SQ" && pb.tasks?.length === 4 && pb.cost === "12580",
+    JSON.stringify(pb).slice(0, 400));
+  const row = await page.evaluate(() => {
+    const r = document.querySelector('[data-proposal="pr1"] .prop-row-main');
+    const chip = r?.querySelector("[data-proposal-status]")?.getBoundingClientRect(), v = r?.querySelector("[data-view-estimate]")?.getBoundingClientRect();
+    return { chip: !!chip, view: !!v, beside: !!chip && !!v && Math.abs(chip.top - v.top) < 24 && v.left > chip.left };
+  });
+  t.ck("View estimate sits next to Draft", row.chip && row.view && row.beside, JSON.stringify(row));
+  await click(page, '[data-proposal="pr1"] [data-view-estimate]');
+  await wait(300);
+  t.ck("and opens the estimate", !!(await page.$(".est-modal [data-estimate-doc] [data-est-schedule]")));
+  await closeModal(page);
   await click(page, "[data-send-proposal]");
   await wait(400);
   const sent = await page.evaluate(() => ({ st: document.querySelector('[data-proposal-status]')?.dataset.proposalStatus,
@@ -250,11 +286,17 @@ try {
   pp.on("pageerror", (e) => pubCrashes.push(e.message));
   await pp.setViewport({ width: 390, height: 844 });
   await pp.goto(`http://app.subsub.work:${WEB}/proposal/${PTOKEN}`, { waitUntil: "domcontentloaded" });
-  for (let n = 0; n < 30; n++) { await wait(200); if (await pp.$("[data-proposal-title]")) break; }
-  const view = await pp.evaluate(() => ({ title: document.querySelector("[data-proposal-title]")?.innerText || "",
-    total: document.querySelector("[data-proposal-total]")?.innerText || "", rows: document.querySelectorAll("[data-proposal-items] tbody tr").length,
+  for (let n = 0; n < 30; n++) { await wait(200); if (await pp.$("[data-est-title]")) break; }
+  const view = await pp.evaluate(() => ({ title: document.querySelector("[data-est-title]")?.innerText || "",
+    total: document.querySelector("[data-est-total]")?.innerText || "", rows: document.querySelectorAll("[data-est-items] tbody tr").length,
     disabled: document.querySelector("[data-sign-go]")?.disabled, scroll: document.documentElement.scrollWidth }));
   t.ck("the homeowner sees the lines and the total, with no account", view.title === "Roof replacement" && view.total === "$14,800" && view.rows === 2, JSON.stringify(view));
+  const doc = await pp.evaluate(() => ({ text: document.querySelector("[data-estimate-doc]")?.innerText || "",
+    phases: document.querySelectorAll("[data-est-schedule] tbody tr").length, facts: document.querySelector("[data-est-facts]")?.innerText || "",
+    margin: !!document.querySelector("[data-est-margin]"), tasks: !!document.querySelector("[data-est-tasks]") }));
+  t.ck("the homeowner sees the schedule, the project and who the rep is", doc.phases === 2 && /Sam Seller/.test(doc.facts) && /Residential/.test(doc.facts)
+    && /27\.5 SQ/.test(doc.text), JSON.stringify({ phases: doc.phases, facts: doc.facts }));
+  t.ck("and never the margin or the tasks", !doc.margin && !doc.tasks && !/Profit margin|office only/i.test(doc.text));
   t.ck("and Sign waits for them to agree", view.disabled === true);
   t.ck("and the page fits a phone", view.scroll <= 390, String(view.scroll));
   await pp.evaluate(() => document.querySelector("[data-sign-agree]")?.click());

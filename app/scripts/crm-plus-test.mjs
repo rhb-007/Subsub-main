@@ -178,7 +178,7 @@ try {
   [st, b] = await json(await call(env, `/api/proposals/${pid}/send`, { method: "POST", who: "u_sm" }));
   const link = b.proposal?.link || "";
   const token = link.split("/proposal/")[1];
-  ck("sending emails the homeowner the link", st === 200 && b.emailed?.ok && mailsTo("dana@home.test", /proposal/i).length === 1 && /^[a-z0-9]{32}$/.test(token || ""),
+  ck("sending emails the homeowner the link", st === 200 && b.emailed?.ok && mailsTo("dana@home.test", /^Your estimate from/i).length === 1 && /^[a-z0-9]{32}$/.test(token || ""),
     JSON.stringify(b).slice(0, 300));
   [st, b] = await json(await call(env, `/api/proposals/${pid}`, { method: "PATCH", who: "u_sm", body: { title: "Changed" } }));
   ck("a sent proposal is not edited under them", st === 409 && b.error === "not_a_draft");
