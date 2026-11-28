@@ -30893,6 +30893,7 @@ function AppointmentsView({ role, meId = null, ask = null, onAskUsed, onConvert,
             onSaved={(l) => upsertLead({ ...currentLead, ...l })}
             onOpenAppt={(id) => setOpen(id)}
             onOpenJob={onOpenJob ? (id) => { setOpenLead(null); onOpenJob(id); } : null}
+            onConvertAppt={sales && onConvert ? (a) => { setOpenLead(null); onConvert(a, () => { load(); loadLeads(); }); } : null}
             onConvertEstimate={sales && onConvertEstimate ? (est, appt) => {
               const l = currentLead;
               setOpenLead(null);
@@ -31496,7 +31497,7 @@ function useLeadEstimates(leadId) {
 // 115. WHERE THE SALE STANDS, AND THE ONE PRESS THAT MOVES IT. Appointment,
 // estimate, signature, job: a sale is a signed estimate, so the job is made
 // from what the homeowner signed, and nothing before the signature is "sold".
-function SaleProgress({ lead, estimates, appts, sales, onBook, onWrite, onOpenEstimates, onConvert, onOpenJob }) {
+function SaleProgress({ lead, estimates, appts, sales, onBook, onWrite, onOpenEstimates, onConvert, onConvertAppt = null, onOpenJob }) {
   if (!estimates.list) return null;
   const st = saleStep({ appointments: appts, estimates: estimates.list });
   const e = st.estimate;
@@ -31536,13 +31537,23 @@ function SaleProgress({ lead, estimates, appts, sales, onBook, onWrite, onOpenEs
           </div>
           {!expired && <p className="note">{tt("Sitting with them? Have them sign now opens the signing page on this device.")}</p>}
         </>)}
-        {st.step === "create_job" && (<>
+        {st.step === "create_job" && e && (<>
           <p><b>{tt("Sold")}</b> {tt("{who} signed {title} for {total}.", { who: e.signerName || first, title: e.title, total: centsText(e.totalCents) })}</p>
           {onConvert ? <button className="btn-solid" data-sale-act="create-job" onClick={() => onConvert(e, appt)}><Briefcase size={15} />{" "}{tt("Create the job")}</button>
             : <span className="note">{tt("The office creates the job from the signed estimate.")}</span>}
         </>)}
+        {st.step === "create_job" && !e && (() => {
+          const full = st.appointment?.full || null;
+          const amt = full?.deal?.amountCents;
+          return (<>
+            <p><b>{tt("Sold")}</b> {amt != null ? tt("The appointment on {day} is marked sold for {total}.", { day: apptWhenText(st.appointment.date), total: centsText(amt) })
+              : tt("The appointment on {day} is marked sold.", { day: apptWhenText(st.appointment.date) })}</p>
+            {onConvertAppt && full ? <button className="btn-solid" data-sale-act="create-job-appt" onClick={() => onConvertAppt(full)}><Briefcase size={15} />{" "}{tt("Create the job")}</button>
+              : <span className="note">{tt("The office creates the job from the sale.")}</span>}
+          </>);
+        })()}
         {st.step === "job" && (<>
-          <p><b>{tt("It's a job")}</b> {tt("Made from the signed estimate {n}.", { n: e.number })}</p>
+          <p><b>{tt("It's a job")}</b> {e ? tt("Made from the signed estimate {n}.", { n: e.number }) : tt("Made from the sale on {day}.", { day: apptWhenText(st.appointment?.date) })}</p>
           {onOpenJob && <button className="btn-ghost" data-sale-act="open-job" onClick={() => onOpenJob(st.jobId)}>{tt("Open the job")}</button>}
         </>)}
       </div>
@@ -31550,7 +31561,7 @@ function SaleProgress({ lead, estimates, appts, sales, onBook, onWrite, onOpenEs
   );
 }
 
-function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, onOpenJob = null, onConvertEstimate = null, accountName = "", startTab = "", startMode = "", onContacted, lib = null }) {
+function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, onBook, onOpenJob = null, onConvertEstimate = null, onConvertAppt = null, accountName = "", startTab = "", startMode = "", onContacted, lib = null }) {
   const sales = SALES_ROLES.includes(role);
   const estimates = useLeadEstimates(lead.id);
   const [tab, setTab] = useState(LEAD_TABS.some(([id]) => id === startTab) ? startTab : "overview");
@@ -31600,7 +31611,7 @@ function LeadDetail({ lead, role, owners, apptById = {}, onSaved, onOpenAppt, on
         onConsent={(consent) => onSaved({ ...lead, consent })}>
       <SaleProgress lead={lead} estimates={estimates} appts={appts} sales={sales} onBook={onBook}
         onWrite={() => { setTab("proposals"); setWriteNew((n) => n + 1); }} onOpenEstimates={() => setTab("proposals")}
-        onConvert={onConvertEstimate} onOpenJob={onOpenJob} />
+        onConvert={onConvertEstimate} onConvertAppt={onConvertAppt} onOpenJob={onOpenJob} />
       <section className="appt-sec lead-stage-sec">
       <h4>Stage</h4>
       <div className="lead-stages" role="group" aria-label="Stage" data-lead-stages>

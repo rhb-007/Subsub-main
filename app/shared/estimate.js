@@ -237,7 +237,14 @@ export function saleStep({ appointments = [], estimates = [] } = {}) {
   const live = (estimates || []).filter((p) => !["void", "expired"].includes(p.status));
   const signed = live.find((p) => p.status === "signed");
   if (signed?.jobId) return { step: "job", estimate: signed, jobId: signed.jobId };
+  // A sale on an appointment counts as much as a signed estimate: one made
+  // into a job, or one marked sold before a sale had to be a signature. A
+  // customer must never read as still waiting on an estimate.
+  const apptJob = (appointments || []).find((a) => a.jobId);
+  if (apptJob) return { step: "job", appointment: apptJob, jobId: apptJob.jobId, estimate: signed || null };
   if (signed) return { step: "create_job", estimate: signed };
+  const soldAppt = (appointments || []).find((a) => a.status === "sold");
+  if (soldAppt) return { step: "create_job", appointment: soldAppt, estimate: null };
   const out = live.find((p) => ["sent", "viewed"].includes(p.status));
   if (out) return { step: "awaiting_signature", estimate: out };
   const draft = live.find((p) => p.status === "draft");

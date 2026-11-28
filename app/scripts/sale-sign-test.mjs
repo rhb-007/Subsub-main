@@ -41,6 +41,10 @@ ck("the next step: book, write, send, sign, job",
   && saleStep({ estimates: [{ status: "viewed" }] }).step === "awaiting_signature"
   && saleStep({ estimates: [{ status: "viewed" }, { status: "signed" }] }).step === "create_job"
   && saleStep({ estimates: [{ status: "signed", jobId: "j1" }] }).step === "job");
+ck("a sale on an appointment is a sale, whatever the estimates say: never back at the estimate step",
+  saleStep({ appointments: [{ status: "sold", date: "2026-11-27" }], estimates: [{ status: "draft" }] }).step === "create_job"
+  && saleStep({ appointments: [{ status: "sold", date: "2026-11-27" }], estimates: [{ status: "draft" }] }).appointment?.date === "2026-11-27"
+  && saleStep({ appointments: [{ status: "sold", jobId: "j9" }], estimates: [{ status: "draft" }] }).jobId === "j9");
 ck("a withdrawn estimate is not a step, a declined one asks for a new one",
   saleStep({ appointments: [{ status: "booked" }], estimates: [{ status: "void" }] }).step === "write"
   && saleStep({ appointments: [{ status: "booked" }], estimates: [{ status: "declined" }] }).declined === true);

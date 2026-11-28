@@ -1459,4 +1459,8 @@ export default {
   "{list} are also in {areas}.": "{list} también están en {areas}.",
   "{n} area": "{n} zona",
   "{n} areas": "{n} zonas",
+  "The appointment on {day} is marked sold for {total}.": "La cita del {day} está marcada como vendida por {total}.",
+  "The appointment on {day} is marked sold.": "La cita del {day} está marcada como vendida.",
+  "The office creates the job from the sale.": "La oficina crea el trabajo a partir de la venta.",
+  "Made from the sale on {day}.": "Creado a partir de la venta del {day}.",
 };

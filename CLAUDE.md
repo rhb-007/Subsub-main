@@ -17907,6 +17907,17 @@ refactor.
     Its stub now answers the lead's estimates, or the step strip never drew
     there.
 
+- **A CUSTOMER NEVER READS AS WAITING ON AN ESTIMATE.** Reported with a lead
+  showing Customer in its stage and *Send the estimate* in its steps. The
+  lead's appointment had been marked sold before a sale had to be a
+  signature, and `saleStep` looked only at estimates. It now reads sales and
+  jobs recorded on appointments too:
+  - an appointment made into a job is the **job** step;
+  - an appointment marked sold is the **create job** step, saying *The
+    appointment on Friday, November 27 is marked sold for $22,000*. Create
+    the job goes through the appointment's own conversion.
+  `test:salesign` pins both. Dropping the appointment check fails it.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is
