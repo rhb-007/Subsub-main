@@ -181,6 +181,9 @@ try {
   await wait(400);
   const tabs = await page.evaluate(() => [...document.querySelectorAll("[data-lead-tab]")].map((b) => b.dataset.leadTab));
   t.ck("a lead has Proposals, Insurance claim and Files tabs", ["proposals", "claim", "files"].every((x) => tabs.includes(x)), tabs.join(","));
+  const oom = await page.evaluate(() => ({ text: document.querySelector("[data-lead-detail] [data-lead-market]")?.innerText || "",
+    link: document.querySelector("[data-lead-detail] [data-add-market-link]")?.innerText || "" }));
+  t.ck("out of market, the office gets Add market", /Lead out of market\./.test(oom.text) && oom.link === "Add market", JSON.stringify(oom));
   // 115. Where the sale stands, on the Overview: booked, so the estimate is next.
   t.ck("the Overview says the estimate is next", await page.evaluate(() => document.querySelector("[data-sale-progress]")?.dataset.saleProgress === "write"
     && !!document.querySelector('[data-sale-act="write"]')));

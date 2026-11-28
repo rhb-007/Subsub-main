@@ -32329,6 +32329,7 @@ function useAreaWeather({ zip = "", city = "", state = "" } = {}) {
 // call script beside their address.
 function LeadArea({ zip, city, state, services = [], compact = false }) {
   const { markets, ready } = React.useContext(MarketsCtx);
+  const nav = React.useContext(AppNav);
   const m = marketFor(markets, { zip, city, state });
   const w = useAreaWeather({ zip, city, state });
   const off = servicesNotOffered(m, services);
@@ -32341,8 +32342,12 @@ function LeadArea({ zip, city, state, services = [], compact = false }) {
       <div className="lead-area-row" data-lead-market>
         <MapPin size={15} />
         {m ? <span><b>{m.name}</b> market</span>
-          : ready && markets.length ? <span className="lead-area-none">Not in any of your markets</span>
-          : ready ? <span className="lead-area-none">No markets set up yet</span> : <span className="lead-area-none">Checking the market…</span>}
+          : ready ? (<>
+            {/* Out of market, whether or not any markets exist yet: the
+                answer is the same, and so is the way to fix it. */}
+            <span className="lead-area-none" data-out-of-market>{tt("Lead out of market.")}</span>
+            {nav?.goAccount && <button type="button" className="link-btn" data-add-market-link onClick={() => nav.goAccount("markets")}>{tt("Add market")}</button>}
+          </>) : <span className="lead-area-none">{tt("Checking the market…")}</span>}
         {off.length > 0 && <span className="tn-chip lead-area-warn" data-not-offered>{andList(off.map(serviceLabel))} not offered there</span>}
       </div>
       {line && (

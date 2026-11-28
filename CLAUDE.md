@@ -17934,6 +17934,17 @@ refactor.
   `test:crmplusui` and `test:leadcontactui` run `touchingSections` on each tab
   (the message rows went from 8px to 10px apart for it).
 
+- **A LEAD IN NO MARKET SAYS "LEAD OUT OF MARKET" WITH AN ADD MARKET LINK.**
+  Asked for in place of *No markets set up yet*. Having no markets at all and
+  being outside all of them are the same answer with the same fix, so one line
+  covers both. **Add market** opens My account → My markets, and it is drawn
+  only where `AppNav.goAccount` exists (an admin). A contact-center seat sees
+  the line and no link it cannot follow. `test:salesapptui` and
+  `test:crmplusui` pin both seats. **And `test:i18n` had gone red over
+  "Estimates"** two changes earlier with nothing stopping the deploy, which is
+  the guard-reports-to-nobody shape again: the deploys gate on lint, not on
+  this suite.
+
 ## Working here
 
 - The app is `app/` (Vite + React, one large `App.tsx`), the API is

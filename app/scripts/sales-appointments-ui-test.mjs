@@ -474,6 +474,10 @@ try {
     });
     t.ck("the lead window: Edit clears the close button, each step's word stays in its step, stages fit", !lw.editHitsClose
       && lw.steps.length === 4 && lw.steps.every(Boolean) && lw.sections >= 4 && lw.stageRow, JSON.stringify(lw));
+    const oom = await page.evaluate(() => ({ text: document.querySelector("[data-lead-detail] [data-lead-market]")?.innerText || "",
+      link: !!document.querySelector("[data-lead-detail] [data-add-market-link]") }));
+    t.ck("a lead in none of the markets says it is out of market, and a contact-center seat gets no link it cannot follow",
+      /Lead out of market\./.test(oom.text) && !/No markets set up/.test(oom.text) && !oom.link, JSON.stringify(oom));
     const ltouch = await touchingSections(page, "[data-lead-detail]");
     t.ck("and no two sections in it touch", ltouch.length === 0, JSON.stringify(ltouch));
     if (process.env.SHOT2) await page.screenshot({ path: process.env.SHOT2 });
